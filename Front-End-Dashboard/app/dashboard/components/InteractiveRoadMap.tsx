@@ -236,11 +236,11 @@ export default function InteractiveRoadMap() {
       const operation = station.dir === "NB" ? "ON (Mainline Entry)" : "OFF (Pay & Exit)";
       return (
         <>
-          <div className="ds-tooltip-row">
+          <div className="ds-tooltip-row px-3">
             <span>Type:</span>
             <span style={{ fontWeight: 700, color: "#f59e0b" }}>Mainline Toll Plaza</span>
           </div>
-          <div className="ds-tooltip-row">
+          <div className="ds-tooltip-row px-3">
             <span>Operation:</span>
             <span>{operation}</span>
           </div>
@@ -248,7 +248,7 @@ export default function InteractiveRoadMap() {
       );
     }
     return (
-      <div className="ds-tooltip-row">
+      <div className="ds-tooltip-row px-3">
         <span>Access:</span>
         <span>{station.access}</span>
       </div>
@@ -295,26 +295,26 @@ export default function InteractiveRoadMap() {
                 <span className="ds-node-name">{station.name}</span>
 
                 {isActive && (
-                  <div className={`ds-roadmap-tooltip ${tooltipAlign}`}>
+                  <div className={`ds-roadmap-tooltip ${tooltipAlign} bg-white shadow-xl z-50`}>
                     <strong>NODE: {station.name} ({station.dir})</strong>
 
                     {/* Access / type row — context-aware */}
                     {renderAccessRow(station)}
 
-                    <div className="ds-tooltip-row">
+                    <div className="ds-tooltip-row px-3">
                       <span>Status:</span>
                       <span className={`ds-status-badge ${data.colorClass}`}>{data.status}</span>
                     </div>
-                    <div className="ds-tooltip-row">
+                    <div className="ds-tooltip-row px-3">
                       <span>Avg. Speed:</span>
                       <span>{data.speed}</span>
                     </div>
-                    <div className="ds-tooltip-row">
+                    <div className="ds-tooltip-row px-3">
                       <span>Incidents:</span>
                       <span>None</span>
                     </div>
                     {nextStation && (
-                      <div className="ds-tooltip-row">
+                      <div className="ds-tooltip-row px-3">
                         <span>Next KM:</span>
                         <span>5 min ({nextStation.name})</span>
                       </div>

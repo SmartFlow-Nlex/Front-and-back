@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { Calendar, Clock, MapPin, Plus, Trash2, ArrowRight } from "lucide-react";
+import { Calendar, Clock, MapPin, Plus, X, ArrowRight, Search, SlidersHorizontal } from "lucide-react";
 
 const NLEX_EXITS = [
   { name: "Balintawak", km: 0 },
@@ -34,6 +34,13 @@ const NLEX_EXITS = [
 
 export default function MaintenancePage() {
   const [showForm, setShowForm] = useState(false);
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+  const [pendingDeleteId, setPendingDeleteId] = useState<string | null>(null);
+  const [cancelReason, setCancelReason] = useState("");
+  const [scheduleError, setScheduleError] = useState("");
+  const [searchQuery, setSearchQuery] = useState("");
+  const [statusFilter, setStatusFilter] = useState("All");
+  const [sortOrder, setSortOrder] = useState("Newest First");
   const [startKm, setStartKm] = useState("0");
   const [endKm, setEndKm] = useState("26");
   const [startDate, setStartDate] = useState("");
@@ -65,16 +72,81 @@ export default function MaintenancePage() {
     }
   ]);
 
+  const today = new Date();
+  const todayDate = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(today.getDate()).padStart(2, "0")}`;
+
   const segmentLength = Math.abs(Number(endKm) - Number(startKm)).toFixed(1);
 
-  const handleDelete = async (id: string) => {
-    try {
-      await fetch(`http://localhost:3001/api/maintenance/${id}`, { method: "DELETE" });
-    } catch (e) {}
-    setSchedules(prev => prev.filter(s => s.id !== id));
+  const confirmDelete = (id: string) => {
+    setPendingDeleteId(id);
+    setCancelReason("");
+    setShowDeleteConfirm(true);
   };
 
+  const executeDelete = async () => {
+    if (!pendingDeleteId) return;
+    if (!cancelReason.trim()) return;
+    setSchedules(prev =>
+      prev.map((item) =>
+        item.id === pendingDeleteId
+          ? {
+              ...item,
+              status: "CANCELLED",
+              cancelReason: cancelReason.trim(),
+              cancelledAt: new Date().toISOString(),
+            }
+          : item
+      )
+    );
+    setPendingDeleteId(null);
+    setCancelReason("");
+    setShowDeleteConfirm(false);
+  };
+
+  const totalScheduled = schedules.filter((item) => item.status === "SCHEDULED").length;
+  const inProgress = schedules.filter((item) => item.status === "IN PROGRESS").length;
+  const cancelled = schedules.filter((item) => item.status === "CANCELLED").length;
+
+  const filteredSchedules = schedules.filter((item) => {
+    const searchValue = searchQuery.trim().toLowerCase();
+    const matchesSearch =
+      !searchValue ||
+      item.reference.toLowerCase().includes(searchValue) ||
+      item.description.toLowerCase().includes(searchValue) ||
+      item.startKm.toLowerCase().includes(searchValue) ||
+      item.endKm.toLowerCase().includes(searchValue);
+
+    const matchesStatus = statusFilter === "All" || item.status === statusFilter;
+
+    return matchesSearch && matchesStatus;
+  }).sort((left, right) => {
+    const leftDate = new Date(left.startDate).getTime();
+    const rightDate = new Date(right.startDate).getTime();
+
+    if (sortOrder === "Oldest First") return leftDate - rightDate;
+    if (sortOrder === "KM Asc") return Number(left.startKm) - Number(right.startKm);
+    if (sortOrder === "KM Desc") return Number(right.startKm) - Number(left.startKm);
+    return rightDate - leftDate;
+  });
+
   const handleSchedule = async () => {
+    if (startDate && startDate < todayDate) {
+      setScheduleError("Start date cannot be before today.");
+      return;
+    }
+
+    if (endDate && endDate < todayDate) {
+      setScheduleError("End date cannot be before today.");
+      return;
+    }
+
+    if (startDate && endDate && endDate < startDate) {
+      setScheduleError("End date cannot be earlier than the start date.");
+      return;
+    }
+
+    setScheduleError("");
+
     const payload = {
       segmentId: `${startKm}_${endKm}`,
       description: description || "Scheduled Maintenance",
@@ -126,17 +198,84 @@ export default function MaintenancePage() {
         </button>
       </div>
 
+      <div className="tab-stat-grid compact ms-maintenance-kpi-grid">
+        <article className="tab-stat-card">
+          <div className="stat-content">
+            <h3>Total Scheduled</h3>
+            <div className="value text-blue-600">{totalScheduled}</div>
+          </div>
+        </article>
+        <article className="tab-stat-card">
+          <div className="stat-content">
+            <h3>In Progress</h3>
+            <div className="value text-amber-600">{inProgress}</div>
+          </div>
+        </article>
+        <article className="tab-stat-card">
+          <div className="stat-content">
+            <h3>Cancelled</h3>
+            <div className="value text-red-600">{cancelled}</div>
+          </div>
+        </article>
+      </div>
+
+      <div className="ms-tools-row">
+        <div className="ms-search-bar">
+          <Search size={16} />
+          <input
+            type="text"
+            placeholder="Search maintenance..."
+            value={searchQuery}
+            onChange={(event) => setSearchQuery(event.target.value)}
+          />
+        </div>
+
+        <div className="ms-filter-group">
+          <div className="ms-select-wrap">
+            <SlidersHorizontal size={16} />
+            <select value={sortOrder} onChange={(event) => setSortOrder(event.target.value)}>
+              <option value="Newest First">Sort: Newest First</option>
+              <option value="Oldest First">Sort: Oldest First</option>
+              <option value="KM Asc">Sort: KM Asc</option>
+              <option value="KM Desc">Sort: KM Desc</option>
+            </select>
+          </div>
+
+          <div className="ms-select-wrap">
+            <SlidersHorizontal size={16} />
+            <select value={statusFilter} onChange={(event) => setStatusFilter(event.target.value)}>
+              <option value="All">Filter: All Statuses</option>
+              <option value="SCHEDULED">Filter: Scheduled</option>
+              <option value="IN PROGRESS">Filter: In Progress</option>
+              <option value="CANCELLED">Filter: Cancelled</option>
+            </select>
+          </div>
+
+          <button
+            type="button"
+            className="ms-filter-reset"
+            onClick={() => {
+              setSearchQuery("");
+              setStatusFilter("All");
+              setSortOrder("Newest First");
+            }}
+          >
+            Reset
+          </button>
+        </div>
+      </div>
+
       {/* Main Container */}
       <div className="ms-card">
         <div className="ms-card-header">
-          <h2>Scheduled Maintenance</h2>
+          <h2>Scheduled Maintenance ({filteredSchedules.length})</h2>
         </div>
 
         <div className="ms-list">
-          {schedules.map((item) => (
+          {filteredSchedules.map((item) => (
             <div className="ms-list-item" key={item.id}>
               <div className="ms-item-top">
-                <span className={`ms-badge ${item.status === 'SCHEDULED' ? 'blue' : 'yellow'}`}>
+                <span className={`ms-badge ${item.status === 'SCHEDULED' ? 'blue' : item.status === 'CANCELLED' ? 'red' : 'yellow'}`}>
                   {item.status}
                 </span>
                 <span className="ms-location">
@@ -144,8 +283,8 @@ export default function MaintenancePage() {
                 </span>
               </div>
               
-              <button className="ms-delete-btn" onClick={() => handleDelete(item.id)}>
-                <Trash2 size={18} />
+              <button className="ms-cancel-pill" onClick={() => confirmDelete(item.id)}>
+                Cancel
               </button>
 
               <div className="ms-km-boxes">
@@ -156,6 +295,11 @@ export default function MaintenancePage() {
 
               <p className="ms-ref">Reference: {item.reference}</p>
               <p className="ms-desc">{item.description}</p>
+              {item.status === "CANCELLED" && item.cancelReason && (
+                <p className="ms-summary-ref" style={{ color: "var(--color-danger)", marginTop: 8 }}>
+                  Cancel reason: {item.cancelReason}
+                </p>
+              )}
 
               <div className="ms-meta">
                 <span><Calendar size={14} /> {new Date(item.startDate).toLocaleDateString("en-US", { month: 'short', day: 'numeric', year: 'numeric' })}</span>
@@ -170,8 +314,16 @@ export default function MaintenancePage() {
       {showForm && (
         <div className="ms-modal-overlay">
           <div className="ms-form-card">
-            <div className="ms-form-header">
+            <div className="ms-form-header ms-form-header-closeable">
               <h2>New Maintenance Schedule</h2>
+              <button
+                type="button"
+                className="ms-modal-close"
+                onClick={() => setShowForm(false)}
+                aria-label="Close schedule form"
+              >
+                <X size={18} />
+              </button>
             </div>
             
             <div className="ms-form-body">
@@ -225,7 +377,7 @@ export default function MaintenancePage() {
               <div className="ms-form-row">
                 <div className="ms-input-group">
                   <label>Start Date</label>
-                  <input type="date" className="ms-input" value={startDate} onChange={e => setStartDate(e.target.value)} />
+                  <input type="date" min={todayDate} className="ms-input" value={startDate} onChange={e => setStartDate(e.target.value)} />
                 </div>
                 <div className="ms-input-group">
                   <label>Start Time</label>
@@ -236,13 +388,19 @@ export default function MaintenancePage() {
               <div className="ms-form-row">
                 <div className="ms-input-group">
                   <label>End Date</label>
-                  <input type="date" className="ms-input" value={endDate} onChange={e => setEndDate(e.target.value)} />
+                  <input type="date" min={startDate || todayDate} className="ms-input" value={endDate} onChange={e => setEndDate(e.target.value)} />
                 </div>
                 <div className="ms-input-group">
                   <label>End Time</label>
                   <input type="time" className="ms-input" value={endTime} onChange={e => setEndTime(e.target.value)} />
                 </div>
               </div>
+
+              {scheduleError && (
+                <p className="ms-summary-ref" style={{ color: "var(--color-danger)", marginTop: -8 }}>
+                  {scheduleError}
+                </p>
+              )}
 
               <div className="ms-input-group">
                 <label>Maintenance Description</label>
@@ -253,6 +411,46 @@ export default function MaintenancePage() {
             <div className="ms-form-actions">
               <button className="ms-btn-submit" onClick={handleSchedule}>Schedule Maintenance</button>
               <button className="ms-btn-cancel" onClick={() => setShowForm(false)}>Cancel</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showDeleteConfirm && (
+        <div className="ms-modal-overlay">
+          <div className="ms-form-card" style={{ maxWidth: 460 }}>
+            <div className="ms-form-header ms-form-header-closeable">
+              <h2>Cancel Maintenance Schedule?</h2>
+              <button
+                type="button"
+                className="ms-modal-close"
+                onClick={() => {
+                  setPendingDeleteId(null);
+                  setCancelReason("");
+                  setShowDeleteConfirm(false);
+                }}
+                aria-label="Close cancel dialog"
+              >
+                <X size={18} />
+              </button>
+            </div>
+            <div className="ms-form-body">
+              <p className="ms-summary-ref" style={{ marginTop: 0 }}>
+                This action cannot be undone. The selected maintenance schedule will be marked as canceled.
+              </p>
+              <div className="ms-input-group">
+                <label>Cancellation Reason <span className="ms-req">*</span></label>
+                <textarea
+                  className="ms-input ms-textarea"
+                  rows={3}
+                  placeholder="Enter a reason for canceling this schedule..."
+                  value={cancelReason}
+                  onChange={(event) => setCancelReason(event.target.value)}
+                />
+              </div>
+            </div>
+            <div className="ms-form-actions">
+              <button className="ms-btn-submit ms-btn-danger-action" onClick={executeDelete} disabled={!cancelReason.trim()}>Cancel Schedule</button>
             </div>
           </div>
         </div>

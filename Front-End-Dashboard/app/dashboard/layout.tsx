@@ -147,7 +147,14 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
               <span />
             </button>
             <div className="ds-top-brand">
-              <img src="/SMARTFLOW_LOGO_WHITE.png" alt="SmartFlow Logo" />
+              <Image
+                src="/SMARTFLOW_LOGO_WHITE.png"
+                alt="SmartFlow Logo"
+                width={224}
+                height={64}
+                className="w-auto max-h-12 object-contain"
+                priority
+              />
               SmartFlow NLEX
             </div>
           </div>

@@ -1,6 +1,117 @@
+"use client";
+
+import { useState } from "react";
 import { Activity, Shield, AlertCircle, Filter } from "lucide-react";
 
 export default function AuditLogPage() {
+  const [searchText, setSearchText] = useState("");
+  const [selectedCategory, setSelectedCategory] = useState("All");
+  const [selectedSeverity, setSelectedSeverity] = useState("All");
+  const [selectedDateRange, setSelectedDateRange] = useState("All Time");
+
+  const now = new Date();
+  const auditLogs = [
+    {
+      id: 1,
+      timestamp: new Date(now.getTime() - 2 * 60 * 60 * 1000).toISOString(),
+      user: "admin",
+      category: "Navigation",
+      action: "Page Navigation",
+      details: "Navigated to Audit Log",
+      severity: "Info",
+    },
+    {
+      id: 2,
+      timestamp: new Date(now.getTime() - 20 * 60 * 60 * 1000).toISOString(),
+      user: "traffic.ops",
+      category: "Traffic",
+      action: "Traffic Status Update",
+      details: "Updated Bocaue Barrier congestion alert",
+      severity: "Warning",
+    },
+    {
+      id: 3,
+      timestamp: new Date(now.getTime() - 2 * 24 * 60 * 60 * 1000).toISOString(),
+      user: "system",
+      category: "System",
+      action: "Cache Refresh",
+      details: "Refreshed dashboard cache after scheduled sync",
+      severity: "Info",
+    },
+    {
+      id: 4,
+      timestamp: new Date(now.getTime() - 4 * 24 * 60 * 60 * 1000).toISOString(),
+      user: "audit.bot",
+      category: "Data Operations",
+      action: "Record Export",
+      details: "Exported 86 audit log rows for review",
+      severity: "Info",
+    },
+    {
+      id: 5,
+      timestamp: new Date(now.getTime() - 6 * 24 * 60 * 60 * 1000).toISOString(),
+      user: "security.admin",
+      category: "Authentication",
+      action: "Login Success",
+      details: "Signed in from approved workstation",
+      severity: "Info",
+    },
+    {
+      id: 6,
+      timestamp: new Date(now.getTime() - 11 * 24 * 60 * 60 * 1000).toISOString(),
+      user: "ops.lead",
+      category: "Authentication",
+      action: "Permission Review",
+      details: "Reviewed role access for incident dashboard",
+      severity: "Warning",
+    },
+    {
+      id: 7,
+      timestamp: new Date(now.getTime() - 18 * 24 * 60 * 60 * 1000).toISOString(),
+      user: "system",
+      category: "System",
+      action: "Alert Triggered",
+      details: "High latency threshold exceeded for traffic feed",
+      severity: "Critical",
+    },
+    {
+      id: 8,
+      timestamp: new Date(now.getTime() - 33 * 24 * 60 * 60 * 1000).toISOString(),
+      user: "admin",
+      category: "Navigation",
+      action: "Route Change",
+      details: "Opened sustainability analytics page",
+      severity: "Info",
+    },
+  ];
+
+  const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const startOfLast7Days = new Date(startOfToday);
+  startOfLast7Days.setDate(startOfLast7Days.getDate() - 6);
+  const startOfLast30Days = new Date(startOfToday);
+  startOfLast30Days.setDate(startOfLast30Days.getDate() - 29);
+
+  const filteredLogs = auditLogs.filter((log) => {
+    const searchMatch = searchText.trim().toLowerCase();
+    const matchesSearch =
+      !searchMatch ||
+      log.user.toLowerCase().includes(searchMatch) ||
+      log.details.toLowerCase().includes(searchMatch) ||
+      log.action.toLowerCase().includes(searchMatch);
+
+    const matchesCategory = selectedCategory === "All" || log.category === selectedCategory;
+    const matchesSeverity = selectedSeverity === "All" || log.severity === selectedSeverity;
+
+    const timestamp = new Date(log.timestamp);
+    const matchesDateRange =
+      selectedDateRange === "All Time" ||
+      (selectedDateRange === "Today" && timestamp >= startOfToday) ||
+      (selectedDateRange === "Last 7 Days" && timestamp >= startOfLast7Days) ||
+      (selectedDateRange === "Last 30 Days" && timestamp >= startOfLast30Days);
+
+    return matchesSearch && matchesCategory && matchesSeverity && matchesDateRange;
+  });
+
   return (
     <section className="ds-content ds-long">
       <h1 className="tab-title">Audit Log</h1>
@@ -9,7 +120,7 @@ export default function AuditLogPage() {
         <article className="tab-stat-card">
           <div className="stat-content">
             <h3>Total Events</h3>
-            <div className="value">86</div>
+            <div className="value">{auditLogs.length}</div>
           </div>
           <div className="icon-box tone-blue"><Activity size={20} /></div>
         </article>
@@ -30,36 +141,50 @@ export default function AuditLogPage() {
         <article className="tab-stat-card">
           <div className="stat-content">
             <h3>Filtered Results</h3>
-            <div className="value">86</div>
+            <div className="value">{filteredLogs.length}</div>
           </div>
           <div className="icon-box tone-purple"><Filter size={20} /></div>
         </article>
       </div>
       <section className="table-card">
         <div className="table-toolbar">
-          <input placeholder="Search logs..." />
-          <select>
-            <option>All Categories</option>
+          <input
+            placeholder="Search logs..."
+            value={searchText}
+            onChange={(event) => setSearchText(event.target.value)}
+          />
+          <select value={selectedCategory} onChange={(event) => setSelectedCategory(event.target.value)}>
+            <option value="All">All Categories</option>
             <option>Authentication</option>
             <option>Navigation</option>
             <option>Data Operations</option>
             <option>System</option>
             <option>Traffic</option>
           </select>
-          <select>
-            <option>All Severities</option>
-            <option>Info</option>
-            <option>Warning</option>
-            <option>Critical</option>
+          <select value={selectedSeverity} onChange={(event) => setSelectedSeverity(event.target.value)}>
+            <option value="All">All Severities</option>
+            <option value="Info">Info</option>
+            <option value="Warning">Warning</option>
+            <option value="Critical">Critical</option>
           </select>
-          <select>
-            <option>All Time</option>
-            <option>Today</option>
-            <option>Last 7 Days</option>
-            <option>Last 30 Days</option>
+          <select value={selectedDateRange} onChange={(event) => setSelectedDateRange(event.target.value)}>
+            <option value="All Time">All Time</option>
+            <option value="Today">Today</option>
+            <option value="Last 7 Days">Last 7 Days</option>
+            <option value="Last 30 Days">Last 30 Days</option>
           </select>
           <button className="btn-primary">Export</button>
-          <button className="btn-danger">Clear</button>
+          <button
+            className="btn-danger"
+            onClick={() => {
+              setSearchText("");
+              setSelectedCategory("All");
+              setSelectedSeverity("All");
+              setSelectedDateRange("All Time");
+            }}
+          >
+            Clear
+          </button>
         </div>
         <div className="table-scroll">
           <table>
@@ -74,14 +199,31 @@ export default function AuditLogPage() {
               </tr>
             </thead>
             <tbody>
-              {Array.from({ length: 8 }).map((_, i) => (
-                <tr key={i}>
-                  <td>Apr 29, 2026, 07:3{i}:23 PM</td>
-                  <td>admin</td>
-                  <td><span className="badge">navigation</span></td>
-                  <td>Page Navigation</td>
-                  <td>Navigated to Audit Log</td>
-                  <td><span className="pill blue">Info</span></td>
+              {filteredLogs.map((log) => (
+                <tr key={log.id}>
+                  <td>{new Date(log.timestamp).toLocaleString("en-US", { dateStyle: "medium", timeStyle: "medium" })}</td>
+                  <td>{log.user}</td>
+                  <td>
+                    <span
+                      className="badge"
+                      style={
+                        log.category === "Authentication"
+                          ? { background: "#d9e7ff", color: "var(--color-info)" }
+                          : log.category === "Navigation"
+                            ? { background: "var(--color-purple-bg)", color: "var(--color-purple)" }
+                            : log.category === "Data Operations"
+                              ? { background: "#d8f2dd", color: "#15803d" }
+                              : log.category === "System"
+                                ? { background: "#f8ebc6", color: "#b45309" }
+                                : { background: "#ffe0e0", color: "var(--color-danger)" }
+                      }
+                    >
+                      {log.category.toLowerCase()}
+                    </span>
+                  </td>
+                  <td>{log.action}</td>
+                  <td>{log.details}</td>
+                  <td><span className={`pill ${log.severity === "Critical" ? "red" : log.severity === "Warning" ? "amber" : "blue"}`}>{log.severity}</span></td>
                 </tr>
               ))}
             </tbody>

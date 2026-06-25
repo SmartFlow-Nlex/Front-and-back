@@ -11,9 +11,10 @@ type Props = {
   endpoint: string;
   layerColor: string;
   tone: "blue" | "purple";
+  children?: React.ReactNode;
 };
 
-export default function TrafficMapPanel({ title, subtitle, badge, endpoint, layerColor, tone }: Props) {
+export default function TrafficMapPanel({ title, subtitle, badge, endpoint, layerColor, tone, children }: Props) {
   const mapRef = useRef<mapboxgl.Map | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
 
@@ -92,7 +93,10 @@ export default function TrafficMapPanel({ title, subtitle, badge, endpoint, laye
         </div>
         <span>{badge}</span>
       </header>
-      <div className="map-canvas mapbox" ref={containerRef} />
+      <div className="map-canvas-container">
+        <div className="map-canvas mapbox" ref={containerRef} />
+        {children}
+      </div>
     </article>
   );
 }

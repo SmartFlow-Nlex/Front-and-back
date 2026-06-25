@@ -85,6 +85,53 @@ function calculateRow(input: CarbonEmissionInput, rowIndex: number, idlingFactor
   };
 }
 
+import { db } from "../config/db.js";
+
+// [DEV-01] Get Emissions Index and AQI
+export async function getEmissionsIndexFromDb() {
+  if (!db) return null;
+  try {
+    const { rows } = await db.query(`SELECT * FROM emissions_log ORDER BY recorded_at DESC LIMIT 1`);
+    return rows[0];
+  } catch (error) {
+    console.error("Database query failed for emissions index:", error);
+    return null;
+  }
+}
+
+// [DEV-01] Get Peak Penalty
+export async function getPeakPenaltyFromDb() {
+  if (!db) return null;
+  try {
+    const { rows } = await db.query(`
+      SELECT COUNT(*) as penalty_count, SUM(co2_emissions_tons) as excess_emissions
+      FROM emissions_log
+      WHERE peak_penalty_applied = TRUE
+    `);
+    return rows[0];
+  } catch (error) {
+    console.error("Database query failed for peak penalty:", error);
+    return null;
+  }
+}
+
+// [DEV-02] Get Climate Resilience Metrics
+export async function getClimateResilienceFromDb() {
+  if (!db) return null;
+  try {
+    // A simplified metric joining incident weather data
+    const { rows } = await db.query(`
+      SELECT weather_condition, COUNT(*) as preventable_incidents
+      FROM incidents_table
+      GROUP BY weather_condition
+    `);
+    return rows;
+  } catch (error) {
+    console.error("Database query failed for climate resilience:", error);
+    return null;
+  }
+}
+
 export async function getEmissionsData() {
   return {
     module: "emissions",

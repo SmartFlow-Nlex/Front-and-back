@@ -221,49 +221,53 @@ export default function DataManagementPage() {
 
       {rows.length > 0 && (
         <div className="table-card">
-          <table>
-            <thead>
-              <tr>
-                <th>FIELD 1</th>
-                <th>FIELD 2</th>
-                <th>FIELD 3</th>
-              </tr>
-            </thead>
-            <tbody>
-              {rows.map((row, index) => (
-                <tr key={`${row.time_reported}-${row.time_cleared}-${index}`}>
-                  <td>{row.time_reported}</td>
-                  <td>{row.time_cleared}</td>
-                  <td>{row.daily_volume}</td>
+          <div className="table-scroll">
+            <table>
+              <thead>
+                <tr>
+                  <th>TIME REPORTED</th>
+                  <th>TIME CLEARED</th>
+                  <th>DAILY VOLUME</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
+              </thead>
+              <tbody>
+                {rows.map((row, index) => (
+                  <tr key={`${row.time_reported}-${row.time_cleared}-${index}`}>
+                    <td>{row.time_reported}</td>
+                    <td>{row.time_cleared}</td>
+                    <td>{row.daily_volume}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         </div>
       )}
 
       {results.length > 0 && (
         <div className="table-card" style={{ marginTop: 16 }}>
-          <table>
-            <thead>
-              <tr>
-                <th>ROW</th>
-                <th>RESULT 1</th>
-                <th>RESULT 2</th>
-                <th>RESULT 3</th>
-              </tr>
-            </thead>
-            <tbody>
-              {results.map((row) => (
-                <tr key={row.row_index}>
-                  <td>{row.row_index}</td>
-                  <td>{row.delay_minutes}</td>
-                  <td>{row.trapped_vehicles}</td>
-                  <td>{row.idling_penalty_co2_kg}</td>
+          <div className="table-scroll">
+            <table>
+              <thead>
+                <tr>
+                  <th>ROW</th>
+                  <th>DELAY (MIN)</th>
+                  <th>TRAPPED VEHICLES</th>
+                  <th>CO₂ PENALTY (KG)</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
+              </thead>
+              <tbody>
+                {results.map((row) => (
+                  <tr key={row.row_index}>
+                    <td>{row.row_index}</td>
+                    <td>{row.delay_minutes}</td>
+                    <td>{row.trapped_vehicles}</td>
+                    <td>{row.idling_penalty_co2_kg}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         </div>
       )}
 

@@ -1,8 +1,13 @@
-import { AlertTriangle, Clock3, Lightbulb, MapPin, Radar, Siren } from "lucide-react";
+"use client";
+
+import { useState } from "react";
+import { AlertTriangle, Clock3, Lightbulb, MapPin, Radar, Siren, Activity, CheckCircle, Zap } from "lucide-react";
 import type { EChartsOption } from "echarts";
 import DashboardChart from "../../../components/dashboard/DashboardChart";
+import PredictiveIncidentChart from "../../../components/dashboard/PredictiveIncidentChart";
 
 const months = ["Oct", "Nov", "Dec", "Jan", "Feb", "Mar"];
+const futureMonths = ["Apr", "May", "Jun", "Jul", "Aug", "Sep"];
 
 const clearanceOption: EChartsOption = {
   grid: { left: 46, right: 20, top: 20, bottom: 36 },
@@ -40,15 +45,63 @@ const severityOption: EChartsOption = {
   series: [{ type: "bar", data: [282, 134, 36], itemStyle: { borderRadius: [8, 8, 0, 0] } }],
 };
 
+// Predictive Mock Options
+const predictiveIncidentOption: EChartsOption = {
+  grid: { left: 46, right: 20, top: 20, bottom: 36 },
+  xAxis: { type: "category", data: futureMonths },
+  yAxis: { type: "value", min: 0, max: 5 },
+  tooltip: { trigger: "axis" },
+  series: [{ type: "line", data: [2.7, 2.5, 2.8, 3.1, 2.6, 2.4], smooth: true, lineStyle: { width: 3, type: "dashed", color: "#eba015" } }],
+};
+
+// Prescriptive Mock Options
+const prescriptiveResourceOption: EChartsOption = {
+  grid: { left: 46, right: 20, top: 20, bottom: 36 },
+  xAxis: { type: "category", data: ["Ambulance", "Tow Truck", "Patrol", "Fire"] },
+  yAxis: { type: "value" },
+  tooltip: { trigger: "axis" },
+  series: [{ type: "bar", data: [3, 5, 8, 2], itemStyle: { color: "#4f7de5", borderRadius: [8, 8, 0, 0] } }],
+};
+
 export default function IncidentPage() {
+  const [activeTab, setActiveTab] = useState("Descriptive");
+
   return (
     <section className="ds-content ds-long">
       <h1 className="tab-title">Incident Analysis</h1>
       <div className="tab-stat-grid">
-        <article className="tab-stat-card"><div className="icon-box tone-blue"><Clock3 size={20} /></div><h3>Avg Incident Clearance Time</h3><div className="value">12.3 min</div><p className="ok">18% efficiency gain</p></article>
-        <article className="tab-stat-card"><div className="icon-box tone-blue"><MapPin size={20} /></div><h3>Incident Rate (per 10K)</h3><div className="value">2.8</div><p className="ok">Below target of 3.5</p></article>
-        <article className="tab-stat-card"><div className="icon-box tone-blue"><Radar size={20} /></div><h3>Proactive Enforcement Rate</h3><div className="value">68%</div><p className="ok">Apprehensions vs crashes</p></article>
-        <article className="tab-stat-card"><div className="icon-box tone-blue"><Siren size={20} /></div><h3>Severe Impact Rate</h3><div className="value">8.2%</div><p className="bad">High-risk incidents</p></article>
+        <article className="tab-stat-card">
+          <div className="stat-content">
+            <h3>Avg Incident Clearance Time</h3>
+            <div className="value">12.3 min</div>
+            <p className="ok">18% efficiency gain</p>
+          </div>
+          <div className="icon-box tone-blue"><Clock3 size={20} /></div>
+        </article>
+        <article className="tab-stat-card">
+          <div className="stat-content">
+            <h3>Incident Rate (per 10K)</h3>
+            <div className="value">2.8</div>
+            <p className="ok">Below target of 3.5</p>
+          </div>
+          <div className="icon-box tone-blue"><MapPin size={20} /></div>
+        </article>
+        <article className="tab-stat-card">
+          <div className="stat-content">
+            <h3>Proactive Enforcement Rate</h3>
+            <div className="value">68%</div>
+            <p className="ok">Apprehensions vs crashes</p>
+          </div>
+          <div className="icon-box tone-blue"><Radar size={20} /></div>
+        </article>
+        <article className="tab-stat-card">
+          <div className="stat-content">
+            <h3>Severe Impact Rate</h3>
+            <div className="value">8.2%</div>
+            <p className="bad">High-risk incidents</p>
+          </div>
+          <div className="icon-box tone-blue"><Siren size={20} /></div>
+        </article>
       </div>
 
       <section className="panel">
@@ -60,14 +113,32 @@ export default function IncidentPage() {
         </div>
       </section>
 
-      <div className="mode-tabs"><button className="active">Descriptive</button><button>Predictive</button><button>Prescriptive</button></div>
-
-      <div className="chart-grid">
-        <article className="chart-card"><div className="chart-head"><h3>Incident Clearance Time Trend</h3><span className="pill green">18% Improvement</span></div><DashboardChart option={clearanceOption} /></article>
-        <article className="chart-card"><div className="chart-head"><h3>Incident Rate vs Target</h3><span className="pill green">Below Target</span></div><DashboardChart option={targetOption} /></article>
-        <article className="chart-card"><div className="chart-head"><h3>Proactive Enforcement Analysis</h3><span className="pill blue">68% Rate</span></div><DashboardChart option={enforcementOption} /></article>
-        <article className="chart-card"><div className="chart-head"><h3>Incident Severity Distribution</h3><span className="pill red">8.2% Severe</span></div><DashboardChart option={severityOption} /></article>
+      <div className="mode-tabs">
+        <button className={activeTab === "Descriptive" ? "active" : ""} onClick={() => setActiveTab("Descriptive")}>Descriptive</button>
+        <button className={activeTab === "Predictive" ? "active" : ""} onClick={() => setActiveTab("Predictive")}>Predictive</button>
+        <button className={activeTab === "Prescriptive" ? "active" : ""} onClick={() => setActiveTab("Prescriptive")}>Prescriptive</button>
       </div>
+
+      {activeTab === "Descriptive" && (
+        <div className="chart-grid">
+          <article className="chart-card wide"><div className="chart-head"><h3>Incident Clearance Time Trend</h3><span className="pill green">18% Improvement</span></div><DashboardChart option={clearanceOption} /></article>
+          <article className="chart-card"><div className="chart-head"><h3>Incident Rate vs Target</h3><span className="pill green">Below Target</span></div><DashboardChart option={targetOption} /></article>
+          <article className="chart-card"><div className="chart-head"><h3>Proactive Enforcement Analysis</h3><span className="pill blue">68% Rate</span></div><DashboardChart option={enforcementOption} /></article>
+          <article className="chart-card wide"><div className="chart-head"><h3>Incident Severity Distribution</h3><span className="pill red">8.2% Severe</span></div><DashboardChart option={severityOption} /></article>
+        </div>
+      )}
+
+      {activeTab === "Predictive" && (
+        <div className="chart-grid">
+          <PredictiveIncidentChart />
+        </div>
+      )}
+
+      {activeTab === "Prescriptive" && (
+        <div className="chart-grid">
+          <article className="chart-card wide"><div className="chart-head"><h3>Recommended Asset Pre-positioning</h3><span className="pill blue">Optimized</span></div><DashboardChart option={prescriptiveResourceOption} /></article>
+        </div>
+      )}
     </section>
   );
 }

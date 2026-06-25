@@ -112,6 +112,18 @@ export default function AuditLogPage() {
     return matchesSearch && matchesCategory && matchesSeverity && matchesDateRange;
   });
 
+  const exportJSON = () => {
+    const dataStr = JSON.stringify(filteredLogs, null, 2);
+    const blob = new Blob([dataStr], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    const date = new Date().toISOString().split('T')[0];
+    a.download = `audit_logs_${date}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
   return (
     <section className="ds-content ds-long">
       <h1 className="tab-title">Audit Log</h1>
@@ -173,7 +185,8 @@ export default function AuditLogPage() {
             <option value="Last 7 Days">Last 7 Days</option>
             <option value="Last 30 Days">Last 30 Days</option>
           </select>
-          <button className="btn-primary">Export</button>
+          
+          <button className="btn-primary" onClick={exportJSON}>Export JSON</button>
           <button
             className="btn-danger"
             onClick={() => {
@@ -190,17 +203,19 @@ export default function AuditLogPage() {
           <table>
             <thead>
               <tr>
-                <th>TIMESTAMP</th>
-                <th>USER</th>
-                <th>CATEGORY</th>
-                <th>ACTION</th>
-                <th>DETAILS</th>
-                <th>SEVERITY</th>
-              </tr>
+                  <th>ID</th>
+                  <th>TIMESTAMP</th>
+                  <th>USER</th>
+                  <th>CATEGORY</th>
+                  <th>ACTION</th>
+                  <th>DETAILS</th>
+                  <th>SEVERITY</th>
+                </tr>
             </thead>
             <tbody>
               {filteredLogs.map((log) => (
                 <tr key={log.id}>
+                  <td className="font-mono text-xs text-gray-500">{`#${String(log.id).padStart(3, '0')}`}</td>
                   <td>{new Date(log.timestamp).toLocaleString("en-US", { dateStyle: "medium", timeStyle: "medium" })}</td>
                   <td>{log.user}</td>
                   <td>

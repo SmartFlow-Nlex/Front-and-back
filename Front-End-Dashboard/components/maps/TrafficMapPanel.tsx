@@ -124,19 +124,24 @@ export default function TrafficMapPanel({ title, subtitle, badge, endpoint, laye
 
         const typeLabel = props.type || "Alert";
         const iconEmoji = props.type === "ACCIDENT" ? "🚗💥" : props.type === "POLICE" ? "👮" : props.type === "CONSTRUCTION" ? "🚧" : props.type === "JAM" ? "🛑" : "⚠️";
+        const typeColor = props.type === "ACCIDENT" ? "#b91c1c" : props.type === "POLICE" ? "#3b82f6" : props.type === "CONSTRUCTION" ? "#f97316" : props.type === "JAM" ? "#ef4444" : "#eab308";
+        const typeBg = props.type === "ACCIDENT" ? "#fef2f2" : props.type === "POLICE" ? "#eff6ff" : props.type === "CONSTRUCTION" ? "#fff7ed" : props.type === "JAM" ? "#fef2f2" : "#fefce8";
         
         const description = `
-          <div style="font-family: 'Inter', system-ui, -apple-system, sans-serif; padding: 10px; width: 220px; border-radius: 12px; background: white; box-shadow: 0 4px 20px rgba(0,0,0,0.08); color: #1e293b;">
-            <div style="font-weight: 700; font-size: 13px; text-transform: uppercase; display: flex; align-items: center; gap: 6px; color: ${
-              props.type === "ACCIDENT" ? "#b91c1c" : props.type === "POLICE" ? "#3b82f6" : props.type === "CONSTRUCTION" ? "#f97316" : "#eab308"
-            }; margin-bottom: 4px;">
-              <span>${iconEmoji}</span> ${typeLabel}
-            </div>
-            <div style="font-size: 11px; font-weight: 600; color: #475569; margin-bottom: 6px;">${props.street || "NLEX"} ${props.city ? `(${props.city})` : ""}</div>
-            ${props.report_description ? `<div style="font-size: 11px; color: #334155; line-height: 1.4; background: #f8fafc; padding: 6px; border-radius: 6px; margin-bottom: 6px;">"${props.report_description}"</div>` : ""}
-            <div style="font-size: 10px; color: #94a3b8; border-top: 1px solid #f1f5f9; padding-top: 6px; display: flex; justify-content: space-between;">
-              <span>Reliability: <strong>${props.reliability || 0}/10</strong></span>
-              <span>Confidence: <strong>${props.confidence || 0}/5</strong></span>
+          <div style="font-family: 'Inter', system-ui, -apple-system, sans-serif; width: 240px; border-radius: 14px; background: #fff; overflow: hidden; box-shadow: 0 12px 40px rgba(7,17,38,0.18);">
+            <div style="height: 3px; background: linear-gradient(90deg, ${typeColor}, ${typeColor}88);"></div>
+            <div style="padding: 14px 16px 12px;">
+              <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px;">
+                <span style="font-size: 16px; line-height: 1;">${iconEmoji}</span>
+                <span style="font-weight: 800; font-size: 12px; text-transform: uppercase; letter-spacing: 0.05em; color: ${typeColor}; background: ${typeBg}; padding: 3px 10px; border-radius: 20px;">${typeLabel}</span>
+              </div>
+              <div style="font-size: 12px; font-weight: 700; color: #1e293b; margin-bottom: 2px;">${props.street || "NLEX"}</div>
+              ${props.city ? `<div style="font-size: 11px; color: #64748b;">${props.city}</div>` : ""}
+              ${props.report_description ? `<div style="font-size: 11px; color: #475569; line-height: 1.45; background: #f8fafc; padding: 8px 10px; border-radius: 8px; margin-top: 8px; border-left: 3px solid ${typeColor}22;">${props.report_description}</div>` : ""}
+              <div style="display: flex; gap: 16px; margin-top: 10px; padding-top: 8px; border-top: 1px solid #f1f5f9;">
+                <div style="font-size: 10px; color: #94a3b8;">Reliability <span style="font-weight: 800; color: #475569;">${props.reliability || 0}/10</span></div>
+                <div style="font-size: 10px; color: #94a3b8;">Confidence <span style="font-weight: 800; color: #475569;">${props.confidence || 0}/5</span></div>
+              </div>
             </div>
           </div>
         `;
@@ -164,31 +169,57 @@ export default function TrafficMapPanel({ title, subtitle, badge, endpoint, laye
         if (isRealtime) {
           const severity = props.level === 4 ? "Severe" : props.level === 3 ? "Heavy" : props.level === 2 ? "Moderate" : "Light";
           const severityColor = props.level === 4 ? "#ef4444" : props.level === 3 ? "#f97316" : props.level === 2 ? "#f59e0b" : "#10b981";
+          const severityBg = props.level === 4 ? "#fef2f2" : props.level === 3 ? "#fff7ed" : props.level === 2 ? "#fffbeb" : "#f0fdf4";
+          const delayMin = Math.round((props.delay_seconds || 0) / 60);
           
           description = `
-            <div style="font-family: 'Inter', system-ui, -apple-system, sans-serif; padding: 10px; width: 180px; border-radius: 12px; background: white; box-shadow: 0 4px 20px rgba(0,0,0,0.08); color: #1e293b;">
-              <div style="font-weight: 700; font-size: 13px; color: ${severityColor}; margin-bottom: 4px; display: flex; align-items: center; gap: 6px;">
-                🚗 ${severity} Jam
-              </div>
-              <div style="font-size: 11px; font-weight: 600; color: #475569; margin-bottom: 6px;">${props.street || "NLEX Corridor"} ${props.city ? `(${props.city})` : ""}</div>
-              <div style="font-size: 11px; color: #334155; line-height: 1.5; border-top: 1px solid #f1f5f9; padding-top: 6px;">
-                Avg Speed: <strong>${props.speed || 0} km/h</strong><br/>
-                Delay: <strong>${Math.round((props.delay_seconds || 0) / 60)} min</strong>
+            <div style="font-family: 'Inter', system-ui, -apple-system, sans-serif; width: 220px; border-radius: 14px; background: #fff; overflow: hidden; box-shadow: 0 12px 40px rgba(7,17,38,0.18);">
+              <div style="height: 3px; background: linear-gradient(90deg, ${severityColor}, ${severityColor}66);"></div>
+              <div style="padding: 14px 16px 12px;">
+                <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px;">
+                  <span style="font-size: 15px; line-height: 1;">🚗</span>
+                  <span style="font-weight: 800; font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em; color: ${severityColor}; background: ${severityBg}; padding: 3px 10px; border-radius: 20px;">${severity} Jam</span>
+                </div>
+                <div style="font-size: 12px; font-weight: 700; color: #1e293b; margin-bottom: 2px;">${props.street || "NLEX Corridor"}</div>
+                ${props.city ? `<div style="font-size: 11px; color: #64748b;">${props.city}</div>` : ""}
+                <div style="display: flex; gap: 12px; margin-top: 10px; padding-top: 8px; border-top: 1px solid #f1f5f9;">
+                  <div style="flex: 1; text-align: center; padding: 6px; background: #f8fafc; border-radius: 8px;">
+                    <div style="font-size: 14px; font-weight: 800; color: #1e293b;">${props.speed || 0}</div>
+                    <div style="font-size: 9px; font-weight: 600; color: #94a3b8; text-transform: uppercase; letter-spacing: 0.04em;">km/h</div>
+                  </div>
+                  <div style="flex: 1; text-align: center; padding: 6px; background: #f8fafc; border-radius: 8px;">
+                    <div style="font-size: 14px; font-weight: 800; color: #1e293b;">${delayMin}</div>
+                    <div style="font-size: 9px; font-weight: 600; color: #94a3b8; text-transform: uppercase; letter-spacing: 0.04em;">min delay</div>
+                  </div>
+                </div>
               </div>
             </div>
           `;
         } else {
           // Forecast map
           const score = Math.round((props.congestion_score || 0) * 100);
+          const congLevel = score >= 70 ? "High" : score >= 40 ? "Medium" : "Low";
+          const congColor = score >= 70 ? "#7c3aed" : score >= 40 ? "#8b5cf6" : "#a855f7";
+          const congBg = score >= 70 ? "#f3e8ff" : score >= 40 ? "#f5f0ff" : "#faf5ff";
           description = `
-            <div style="font-family: 'Inter', system-ui, -apple-system, sans-serif; padding: 10px; width: 180px; border-radius: 12px; background: white; box-shadow: 0 4px 20px rgba(0,0,0,0.08); color: #1e293b;">
-              <div style="font-weight: 700; font-size: 13px; color: #a855f7; margin-bottom: 4px; display: flex; align-items: center; gap: 6px;">
-                🔮 Predicted Traffic
-              </div>
-              <div style="font-size: 11px; font-weight: 600; color: #475569; margin-bottom: 6px;">Segment: ${props.segment_id || "NLEX"}</div>
-              <div style="font-size: 11px; color: #334155; line-height: 1.5; border-top: 1px solid #f1f5f9; padding-top: 6px;">
-                Congestion Index: <strong>${score}%</strong><br/>
-                Horizon: <strong>${props.horizon || "2h"}</strong>
+            <div style="font-family: 'Inter', system-ui, -apple-system, sans-serif; width: 220px; border-radius: 14px; background: #fff; overflow: hidden; box-shadow: 0 12px 40px rgba(7,17,38,0.18);">
+              <div style="height: 3px; background: linear-gradient(90deg, #a855f7, #6d28d9);"></div>
+              <div style="padding: 14px 16px 12px;">
+                <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px;">
+                  <span style="font-size: 15px; line-height: 1;">🔮</span>
+                  <span style="font-weight: 800; font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em; color: ${congColor}; background: ${congBg}; padding: 3px 10px; border-radius: 20px;">${congLevel} Congestion</span>
+                </div>
+                <div style="font-size: 12px; font-weight: 700; color: #1e293b; margin-bottom: 6px;">Segment: ${props.segment_id || "NLEX"}</div>
+                <div style="display: flex; gap: 12px; margin-top: 4px; padding-top: 8px; border-top: 1px solid #f1f5f9;">
+                  <div style="flex: 1; text-align: center; padding: 6px; background: #faf5ff; border-radius: 8px;">
+                    <div style="font-size: 14px; font-weight: 800; color: #6d28d9;">${score}%</div>
+                    <div style="font-size: 9px; font-weight: 600; color: #94a3b8; text-transform: uppercase; letter-spacing: 0.04em;">congestion</div>
+                  </div>
+                  <div style="flex: 1; text-align: center; padding: 6px; background: #faf5ff; border-radius: 8px;">
+                    <div style="font-size: 14px; font-weight: 800; color: #6d28d9;">${props.horizon || "2h"}</div>
+                    <div style="font-size: 9px; font-weight: 600; color: #94a3b8; text-transform: uppercase; letter-spacing: 0.04em;">horizon</div>
+                  </div>
+                </div>
               </div>
             </div>
           `;

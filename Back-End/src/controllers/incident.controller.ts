@@ -1,6 +1,26 @@
 import type { Request, Response } from "express";
+import { z } from "zod";
 import { IncidentQuerySchema } from "../validators/incident.validator.js";
-import { getIncidentListFromDb, getIncidentMetricsFromDb, getWeatherCorrelationFromDb } from "../services/incident.service.js";
+import { getIncidentListFromDb, getIncidentMetricsFromDb, getWeatherCorrelationFromDb, getIncidentAnalyticsFromDb } from "../services/incident.service.js";
+
+const IncidentAnalyticsQuerySchema = z.object({
+  months: z.enum(["3", "12", "all"]).optional().default("12"),
+  from: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+  to: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+  source: z.enum(["all", "road", "moto", "stalled"]).optional().default("all"),
+});
+
+// GET /api/incident/analytics — descriptive dashboard aggregates
+export const getIncidentAnalytics = async (req: Request, res: Response) => {
+  const query = IncidentAnalyticsQuerySchema.parse(req.query);
+  const data = await getIncidentAnalyticsFromDb(query);
+
+  if (!data) {
+    return res.status(503).json({ success: false, message: "Incident analytics unavailable: database not reachable" });
+  }
+
+  res.json({ success: true, source: "database", data });
+};
 
 // [DEV-01] GET /api/v1/incident/list
 export const getIncidentList = async (req: Request, res: Response) => {

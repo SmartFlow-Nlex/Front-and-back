@@ -1,6 +1,25 @@
 import type { Request, Response } from "express";
-import { TrafficQuerySchema, IncidentQuerySchema, ForecastQuerySchema } from "../validators/traffic.validator.js";
-import { getTrafficVolumesFromDb, getDirectionalFlowFromDb, getVehicleClassDistributionFromDb } from "../services/traffic.service.js";
+import { TrafficQuerySchema, IncidentQuerySchema, ForecastQuerySchema, AnalyticsQuerySchema } from "../validators/traffic.validator.js";
+import { getTrafficVolumesFromDb, getDirectionalFlowFromDb, getVehicleClassDistributionFromDb, getTrafficAnalyticsFromDb } from "../services/traffic.service.js";
+
+// GET /api/traffic/analytics — descriptive dashboard aggregates
+export const getTrafficAnalytics = async (req: Request, res: Response) => {
+  const query = AnalyticsQuerySchema.parse(req.query);
+  const data = await getTrafficAnalyticsFromDb({
+    months: query.months,
+    from: query.from,
+    to: query.to,
+    plazas: query.plazas ? query.plazas.split(",").map((p) => p.trim()).filter(Boolean) : undefined,
+    direction: query.direction,
+    vehicleClass: query.vehicleClass,
+  });
+
+  if (!data) {
+    return res.status(503).json({ success: false, message: "Traffic analytics unavailable: database not reachable" });
+  }
+
+  res.json({ success: true, source: "database", data });
+};
 
 // [REQ-01] GET /api/v1/traffic/realtime
 export const getRealtimeTraffic = async (req: Request, res: Response) => {

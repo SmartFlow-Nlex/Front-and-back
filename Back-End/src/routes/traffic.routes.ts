@@ -1,8 +1,9 @@
 import { Router } from "express";
-import { getRealtimeTraffic, getIncidents, getForecast, getVolumeAdt } from "../controllers/traffic.controller.js";
+import { getRealtimeTraffic, getIncidents, getForecast, getVolumeAdt, getTrafficAnalytics } from "../controllers/traffic.controller.js";
 
 const router = Router();
 
+router.get("/analytics", getTrafficAnalytics);
 router.get("/realtime", getRealtimeTraffic);
 router.get("/incidents", getIncidents);
 router.get("/forecast", getForecast);

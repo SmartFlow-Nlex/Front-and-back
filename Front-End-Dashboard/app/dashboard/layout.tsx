@@ -5,7 +5,6 @@ import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { AlertTriangle, Brain, Calendar, Car, ChevronDown, ClipboardList, Home, Leaf, LogOut, Map, Menu, TrendingUp, User, Wrench, X } from "lucide-react";
-import DateFilter from "./components/DateFilter";
 import { supabase } from "../../lib/supabase";
 
 const tabs = [
@@ -150,25 +149,24 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
     setSidebarOpen(false);
   }, []);
 
-  const dateText = useMemo(
-    () =>
-      new Date().toLocaleDateString("en-US", {
-        weekday: "long",
-        month: "long",
-        day: "numeric",
-        year: "numeric",
-      }),
-    []
-  );
+  const [now, setNow] = useState(new Date());
 
-  const timeText = useMemo(
-    () =>
-      new Date().toLocaleTimeString("en-US", {
-        hour: "2-digit",
-        minute: "2-digit",
-      }),
-    []
-  );
+  useEffect(() => {
+    const timer = setInterval(() => setNow(new Date()), 1000);
+    return () => clearInterval(timer);
+  }, []);
+
+  const dateText = now.toLocaleDateString("en-US", {
+    weekday: "long",
+    month: "long",
+    day: "numeric",
+    year: "numeric",
+  });
+
+  const timeText = now.toLocaleTimeString("en-US", {
+    hour: "2-digit",
+    minute: "2-digit",
+  });
 
   let shellClass = "ds-shell";
   if (isMobile) {
@@ -262,7 +260,6 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
               <span>{dateText}</span>
               <strong>{timeText}</strong>
             </div>
-            <DateFilter />
           </div>
         </header>
 

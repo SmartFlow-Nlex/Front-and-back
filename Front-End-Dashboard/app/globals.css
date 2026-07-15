@@ -4104,3 +4104,15 @@ body {
 .mc-stat-value.orange { color: #ea580c; }
 .mc-stat-value.purple { color: var(--color-purple); }
 .mc-stat-value.green { color: var(--color-success); }
+
+/* ---------- MapLibre popup chrome override ---------- */
+.maplibregl-popup-content {
+  background: transparent !important;
+  padding: 0 !important;
+  box-shadow: none !important;
+  border-radius: 0 !important;
+}
+
+.maplibregl-popup-tip {
+  display: none !important;
+}

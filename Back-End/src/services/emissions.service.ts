@@ -87,6 +87,154 @@ function calculateRow(input: CarbonEmissionInput, rowIndex: number, idlingFactor
 
 import { db } from "../config/db.js";
 
+// ---------------------------------------------------------------------------
+// Emissions analytics for the descriptive dashboard.
+// Sources: nlex_theoretical_emissions (hourly modeled CO2/pollutants per exit,
+// direction, and vehicle class, from traffic volume x IPCC Tier 2 factors),
+// nlex_emissions (measured air quality from OpenWeatherMap, AQI 1-5),
+// nlex_emission_factors (per-class g/km factors), nlex_exits (segment names).
+// All timestamps are UTC; local time = UTC+8.
+// ---------------------------------------------------------------------------
+
+export type EmissionsAnalyticsFilters = {
+  months: "3" | "12" | "all";
+  from?: string;
+  to?: string;
+};
+
+type EmissionsCacheEntry = { at: number; data: unknown };
+const emissionsCache = new Map<string, EmissionsCacheEntry>();
+const EMISSIONS_CACHE_TTL_MS = 10 * 60 * 1000;
+
+const LOCAL_DATE = `(timestamp_utc + interval '8 hours')::date`;
+const LOCAL_HOUR = `EXTRACT(hour FROM timestamp_utc + interval '8 hours')::int`;
+
+export async function getEmissionsAnalyticsFromDb(filters: EmissionsAnalyticsFilters) {
+  if (!db) return null;
+
+  const cacheKey = JSON.stringify(filters);
+  const cached = emissionsCache.get(cacheKey);
+  if (cached && Date.now() - cached.at < EMISSIONS_CACHE_TTL_MS) return cached.data;
+
+  try {
+    const bounds = await db.query(
+      `SELECT min(${LOCAL_DATE})::text AS lo, max(${LOCAL_DATE})::text AS hi FROM nlex_theoretical_emissions`
+    );
+    const minDate: string = bounds.rows[0].lo;
+    const maxDate: string = bounds.rows[0].hi;
+
+    let lo: string;
+    let hi: string;
+    if (filters.from && filters.to) {
+      const [f, t] = filters.from <= filters.to ? [filters.from, filters.to] : [filters.to, filters.from];
+      lo = f < minDate ? minDate : f;
+      hi = t > maxDate ? maxDate : t;
+    } else {
+      // Month ranges anchor at the default year (2025), clamped to available data:
+      // "12 mo" opens as calendar 2025, "3 mo" as Jan-Apr 2025.
+      const anchor = "2025-01-01";
+      lo = anchor < minDate ? minDate : anchor > maxDate ? minDate : anchor;
+      hi =
+        filters.months === "all"
+          ? maxDate
+          : (
+              await db.query(`SELECT LEAST(($1::date + ($2 || ' months')::interval)::date, $3::date)::text AS hi`, [lo, filters.months, maxDate]))
+              .rows[0].hi;
+    }
+
+    const params = [lo, hi];
+    const WHERE = `${LOCAL_DATE} BETWEEN $1 AND $2`;
+
+    const [trend, heatmap, classes, kpi, aqiMonthly, aqiKpi] = await Promise.all([
+      // Daily CO2 (tonnes) by vehicle class and direction (client rolls up)
+      db.query(
+        `SELECT ${LOCAL_DATE}::text AS d,
+                ROUND((SUM(co2_grams) FILTER (WHERE vehicle_class = 1) / 1e6)::numeric, 2)::float AS c1,
+                ROUND((SUM(co2_grams) FILTER (WHERE vehicle_class = 2) / 1e6)::numeric, 2)::float AS c2,
+                ROUND((SUM(co2_grams) FILTER (WHERE vehicle_class = 3) / 1e6)::numeric, 2)::float AS c3,
+                ROUND((COALESCE(SUM(co2_grams) FILTER (WHERE direction = 'NB'), 0) / 1e6)::numeric, 2)::float AS nb,
+                ROUND((COALESCE(SUM(co2_grams) FILTER (WHERE direction = 'SB'), 0) / 1e6)::numeric, 2)::float AS sb
+         FROM nlex_theoretical_emissions WHERE ${WHERE}
+         GROUP BY 1 ORDER BY 1`,
+        params
+      ),
+      // CO2 tonnes per hour-of-day x day-of-week (client derives weekday/weekend profile)
+      db.query(
+        `SELECT EXTRACT(dow FROM ${LOCAL_DATE})::int AS dow, ${LOCAL_HOUR} AS hour,
+                ROUND((SUM(co2_grams) / 1e6)::numeric, 2)::float AS v
+         FROM nlex_theoretical_emissions WHERE ${WHERE}
+         GROUP BY 1, 2 ORDER BY 1, 2`,
+        params
+      ),
+      // Volume and emissions by vehicle class, with the per-km factors
+      db.query(
+        `SELECT t.vehicle_class AS class, MAX(f.class_label) AS label,
+                MAX(f.co2_g_per_km)::float AS co2_g_per_km,
+                SUM(t.volume)::bigint AS volume,
+                ROUND((SUM(t.co2_grams) / 1e6)::numeric, 1)::float AS co2_t,
+                ROUND((SUM(t.pm25_grams) / 1e3)::numeric, 1)::float AS pm25_kg,
+                ROUND((SUM(t.no2_grams) / 1e3)::numeric, 1)::float AS no2_kg
+         FROM nlex_theoretical_emissions t
+         LEFT JOIN nlex_emission_factors f ON f.vehicle_class = t.vehicle_class
+         WHERE ${WHERE}
+         GROUP BY 1 ORDER BY 1`,
+        params
+      ),
+      // KPI: current vs previous period CO2 (tonnes)
+      db.query(
+        `SELECT
+           ROUND((SUM(co2_grams) FILTER (WHERE ${WHERE}) / 1e6)::numeric, 1)::float AS cur_t,
+           ROUND((SUM(co2_grams) FILTER (WHERE ${LOCAL_DATE} >= $1::date - ($2::date - $1::date + 1) AND ${LOCAL_DATE} < $1::date) / 1e6)::numeric, 1)::float AS prev_t
+         FROM nlex_theoretical_emissions
+         WHERE ${LOCAL_DATE} >= $1::date - ($2::date - $1::date + 1) AND ${LOCAL_DATE} <= $2`,
+        params
+      ),
+      // Measured air quality: monthly hours per AQI level + avg PM2.5
+      db.query(
+        `SELECT to_char(to_timestamp(api_dt) + interval '8 hours', 'YYYY-MM') AS m,
+                COUNT(*) FILTER (WHERE aqi <= 2)::int AS good,
+                COUNT(*) FILTER (WHERE aqi = 3)::int AS moderate,
+                COUNT(*) FILTER (WHERE aqi >= 4)::int AS poor,
+                ROUND(AVG(pm2_5)::numeric, 1)::float AS pm25
+         FROM nlex_emissions
+         WHERE (to_timestamp(api_dt) + interval '8 hours')::date BETWEEN $1 AND $2
+         GROUP BY 1 ORDER BY 1`,
+        params
+      ),
+      // Measured air quality KPI: avg AQI + sample count in range
+      db.query(
+        `SELECT ROUND(AVG(aqi)::numeric, 2)::float AS avg_aqi, COUNT(*)::int AS samples,
+                ROUND(AVG(pm2_5)::numeric, 1)::float AS avg_pm25
+         FROM nlex_emissions
+         WHERE (to_timestamp(api_dt) + interval '8 hours')::date BETWEEN $1 AND $2`,
+        params
+      ),
+    ]);
+
+    const data = {
+      range: { from: lo, to: hi },
+      meta: { minDate, maxDate },
+      kpis: {
+        totalCo2T: kpi.rows[0].cur_t ?? 0,
+        prevCo2T: kpi.rows[0].prev_t ?? 0,
+        avgAqi: aqiKpi.rows[0].avg_aqi,
+        aqiSamples: aqiKpi.rows[0].samples,
+        avgPm25: aqiKpi.rows[0].avg_pm25,
+      },
+      dailyTrend: trend.rows,
+      heatmap: heatmap.rows,
+      classes: classes.rows.map((r) => ({ ...r, volume: Number(r.volume) })),
+      aqiMonthly: aqiMonthly.rows,
+    };
+
+    emissionsCache.set(cacheKey, { at: Date.now(), data });
+    return data;
+  } catch (error) {
+    console.error("Database query failed for emissions analytics:", error);
+    return null;
+  }
+}
+
 // [DEV-01] Get Emissions Index and AQI
 export async function getEmissionsIndexFromDb() {
   if (!db) return null;

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import ReactECharts from "echarts-for-react";
 import type { EChartsOption } from "echarts";
 import DashboardChart from "../../../components/dashboard/DashboardChart";
@@ -16,7 +16,6 @@ const PURPLE = "#7c3aed"; // motorcycle crashes
 const ORANGE = "#e06b47"; // stalled vehicles
 // Sequential ramp (magnitude: heatmap, hotspot bar)
 const SEQ = ["#eef2fb", "#8fa8ee", "#3e67ef", "#1d3aa8"];
-const GRAY = "#9aa4b8";
 
 const DOW_LABELS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 const DOW_ORDER = [1, 2, 3, 4, 5, 6, 0];
@@ -55,11 +54,12 @@ type Analytics = {
 
 type Granularity = "daily" | "weekly" | "monthly";
 type RangeMode = "3" | "12" | "all" | "custom";
-type SourceFilter = "all" | "road" | "moto" | "stalled";
+type WeatherFilter = "all" | "dry" | "wet";
 type Detail = { title: string; subtitle?: string; rows: [string, string][]; note?: string };
 
 // ---------- Formatting ----------
 const fmtInt = (n: number) => Math.round(n).toLocaleString("en-US");
+const fmt1 = (n: number) => n.toLocaleString("en-US", { minimumFractionDigits: 1, maximumFractionDigits: 1 });
 const fmtHour = (h: number) => (h === 0 ? "12 AM" : h < 12 ? `${h} AM` : h === 12 ? "12 PM" : `${h - 12} PM`);
 const fmtPct = (p: number) => `${p >= 0 ? "+" : ""}${p.toFixed(1)}%`;
 const kmLabel = (bin: number) => `Km ${bin}–${bin + 4}`;
@@ -81,50 +81,6 @@ const prescriptiveResourceOption: EChartsOption = {
   series: [{ type: "bar", data: [3, 5, 8, 2], itemStyle: { color: "#4f7de5", borderRadius: [8, 8, 0, 0] } }],
 };
 
-function CustomSelect({ value, options, onChange }: { value: string; options: { label: string; value: string }[]; onChange: (val: string) => void }) {
-  const [open, setOpen] = useState(false);
-  const ref = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    if (!open) return;
-    const clickOut = (e: MouseEvent) => {
-      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
-    };
-    document.addEventListener("mousedown", clickOut);
-    return () => document.removeEventListener("mousedown", clickOut);
-  }, [open]);
-
-  const selectedLabel = options.find((o) => o.value === value)?.label || value;
-
-  return (
-    <div className={styles.customSelectWrap} ref={ref}>
-      <button className={styles.customSelectBtn} onClick={() => setOpen(!open)} aria-expanded={open}>
-        {selectedLabel}
-        <svg width="12" height="12" viewBox="0 0 16 16" fill="none"><path d="M4 6l4 4 4-4" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" /></svg>
-      </button>
-      {open && (
-        <div className={styles.customSelectMenu}>
-          {options.map((o) => (
-            <button
-              key={o.value}
-              className={`${styles.customSelectOption} ${value === o.value ? styles.customSelectOptionActive : ""}`}
-              onClick={() => {
-                onChange(o.value);
-                setOpen(false);
-              }}
-            >
-              {o.label}
-              {value === o.value && (
-                <svg width="14" height="14" viewBox="0 0 16 16" fill="none" style={{ marginLeft: "auto", color: "var(--brand-primary)" }}><path d="M3.5 8.5l3 3 6-7" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" /></svg>
-              )}
-            </button>
-          ))}
-        </div>
-      )}
-    </div>
-  );
-}
-
 export default function IncidentPage() {
   const [activeTab, setActiveTab] = useState<"Descriptive" | "Predictive" | "Prescriptive">("Descriptive");
 
@@ -132,10 +88,11 @@ export default function IncidentPage() {
   const [rangeMode, setRangeMode] = useState<RangeMode>("12");
   const [customFrom, setCustomFrom] = useState("");
   const [customTo, setCustomTo] = useState("");
-  const [source, setSource] = useState<SourceFilter>("all");
+  const [weather, setWeather] = useState<WeatherFilter>("all");
 
   // Chart-local interactivity
   const [grain, setGrain] = useState<Granularity>("monthly");
+  const [timeView, setTimeView] = useState<"hour" | "dow">("hour");
   const [causeMode, setCauseMode] = useState<"Causes" | "Types">("Causes");
   const [allHotspotsOpen, setAllHotspotsOpen] = useState(false);
   const [detail, setDetail] = useState<Detail | null>(null);
@@ -156,7 +113,7 @@ export default function IncidentPage() {
     } else {
       qs.set("months", rangeMode);
     }
-    if (source !== "all") qs.set("source", source);
+    if (weather !== "all") qs.set("weather", weather);
     fetch(`${BACKEND}/api/incident/analytics?${qs}`, { cache: "no-store" })
       .then((r) => r.json())
       .then((json) => {
@@ -169,7 +126,7 @@ export default function IncidentPage() {
     return () => {
       cancelled = true;
     };
-  }, [rangeMode, customFrom, customTo, source]);
+  }, [rangeMode, customFrom, customTo, weather]);
 
   // ---------- Derived ----------
   const derived = useMemo(() => {
@@ -182,11 +139,12 @@ export default function IncidentPage() {
     const hotspotTotal = hotspots.reduce((s, h) => s + h.total, 0);
     const topHotspot = hotspots[0] ?? null;
 
-    // Crash rate per 1,000 hours, wet vs dry (crashes = road + moto)
+    // Crash rate per day of each weather, wet vs dry (crashes = road + moto).
+    // Exposure-normalized: wet hours are far rarer than dry, so raw counts can't be compared.
     const wetCrashes = weather.incidents.wet.road + weather.incidents.wet.moto;
     const dryCrashes = weather.incidents.dry.road + weather.incidents.dry.moto;
-    const wetRate = weather.wetHours > 0 ? (wetCrashes / weather.wetHours) * 1000 : 0;
-    const dryRate = weather.dryHours > 0 ? (dryCrashes / weather.dryHours) * 1000 : 0;
+    const wetRate = weather.wetHours > 0 ? (wetCrashes / weather.wetHours) * 24 : 0;
+    const dryRate = weather.dryHours > 0 ? (dryCrashes / weather.dryHours) * 24 : 0;
     const rainMultiplier = dryRate > 0 ? wetRate / dryRate : null;
 
     return { deltaPct, topHotspot, hotspotTotal, wetRate, dryRate, rainMultiplier };
@@ -224,39 +182,123 @@ export default function IncidentPage() {
       lineStyle: { width: 2.5, color },
     });
 
-    const series =
-      source === "all"
-        ? [mk("Road crashes", "road", BLUE), mk("Motorcycle crashes", "moto", PURPLE), mk("Stalled vehicles", "stalled", ORANGE)]
-        : [mk(SOURCE_LABEL[source], source, source === "road" ? BLUE : source === "moto" ? PURPLE : ORANGE)];
+    const series = [mk("Road crashes", "road", BLUE), mk("Motorcycle crashes", "moto", PURPLE), mk("Stalled vehicles", "stalled", ORANGE)];
 
     return {
       grid: { left: 52, right: 16, top: 30, bottom: 22 },
       xAxis: { type: "category", data: labels, axisLabel: { interval: labelInterval, fontSize: 10, hideOverlap: true }, axisTick: { show: false } },
       yAxis: { type: "value", splitNumber: 3, axisLabel: { fontSize: 10 } },
       tooltip: { trigger: "axis", valueFormatter: (v) => (v == null ? "—" : fmtInt(Number(v))) },
-      legend: { show: source === "all", top: 0, right: 8, itemWidth: 14, textStyle: { fontSize: 11 } },
+      legend: { show: true, top: 0, right: 8, itemWidth: 14, textStyle: { fontSize: 11 } },
       series,
     };
-  }, [trendRows, grain, source]);
+  }, [trendRows, grain]);
 
-  const heatmapOption = useMemo<EChartsOption | null>(() => {
+  // Weekday/weekend hourly profile + day-of-week averages, normalized per day
+  // so 5 weekdays vs 2 weekend days compare fairly.
+  const timeProfile = useMemo(() => {
     if (!data || data.heatmap.length === 0) return null;
-    const heatData: [number, number, number][] = data.heatmap.map((r) => [r.hour, DOW_ORDER.indexOf(r.dow), r.v]);
-    const heatMax = Math.max(...data.heatmap.map((r) => r.v));
+    const dowCount = [0, 0, 0, 0, 0, 0, 0]; // index = JS getDay()
+    const end = new Date(`${data.range.to}T00:00:00`);
+    for (const d = new Date(`${data.range.from}T00:00:00`); d <= end; d.setDate(d.getDate() + 1)) dowCount[d.getDay()]++;
+    const weekdayDays = dowCount[1] + dowCount[2] + dowCount[3] + dowCount[4] + dowCount[5];
+    const weekendDays = dowCount[0] + dowCount[6];
+    const totalDays = weekdayDays + weekendDays;
+
+    const wkHour = Array<number>(24).fill(0);
+    const weHour = Array<number>(24).fill(0);
+    const dowTotals = Array<number>(7).fill(0);
+    for (const r of data.heatmap) {
+      if (r.dow >= 1 && r.dow <= 5) wkHour[r.hour] += r.v;
+      else weHour[r.hour] += r.v;
+      dowTotals[r.dow] += r.v;
+    }
+
+    const weekday = wkHour.map((v) => (weekdayDays > 0 ? v / weekdayDays : 0));
+    const weekend = weHour.map((v) => (weekendDays > 0 ? v / weekendDays : 0));
+    const allHour = wkHour.map((v, h) => (totalDays > 0 ? (v + weHour[h]) / totalDays : 0));
+    const hourTotals = wkHour.map((v, h) => v + weHour[h]);
+    const peakHour = allHour.indexOf(Math.max(...allHour));
+    const quietHour = allHour.indexOf(Math.min(...allHour));
+
+    // Mon..Sun display order
+    const dowAvg = DOW_ORDER.map((d) => (dowCount[d] > 0 ? dowTotals[d] / dowCount[d] : 0));
+    const dowTotalOrdered = DOW_ORDER.map((d) => dowTotals[d]);
+    const dowDaysOrdered = DOW_ORDER.map((d) => dowCount[d]);
+    const busiestDow = dowAvg.indexOf(Math.max(...dowAvg));
+
+    return { weekday, weekend, hourTotals, peakHour, quietHour, dowAvg, dowTotalOrdered, dowDaysOrdered, busiestDow };
+  }, [data]);
+
+  const timeTakeaway = timeProfile
+    ? `Peak around ${fmtHour(timeProfile.peakHour)} · quietest around ${fmtHour(timeProfile.quietHour)} · busiest day: ${DOW_LABELS[timeProfile.busiestDow]}`
+    : null;
+
+  const timeOption = useMemo<EChartsOption | null>(() => {
+    if (!timeProfile) return null;
+
+    if (timeView === "hour") {
+      const peakIdx = timeProfile.weekday.indexOf(Math.max(...timeProfile.weekday));
+      return {
+        grid: { left: 44, right: 16, top: 34, bottom: 24 },
+        xAxis: { type: "category", boundaryGap: false, data: Array.from({ length: 24 }, (_, h) => fmtHour(h)), axisLabel: { interval: 3, fontSize: 10 }, axisTick: { show: false } },
+        yAxis: { type: "value", name: "avg incidents / day", nameGap: 10, nameTextStyle: { fontSize: 9, align: "left" }, splitNumber: 3, axisLabel: { fontSize: 10 } },
+        tooltip: { trigger: "axis", valueFormatter: (v) => (v == null ? "—" : `${fmt1(Number(v))} / day`) },
+        legend: { show: true, top: 0, right: 8, itemWidth: 14, textStyle: { fontSize: 11 } },
+        series: [
+          {
+            name: "Weekdays",
+            type: "line",
+            data: timeProfile.weekday.map((v) => Number(v.toFixed(2))),
+            symbol: "none",
+            smooth: true,
+            itemStyle: { color: BLUE },
+            lineStyle: { width: 2.5, color: BLUE },
+            markPoint: {
+              symbol: "circle",
+              symbolSize: 8,
+              itemStyle: { color: BLUE, borderColor: "#fff", borderWidth: 2 },
+              label: { show: true, position: "top", fontSize: 10, color: "#475069", formatter: `Peak · ${fmtHour(peakIdx)}` },
+              data: [{ name: "Peak", coord: [peakIdx, Number(timeProfile.weekday[peakIdx].toFixed(2))] }],
+            },
+          },
+          {
+            name: "Weekends",
+            type: "line",
+            data: timeProfile.weekend.map((v) => Number(v.toFixed(2))),
+            symbol: "none",
+            smooth: true,
+            itemStyle: { color: ORANGE },
+            lineStyle: { width: 2.5, color: ORANGE },
+          },
+        ],
+      };
+    }
+
+    const maxIdx = timeProfile.busiestDow;
     return {
-      grid: { left: 40, right: 10, top: 6, bottom: 44 },
-      xAxis: { type: "category", data: Array.from({ length: 24 }, (_, h) => fmtHour(h)), splitArea: { show: true }, axisLabel: { interval: 3, fontSize: 10 }, axisTick: { show: false } },
-      yAxis: { type: "category", data: DOW_LABELS, inverse: true, splitArea: { show: true }, axisLabel: { interval: 0, fontSize: 10 }, axisTick: { show: false } },
+      grid: { left: 44, right: 16, top: 34, bottom: 24 },
+      xAxis: { type: "category", data: DOW_LABELS, axisLabel: { interval: 0, fontSize: 10 }, axisTick: { show: false } },
+      yAxis: { type: "value", name: "avg incidents / day", nameGap: 10, nameTextStyle: { fontSize: 9, align: "left" }, splitNumber: 3, axisLabel: { fontSize: 10 } },
       tooltip: {
         formatter: (p) => {
-          const v = (p as unknown as { value: [number, number, number] }).value;
-          return `${DOW_LABELS[v[1]]} ${fmtHour(v[0])}<br/><b>${fmtInt(v[2])}</b> incidents in range`;
+          const i = (p as { dataIndex: number }).dataIndex;
+          return `<b>${DOW_LABELS[i]}</b><br/>${fmt1(timeProfile.dowAvg[i])} incidents per ${DOW_LABELS[i]} on average<br/>${fmtInt(timeProfile.dowTotalOrdered[i])} total across ${fmtInt(timeProfile.dowDaysOrdered[i])} ${DOW_LABELS[i]}s`;
         },
       },
-      visualMap: { type: "continuous", min: 0, max: heatMax, calculable: false, orient: "horizontal", left: "center", bottom: 0, itemWidth: 8, itemHeight: 110, padding: 0, inRange: { color: SEQ }, textStyle: { fontSize: 9 }, formatter: (v) => fmtInt(Number(v)) },
-      series: [{ type: "heatmap", data: heatData, emphasis: { itemStyle: { borderColor: "#1d3aa8", borderWidth: 1 } } }],
+      series: [
+        {
+          type: "bar",
+          data: timeProfile.dowAvg.map((v, i) => ({
+            value: Number(v.toFixed(2)),
+            itemStyle: { color: i === maxIdx ? BLUE : "#8fa8ee", borderRadius: [4, 4, 0, 0] },
+            label: i === maxIdx ? { show: true, position: "top", fontSize: 10, color: "#475069", formatter: () => fmt1(v) } : undefined,
+          })),
+          barMaxWidth: 26,
+        },
+      ],
     };
-  }, [data]);
+  }, [timeProfile, timeView]);
 
   const hotspotChart = useMemo<{ option: EChartsOption; rows: Analytics["hotspots"] } | null>(() => {
     if (!data || data.hotspots.length === 0) return null;
@@ -328,30 +370,32 @@ export default function IncidentPage() {
     if (w.wetHours === 0 && w.dryHours === 0) return null;
     const cats = ["Road crashes", "Motorcycle crashes", "Stalled vehicles"] as const;
     const keys = ["road", "moto", "stalled"] as const;
-    const rate = (n: number, hours: number) => (hours > 0 ? Number(((n / hours) * 1000).toFixed(1)) : 0);
+    // Per day of that weather = incidents / hours-of-exposure × 24, so rare wet
+    // hours compare fairly against abundant dry hours.
+    const rate = (n: number, hours: number) => (hours > 0 ? Number(((n / hours) * 24).toFixed(1)) : 0);
     return {
       grid: { left: 52, right: 16, top: 30, bottom: 40 },
       xAxis: { type: "category", data: [...cats], axisLabel: { fontSize: 10, interval: 0 }, axisTick: { show: false } },
-      yAxis: { type: "value", name: "per 1,000 hrs", nameGap: 8, nameTextStyle: { fontSize: 9 }, splitNumber: 3, axisLabel: { fontSize: 10 } },
+      yAxis: { type: "value", name: "avg incidents / day", nameGap: 8, nameTextStyle: { fontSize: 9 }, splitNumber: 3, axisLabel: { fontSize: 10 } },
       tooltip: {
         trigger: "axis",
         formatter: (p) => {
           const items = p as { seriesName: string; dataIndex: number; value: number }[];
           const i = items[0].dataIndex;
           const k = keys[i];
-          return `<b>${cats[i]}</b><br/>Dry: ${fmtInt(w.incidents.dry[k])} incidents over ${fmtInt(w.dryHours)} hrs (${items.find((x) => x.seriesName === "Dry hours")?.value}/1,000 hrs)<br/>Wet: ${fmtInt(w.incidents.wet[k])} incidents over ${fmtInt(w.wetHours)} hrs (${items.find((x) => x.seriesName === "Wet hours")?.value}/1,000 hrs)`;
+          return `<b>${cats[i]}</b><br/>Dry weather: ${items.find((x) => x.seriesName === "Dry weather")?.value} per day — ${fmtInt(w.incidents.dry[k])} incidents over ${fmtInt(w.dryHours)} dry hrs<br/>Wet weather: ${items.find((x) => x.seriesName === "Wet weather")?.value} per day — ${fmtInt(w.incidents.wet[k])} incidents over ${fmtInt(w.wetHours)} wet hrs`;
         },
       },
       legend: { show: true, top: 0, right: 8, itemWidth: 14, textStyle: { fontSize: 11 } },
       series: [
-        { name: "Dry hours", type: "bar", data: keys.map((k) => rate(w.incidents.dry[k], w.dryHours)), itemStyle: { color: BLUE, borderRadius: [3, 3, 0, 0] }, barMaxWidth: 26 },
-        { name: "Wet hours", type: "bar", data: keys.map((k) => rate(w.incidents.wet[k], w.wetHours)), itemStyle: { color: ORANGE, borderRadius: [3, 3, 0, 0] }, barMaxWidth: 26 },
+        { name: "Dry weather", type: "bar", data: keys.map((k) => rate(w.incidents.dry[k], w.dryHours)), itemStyle: { color: BLUE, borderRadius: [3, 3, 0, 0] }, barMaxWidth: 26 },
+        { name: "Wet weather", type: "bar", data: keys.map((k) => rate(w.incidents.wet[k], w.wetHours)), itemStyle: { color: ORANGE, borderRadius: [3, 3, 0, 0] }, barMaxWidth: 26 },
       ],
     };
   }, [data, derived]);
 
   // ---------- Click-to-inspect ----------
-  const filtersNote = `Filters: ${source === "all" ? "all incident types" : SOURCE_LABEL[source]}${data ? ` · ${data.range.from} to ${data.range.to}` : ""}`;
+  const filtersNote = `${weather === "all" ? "All weather" : weather === "wet" ? "Wet hours only (rainfall > 0.3 mm)" : "Dry hours only"}${data ? ` · ${data.range.from} to ${data.range.to}` : ""}`;
 
   const onTrendClick = (p: { dataIndex: number }) => {
     const r = trendRows[p.dataIndex];
@@ -376,22 +420,38 @@ export default function IncidentPage() {
     });
   };
 
-  const onHeatmapClick = (p: { value: [number, number, number] }) => {
-    if (!data) return;
-    const [hour, dowIdx, v] = p.value;
-    const all = data.heatmap.map((r) => r.v).sort((a, b) => b - a);
-    const rank = 1 + all.findIndex((x) => x <= v);
-    const max = all[0] ?? 1;
-    setDetail({
-      title: `${DOW_LABELS[dowIdx]} · ${fmtHour(hour)}`,
-      subtitle: "Incident frequency for this hour-slot",
-      rows: [
-        ["Incidents in range", fmtInt(v)],
-        ["Share of peak slot", `${((v / max) * 100).toFixed(0)}% of ${fmtInt(max)}`],
-        ["Rank", `#${rank} of ${all.length} hour-slots`],
-      ],
-      note: filtersNote,
-    });
+  const onTimeClick = (p: { dataIndex: number }) => {
+    if (!timeProfile) return;
+    if (timeView === "hour") {
+      const h = p.dataIndex;
+      const totals = [...timeProfile.hourTotals].sort((a, b) => b - a);
+      const rank = 1 + totals.findIndex((x) => x <= timeProfile.hourTotals[h]);
+      setDetail({
+        title: `${fmtHour(h)} – ${fmtHour((h + 1) % 24)}`,
+        subtitle: "Incident frequency in this hour of day",
+        rows: [
+          ["Avg on a weekday", `${fmt1(timeProfile.weekday[h])} incidents`],
+          ["Avg on a weekend day", `${fmt1(timeProfile.weekend[h])} incidents`],
+          ["Total in range", fmtInt(timeProfile.hourTotals[h])],
+          ["Rank among hours", `#${rank} of 24`],
+        ],
+        note: filtersNote,
+      });
+    } else {
+      const i = p.dataIndex;
+      const avgs = [...timeProfile.dowAvg].sort((a, b) => b - a);
+      const rank = 1 + avgs.findIndex((x) => x <= timeProfile.dowAvg[i]);
+      setDetail({
+        title: DOW_LABELS[i],
+        subtitle: "Incident frequency on this day of week",
+        rows: [
+          ["Avg per day", `${fmt1(timeProfile.dowAvg[i])} incidents`],
+          ["Total in range", `${fmtInt(timeProfile.dowTotalOrdered[i])} across ${fmtInt(timeProfile.dowDaysOrdered[i])} ${DOW_LABELS[i]}s`],
+          ["Rank among days", `#${rank} of 7`],
+        ],
+        note: filtersNote,
+      });
+    }
   };
 
   const showHotspotDetail = (r: Analytics["hotspots"][number]) => {
@@ -447,12 +507,12 @@ export default function IncidentPage() {
       rows: [
         ["Incidents in dry hours", `${fmtInt(w.incidents.dry[k])} over ${fmtInt(w.dryHours)} hrs`],
         ["Incidents in wet hours", `${fmtInt(w.incidents.wet[k])} over ${fmtInt(w.wetHours)} hrs`],
-        ["Dry rate", w.dryHours > 0 ? `${((w.incidents.dry[k] / w.dryHours) * 1000).toFixed(1)} per 1,000 hrs` : "—"],
-        ["Wet rate", w.wetHours > 0 ? `${((w.incidents.wet[k] / w.wetHours) * 1000).toFixed(1)} per 1,000 hrs` : "—"],
+        ["Rate in dry weather", w.dryHours > 0 ? `${((w.incidents.dry[k] / w.dryHours) * 24).toFixed(1)} per day` : "—"],
+        ["Rate in wet weather", w.wetHours > 0 ? `${((w.incidents.wet[k] / w.wetHours) * 24).toFixed(1)} per day` : "—"],
         ["Avg jam speed (dry)", w.jam.dry ? `${w.jam.dry.speed} km/h` : "—"],
         ["Avg jam speed (wet)", w.jam.wet ? `${w.jam.wet.speed} km/h` : "—"],
       ],
-      note: "Rates are exposure-normalized: incidents divided by the number of hours with that weather, so wet and dry compare fairly.",
+      note: "Rates are exposure-normalized: incidents ÷ hours with that weather, scaled to a 24-hour day. Wet hours are much rarer than dry, so raw counts can't be compared directly.",
     });
   };
 
@@ -486,6 +546,7 @@ export default function IncidentPage() {
           <div className={styles.modeTabs}>
             {(["Descriptive", "Predictive", "Prescriptive"] as const).map((t) => (
               <button key={t} className={`${styles.modeTab} ${activeTab === t ? styles.modeTabActive : ""}`} onClick={() => setActiveTab(t)}>
+                {activeTab === t && <svg width="12" height="12" viewBox="0 0 16 16" fill="none" style={{ marginRight: 6, marginBottom: -1 }}><path d="M3.5 8.5l3 3 6-7" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" /></svg>}
                 {t}
               </button>
             ))}
@@ -516,10 +577,12 @@ export default function IncidentPage() {
       {/* Row A — global filters */}
       <div className={styles.filterRow}>
         <div className={styles.filterGroup}>
+          <svg width="15" height="15" viewBox="0 0 16 16" fill="none" style={{ color: "var(--text-muted)" }}><rect x="2" y="2" width="12" height="12" rx="3" stroke="currentColor" strokeWidth="1.4" /><path d="M2 6h12" stroke="currentColor" strokeWidth="1.4" /><path d="M5.5 2V4M10.5 2V4" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" /></svg>
           <span className={styles.filterLabel}>Range</span>
           <div className={styles.segmented}>
             {(["3", "12", "all", "custom"] as const).map((m) => (
               <button key={m} className={rangeMode === m ? "active" : ""} onClick={() => setRangeMode(m)}>
+                {rangeMode === m && <svg width="12" height="12" viewBox="0 0 16 16" fill="none" style={{ marginRight: 4, marginBottom: -1 }}><path d="M3.5 8.5l3 3 6-7" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" /></svg>}
                 {m === "3" ? "3 mo" : m === "12" ? "12 mo" : m === "all" ? "All" : "Custom"}
               </button>
             ))}
@@ -537,17 +600,16 @@ export default function IncidentPage() {
         </div>
 
         <div className={styles.filterGroup}>
-          <span className={styles.filterLabel}>Type</span>
-          <CustomSelect
-            value={source}
-            onChange={(v) => setSource(v as SourceFilter)}
-            options={[
-              { label: "All incidents", value: "all" },
-              { label: "Road crashes", value: "road" },
-              { label: "Motorcycle crashes", value: "moto" },
-              { label: "Stalled vehicles", value: "stalled" },
-            ]}
-          />
+          <svg width="15" height="15" viewBox="0 0 16 16" fill="none" style={{ color: "var(--text-muted)" }}><path d="M4.5 11.5a3 3 0 1 1 .4-5.97 4 4 0 0 1 7.75 1.1A2.5 2.5 0 0 1 12 11.5H4.5z" stroke="currentColor" strokeWidth="1.4" strokeLinejoin="round" /><path d="M6 13.2v1M9 13.2v1M12 13.2v1" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" /></svg>
+          <span className={styles.filterLabel}>Weather</span>
+          <div className={styles.segmented}>
+            {(["all", "dry", "wet"] as const).map((w) => (
+              <button key={w} className={weather === w ? "active" : ""} onClick={() => setWeather(w)}>
+                {weather === w && <svg width="12" height="12" viewBox="0 0 16 16" fill="none" style={{ marginRight: 4, marginBottom: -1 }}><path d="M3.5 8.5l3 3 6-7" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" /></svg>}
+                {w === "all" ? "All" : w === "dry" ? "Dry" : "Wet"}
+              </button>
+            ))}
+          </div>
         </div>
 
         {loading && data && <span className={styles.updating}>Updating…</span>}
@@ -556,6 +618,7 @@ export default function IncidentPage() {
         <div className={styles.modeTabs}>
           {(["Descriptive", "Predictive", "Prescriptive"] as const).map((t) => (
             <button key={t} className={`${styles.modeTab} ${activeTab === t ? styles.modeTabActive : ""}`} onClick={() => setActiveTab(t)}>
+              {activeTab === t && <svg width="12" height="12" viewBox="0 0 16 16" fill="none" style={{ marginRight: 6, marginBottom: -1 }}><path d="M3.5 8.5l3 3 6-7" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" /></svg>}
               {t}
             </button>
           ))}
@@ -597,7 +660,7 @@ export default function IncidentPage() {
           <h3>Crash Rate in Rain</h3>
           <div className={styles.kpiValue}>{kpiValue(derived?.rainMultiplier != null ? `${derived.rainMultiplier.toFixed(2)}×` : null)}</div>
           <p className={styles.kpiHint}>
-            {derived ? `${derived.wetRate.toFixed(1)} vs ${derived.dryRate.toFixed(1)} crashes/1,000 hrs` : "—"}
+            {derived ? `${derived.wetRate.toFixed(1)} vs ${derived.dryRate.toFixed(1)} crashes/day, wet vs dry` : "—"}
           </p>
         </article>
       </div>
@@ -615,6 +678,7 @@ export default function IncidentPage() {
             <div className={styles.segmentedSmall}>
               {(["daily", "weekly", "monthly"] as const).map((g) => (
                 <button key={g} className={grain === g ? "active" : ""} onClick={() => setGrain(g)}>
+                  {grain === g && <svg width="10" height="10" viewBox="0 0 16 16" fill="none" style={{ marginRight: 4, marginBottom: -1 }}><path d="M3.5 8.5l3 3 6-7" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" /></svg>}
                   {g.charAt(0).toUpperCase() + g.slice(1)}
                 </button>
               ))}
@@ -628,10 +692,19 @@ export default function IncidentPage() {
       <article className={`${styles.chartCard} ${styles.chart2}`}>
         <div className={styles.chartHead}>
           <div className={styles.headText}>
-            <h3>Incident Frequency by Hour × Day of Week</h3>
+            <h3>When Incidents Happen</h3>
+            {timeTakeaway && <p className={styles.subtitle}>{timeTakeaway}</p>}
+          </div>
+          <div className={styles.segmentedSmall}>
+            {(["hour", "dow"] as const).map((v) => (
+              <button key={v} className={timeView === v ? "active" : ""} onClick={() => setTimeView(v)}>
+                {timeView === v && <svg width="10" height="10" viewBox="0 0 16 16" fill="none" style={{ marginRight: 4, marginBottom: -1 }}><path d="M3.5 8.5l3 3 6-7" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" /></svg>}
+                {v === "hour" ? "By hour" : "By day"}
+              </button>
+            ))}
           </div>
         </div>
-        <div className={styles.chartBody}>{chartFrame(heatmapOption, "No data for the selected filters", onHeatmapClick)}</div>
+        <div className={styles.chartBody}>{chartFrame(timeOption, "No data for the selected filters", onTimeClick)}</div>
       </article>
 
       <article className={`${styles.chartCard} ${styles.chart3}`}>
@@ -656,6 +729,7 @@ export default function IncidentPage() {
           <div className={styles.segmentedSmall}>
             {(["Causes", "Types"] as const).map((m) => (
               <button key={m} className={causeMode === m ? "active" : ""} onClick={() => setCauseMode(m)}>
+                {causeMode === m && <svg width="10" height="10" viewBox="0 0 16 16" fill="none" style={{ marginRight: 4, marginBottom: -1 }}><path d="M3.5 8.5l3 3 6-7" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" /></svg>}
                 {m}
               </button>
             ))}
@@ -667,7 +741,7 @@ export default function IncidentPage() {
       <article className={`${styles.chartCard} ${styles.chart5}`}>
         <div className={styles.chartHead}>
           <div className={styles.headText}>
-            <h3>Incident Rate: Dry vs Wet Hours</h3>
+            <h3>Incidents per Day: Dry vs Wet Weather</h3>
           </div>
         </div>
         <div className={styles.chartBody}>{chartFrame(weatherChart, "No weather data in range", onWeatherClick)}</div>

@@ -4,12 +4,14 @@ import { authenticateToken, authorizeRoles } from "../middleware/auth.middleware
 
 const router = Router();
 
-// Apply auth middleware to all audit-log endpoints
+// Read endpoint is public like the other dashboard data endpoints
+router.get("/list", listAuditLogs);
+
+// Apply auth middleware to the remaining audit-log endpoints
 router.use(authenticateToken);
 router.use(authorizeRoles(["data-analyst"]));
 
 router.post("/event", writeAuditEvent);
-router.get("/list", listAuditLogs);
 router.get("/export", exportAuditLogs);
 
 export default router;

@@ -3517,6 +3517,12 @@ body {
   border: 1px solid #f5b5b5;
 }
 
+.ms-badge.green {
+  background: #ddf3e7;
+  color: #1d7a4c;
+  border: 1px solid #b3e2c8;
+}
+
 .ms-location {
   display: flex;
   align-items: center;

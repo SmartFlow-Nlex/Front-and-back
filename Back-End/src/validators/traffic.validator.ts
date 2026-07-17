@@ -21,6 +21,7 @@ export const AnalyticsQuerySchema = z.object({
   plazas: z.string().optional(), // comma-separated plaza names
   direction: z.enum(["NB", "SB"]).optional(),
   vehicleClass: z.enum(["Class 1", "Class 2", "Class 3"]).optional(),
+  weather: z.enum(["all", "dry", "wet"]).optional().default("all"),
 });
 
 // Response Schemas for Documentation and Type Checking

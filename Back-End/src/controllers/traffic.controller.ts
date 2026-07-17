@@ -12,6 +12,7 @@ export const getTrafficAnalytics = async (req: Request, res: Response) => {
     plazas: query.plazas ? query.plazas.split(",").map((p) => p.trim()).filter(Boolean) : undefined,
     direction: query.direction,
     vehicleClass: query.vehicleClass,
+    weather: query.weather,
   });
 
   if (!data) {

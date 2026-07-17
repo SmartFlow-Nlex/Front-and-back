@@ -14,6 +14,7 @@ export type AnalyticsFilters = {
   plazas?: string[];
   direction?: "NB" | "SB";
   vehicleClass?: "Class 1" | "Class 2" | "Class 3";
+  weather?: "all" | "dry" | "wet";
 };
 
 type CacheEntry = { at: number; data: unknown };
@@ -42,16 +43,20 @@ export async function getTrafficAnalyticsFromDb(filters: AnalyticsFilters) {
       lo = f < minDate ? minDate : f;
       hi = t > maxDate ? maxDate : t;
     } else {
-      hi = maxDate;
-      lo =
+      // Month ranges anchor at the default year (2025), clamped to available data:
+      // "12 mo" opens as calendar 2025, "3 mo" as Jan-Apr 2025.
+      const anchor = "2025-01-01";
+      lo = anchor < minDate ? minDate : anchor > maxDate ? minDate : anchor;
+      hi =
         filters.months === "all"
-          ? minDate
+          ? maxDate
           : (
-              await db.query(`SELECT ($1::date - ($2 || ' months')::interval)::date::text AS lo`, [
-                hi,
+              await db.query(`SELECT LEAST(($1::date + ($2 || ' months')::interval)::date, $3::date)::text AS hi`, [
+                lo,
                 filters.months,
+                maxDate,
               ])
-            ).rows[0].lo;
+            ).rows[0].hi;
     }
 
     // Hourly detail is heavy and noisy beyond ~2 weeks; only ship it for short spans
@@ -73,62 +78,132 @@ export async function getTrafficAnalyticsFromDb(filters: AnalyticsFilters) {
     // Same filter without the date bounds (for full-history baselines)
     const volumeWhereNoDate = volumeWhere.replace(` AND date BETWEEN $1 AND $2`, "");
 
+    // Optional weather filter: keep only hours classified wet/dry by expressway-avg
+    // rainfall > 0.3 mm — the same rule as the incident dashboard. Volume queries
+    // switch to per-hour rows joined to the weather grid. Calendar analyses
+    // (events, holidays) compare whole days against baselines and stay unfiltered.
+    const wet = filters.weather && filters.weather !== "all" ? filters.weather === "wet" : null;
+    const wparams = wet === null ? params : [...params, wet];
+    const W = params.length + 1; // $ index of the wet flag in wparams
+    // Spans the previous period too so the KPI comparison stays weather-filtered
+    const TWX_CTE = `
+      wx AS (
+        SELECT (timestamp_utc + interval '8 hours')::date AS d,
+               EXTRACT(hour FROM timestamp_utc + interval '8 hours')::int AS h,
+               AVG(rainfall) > 0.3 AS wet
+        FROM hourly_weather
+        WHERE (timestamp_utc + interval '8 hours')::date BETWEEN $1::date - ($2::date - $1::date + 1) AND $2
+        GROUP BY 1, 2
+      )`;
+    const HV_CTE = `
+      hv AS (
+        SELECT t.date, t.toll_plaza, t.direction, u.hr - 1 AS hour, u.v
+        FROM nlex_traffic_volume t,
+             LATERAL unnest(${HOUR_ARRAY}) WITH ORDINALITY AS u(v, hr)
+        WHERE ${volumeWhere}
+      ),
+      hvw AS (
+        SELECT hv.* FROM hv JOIN wx w ON w.d = hv.date AND w.h = hv.hour WHERE w.wet = $${W}
+      )`;
+    const NB_SB_HOURLY = `COALESCE(SUM(v) FILTER (WHERE direction = 'NB'), 0)::bigint AS nb,
+                          COALESCE(SUM(v) FILTER (WHERE direction = 'SB'), 0)::bigint AS sb`;
+
     const NB_SB = `COALESCE(SUM(${DAY_TOTAL}) FILTER (WHERE direction = 'NB'), 0)::bigint AS nb,
                    COALESCE(SUM(${DAY_TOTAL}) FILTER (WHERE direction = 'SB'), 0)::bigint AS sb`;
 
     const [daily, hourly, byPlaza, hourDow, speedByHour, eventImpact, holidayImpact, holidayYearly, kpi, plazaList] =
       await Promise.all([
         // Daily NB/SB volume
-        db.query(
-          `SELECT date::text AS d, ${NB_SB}
-           FROM nlex_traffic_volume WHERE ${volumeWhere}
-           GROUP BY 1 ORDER BY 1`,
-          params
-        ),
-        // Hourly NB/SB volume — only for short ranges (payload size)
-        includeHourly
+        wet === null
           ? db.query(
-              `SELECT t.date::text AS d, u.hr - 1 AS hour,
-                      COALESCE(SUM(u.v) FILTER (WHERE t.direction = 'NB'), 0)::bigint AS nb,
-                      COALESCE(SUM(u.v) FILTER (WHERE t.direction = 'SB'), 0)::bigint AS sb
-               FROM nlex_traffic_volume t,
-                    LATERAL unnest(${HOUR_ARRAY}) WITH ORDINALITY AS u(v, hr)
-               WHERE ${volumeWhere}
-               GROUP BY 1, 2 ORDER BY 1, 2`,
+              `SELECT date::text AS d, ${NB_SB}
+               FROM nlex_traffic_volume WHERE ${volumeWhere}
+               GROUP BY 1 ORDER BY 1`,
               params
             )
+          : db.query(
+              `WITH ${TWX_CTE}, ${HV_CTE}
+               SELECT date::text AS d, ${NB_SB_HOURLY}
+               FROM hvw GROUP BY 1 ORDER BY 1`,
+              wparams
+            ),
+        // Hourly NB/SB volume — only for short ranges (payload size)
+        includeHourly
+          ? wet === null
+            ? db.query(
+                `SELECT t.date::text AS d, u.hr - 1 AS hour,
+                        COALESCE(SUM(u.v) FILTER (WHERE t.direction = 'NB'), 0)::bigint AS nb,
+                        COALESCE(SUM(u.v) FILTER (WHERE t.direction = 'SB'), 0)::bigint AS sb
+                 FROM nlex_traffic_volume t,
+                      LATERAL unnest(${HOUR_ARRAY}) WITH ORDINALITY AS u(v, hr)
+                 WHERE ${volumeWhere}
+                 GROUP BY 1, 2 ORDER BY 1, 2`,
+                params
+              )
+            : db.query(
+                `WITH ${TWX_CTE}, ${HV_CTE}
+                 SELECT date::text AS d, hour, ${NB_SB_HOURLY}
+                 FROM hvw GROUP BY 1, 2 ORDER BY 1, 2`,
+                wparams
+              )
           : Promise.resolve(null),
         // Volume per plaza — full ranked list (client derives top 10 + Others)
-        db.query(
-          `SELECT toll_plaza AS plaza, SUM(${DAY_TOTAL})::bigint AS v
-           FROM nlex_traffic_volume WHERE ${volumeWhere}
-           GROUP BY 1 ORDER BY 2 DESC`,
-          params
-        ),
+        wet === null
+          ? db.query(
+              `SELECT toll_plaza AS plaza, SUM(${DAY_TOTAL})::bigint AS v
+               FROM nlex_traffic_volume WHERE ${volumeWhere}
+               GROUP BY 1 ORDER BY 2 DESC`,
+              params
+            )
+          : db.query(
+              `WITH ${TWX_CTE}, ${HV_CTE}
+               SELECT toll_plaza AS plaza, SUM(v)::bigint AS v
+               FROM hvw GROUP BY 1 ORDER BY 2 DESC`,
+              wparams
+            ),
         // Average volume per hour-of-day x day-of-week (0=Sun)
-        db.query(
-          `WITH hourly AS (
-             SELECT t.date, u.hr - 1 AS hour, SUM(u.v) AS v
-             FROM nlex_traffic_volume t,
-                  LATERAL unnest(${HOUR_ARRAY}) WITH ORDINALITY AS u(v, hr)
-             WHERE ${volumeWhere}
-             GROUP BY 1, 2
-           )
-           SELECT EXTRACT(dow FROM date)::int AS dow, hour::int, ROUND(AVG(v))::int AS v
-           FROM hourly GROUP BY 1, 2 ORDER BY 1, 2`,
-          params
-        ),
+        wet === null
+          ? db.query(
+              `WITH hourly AS (
+                 SELECT t.date, u.hr - 1 AS hour, SUM(u.v) AS v
+                 FROM nlex_traffic_volume t,
+                      LATERAL unnest(${HOUR_ARRAY}) WITH ORDINALITY AS u(v, hr)
+                 WHERE ${volumeWhere}
+                 GROUP BY 1, 2
+               )
+               SELECT EXTRACT(dow FROM date)::int AS dow, hour::int, ROUND(AVG(v))::int AS v
+               FROM hourly GROUP BY 1, 2 ORDER BY 1, 2`,
+              params
+            )
+          : db.query(
+              `WITH ${TWX_CTE}, ${HV_CTE},
+               hourly AS (SELECT date, hour, SUM(v) AS v FROM hvw GROUP BY 1, 2)
+               SELECT EXTRACT(dow FROM date)::int AS dow, hour::int, ROUND(AVG(v))::int AS v
+               FROM hourly GROUP BY 1, 2 ORDER BY 1, 2`,
+              wparams
+            ),
         // Congestion: avg speed & jam level per hour (Waze jams; date filter only —
         // jam records do not join to plazas/classes)
-        db.query(
-          `SELECT hour_of_day AS hour,
-                  ROUND(AVG(avg_speed_kmh)::numeric, 1)::float AS speed,
-                  ROUND(AVG(avg_jam_level)::numeric, 2)::float AS jam_level
-           FROM fact_hourly_jams
-           WHERE date_day BETWEEN $1 AND $2
-           GROUP BY 1 ORDER BY 1`,
-          [lo, hi]
-        ),
+        wet === null
+          ? db.query(
+              `SELECT hour_of_day AS hour,
+                      ROUND(AVG(avg_speed_kmh)::numeric, 1)::float AS speed,
+                      ROUND(AVG(avg_jam_level)::numeric, 2)::float AS jam_level
+               FROM fact_hourly_jams
+               WHERE date_day BETWEEN $1 AND $2
+               GROUP BY 1 ORDER BY 1`,
+              [lo, hi]
+            )
+          : db.query(
+              `WITH ${TWX_CTE}
+               SELECT j.hour_of_day AS hour,
+                      ROUND(AVG(j.avg_speed_kmh)::numeric, 1)::float AS speed,
+                      ROUND(AVG(j.avg_jam_level)::numeric, 2)::float AS jam_level
+               FROM fact_hourly_jams j JOIN wx w ON w.d = j.date_day AND w.h = j.hour_of_day
+               WHERE j.date_day BETWEEN $1 AND $2 AND w.wet = $3
+               GROUP BY 1 ORDER BY 1`,
+              [lo, hi, wet]
+            ),
         // Philippine Arena events: CDV plaza day volume vs same-weekday baseline
         db.query(
           `WITH cdv AS (
@@ -203,28 +278,58 @@ export async function getTrafficAnalyticsFromDb(filters: AnalyticsFilters) {
           params
         ),
         // KPI: current vs previous period volume + congestion index (avg jam level)
-        db.query(
-          `WITH cur AS (
-             SELECT COALESCE(SUM(${DAY_TOTAL}), 0)::bigint AS total, COUNT(DISTINCT date)::int AS days
-             FROM nlex_traffic_volume WHERE ${volumeWhere}
-           ), prev AS (
-             SELECT COALESCE(SUM(${DAY_TOTAL}), 0)::bigint AS total, COUNT(DISTINCT date)::int AS days
-             FROM nlex_traffic_volume
-             WHERE ${volumeWhereNoDate}
-               AND date >= $1::date - ($2::date - $1::date + 1) AND date < $1::date
-           ), jam_cur AS (
-             SELECT ROUND(AVG(avg_jam_level)::numeric, 2)::float AS jam FROM fact_hourly_jams
-             WHERE date_day BETWEEN $1 AND $2
-           ), jam_prev AS (
-             SELECT ROUND(AVG(avg_jam_level)::numeric, 2)::float AS jam FROM fact_hourly_jams
-             WHERE date_day >= $1::date - ($2::date - $1::date + 1) AND date_day < $1::date
-           )
-           SELECT cur.total AS cur_total, cur.days AS cur_days,
-                  prev.total AS prev_total, prev.days AS prev_days,
-                  jam_cur.jam AS cur_jam, jam_prev.jam AS prev_jam
-           FROM cur, prev, jam_cur, jam_prev`,
-          params
-        ),
+        wet === null
+          ? db.query(
+              `WITH cur AS (
+                 SELECT COALESCE(SUM(${DAY_TOTAL}), 0)::bigint AS total, COUNT(DISTINCT date)::int AS days
+                 FROM nlex_traffic_volume WHERE ${volumeWhere}
+               ), prev AS (
+                 SELECT COALESCE(SUM(${DAY_TOTAL}), 0)::bigint AS total, COUNT(DISTINCT date)::int AS days
+                 FROM nlex_traffic_volume
+                 WHERE ${volumeWhereNoDate}
+                   AND date >= $1::date - ($2::date - $1::date + 1) AND date < $1::date
+               ), jam_cur AS (
+                 SELECT ROUND(AVG(avg_jam_level)::numeric, 2)::float AS jam FROM fact_hourly_jams
+                 WHERE date_day BETWEEN $1 AND $2
+               ), jam_prev AS (
+                 SELECT ROUND(AVG(avg_jam_level)::numeric, 2)::float AS jam FROM fact_hourly_jams
+                 WHERE date_day >= $1::date - ($2::date - $1::date + 1) AND date_day < $1::date
+               )
+               SELECT cur.total AS cur_total, cur.days AS cur_days,
+                      prev.total AS prev_total, prev.days AS prev_days,
+                      jam_cur.jam AS cur_jam, jam_prev.jam AS prev_jam
+               FROM cur, prev, jam_cur, jam_prev`,
+              params
+            )
+          : db.query(
+              `WITH ${TWX_CTE}, ${HV_CTE},
+               hvprev AS (
+                 SELECT t.date, u.hr - 1 AS hour, u.v
+                 FROM nlex_traffic_volume t,
+                      LATERAL unnest(${HOUR_ARRAY}) WITH ORDINALITY AS u(v, hr)
+                 WHERE ${volumeWhereNoDate}
+                   AND t.date >= $1::date - ($2::date - $1::date + 1) AND t.date < $1::date
+               ),
+               hvprevw AS (
+                 SELECT hvprev.* FROM hvprev JOIN wx w ON w.d = hvprev.date AND w.h = hvprev.hour WHERE w.wet = $${W}
+               ),
+               cur AS (SELECT COALESCE(SUM(v), 0)::bigint AS total, COUNT(DISTINCT date)::int AS days FROM hvw),
+               prev AS (SELECT COALESCE(SUM(v), 0)::bigint AS total, COUNT(DISTINCT date)::int AS days FROM hvprevw),
+               jam_cur AS (
+                 SELECT ROUND(AVG(j.avg_jam_level)::numeric, 2)::float AS jam
+                 FROM fact_hourly_jams j JOIN wx w ON w.d = j.date_day AND w.h = j.hour_of_day
+                 WHERE j.date_day BETWEEN $1 AND $2 AND w.wet = $${W}
+               ), jam_prev AS (
+                 SELECT ROUND(AVG(j.avg_jam_level)::numeric, 2)::float AS jam
+                 FROM fact_hourly_jams j JOIN wx w ON w.d = j.date_day AND w.h = j.hour_of_day
+                 WHERE j.date_day >= $1::date - ($2::date - $1::date + 1) AND j.date_day < $1::date AND w.wet = $${W}
+               )
+               SELECT cur.total AS cur_total, cur.days AS cur_days,
+                      prev.total AS prev_total, prev.days AS prev_days,
+                      jam_cur.jam AS cur_jam, jam_prev.jam AS prev_jam
+               FROM cur, prev, jam_cur, jam_prev`,
+              wparams
+            ),
         // All plaza names for the filter control
         db.query(`SELECT DISTINCT toll_plaza AS plaza FROM nlex_traffic_volume ORDER BY 1`),
       ]);

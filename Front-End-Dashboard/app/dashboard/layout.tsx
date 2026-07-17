@@ -166,6 +166,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
   const timeText = now.toLocaleTimeString("en-US", {
     hour: "2-digit",
     minute: "2-digit",
+    second: "2-digit",
   });
 
   let shellClass = "ds-shell";

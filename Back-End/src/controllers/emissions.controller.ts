@@ -1,5 +1,24 @@
 import type { Request, Response } from "express";
-import { getEmissionsIndexFromDb, getPeakPenaltyFromDb, getClimateResilienceFromDb } from "../services/emissions.service.js";
+import { z } from "zod";
+import { getEmissionsIndexFromDb, getPeakPenaltyFromDb, getClimateResilienceFromDb, getEmissionsAnalyticsFromDb } from "../services/emissions.service.js";
+
+const EmissionsAnalyticsQuerySchema = z.object({
+  months: z.enum(["3", "12", "all"]).optional().default("12"),
+  from: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+  to: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+});
+
+// GET /api/emissions/analytics — descriptive dashboard aggregates
+export const getEmissionsAnalytics = async (req: Request, res: Response) => {
+  const query = EmissionsAnalyticsQuerySchema.parse(req.query);
+  const data = await getEmissionsAnalyticsFromDb(query);
+
+  if (!data) {
+    return res.status(503).json({ success: false, message: "Emissions analytics unavailable: database not reachable" });
+  }
+
+  res.json({ success: true, source: "database", data });
+};
 
 // [DEV-01] GET /api/v1/emissions/index
 export const getEmissionsIndex = async (_req: Request, res: Response) => {

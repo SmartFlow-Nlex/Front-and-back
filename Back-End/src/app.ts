@@ -14,6 +14,9 @@ const apiLimiter = rateLimit({
   limit: 200, // Limit each IP to 200 requests per 15 minutes
   standardHeaders: "draft-7", // Standard headers in HTTP
   legacyHeaders: false, // Disable X-RateLimit-* headers
+  // Local development shares one IP across every dashboard tab, so the per-IP
+  // cap trips on normal use — exempt loopback traffic only (user-approved).
+  skip: (req) => req.ip === "127.0.0.1" || req.ip === "::1" || req.ip === "::ffff:127.0.0.1",
   message: {
     success: false,
     message: "Too many requests from this IP, please try again after 15 minutes"

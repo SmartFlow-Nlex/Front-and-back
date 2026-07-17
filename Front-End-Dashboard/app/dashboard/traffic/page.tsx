@@ -168,6 +168,7 @@ export default function TrafficPage() {
   const [plazaSel, setPlazaSel] = useState<string[]>([]); // empty = All
   const [direction, setDirection] = useState<Direction>("Both");
   const [vClass, setVClass] = useState<VehicleClass>("All");
+  const [weather, setWeather] = useState<"all" | "dry" | "wet">("all");
 
   // Chart-local interactivity
   const [grain, setGrain] = useState<Granularity>("daily");
@@ -197,6 +198,7 @@ export default function TrafficPage() {
     if (plazaSel.length > 0) qs.set("plazas", plazaSel.join(","));
     if (direction !== "Both") qs.set("direction", direction);
     if (vClass !== "All") qs.set("vehicleClass", vClass);
+    if (weather !== "all") qs.set("weather", weather);
     fetch(`${BACKEND}/api/traffic/analytics?${qs}`, { cache: "no-store" })
       .then((r) => r.json())
       .then((json) => {
@@ -209,7 +211,7 @@ export default function TrafficPage() {
     return () => {
       cancelled = true;
     };
-  }, [rangeMode, customFrom, customTo, plazaSel, direction, vClass]);
+  }, [rangeMode, customFrom, customTo, plazaSel, direction, vClass, weather]);
 
   // Hourly grain exists only when the server shipped hourly rows (spans <= ~3 months)
   const hourlyAvailable = !!data?.hourlyTrend;
@@ -692,6 +694,19 @@ export default function TrafficPage() {
               }}
             />
           )}
+        </div>
+
+        <div className={styles.filterGroup}>
+          <svg width="15" height="15" viewBox="0 0 16 16" fill="none" style={{ color: "var(--text-muted)" }}><path d="M4.5 11.5a3 3 0 1 1 .4-5.97 4 4 0 0 1 7.75 1.1A2.5 2.5 0 0 1 12 11.5H4.5z" stroke="currentColor" strokeWidth="1.4" strokeLinejoin="round" /><path d="M6 13.2v1M9 13.2v1M12 13.2v1" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" /></svg>
+          <span className={styles.filterLabel}>Weather</span>
+          <div className={styles.segmented}>
+            {(["all", "dry", "wet"] as const).map((w) => (
+              <button key={w} className={weather === w ? "active" : ""} onClick={() => setWeather(w)}>
+                {weather === w && <svg width="12" height="12" viewBox="0 0 16 16" fill="none" style={{ marginRight: 4, marginBottom: -1 }}><path d="M3.5 8.5l3 3 6-7" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" /></svg>}
+                {w === "all" ? "All" : w === "dry" ? "Dry" : "Wet"}
+              </button>
+            ))}
+          </div>
         </div>
 
         {loading && data && <span className={styles.updating}>Updating…</span>}

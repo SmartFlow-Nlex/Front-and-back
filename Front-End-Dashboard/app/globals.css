@@ -4023,6 +4023,42 @@ body {
   inset: 0;
 }
 
+/* Graceful fallback when Mapbox can't initialize (e.g. missing token) */
+.map-fallback {
+  position: absolute;
+  inset: 0;
+  z-index: 5;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  gap: 8px;
+  padding: 24px;
+  background: var(--bg-surface, #fff);
+  color: var(--text-muted, #6b7b94);
+}
+.map-fallback svg { color: var(--text-muted, #9aa4b8); opacity: 0.7; }
+.map-fallback-title {
+  margin: 4px 0 0;
+  font-size: 1rem;
+  font-weight: 700;
+  color: var(--text-secondary, #4b5e7d);
+}
+.map-fallback-body {
+  margin: 0;
+  max-width: 340px;
+  font-size: 0.82rem;
+  line-height: 1.5;
+}
+.map-fallback code {
+  background: var(--bg-body, #f3f5f9);
+  border-radius: 4px;
+  padding: 1px 5px;
+  font-size: 0.78rem;
+  margin: 0 2px;
+}
+
 /* Overlays */
 .mc-live-clock {
   position: absolute;

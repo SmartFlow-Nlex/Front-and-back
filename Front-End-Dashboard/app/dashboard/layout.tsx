@@ -257,9 +257,11 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
           </div>
 
           <div className="ds-topbar-right">
+            {/* Live clock differs between server render and first client tick;
+                suppress the expected hydration text mismatch on these nodes. */}
             <div className="ds-datetime-block">
-              <span>{dateText}</span>
-              <strong>{timeText}</strong>
+              <span suppressHydrationWarning>{dateText}</span>
+              <strong suppressHydrationWarning>{timeText}</strong>
             </div>
           </div>
         </header>

@@ -3,7 +3,7 @@
 import "mapbox-gl/dist/mapbox-gl.css";
 import mapboxgl, { GeoJSONSource } from "mapbox-gl";
 import type { Point } from "geojson";
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import nlexGeometry from "./nlex-geometry.json";
 import nlexRamps from "./nlex-ramps.json";
 
@@ -22,27 +22,43 @@ export default function TrafficMapPanel({ title, subtitle, badge, endpoint, laye
   const containerRef = useRef<HTMLDivElement | null>(null);
   const activeMarkers = useRef<mapboxgl.Marker[]>([]);
   const alertMarkersRef = useRef<mapboxgl.Marker[]>([]);
-
+  // "ok" once the map builds; otherwise show a graceful fallback instead of
+  // letting Mapbox throw and take the whole page down.
+  const [status, setStatus] = useState<"ok" | "no-token" | "error">("ok");
 
   useEffect(() => {
     if (!containerRef.current) return;
 
-    mapboxgl.accessToken = process.env.NEXT_PUBLIC_MAPBOX_TOKEN || "";
-    const map = new mapboxgl.Map({
-      container: containerRef.current,
-      style: "mapbox://styles/mapbox/light-v11", // Gray base map
-      center: [120.79, 14.94],
-      zoom: 9.2,
-      minZoom: 9.0, // Max zoom out restricted to this view
-      maxBounds: [
-        [120.4, 14.5], // Southwest bound (Manila Bay area)
-        [121.2, 15.3]  // Northeast bound (past Sta. Ines)
-      ],
-      pitch: 0, // Flat (2D)
-      bearing: 0, // North up
-      attributionControl: false,
-    });
+    const token = process.env.NEXT_PUBLIC_MAPBOX_TOKEN;
+    if (!token) {
+      setStatus("no-token");
+      return;
+    }
 
+    mapboxgl.accessToken = token;
+    let map: mapboxgl.Map;
+    try {
+      map = new mapboxgl.Map({
+        container: containerRef.current,
+        style: "mapbox://styles/mapbox/light-v11", // Gray base map
+        center: [120.79, 14.94],
+        zoom: 9.2,
+        minZoom: 9.0, // Max zoom out restricted to this view
+        maxBounds: [
+          [120.4, 14.5], // Southwest bound (Manila Bay area)
+          [121.2, 15.3]  // Northeast bound (past Sta. Ines)
+        ],
+        pitch: 0, // Flat (2D)
+        bearing: 0, // North up
+        attributionControl: false,
+      });
+    } catch (err) {
+      console.error("Mapbox failed to initialize:", err);
+      setStatus("error");
+      return;
+    }
+
+    setStatus("ok");
     mapRef.current = map;
     map.addControl(new mapboxgl.NavigationControl({ showCompass: false }), "top-right");
 
@@ -767,6 +783,28 @@ export default function TrafficMapPanel({ title, subtitle, badge, endpoint, laye
       </header>
       <div className="map-canvas-container">
         <div className="map-canvas mapbox" ref={containerRef} />
+        {status !== "ok" && (
+          <div className="map-fallback">
+            <svg width="34" height="34" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M9 20 3 17V4l6 3 6-3 6 3v13l-6-3-6 3Z" />
+              <path d="M9 7v13M15 4v13" />
+            </svg>
+            {status === "no-token" ? (
+              <>
+                <p className="map-fallback-title">Map unavailable</p>
+                <p className="map-fallback-body">
+                  A Mapbox access token is required. Add <code>NEXT_PUBLIC_MAPBOX_TOKEN</code> to
+                  <code>Front-End-Dashboard/.env.local</code> and restart the dev server.
+                </p>
+              </>
+            ) : (
+              <>
+                <p className="map-fallback-title">Map failed to load</p>
+                <p className="map-fallback-body">The map could not be initialized. Check the access token and console for details.</p>
+              </>
+            )}
+          </div>
+        )}
         {children}
       </div>
     </article>

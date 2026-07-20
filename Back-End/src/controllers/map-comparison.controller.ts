@@ -14,36 +14,21 @@ const fallbackRealtime = {
         feature_type: "jam",
         level: 3,
         speed: 42,
-        street: "NLEX Balintawak",
-        city: "Caloocan",
+        street: "NLEX Balintawak to Paso de Blas",
+        city: "Caloocan / Valenzuela",
         delay_seconds: 180,
       },
       geometry: {
         type: "LineString",
         coordinates: [
-          [120.9842, 14.6575],
-          [120.9905, 14.673],
-          [121.0002, 14.6911],
-          [121.009, 14.7105],
-          [121.0172, 14.728],
+          [121.00009, 14.67877],
+          [121.00020, 14.68200],
+          [121.00025, 14.68600],
+          [121.00031, 14.69347],
+          [120.99800, 14.69800],
+          [120.99600, 14.70200],
+          [120.99300, 14.70821],
         ],
-      },
-    },
-    {
-      type: "Feature",
-      properties: {
-        feature_type: "alert",
-        type: "ACCIDENT",
-        subtype: "ACCIDENT_MINOR",
-        street: "NLEX Bocaue",
-        city: "Bocaue",
-        report_description: "Minor collision on northbound lane. Drive carefully.",
-        reliability: 6,
-        confidence: 4,
-      },
-      geometry: {
-        type: "Point",
-        coordinates: [121.0172, 14.728],
       },
     },
   ],
@@ -58,6 +43,14 @@ function parseWktLineString(wkt: string): [number, number][] {
     const [lon, lat] = pair.trim().split(/\s+/).map(Number);
     return [lon, lat] as [number, number];
   }).filter(c => !isNaN(c[0]) && !isNaN(c[1]));
+}
+
+function isNlexCorridor(street: string): boolean {
+  const s = (street || "").toLowerCase();
+  // Ensure it explicitly matches NLEX, rather than generic terms like "expressway" or "ah26" which leak into SLEX/EDSA.
+  const hasNlex = s.includes("nlex") || s.includes("north luzon");
+  const isServiceOrCrossRoad = s.includes("service") || s.includes("crossing") || s.includes("exit rd") || s.includes("interchange service") || s.includes("halili") || s.includes("dulalia") || s.includes("tullahan") || s.includes("libtong") || s.includes("slex") || s.includes("skyway") || s.includes("sctex") || s.includes("tplex") || s.includes("cavitex");
+  return hasNlex && !isServiceOrCrossRoad;
 }
 
 // [DEV-01, DEV-03] GET /api/v1/map-comparison/real-time
@@ -85,25 +78,33 @@ export const getMapRealtime = async (_req: Request, res: Response) => {
 
     // Transform Waze active alerts
     for (const alert of rawAlerts) {
-      if (alert.longitude !== undefined && alert.latitude !== undefined) {
+      const street = alert.street || "";
+      const lat = Number(alert.latitude);
+      const lon = Number(alert.longitude);
+      const type = (alert.type || "HAZARD").toUpperCase();
+      
+      // Skip JAM point alerts to prevent red dots on top of traffic lines
+      if (type === "JAM") continue;
+
+      if (alert.longitude !== undefined && alert.latitude !== undefined && isNlexCorridor(street) && lat >= 14.63) {
         features.push({
           type: "Feature",
           properties: {
             feature_type: "alert",
             uuid: alert.uuid,
-            street: alert.street || "",
+            street,
             city: alert.city || "",
             report_description: alert.report_description || "",
             reliability: alert.reliability || 0,
             confidence: alert.confidence || 0,
-            type: (alert.type || "HAZARD").toUpperCase(),
+            type,
             subtype: alert.subtype || "",
             first_seen_at: alert.first_seen_at || "",
             last_seen_at: alert.last_seen_at || "",
           },
           geometry: {
             type: "Point",
-            coordinates: [Number(alert.longitude), Number(alert.latitude)],
+            coordinates: [lon, lat],
           },
         });
       }
@@ -111,32 +112,32 @@ export const getMapRealtime = async (_req: Request, res: Response) => {
 
     // Transform Waze active jams
     for (const jam of rawJams) {
-      const coords = parseWktLineString(jam.polyline);
-      if (coords.length >= 2) {
-        features.push({
-          type: "Feature",
-          properties: {
-            feature_type: "jam",
-            uuid: jam.uuid,
-            street: jam.street || "",
-            city: jam.city || "",
-            level: Number(jam.level) || 1,
-            speed: Number(jam.speed_kmh) || 0,
-            length_meters: Number(jam.length_meters) || 0,
-            delay_seconds: Number(jam.delay_seconds) || 0,
-            first_seen_at: jam.first_seen_at || "",
-            last_seen_at: jam.last_seen_at || "",
-          },
-          geometry: {
-            type: "LineString",
-            coordinates: coords,
-          },
-        });
+      const street = jam.street || "";
+      if (isNlexCorridor(street)) {
+        const coords = parseWktLineString(jam.polyline);
+        const isNlexBounds = coords.some(c => c[1] >= 14.63);
+        if (coords.length >= 2 && isNlexBounds) {
+          features.push({
+            type: "Feature",
+            properties: {
+              feature_type: "jam",
+              uuid: jam.uuid,
+              street,
+              city: jam.city || "",
+              level: Number(jam.level) || 1,
+              speed: Number(jam.speed_kmh) || 0,
+              length_meters: Number(jam.length_meters) || 0,
+              delay_seconds: Number(jam.delay_seconds) || 0,
+              first_seen_at: jam.first_seen_at || "",
+              last_seen_at: jam.last_seen_at || "",
+            },
+            geometry: {
+              type: "LineString",
+              coordinates: coords,
+            },
+          });
+        }
       }
-    }
-
-    if (features.length === 0) {
-      return res.json(fallbackRealtime);
     }
 
     res.json({

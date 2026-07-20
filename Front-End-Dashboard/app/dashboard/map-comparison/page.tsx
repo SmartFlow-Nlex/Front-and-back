@@ -4,7 +4,7 @@ import { useState, useEffect } from "react";
 import { 
   CarFront, Cone, ShieldAlert, AlertTriangle, AlertCircle, 
   Clock, ChevronDown, Navigation, ZoomIn, ZoomOut, Search,
-  Milestone, CornerUpRight
+  Milestone
 } from "lucide-react";
 import type { Feature } from "geojson";
 import TrafficMapPanel from "../../../components/maps/TrafficMapPanel";

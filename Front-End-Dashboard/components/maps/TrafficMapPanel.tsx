@@ -55,7 +55,7 @@ export default function TrafficMapPanel({ title, subtitle, badge, endpoint, laye
             layer.id.includes("road") ||
             layer.id.includes("bridge") ||
             layer.id.includes("tunnel") ||
-            (layer as any)["source-layer"] === "road"
+            (layer as Record<string, unknown>)["source-layer"] === "road"
           ) {
             map.setLayoutProperty(layer.id, "visibility", "none");
           }
@@ -91,7 +91,7 @@ export default function TrafficMapPanel({ title, subtitle, badge, endpoint, laye
             {
               type: "Feature",
               properties: {},
-              geometry: nlexGeometry as any,
+              geometry: nlexGeometry as GeoJSON.Geometry,
             },
           ],
         },
@@ -103,7 +103,7 @@ export default function TrafficMapPanel({ title, subtitle, badge, endpoint, laye
       // entrance/exit sections the teal fully replaces the orange instead of the two overlapping.
       map.addSource("nlex-ramps", {
         type: "geojson",
-        data: nlexRamps as any,
+        data: nlexRamps as GeoJSON.FeatureCollection,
       });
 
       // Layer 1: Base NLEX Casing
@@ -617,14 +617,14 @@ export default function TrafficMapPanel({ title, subtitle, badge, endpoint, laye
 
       // Render alerts as HTML markers to ensure they are highly visible and don't rely on Mapbox GL circle layer filtering,
       // but remove CSS transitions so they don't drift during zoom.
-      const renderAlerts = (geojson: any) => {
+      const renderAlerts = (geojson: GeoJSON.FeatureCollection | Record<string, unknown>) => {
         // Clear old alert markers
         alertMarkersRef.current.forEach((m) => m.remove());
         alertMarkersRef.current = [];
 
-        if (!geojson || !geojson.features) return;
+        if (!geojson || !("features" in geojson) || !Array.isArray(geojson.features)) return;
         
-        geojson.features.forEach((feature: any) => {
+        geojson.features.forEach((feature: GeoJSON.Feature) => {
           if (feature.properties?.feature_type !== "alert") return;
           // Skip JAM point alerts since they are rendered as lines on the road
           if (feature.properties?.type === "JAM") return;
@@ -720,7 +720,7 @@ export default function TrafficMapPanel({ title, subtitle, badge, endpoint, laye
           `);
 
           const marker = new mapboxgl.Marker({ element: el, anchor: "center" })
-            .setLngLat(coords)
+            .setLngLat(coords as [number, number])
             .setPopup(popup)
             .addTo(map);
             
@@ -733,7 +733,7 @@ export default function TrafficMapPanel({ title, subtitle, badge, endpoint, laye
       }
 
       const source = map.getSource("traffic") as GeoJSONSource;
-      const pollingInterval = setInterval(async () => {
+      const _pollingInterval = setInterval(async () => {
         try {
           const fresh = await fetch(endpoint, { cache: "no-store" }).then((r) => r.json());
           source.setData(fresh);

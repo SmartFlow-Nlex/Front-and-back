@@ -47,8 +47,9 @@ function parseWktLineString(wkt: string): [number, number][] {
 
 function isNlexCorridor(street: string): boolean {
   const s = (street || "").toLowerCase();
-  const hasNlex = s.includes("nlex") || s.includes("north luzon") || s.includes("expressway") || s.includes("ah26") || s.includes("e1");
-  const isServiceOrCrossRoad = s.includes("service rd") || s.includes("service road") || s.includes("crossing") || s.includes("exit rd") || s.includes("interchange service") || s.includes("halili") || s.includes("dulalia") || s.includes("tullahan") || s.includes("libtong") || s.includes("slex") || s.includes("south luzon") || s.includes("skyway");
+  // Ensure it explicitly matches NLEX, rather than generic terms like "expressway" or "ah26" which leak into SLEX/EDSA.
+  const hasNlex = s.includes("nlex") || s.includes("north luzon");
+  const isServiceOrCrossRoad = s.includes("service") || s.includes("crossing") || s.includes("exit rd") || s.includes("interchange service") || s.includes("halili") || s.includes("dulalia") || s.includes("tullahan") || s.includes("libtong") || s.includes("slex") || s.includes("skyway") || s.includes("sctex") || s.includes("tplex") || s.includes("cavitex");
   return hasNlex && !isServiceOrCrossRoad;
 }
 

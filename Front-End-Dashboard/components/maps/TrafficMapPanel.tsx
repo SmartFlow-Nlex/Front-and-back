@@ -4,6 +4,8 @@ import "mapbox-gl/dist/mapbox-gl.css";
 import mapboxgl, { GeoJSONSource } from "mapbox-gl";
 import type { Point } from "geojson";
 import { useEffect, useRef } from "react";
+import nlexGeometry from "./nlex-geometry.json";
+import nlexRamps from "./nlex-ramps.json";
 
 type Props = {
   title: string;
@@ -28,9 +30,14 @@ export default function TrafficMapPanel({ title, subtitle, badge, endpoint, laye
     mapboxgl.accessToken = process.env.NEXT_PUBLIC_MAPBOX_TOKEN || "";
     const map = new mapboxgl.Map({
       container: containerRef.current,
-      style: "mapbox://styles/mapbox/streets-v12", // Mapbox Streets design matching the screenshot
+      style: "mapbox://styles/mapbox/light-v11", // Gray base map
       center: [120.79, 14.94],
       zoom: 9.2,
+      minZoom: 9.0, // Max zoom out restricted to this view
+      maxBounds: [
+        [120.4, 14.5], // Southwest bound (Manila Bay area)
+        [121.2, 15.3]  // Northeast bound (past Sta. Ines)
+      ],
       pitch: 0, // Flat (2D)
       bearing: 0, // North up
       attributionControl: false,
@@ -38,6 +45,23 @@ export default function TrafficMapPanel({ title, subtitle, badge, endpoint, laye
 
     mapRef.current = map;
     map.addControl(new mapboxgl.NavigationControl({ showCompass: false }), "top-right");
+
+    // Hide all other roads from the base map so ONLY the NLEX corridor is visible
+    map.on("style.load", () => {
+      const layers = map.getStyle().layers;
+      if (layers) {
+        layers.forEach((layer) => {
+          if (
+            layer.id.includes("road") ||
+            layer.id.includes("bridge") ||
+            layer.id.includes("tunnel") ||
+            (layer as any)["source-layer"] === "road"
+          ) {
+            map.setLayoutProperty(layer.id, "visibility", "none");
+          }
+        });
+      }
+    });
 
     const resizeObserver = new ResizeObserver(() => {
       map.resize();
@@ -58,31 +82,137 @@ export default function TrafficMapPanel({ title, subtitle, badge, endpoint, laye
         data,
       });
 
-      // Jam Lines Layer
+      // Add the base NLEX corridor source
+      map.addSource("nlex-corridor", {
+        type: "geojson",
+        data: {
+          type: "FeatureCollection",
+          features: [
+            {
+              type: "Feature",
+              properties: {},
+              geometry: nlexGeometry as any,
+            },
+          ],
+        },
+      });
+
+      // NLEX Entrance / Exit ramps (on- & off-ramps into and out of the corridor).
+      // Sourced from OSM motorway_link/motorway geometry, so they trace the real road centerlines.
+      // NOTE: the ramp layers themselves are added AFTER the mainline (further below) so that on
+      // entrance/exit sections the teal fully replaces the orange instead of the two overlapping.
+      map.addSource("nlex-ramps", {
+        type: "geojson",
+        data: nlexRamps as any,
+      });
+
+      // Layer 1: Base NLEX Casing
+      map.addLayer({
+        id: "nlex-casing",
+        type: "line",
+        source: "nlex-corridor",
+        layout: {
+          "line-join": "round",
+          "line-cap": "round",
+        },
+        paint: {
+          "line-color": "#475569", // Slate grey border
+          "line-width": [
+            "interpolate", ["exponential", 1.5], ["zoom"],
+            8,   3,
+            12,  7,
+            16,  16,
+          ],
+          "line-opacity": 0.8,
+        },
+      }); 
+
+      // Layer 2: Base NLEX Surface
+      map.addLayer({
+        id: "nlex-surface",
+        type: "line",
+        source: "nlex-corridor",
+        layout: {
+          "line-join": "round",
+          "line-cap": "round",
+        },
+        paint: {
+          "line-color": "#f59e0b", // Solid Orange
+          "line-width": [
+            "interpolate", ["exponential", 1.5], ["zoom"],
+            8,   1.5,
+            12,  4.5,
+            16,  12,
+          ],
+          "line-opacity": 0.9,
+        },
+      });
+
+      // Entrance / Exit ramp casing — drawn ON TOP of the mainline and at least as wide as the
+      // corridor casing, so where a ramp coincides with the corridor the teal fully covers the
+      // orange (no orange/teal overlap on entrance & exit sections).
+      map.addLayer({
+        id: "nlex-ramp-casing",
+        type: "line",
+        source: "nlex-ramps",
+        layout: {
+          "line-join": "round",
+          "line-cap": "round",
+        },
+        paint: {
+          "line-color": "#0f766e", // Deep teal border (keeps ramps reading as teal, not grey)
+          "line-width": [
+            "interpolate", ["exponential", 1.5], ["zoom"],
+            8,   3.5,
+            12,  8,
+            16,  18,
+          ],
+          "line-opacity": 1,
+        },
+      });
+
+      // Entrance / Exit ramp surface — teal fill, matches the corridor width so it reads as the
+      // same expressway while clearly marking the on/off ramps.
+      map.addLayer({
+        id: "nlex-ramp-surface",
+        type: "line",
+        source: "nlex-ramps",
+        layout: {
+          "line-join": "round",
+          "line-cap": "round",
+        },
+        paint: {
+          "line-color": "#14b8a6", // Teal / Emerald — entrance & exit ramps
+          "line-width": [
+            "interpolate", ["exponential", 1.5], ["zoom"],
+            8,   1.6,
+            12,  4.8,
+            16,  12.5,
+          ],
+          "line-opacity": 1,
+        },
+      });
+
+      // Layer 3: Jam Lines Layer (Overlays on top for realtime)
       map.addLayer({
         id: "traffic-line",
         type: "line",
         source: "traffic",
+        layout: {
+          "line-join": "round",
+          "line-cap": "round",
+        },
         paint: {
-          "line-color": isRealtime
-            ? [
-              "match",
-              ["get", "level"],
-              1, "#10b981", // Light (Green)
-              2, "#f59e0b", // Moderate (Yellow/Orange)
-              3, "#f97316", // Heavy (Orange)
-              4, "#ef4444", // Severe (Red)
-              5, "#b91c1c", // Standstill (Dark Red)
-              "#10b981"    // Fallback (Green)
-            ]
-            : [
-              "interpolate",
-              ["linear"],
-              ["get", "congestion_score"],
-              0.2, "#a855f7",
-              0.6, "#8b5cf6",
-              0.9, "#6d28d9"
-            ],
+          "line-color": [
+            "match",
+            ["get", "level"],
+            1, "#10b981", // Light (Green)
+            2, "#f59e0b", // Moderate (Yellow/Orange)
+            3, "#f97316", // Heavy (Orange)
+            4, "#ef4444", // Severe (Red)
+            5, "#b91c1c", // Standstill (Dark Red)
+            "#10b981"    // Fallback (Green)
+          ],
           "line-width": [
             "interpolate",
             ["linear"],
@@ -93,9 +223,7 @@ export default function TrafficMapPanel({ title, subtitle, badge, endpoint, laye
           ],
           "line-opacity": 0.85,
         },
-        filter: isRealtime
-          ? ["==", ["get", "feature_type"], "jam"]
-          : ["==", ["geometry-type"], "LineString"],
+        filter: ["==", ["get", "feature_type"], "jam"],
       });
 
       // Incident / Alert Points Layer — native Mapbox circle (always pixel-perfect)

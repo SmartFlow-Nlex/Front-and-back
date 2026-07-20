@@ -4,7 +4,7 @@ import { useState, useEffect } from "react";
 import { 
   CarFront, Cone, ShieldAlert, AlertTriangle, AlertCircle, 
   Clock, ChevronDown, Navigation, ZoomIn, ZoomOut, Search,
-  Milestone
+  Milestone, CornerUpRight
 } from "lucide-react";
 import type { Feature } from "geojson";
 import TrafficMapPanel from "../../../components/maps/TrafficMapPanel";
@@ -120,6 +120,7 @@ export default function MapComparisonPage() {
                 <div className="mc-report-row"><span className="mc-icon-bg darkred"><AlertTriangle size={12} /></span> Accident</div>
                 <div className="mc-report-row"><span className="mc-icon-bg yellow"><AlertCircle size={12} /></span> Hazard</div>
                 <div className="mc-report-row"><span className="mc-icon-bg cyan" style={{ backgroundColor: "#06b6d4" }}><Milestone size={12} /></span> Toll Plaza</div>
+                <div className="mc-report-row"><span className="mc-density-line" style={{ backgroundColor: "#14b8a6" }}></span> Entry / Exit Ramp</div>
               </div>
             </div>
           </TrafficMapPanel>

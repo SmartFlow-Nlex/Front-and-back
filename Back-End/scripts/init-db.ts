@@ -1,7 +1,12 @@
 import { Pool } from "pg";
 import { env } from "../src/config/env.js";
 
-const db = env.POSTGRES_URL ? new Pool({ connectionString: env.POSTGRES_URL }) : null;
+const db = env.POSTGRES_URL
+  ? new Pool({ 
+      connectionString: env.POSTGRES_URL.replace(/[?&]ssl=true/, ''),
+      ssl: { rejectUnauthorized: false }
+    })
+  : null;
 
 async function runSeeder() {
   if (!db) {

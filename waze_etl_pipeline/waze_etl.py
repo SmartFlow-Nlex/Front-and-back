@@ -264,7 +264,7 @@ def transform_and_load_alerts(conn, alerts, weather_id=None, time_id=None):
             """
             SELECT location_id 
             FROM dim_location 
-            WHERE ST_DWithin(geom, ST_SetSRID(ST_MakePoint(%s, %s), 4326), 0.001)
+            WHERE ST_DWithin(geom, ST_SetSRID(ST_MakePoint(%s, %s), 4326), 0.005)
             ORDER BY ST_Distance(geom, ST_SetSRID(ST_MakePoint(%s, %s), 4326)) ASC
             LIMIT 1
             """,
@@ -360,7 +360,7 @@ def transform_and_load_jams(conn, jams, time_id=None):
             """
             SELECT location_id 
             FROM dim_location 
-            WHERE ST_DWithin(geom, ST_GeomFromText(%s, 4326), 0.001)
+            WHERE ST_DWithin(geom, ST_GeomFromText(%s, 4326), 0.005)
             ORDER BY ST_Distance(geom, ST_GeomFromText(%s, 4326)) ASC
             LIMIT 1
             """,

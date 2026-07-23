@@ -78,6 +78,7 @@ const A_MAX = 1.4; // max accel m/s^2
 const B_COMF = 2.0; // comfortable decel m/s^2
 const S0 = 2.5; // minimum bumper gap m
 const DELTA = 4;
+const INCIDENT_LENGTH = 5; // a stalled vehicle occupies ~5 m of lane
 
 const B_SAFE = 4.0; // MOBIL: max decel a follower may be forced into
 const LC_THRESHOLD = 0.2; // MOBIL: incentive threshold m/s^2
@@ -185,14 +186,19 @@ export class TrafficSim {
   // Gap + relative speed to whatever is ahead in a given lane: real leader,
   // an incident, or a lane-closure taper. Returns null if the road is clear.
   private leaderAhead(v: Vehicle, lane: number): { gap: number; dv: number } | null {
+    // `x` is the front bumper; track the front of the nearest thing ahead
+    // (`bestX`) and its length (`leadLen`) so the bumper-to-bumper gap is
+    // measured to the leader's REAR — not miscounted through our own body.
     let bestX = Infinity;
     let leadV = 0;
+    let leadLen = 0;
     // real vehicles
     for (const o of this.vehicles) {
       if (o === v || o.lane !== lane) continue;
       if (o.x > v.x && o.x < bestX) {
         bestX = o.x;
         leadV = o.v;
+        leadLen = o.length;
       }
     }
     // incidents (stopped obstacles) in this lane
@@ -200,16 +206,17 @@ export class TrafficSim {
       if (inc.lane === lane && inc.x > v.x && inc.x < bestX) {
         bestX = inc.x;
         leadV = 0;
+        leadLen = INCIDENT_LENGTH;
       }
     }
     // lane closure acts as a stopped obstacle at the taper point
     if (this.interventions.closedLanes[lane] && this.interventions.closurePoint > v.x && this.interventions.closurePoint < bestX) {
       bestX = this.interventions.closurePoint;
       leadV = 0;
+      leadLen = 0;
     }
     if (!isFinite(bestX)) return null;
-    const leadLen = leadV > 0 ? 0 : 0; // obstacles are points; vehicle length handled below
-    const gap = bestX - v.x - v.length - leadLen;
+    const gap = bestX - v.x - leadLen;
     return { gap: Math.max(0.1, gap), dv: v.v - leadV };
   }
 
@@ -224,6 +231,20 @@ export class TrafficSim {
     return free + interaction;
   }
 
+  // Would merging a vehicle of `length` at front-position `x` land it on top of
+  // (or right up against) a stalled incident in `lane`? Used to stop cars from
+  // changing lanes directly onto an accident.
+  private incidentTooCloseInLane(lane: number, x: number, length: number): boolean {
+    for (const inc of this.interventions.incidents) {
+      if (inc.lane !== lane) continue;
+      const incFront = inc.x;
+      const incRear = inc.x - INCIDENT_LENGTH;
+      // the vehicle would occupy [x - length, x]; require an S0 buffer each side
+      if (incFront > x - length - S0 && incRear < x + S0) return true;
+    }
+    return false;
+  }
+
   // MOBIL-ish lane change: pick the neighbouring lane that is safe and offers a
   // meaningfully better acceleration, with a strong pull out of a blocked lane.
   private considerLaneChange(v: Vehicle) {
@@ -233,6 +254,8 @@ export class TrafficSim {
     const candidates = [v.lane - 1, v.lane + 1].filter((l) => l >= 0 && l < this.cfg.laneCount && !this.interventions.closedLanes[l]);
     let best: { lane: number; gain: number } | null = null;
     for (const lane of candidates) {
+      // never change lanes onto (or right up against) an accident
+      if (this.incidentTooCloseInLane(lane, v.x, v.length)) continue;
       // safety: would the new follower have to brake harder than B_SAFE?
       let follower: Vehicle | null = null;
       let fx = -Infinity;
@@ -264,7 +287,7 @@ export class TrafficSim {
     const p = PROFILE[f.profile];
     const v0 = this.desiredSpeed(f);
     const free = A_MAX * (1 - Math.pow(f.v / Math.max(1, v0), DELTA));
-    const gap = Math.max(0.1, leadX - f.x - f.length - leadLen);
+    const gap = Math.max(0.1, leadX - f.x - leadLen);
     const dv = f.v - leadV;
     const sStar = S0 + Math.max(0, f.v * p.T + (f.v * dv) / (2 * Math.sqrt(A_MAX * B_COMF)));
     return free - A_MAX * Math.pow(sStar / gap, 2);
@@ -280,6 +303,33 @@ export class TrafficSim {
     const g = moving + idle;
     v.co2 += g;
     this.co2Window.push({ t: this.time, g });
+  }
+
+  // Nearest impassable point ahead of `fromX` in a lane: the rear of a stalled
+  // incident, or a closed lane's taper. Infinity if the lane is clear ahead.
+  private blockPointAhead(lane: number, fromX: number): number {
+    let wall = Infinity;
+    for (const inc of this.interventions.incidents) {
+      if (inc.lane !== lane) continue;
+      const rear = inc.x - INCIDENT_LENGTH;
+      if (rear >= fromX && rear < wall) wall = rear;
+    }
+    if (this.interventions.closedLanes[lane]) {
+      const cp = this.interventions.closurePoint;
+      if (cp >= fromX && cp < wall) wall = cp;
+    }
+    return wall;
+  }
+
+  // Place a stalled-vehicle incident. Any car sitting on that spot is absorbed
+  // into the accident (removed) so nothing appears to drive out of it.
+  addIncident(lane: number, x: number) {
+    const front = x + 1;
+    const rear = x - INCIDENT_LENGTH - 1;
+    this.vehicles = this.vehicles.filter(
+      (v) => v.lane !== lane || v.x - v.length >= front || v.x <= rear
+    );
+    this.interventions.incidents.push({ lane, x });
   }
 
   step(dt: number) {
@@ -303,12 +353,21 @@ export class TrafficSim {
 
     // Longitudinal update (ballistic integration, clamped to >= 0).
     for (const v of this.vehicles) {
+      const oldX = v.x;
       const a = Math.max(-8, Math.min(A_MAX, this.idmAccel(v, v.lane)));
       const vNew = Math.max(0, v.v + a * dt);
-      const dist = Math.max(0, (v.v + vNew) / 2 * dt);
-      v.x += dist;
+      v.x += Math.max(0, (v.v + vNew) / 2 * dt);
       v.v = vNew;
-      this.emit(v, dist, dt);
+      // Safety net: a discrete step can carry a fast car *past* a stalled
+      // obstacle the IDM couldn't brake for in time. Never let a car drive
+      // out the far side of an accident (or closed-lane taper) — it stops
+      // against it instead.
+      const wall = this.blockPointAhead(v.lane, oldX);
+      if (v.x > wall) {
+        v.x = wall;
+        v.v = 0;
+      }
+      this.emit(v, Math.max(0, v.x - oldX), dt);
     }
 
     // Retire vehicles that cleared the segment; record travel time.

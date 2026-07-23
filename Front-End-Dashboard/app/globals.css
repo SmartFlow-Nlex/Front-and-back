@@ -2141,6 +2141,66 @@ body {
   gap: 14px;
 }
 
+/* ---------- AI Sandbox: fit the page to the viewport so the whole page
+   no longer scrolls; only the Scenario card's controls scroll, while its
+   "Scenario" title stays pinned in place. ---------- */
+.sandbox-page {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.sandbox-page .dm-head,
+.sandbox-page .sandbox-metric-row {
+  flex-shrink: 0;
+}
+
+.sandbox-page .sandbox-grid {
+  flex: 1;
+  min-height: 0;
+  grid-template-rows: minmax(0, 1fr);
+}
+
+.sandbox-page .sandbox-main,
+.sandbox-page .sandbox-side {
+  min-height: 0;
+}
+
+/* Left card: let the simulation canvas grow to fill the card so there is no
+   empty space below the prescriptive recommendation. */
+.sandbox-page .sandbox-main {
+  display: flex;
+  flex-direction: column;
+}
+
+.sandbox-page .sandbox-canvas {
+  flex: 1;
+  height: auto;
+  min-height: 280px;
+}
+
+/* Scenario card becomes a fixed-height column: pinned title + scrolling body */
+.sandbox-page .sandbox-side {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.sandbox-page .sandbox-side > h2,
+.sandbox-page .sandbox-side > .sandbox-side-head {
+  flex-shrink: 0;
+}
+
+.sandbox-side-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  /* pull the scrollbar to the card edge without shifting the controls */
+  margin-right: -8px;
+  padding-right: 8px;
+}
+
 .sandbox-main,
 .sandbox-side {
   background: var(--bg-surface);
@@ -2347,6 +2407,114 @@ body {
 }
 .sandbox-btn-row { display: flex; gap: 8px; margin-top: 10px; }
 .sandbox-btn-row .btn-primary, .sandbox-btn-row .btn-muted { margin-left: 0; }
+
+/* Incident placement mode */
+.sandbox-canvas.placing { cursor: crosshair; }
+.btn-muted.active {
+  background: var(--color-danger-bg);
+  color: var(--color-danger);
+  box-shadow: inset 0 0 0 1px var(--color-danger-border);
+}
+.sandbox-place-hint {
+  margin: 8px 0 0;
+  font-size: 0.76rem;
+  font-weight: 600;
+  color: var(--color-danger);
+}
+
+/* ---------- Simulation Controls / Command mode toggle ---------- */
+.sandbox-side-head {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-bottom: 14px;
+}
+.sandbox-side-head h2 {
+  margin: 0;
+}
+.sandbox-mode-seg {
+  display: flex;
+  gap: 3px;
+  background: #e7ecf5;
+  border-radius: var(--radius-sm);
+  padding: 3px;
+}
+.sandbox-mode-seg button {
+  flex: 1;
+  border: 0;
+  background: transparent;
+  padding: 7px 10px;
+  font-size: 0.82rem;
+  font-weight: 700;
+  border-radius: 6px;
+  cursor: pointer;
+  color: #3b4f6b;
+  transition: background-color var(--transition-fast), color var(--transition-fast);
+}
+.sandbox-mode-seg button.active {
+  background: #fff;
+  color: var(--brand-primary);
+  box-shadow: var(--shadow-sm);
+}
+
+/* ---------- AI Command Prompt (preview) ---------- */
+.ai-command {
+  border: 1px solid #e7ebf4;
+  border-radius: var(--radius-lg);
+  padding: 16px;
+  background: linear-gradient(180deg, #faf8ff, var(--bg-surface));
+}
+.ai-command-sub {
+  margin: 0 0 12px;
+  font-size: 0.82rem;
+  color: var(--text-secondary);
+}
+.ai-command-input {
+  width: 100%;
+  resize: vertical;
+  min-height: 96px;
+  border: 1px dashed #c7b6f0;
+  border-radius: var(--radius-md);
+  padding: 12px;
+  font-size: 0.88rem;
+  font-family: inherit;
+  line-height: 1.45;
+  color: var(--text-primary);
+  background: #ffffff;
+  outline: none;
+  transition: border-color var(--transition-fast), box-shadow var(--transition-fast);
+}
+.ai-command-input::placeholder { color: var(--text-muted); }
+.ai-command-input:focus {
+  border-style: solid;
+  border-color: var(--brand-primary);
+  box-shadow: 0 0 0 3px rgba(49, 83, 232, 0.15);
+}
+.ai-command-btn {
+  width: 100%;
+  margin-top: 12px;
+  border: 0;
+  border-radius: var(--radius-md);
+  padding: 12px;
+  font-size: 0.92rem;
+  font-weight: 700;
+  color: #fff;
+  cursor: pointer;
+  background: linear-gradient(90deg, #7c3aed, #2d46d2);
+  transition: filter var(--transition-fast), opacity var(--transition-fast);
+}
+.ai-command-btn:hover:not(:disabled) { filter: brightness(1.08); }
+.ai-command-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+.ai-command-note {
+  margin: 12px 0 0;
+  font-size: 0.8rem;
+  line-height: 1.5;
+  color: var(--text-secondary);
+  background: var(--color-purple-bg);
+  border-left: 3px solid var(--brand-primary);
+  border-radius: 8px;
+  padding: 10px 12px;
+}
 .sandbox-baseline-note {
   font-size: 0.76rem;
   color: var(--text-muted);
@@ -2763,6 +2931,23 @@ body {
 
   .sandbox-grid {
     grid-template-columns: 1fr;
+  }
+
+  /* Stacked layout: revert to normal full-page scroll, drop the
+     viewport-locked Scenario-card scrolling used on wide screens. */
+  .sandbox-page,
+  .sandbox-page .sandbox-side {
+    overflow: visible;
+  }
+
+  .sandbox-page .sandbox-grid {
+    grid-template-rows: none;
+  }
+
+  .sandbox-side-scroll {
+    overflow: visible;
+    margin-right: 0;
+    padding-right: 0;
   }
 
   .ds-feature-grid {
@@ -4021,6 +4206,11 @@ body {
 .map-canvas-container .map-canvas {
   position: absolute;
   inset: 0;
+  /* Override the fixed 380px height from the base .map-canvas rule.
+     With top/bottom AND height set, absolute positioning is over-constrained
+     and ignores `bottom`, leaving the map stuck at 380px. Force full height. */
+  height: 100%;
+  width: 100%;
 }
 
 /* Graceful fallback when Mapbox can't initialize (e.g. missing token) */

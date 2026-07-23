@@ -47,6 +47,13 @@ export default function AiSandboxPage() {
   const [closedLanes, setClosedLanes] = useState<boolean[]>(Array(4).fill(false));
   const [speedLimit, setSpeedLimit] = useState<number | null>(null);
   const [incidentCount, setIncidentCount] = useState(0);
+  const [placingIncident, setPlacingIncident] = useState(false);
+
+  // Simulation Controls card can flip between the manual controls and an
+  // (in-training) natural-language command prompt for the NLEX corridor.
+  const [sideMode, setSideMode] = useState<"controls" | "command">("controls");
+  const [command, setCommand] = useState("");
+  const [commandNote, setCommandNote] = useState<string | null>(null);
 
   const [metrics, setMetrics] = useState<Metrics | null>(null);
   const [baseline, setBaseline] = useState<Baseline | null>(null);
@@ -145,13 +152,55 @@ export default function AiSandboxPage() {
     return () => cancelAnimationFrame(rafRef.current);
   }, [running, simSpeed]);
 
-  const dropIncident = () => {
+  // Incident placement: arm "placing" mode, then let the user click the
+  // simulation to choose exactly where (which lane / how far along) the
+  // incident is dropped. One accident per click — re-arm to drop another.
+  const togglePlacing = () => setPlacingIncident((p) => !p);
+
+  const placeIncidentAt = (e: React.MouseEvent<HTMLCanvasElement>) => {
+    if (!placingIncident) return;
+    const canvas = canvasRef.current;
     const sim = simRef.current;
-    if (!sim) return;
-    const open = closedLanes.map((c, i) => (c ? -1 : i)).filter((i) => i >= 0);
-    const lane = open[Math.floor(Math.random() * open.length)] ?? 0;
-    sim.interventions.incidents.push({ lane, x: SEG_LENGTH * (0.45 + Math.random() * 0.15) });
+    if (!canvas || !sim) return;
+
+    // Invert the same geometry the renderer uses to map the click back to
+    // (lane, x-in-metres). Keep these formulas in sync with render().
+    const rect = canvas.getBoundingClientRect();
+    const cssW = rect.width;
+    const cssH = rect.height;
+    const cx = e.clientX - rect.left;
+    const cy = e.clientY - rect.top;
+    const L = sim.cfg.length;
+    const lanes = sim.cfg.laneCount;
+    const pad = 8;
+    const laneH = Math.min((cssH - pad * 2) / lanes, 88);
+    const roadTop = (cssH - laneH * lanes) / 2;
+
+    const lane = Math.max(0, Math.min(lanes - 1, Math.floor((cy - roadTop) / laneH)));
+    const x = Math.max(0, Math.min(L, (cx / cssW) * L));
+    sim.addIncident(lane, x);
     setIncidentCount(sim.interventions.incidents.length);
+    setPlacingIncident(false); // one accident per click; re-arm to drop another
+  };
+
+  // Esc leaves incident-placing mode.
+  useEffect(() => {
+    if (!placingIncident) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setPlacingIncident(false);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [placingIncident]);
+
+  // The natural-language command AI isn't wired up yet (still being trained),
+  // so for now the prompt just acknowledges the input as a preview.
+  const runCommand = () => {
+    const text = command.trim();
+    if (!text) return;
+    setCommandNote(
+      `🤖 Command received: "${text}". The AI that turns this into traffic actions is still being trained, so nothing was applied yet — natural-language control is coming soon.`
+    );
   };
   const clearIncidents = () => {
     const sim = simRef.current;
@@ -179,7 +228,7 @@ export default function AiSandboxPage() {
   const destExit = EXITS[destination];
 
   return (
-    <section className="ds-content ds-long">
+    <section className="ds-content sandbox-page">
       <div className="dm-head" style={{ marginBottom: 4 }}>
         <div>
           <h1 className="tab-title">AI Traffic Sandbox</h1>
@@ -187,7 +236,6 @@ export default function AiSandboxPage() {
             Agent-based what-if simulation · {originExit.name} → {destExit.name} corridor
           </p>
         </div>
-        <span className="pill blue">Live digital twin</span>
       </div>
 
       {/* Live metric tiles */}
@@ -240,7 +288,11 @@ export default function AiSandboxPage() {
             </div>
           </div>
 
-          <canvas ref={canvasRef} className="sandbox-canvas" />
+          <canvas
+            ref={canvasRef}
+            className={`sandbox-canvas ${placingIncident ? "placing" : ""}`}
+            onClick={placeIncidentAt}
+          />
 
           <div className="sandbox-legend">
             <span><i style={{ background: CLASS_META[1].color }} /> Class 1 · light</span>
@@ -257,8 +309,30 @@ export default function AiSandboxPage() {
 
         {/* Controls */}
         <aside className="sandbox-side">
-          <h2>Scenario</h2>
+          <div className="sandbox-side-head">
+            <h2>{sideMode === "command" ? "Command Prompt" : "Simulation Controls"}</h2>
+            <div className="sandbox-mode-seg" role="tablist">
+              <button
+                role="tab"
+                aria-selected={sideMode === "controls"}
+                className={sideMode === "controls" ? "active" : ""}
+                onClick={() => setSideMode("controls")}
+              >
+                Controls
+              </button>
+              <button
+                role="tab"
+                aria-selected={sideMode === "command"}
+                className={sideMode === "command" ? "active" : ""}
+                onClick={() => setSideMode("command")}
+              >
+                Command
+              </button>
+            </div>
+          </div>
 
+          {sideMode === "controls" ? (
+          <div className="sandbox-side-scroll">
           <div className="sandbox-section-title">Corridor</div>
           <label>
             Origin
@@ -331,13 +405,21 @@ export default function AiSandboxPage() {
           </div>
 
           <div className="sandbox-btn-row">
-            <button className="btn-muted" onClick={dropIncident}>
-              Drop incident
+            <button
+              className={`btn-muted ${placingIncident ? "active" : ""}`}
+              onClick={togglePlacing}
+            >
+              {placingIncident ? "Placing… (click map)" : "Drop incident"}
             </button>
             <button className="btn-muted" onClick={clearIncidents} disabled={incidentCount === 0}>
               Clear ({incidentCount})
             </button>
           </div>
+          {placingIncident && (
+            <p className="sandbox-place-hint">
+              Click a lane on the simulation to drop an incident · Esc to cancel
+            </p>
+          )}
 
           <div className="sandbox-slider-group">
             <div className="sandbox-slider-header">
@@ -378,6 +460,31 @@ export default function AiSandboxPage() {
               Baseline: {fmt(baseline.avgSpeedKmh)} km/h · {fmt(baseline.throughputPerMin)}/min
               {anyIntervention ? " · comparing against current interventions" : " · no interventions applied yet"}
             </p>
+          )}
+          </div>
+          ) : (
+          <div className="sandbox-side-scroll">
+            <div className="ai-command">
+              <p className="ai-command-sub">
+                Type natural-language commands to control traffic on the NLEX corridor.
+              </p>
+              <textarea
+                className="ai-command-input"
+                rows={4}
+                value={command}
+                onChange={(e) => setCommand(e.target.value)}
+                placeholder={'Try: "From Balintawak close lane 4" or "Set 2 lanes open"'}
+              />
+              <button
+                className="ai-command-btn"
+                onClick={runCommand}
+                disabled={!command.trim()}
+              >
+                Execute Command
+              </button>
+              {commandNote && <p className="ai-command-note">{commandNote}</p>}
+            </div>
+          </div>
           )}
         </aside>
       </div>
@@ -481,9 +588,11 @@ function render(ctx: CanvasRenderingContext2D, canvas: HTMLCanvasElement, sim: T
   const L = sim.cfg.length;
   const lanes = sim.cfg.laneCount;
   const pad = 8;
-  // Cap lane height so vehicles sit in a realistically proportioned lane
-  // (the along-road scale is compressed, so tall lanes would stretch cars).
-  const laneH = Math.min((cssH - pad * 2) / lanes, 44);
+  // Let lanes grow to fill the taller canvas. Vehicle length and width are
+  // bounded independently below (true-to-scale), so lanes just gain breathing
+  // room instead of stretching the cars. The cap only prevents absurdly tall
+  // lanes on very large screens.
+  const laneH = Math.min((cssH - pad * 2) / lanes, 88);
   const roadH = laneH * lanes;
   const roadTop = (cssH - roadH) / 2;
   const mToPx = cssW / L;
@@ -537,10 +646,16 @@ function render(ctx: CanvasRenderingContext2D, canvas: HTMLCanvasElement, sim: T
   // than it is wide and keeps stopped vehicles from overlapping.
   const minLen: Record<number, number> = { 1: 14, 2: 26, 3: 40 };
   const widthM: Record<number, number> = { 1: 1.9, 2: 2.5, 3: 2.6 };
+  // Keep the length scale modest so queued sprites don't overhang into each
+  // other (cars are spaced by their *physical* length): a bigger factor here
+  // reads as an overlapping pile rather than a line. Width can be exaggerated
+  // more for legibility since it doesn't affect car-following spacing.
+  const lenScale = 1.25;
+  const widScale = 1.6;
   for (const v of sim.vehicles) {
     const y = roadTop + v.lane * laneH + laneH * 0.5;
-    const len = Math.max(minLen[v.vClass], v.length * mToPx);
-    const wid = Math.min(laneH * 0.6, widthM[v.vClass] * mToPx * 1.7);
+    const len = Math.max(minLen[v.vClass], v.length * mToPx) * lenScale;
+    const wid = Math.min(laneH * 0.82, widthM[v.vClass] * mToPx * 1.7 * widScale);
     drawVehicle(ctx, xPx(v.x), y, len, wid, v.vClass, v.color, v.v < 3);
   }
 

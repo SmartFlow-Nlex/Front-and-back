@@ -6,8 +6,9 @@ import incidentRoutes from "./incident.routes.js";
 import emissionsRoutes from "./emissions.routes.js";
 import mapComparisonRoutes from "./map-comparison.routes.js";
 import aiSandboxRoutes from "./ai-sandbox.routes.js";
-import dataManagementRoutes from "./data-management.routes.js";
+import maintenanceRoutes from "./maintenance.routes.js";
 import auditLogRoutes from "./audit-log.routes.js";
+import uploadRoutes from "./upload.routes.js";
 
 const router = Router();
 
@@ -18,7 +19,8 @@ router.use("/incident", incidentRoutes);
 router.use("/emissions", emissionsRoutes);
 router.use("/map-comparison", mapComparisonRoutes);
 router.use("/ai-sandbox", aiSandboxRoutes);
-router.use("/data-management", dataManagementRoutes);
+router.use("/maintenance", maintenanceRoutes);
 router.use("/audit-log", auditLogRoutes);
+router.use("/upload", uploadRoutes);
 
 export default router;

@@ -1,7 +1,10 @@
 import { Router } from "express";
-import { mapComparisonController } from "../controllers/map-comparison.controller.js";
+import { getMapRealtime, getMapForecast, searchExits } from "../controllers/map-comparison.controller.js";
 
 const router = Router();
-router.get("/", mapComparisonController);
+
+router.get("/real-time", getMapRealtime);
+router.get("/forecast", getMapForecast);
+router.get("/exits", searchExits);
 
 export default router;

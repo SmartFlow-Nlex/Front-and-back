@@ -1,0 +1,86 @@
+[
+    {
+        "model": "LSTM",
+        "target": "total_volume",
+        "folds": [
+            {
+                "fold": 1,
+                "train_r2": 0.9839,
+                "val_r2": 0.9905,
+                "gap": -0.0067
+            },
+            {
+                "fold": 2,
+                "train_r2": 0.9869,
+                "val_r2": 0.9936,
+                "gap": -0.0066
+            },
+            {
+                "fold": 3,
+                "train_r2": 0.9868,
+                "val_r2": 0.9918,
+                "gap": -0.005
+            }
+        ],
+        "avg_train_r2": 0.9859,
+        "avg_val_r2": 0.992,
+        "avg_gap": -0.0061,
+        "diagnosis": "JUST RIGHT \u2014 Both R\u00b2 are high with a small gap. Excellent generalization!"
+    },
+    {
+        "model": "XGBoost",
+        "target": "avg_speed_kmh",
+        "folds": [
+            {
+                "fold": 1,
+                "train_r2": 0.3464,
+                "val_r2": 0.1107,
+                "gap": 0.2357
+            },
+            {
+                "fold": 2,
+                "train_r2": 0.3339,
+                "val_r2": 0.1069,
+                "gap": 0.227
+            },
+            {
+                "fold": 3,
+                "train_r2": 0.3179,
+                "val_r2": 0.0618,
+                "gap": 0.2561
+            }
+        ],
+        "avg_train_r2": 0.3327,
+        "avg_val_r2": 0.0931,
+        "avg_gap": 0.2396,
+        "diagnosis": "UNDERFITTING \u2014 Both Train and Val R\u00b2 are low. Model is too simple or target has high noise."
+    },
+    {
+        "model": "Prophet",
+        "target": "total_volume",
+        "folds": [
+            {
+                "fold": 1,
+                "train_r2": 0.9558,
+                "val_r2": 0.9711,
+                "gap": -0.0153
+            },
+            {
+                "fold": 2,
+                "train_r2": 0.9568,
+                "val_r2": 0.9731,
+                "gap": -0.0164
+            },
+            {
+                "fold": 3,
+                "train_r2": 0.9566,
+                "val_r2": 0.9734,
+                "gap": -0.0168
+            }
+        ],
+        "avg_train_r2": 0.9564,
+        "avg_val_r2": 0.9725,
+        "avg_gap": -0.0161,
+        "diagnosis": "JUST RIGHT \u2014 Both R\u00b2 are high with a small gap. Excellent generalization!"
+    }
+]

@@ -1,0 +1,56 @@
+================================================================================
+  SPLIT R² ANALYSIS — TRAINING vs VALIDATION
+  (Adviser-Recommended Overfitting Diagnostic)
+================================================================================
+
+  Methodology:
+    - For each model, we compute R² on TRAINING data and VALIDATION data separately
+    - This is done for each of the 3 walk-forward folds
+    - The GAP (Train R² - Val R²) reveals overfitting behavior
+
+  Interpretation Key:
+    Train R² HIGH + Val R² HIGH + Gap SMALL  → JUST RIGHT
+    Train R² HIGH + Val R² LOW  + Gap LARGE  → OVERFITTING
+    Train R² LOW  + Val R² LOW               → UNDERFITTING
+
+--------------------------------------------------------------------------------
+  MODEL: LSTM  |  TARGET: total_volume
+--------------------------------------------------------------------------------
+    Fold 1:  Train R² = 0.9839  |  Val R² = 0.9905  |  Gap = -0.0067
+    Fold 2:  Train R² = 0.9869  |  Val R² = 0.9936  |  Gap = -0.0066
+    Fold 3:  Train R² = 0.9868  |  Val R² = 0.9918  |  Gap = -0.0050
+
+    ╔══════════════════════════════════════════════════╗
+    ║  Avg Train R² = 0.9859                        ║
+    ║  Avg Val R²   = 0.9920                        ║
+    ║  Avg Gap      = -0.0061                        ║
+    ║  DIAGNOSIS:  JUST RIGHT — Both R² are high with a sma║
+    ╚══════════════════════════════════════════════════╝
+
+--------------------------------------------------------------------------------
+  MODEL: XGBoost  |  TARGET: avg_speed_kmh
+--------------------------------------------------------------------------------
+    Fold 1:  Train R² = 0.3464  |  Val R² = 0.1107  |  Gap = 0.2357
+    Fold 2:  Train R² = 0.3339  |  Val R² = 0.1069  |  Gap = 0.2270
+    Fold 3:  Train R² = 0.3179  |  Val R² = 0.0618  |  Gap = 0.2561
+
+    ╔══════════════════════════════════════════════════╗
+    ║  Avg Train R² = 0.3327                        ║
+    ║  Avg Val R²   = 0.0931                        ║
+    ║  Avg Gap      = 0.2396                        ║
+    ║  DIAGNOSIS:  UNDERFITTING — Both Train and Val R² are║
+    ╚══════════════════════════════════════════════════╝
+
+--------------------------------------------------------------------------------
+  MODEL: Prophet  |  TARGET: total_volume
+--------------------------------------------------------------------------------
+    Fold 1:  Train R² = 0.9558  |  Val R² = 0.9711  |  Gap = -0.0153
+    Fold 2:  Train R² = 0.9568  |  Val R² = 0.9731  |  Gap = -0.0164
+    Fold 3:  Train R² = 0.9566  |  Val R² = 0.9734  |  Gap = -0.0168
+
+    ╔══════════════════════════════════════════════════╗
+    ║  Avg Train R² = 0.9564                        ║
+    ║  Avg Val R²   = 0.9725                        ║
+    ║  Avg Gap      = -0.0161                        ║
+    ║  DIAGNOSIS:  JUST RIGHT — Both R² are high with a sma║
+    ╚══════════════════════════════════════════════════╝

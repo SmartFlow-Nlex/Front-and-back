@@ -1,0 +1,14 @@
+feature,importance
+exit_code,0.82540613
+is_weekend,0.029350275
+avg_speed_kmh,0.026540147
+volume_total,0.024229782
+is_holiday,0.023931574
+avg_jam_level,0.02390826
+is_rush_hour,0.023837937
+hour_of_day,0.022795841
+temperature,0.0
+humidity,0.0
+wind_speed,0.0
+rainfall,0.0
+exit_km,0.0

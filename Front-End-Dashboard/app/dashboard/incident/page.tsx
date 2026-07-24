@@ -57,6 +57,37 @@ type RangeMode = "3" | "12" | "all" | "custom";
 type WeatherFilter = "all" | "dry" | "wet";
 type Detail = { title: string; subtitle?: string; rows: [string, string][]; note?: string };
 
+// ---------- Predictive Forecast Contract ----------
+type PredictiveData = {
+  chartData: {
+    days: string[];
+    actualData: (number | null)[];
+    predictedData: (number | null)[];
+    trainingEnd?: number;
+    validationEnd?: number;
+  };
+  summary: {
+    totalPredictedNext7Days: number;
+    highestRiskSegment: string;
+    peakRiskDate: string;
+    modelUsed: string;
+  };
+  metrics?: {
+    rmse: number;
+    mae: number;
+    wmape: string;
+    modelScore: number;
+  };
+  highRiskSegments: {
+    exit: string;
+    km: number;
+    predictedCount: number;
+    riskLevel: string;
+    probability: number;
+    recommendedAction: string;
+  }[];
+};
+
 // ---------- Formatting ----------
 const fmtInt = (n: number) => Math.round(n).toLocaleString("en-US");
 const fmt1 = (n: number) => n.toLocaleString("en-US", { minimumFractionDigits: 1, maximumFractionDigits: 1 });
@@ -98,6 +129,32 @@ export default function IncidentPage() {
   const [detail, setDetail] = useState<Detail | null>(null);
 
   const [data, setData] = useState<Analytics | null>(null);
+  const [predictiveData, setPredictiveData] = useState<PredictiveData | null>(null);
+  const [predictiveLoading, setPredictiveLoading] = useState(false);
+  const [predictiveError, setPredictiveError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (activeTab === "Predictive" && !predictiveData && !predictiveLoading && !predictiveError) {
+      setPredictiveLoading(true);
+      fetch(`${BACKEND}/api/incident/predictive`)
+        .then((res) => {
+          if (!res.ok) throw new Error("API responded with an error");
+          return res.json();
+        })
+        .then((res) => {
+          if (res.success) {
+            setPredictiveData(res.data);
+          } else {
+            throw new Error(res.message || "Failed to parse forecast data");
+          }
+        })
+        .catch((err) => {
+          console.error("Failed to load predictive incidents", err);
+          setPredictiveError(err instanceof Error ? err.message : "Unknown error");
+        })
+        .finally(() => setPredictiveLoading(false));
+    }
+  }, [activeTab, predictiveData, predictiveLoading, predictiveError]);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
 
@@ -537,7 +594,8 @@ export default function IncidentPage() {
   // ---------- Predictive / Prescriptive share the same shell ----------
   if (activeTab !== "Descriptive") {
     return (
-      <section className={styles.page}>
+      <div style={{ display: "block", width: "100%", padding: "20px 24px", boxSizing: "border-box" }}>
+        {/* Filter / tab row */}
         <div className={styles.filterRow}>
           <span className={styles.filterLabel}>
             {activeTab === "Predictive" ? "Forecasts from the AI model" : "Recommended resource allocation"}
@@ -552,11 +610,126 @@ export default function IncidentPage() {
             ))}
           </div>
         </div>
+
         {activeTab === "Predictive" ? (
-          <article className={`${styles.chartCard} ${styles.chart1}`}>
-            <PredictiveIncidentChart />
-          </article>
+          <section style={{ display: "block", width: "100%" }} className="space-y-5">
+            {predictiveLoading ? (
+              <div style={{ padding: "60px 0", textAlign: "center", color: "#64748b", fontSize: "1rem" }}>Loading AI Forecasts…</div>
+            ) : predictiveError ? (
+              <div style={{ padding: "24px", textAlign: "center", color: "#dc2626", background: "#fef2f2", borderRadius: "12px", border: "1px solid #fecaca" }}>
+                <strong style={{ display: "block", marginBottom: "6px" }}>Error Loading Forecasts</strong>
+                {predictiveError}
+              </div>
+            ) : predictiveData ? (
+              <>
+                {/* ── Summary KPI row ── */}
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(210px, 1fr))", gap: "14px", width: "100%" }}>
+                  {[
+                    { label: "Predicted Incidents (7 Days)", value: String(predictiveData.summary.totalPredictedNext7Days), accent: "#3e67ef" },
+                    { label: "Highest‑Risk Segment",        value: predictiveData.summary.highestRiskSegment,               accent: "#e06b47" },
+                    { label: "Peak Risk Date",              value: predictiveData.summary.peakRiskDate,                     accent: "#1e293b" },
+                    { label: "Model Used",                  value: predictiveData.summary.modelUsed,                        accent: "#1e293b" },
+                  ].map((c) => (
+                    <div key={c.label} style={{ background: "#fff", borderRadius: "12px", padding: "18px 20px", boxShadow: "0 1px 3px rgba(0,0,0,0.07)", border: "1px solid #e2e8f0" }}>
+                      <p style={{ fontSize: "0.73rem", color: "#94a3b8", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.06em", marginBottom: "6px" }}>{c.label}</p>
+                      <p style={{ fontSize: "1.55rem", fontWeight: 700, color: c.accent, lineHeight: 1.15 }}>{c.value}</p>
+                    </div>
+                  ))}
+                </div>
+
+                {/* ── Walk-Forward Forecast Chart ── */}
+                <div style={{ background: "#fff", borderRadius: "12px", padding: "24px 28px", boxShadow: "0 1px 3px rgba(0,0,0,0.07)", border: "1px solid #e2e8f0", boxSizing: "border-box", width: "100%" }}>
+                  {/* Chart header */}
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: "6px", flexWrap: "wrap", gap: "8px" }}>
+                    <div>
+                      <h3 style={{ fontSize: "1.05rem", fontWeight: 700, color: "#1e293b", margin: 0 }}>Predictive Incident Walk-Forward Forecast (XGBoost Poisson)</h3>
+                      <p style={{ fontSize: "0.82rem", color: "#64748b", margin: "4px 0 0" }}>Historical incidents, validation period, and 7-day future incident forecast.</p>
+                    </div>
+                    {/* Region legend */}
+                    <div style={{ display: "flex", gap: "16px", alignItems: "center", flexShrink: 0 }}>
+                      {[
+                        { color: "rgba(59,130,246,0.18)", border: "#93c5fd", label: "Past (Training)"     },
+                        { color: "rgba(249,115,22,0.15)", border: "#fdba74", label: "Present (Holdout)"   },
+                        { color: "rgba(34,197,94,0.15)",  border: "#86efac", label: "Future (Forecast)"   },
+                      ].map((r) => (
+                        <span key={r.label} style={{ display: "flex", alignItems: "center", gap: "6px", fontSize: "0.78rem", color: "#475569" }}>
+                          <span style={{ display: "inline-block", width: "14px", height: "14px", background: r.color, border: `1px solid ${r.border}`, borderRadius: "3px" }} />
+                          {r.label}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                  {/* Chart canvas */}
+                  <div style={{ width: "100%", height: "460px" }}>
+                    <PredictiveIncidentChart
+                      days={predictiveData.chartData.days}
+                      actualData={predictiveData.chartData.actualData}
+                      predictedData={predictiveData.chartData.predictedData}
+                      trainingEnd={predictiveData.chartData.trainingEnd}
+                      validationEnd={predictiveData.chartData.validationEnd}
+                    />
+                  </div>
+                </div>
+
+                {/* ── ML Validation Metrics ── */}
+                <div style={{ background: "#fff", borderRadius: "12px", padding: "20px 28px", boxShadow: "0 1px 3px rgba(0,0,0,0.07)", border: "1px solid #e2e8f0", boxSizing: "border-box", width: "100%" }}>
+                  <h4 style={{ fontSize: "0.9rem", fontWeight: 700, color: "#475569", marginBottom: "14px", textTransform: "uppercase", letterSpacing: "0.05em" }}>Real-World ML Validation Metrics (XGBoost Poisson)</h4>
+                  <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))", gap: "20px" }}>
+                    {[
+                      { label: "Root Mean Square Error",  value: predictiveData.metrics ? predictiveData.metrics.rmse.toFixed(2)        : "—",    unit: "incidents", highlight: false },
+                      { label: "Mean Absolute Error",     value: predictiveData.metrics ? predictiveData.metrics.mae.toFixed(2)         : "—",    unit: "incidents", highlight: false },
+                      { label: "WMAPE (Error Rate)",      value: predictiveData.metrics ? predictiveData.metrics.wmape                  : "—",    unit: "",          highlight: true  },
+                      { label: "R² Score",                value: predictiveData.metrics ? predictiveData.metrics.modelScore.toFixed(3)  : "—",    unit: "",          highlight: true  },
+                    ].map((m) => (
+                      <div key={m.label}>
+                        <p style={{ fontSize: "0.72rem", color: "#94a3b8", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.06em", marginBottom: "4px" }}>{m.label}</p>
+                        <p style={{ fontSize: "1.6rem", fontWeight: 700, color: m.highlight ? "#16a34a" : "#1e293b", lineHeight: 1.1 }}>
+                          {m.value}
+                          {m.unit && <span style={{ fontSize: "0.8rem", fontWeight: 400, color: "#94a3b8", marginLeft: "4px" }}>{m.unit}</span>}
+                        </p>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                {/* ── High‑Risk Segment Table ── */}
+                <div style={{ background: "#fff", borderRadius: "12px", padding: "20px 28px", boxShadow: "0 1px 3px rgba(0,0,0,0.07)", border: "1px solid #e2e8f0", boxSizing: "border-box", width: "100%" }}>
+                  <h3 style={{ fontSize: "0.9rem", fontWeight: 700, color: "#475569", textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: "4px" }}>High‑Risk Segment Forecast</h3>
+                  <p style={{ fontSize: "0.82rem", color: "#94a3b8", marginBottom: "14px" }}>Areas requiring proactive deployment in the next 7 days</p>
+                  <div style={{ overflowX: "auto" }}>
+                    <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "0.875rem" }}>
+                      <thead>
+                        <tr style={{ background: "#f8fafc" }}>
+                          {["Exit / Segment", "Predicted Count", "Risk Level", "Probability", "Recommended Action"].map((h) => (
+                            <th key={h} style={{ padding: "10px 14px", fontWeight: 600, color: "#64748b", textAlign: "left", borderBottom: "1px solid #e2e8f0", fontSize: "0.77rem", textTransform: "uppercase", letterSpacing: "0.04em", whiteSpace: "nowrap" }}>{h}</th>
+                          ))}
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {predictiveData.highRiskSegments.map((seg, i) => (
+                          <tr key={i} style={{ borderBottom: "1px solid #f1f5f9" }}>
+                            <td style={{ padding: "11px 14px", fontWeight: 500, color: "#1e293b" }}>{seg.exit} <span style={{ color: "#94a3b8", fontWeight: 400, fontSize: "0.82rem" }}>(Km {seg.km})</span></td>
+                            <td style={{ padding: "11px 14px", color: "#3e67ef", fontWeight: 700 }}>{seg.predictedCount}</td>
+                            <td style={{ padding: "11px 14px" }}>
+                              <span style={{ display: "inline-block", padding: "3px 10px", borderRadius: "20px", fontSize: "0.75rem", fontWeight: 600,
+                                background: seg.riskLevel === "High" ? "#fee2e2" : seg.riskLevel === "Medium" ? "#fef3c7" : "#e0f2fe",
+                                color:      seg.riskLevel === "High" ? "#dc2626" : seg.riskLevel === "Medium" ? "#d97706" : "#0284c7" }}>{seg.riskLevel}</span>
+                            </td>
+                            <td style={{ padding: "11px 14px", color: "#64748b" }}>{Math.round(seg.probability * 100)}%</td>
+                            <td style={{ padding: "11px 14px", color: "#64748b" }}>{seg.recommendedAction}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              </>
+            ) : (
+              <div style={{ padding: "60px 0", textAlign: "center", color: "#94a3b8", fontSize: "1rem" }}>No prediction data available yet.</div>
+            )}
+          </section>
         ) : (
+          /* ── Prescriptive tab ── */
           <article className={`${styles.chartCard} ${styles.chart1}`}>
             <div className={styles.chartHead}>
               <div className={styles.headText}>
@@ -568,7 +741,7 @@ export default function IncidentPage() {
             </div>
           </article>
         )}
-      </section>
+      </div>
     );
   }
 

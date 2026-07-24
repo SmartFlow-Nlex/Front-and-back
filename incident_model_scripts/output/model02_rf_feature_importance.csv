@@ -1,0 +1,14 @@
+feature,importance
+volume_total,0.24987798918940676
+avg_speed_kmh,0.23588834923064836
+avg_jam_level,0.18559116848941126
+exit_code,0.13691225812722396
+exit_km,0.13485885045330273
+hour_of_day,0.03684524095522331
+is_weekend,0.009695276096045018
+is_holiday,0.006475099759231187
+is_rush_hour,0.003855767699507371
+humidity,0.0
+wind_speed,0.0
+rainfall,0.0
+temperature,0.0

@@ -1,0 +1,17 @@
+{
+    "champion_model": "XGBoost (Poisson)",
+    "metrics_ranking": [
+        {
+            "model": "XGBoost (Poisson)",
+            "MAE": 0.024545341730117798,
+            "RMSE": 0.11278770484035856,
+            "Poisson_Deviance": 0.0965825617313385
+        },
+        {
+            "model": "Random Forest",
+            "MAE": 0.024781303461069257,
+            "RMSE": 0.11299840614095148,
+            "Poisson_Deviance": 0.09715921202494908
+        }
+    ]
+}

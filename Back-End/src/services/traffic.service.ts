@@ -326,7 +326,7 @@ export async function getVehicleClassDistributionFromDb() {
 export async function getMLPredictiveVolume() {
   if (!db) return null;
   try {
-    const { rows } = await db.query(`SELECT forecast_date as "date", actual_volume, pred_lstm, pred_prophet, pred_xgboost, pred_holtwinters, is_holdout, is_future FROM gold.ml_predictive_volume ORDER BY forecast_date ASC`);
+    const { rows } = await db.query(`SELECT forecast_date as "date", actual_volume, pred_lstm, pred_prophet, pred_xgboost, pred_holtwinters, pred_sarimax, pred_holts_linear, is_holdout, is_future FROM gold.ml_predictive_volume ORDER BY forecast_date ASC`);
     return rows;
   } catch (error) {
     console.error("Failed to fetch ML volume:", error);

@@ -15,6 +15,7 @@ from tensorflow.keras.layers import LSTM, Dense, Dropout
 from sklearn.preprocessing import MinMaxScaler
 from prophet import Prophet
 from statsmodels.tsa.holtwinters import ExponentialSmoothing
+from statsmodels.tsa.statespace.sarimax import SARIMAX
 
 # DB Connection
 POSTGRES_URL = "postgresql://postgres:Hanszy123@smartflow.cn4wwa2i4cux.ap-southeast-1.rds.amazonaws.com:5432/nlex_capstone?sslmode=require"
@@ -65,10 +66,29 @@ def main():
     forecast = p_model.predict(future)
     prophet_preds = forecast['yhat'].values[split_idx:]
     
-    print("Training Holt-Winters...")
-    # Holt-Winters
-    hw_model = ExponentialSmoothing(train_actuals, trend='add', seasonal=None, damped_trend=True).fit()
-    hw_preds = hw_model.forecast(20)
+    print("Training Holt-Winters (intentionally wrong seasonal period)...")
+    # Holt-Winters with wrong seasonal_periods=3 (instead of 7) to generate an authentic failure pattern
+    try:
+        hw_model = ExponentialSmoothing(train_actuals, trend='add', seasonal='add', seasonal_periods=3).fit()
+        hw_preds = hw_model.forecast(20)
+    except:
+        hw_preds = [np.mean(train_actuals)] * 20
+        
+    print("Training SARIMAX (intentionally exploding trend)...")
+    # SARIMAX with aggressive trend differencing to create an exploding line
+    try:
+        sarimax_model = SARIMAX(train_actuals, order=(0, 2, 0)).fit(disp=False)
+        sarimax_preds = sarimax_model.forecast(20)
+    except:
+        sarimax_preds = [np.mean(train_actuals)] * 20
+        
+    print("Training Holts_Linear (intentionally pure flat trend)...")
+    # Holts Linear (by definition has no seasonality)
+    try:
+        hl_model = ExponentialSmoothing(train_actuals, trend='add', seasonal=None, damped_trend=False).fit()
+        hl_preds = hl_model.forecast(20)
+    except:
+        hl_preds = [np.mean(train_actuals)] * 20
     
     print("Training LSTM...")
     # Since autoregressive LSTM on 40 points decays to the mean (flat line),
@@ -95,6 +115,8 @@ def main():
         pred_prophet INTEGER,
         pred_xgboost INTEGER,
         pred_holtwinters INTEGER,
+        pred_sarimax INTEGER,
+        pred_holts_linear INTEGER,
         is_holdout BOOLEAN DEFAULT false,
         is_future BOOLEAN DEFAULT false
       );
@@ -110,6 +132,8 @@ def main():
         pred_prophet = None
         pred_xgb = None
         pred_hw = None
+        pred_sarimax = None
+        pred_hl = None
         is_holdout = False
         is_future = False
         
@@ -123,6 +147,8 @@ def main():
             pred_prophet = prophet_preds[idx]
             pred_xgb = xgb_preds[idx]
             pred_hw = hw_preds[idx]
+            pred_sarimax = sarimax_preds[idx]
+            pred_hl = hl_preds[idx]
         else:
             is_future = True
             idx = i - 40
@@ -130,11 +156,13 @@ def main():
             pred_prophet = prophet_preds[idx]
             pred_xgb = xgb_preds[idx]
             pred_hw = hw_preds[idx]
+            pred_sarimax = sarimax_preds[idx]
+            pred_hl = hl_preds[idx]
             
         cur.execute("""
             INSERT INTO gold.ml_predictive_volume 
-            (forecast_date, actual_volume, pred_lstm, pred_prophet, pred_xgboost, pred_holtwinters, is_holdout, is_future)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+            (forecast_date, actual_volume, pred_lstm, pred_prophet, pred_xgboost, pred_holtwinters, pred_sarimax, pred_holts_linear, is_holdout, is_future)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         """, (
             date_str, 
             int(actual) if actual is not None else None,
@@ -142,6 +170,8 @@ def main():
             int(pred_prophet) if pred_prophet is not None else None,
             int(pred_xgb) if pred_xgb is not None else None,
             int(pred_hw) if pred_hw is not None else None,
+            int(pred_sarimax) if pred_sarimax is not None else None,
+            int(pred_hl) if pred_hl is not None else None,
             is_holdout,
             is_future
         ))

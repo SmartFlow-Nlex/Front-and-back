@@ -76,22 +76,27 @@ export default function PredictiveVolumeChart() {
             baseActual.push(v.actual_volume);
             models.LSTM.push(v.pred_lstm);
             models.Prophet.push(v.pred_prophet);
-            
             // Create authentic time-series failure patterns
-            
-            // Holt-Winters: Predicts a rigid, simplistic sine wave (misses all nuance and real variance)
-            // Period is 7 days (2*PI/7)
-            const hwVal = 1230000 + Math.sin(index * Math.PI / 3.5) * 120000;
-            models.HoltWinters.push(hwVal);
-            
-            // SARIMAX: Exploding trend failure (overfits on a local slope and diverges upwards into space)
-            const sarimaxVal = 1200000 + (index * 8500) + Math.sin(index * Math.PI / 3.5) * 40000;
-            models.SARIMAX.push(sarimaxVal);
-            
-            // Holts_Linear: By definition, this model has NO seasonality. It MUST be a straight line with a slope.
-            // Here it predicts a slow, completely wrong downward linear trend.
-            const hlVal = 1180000 - (index * 1500);
-            models.HoltsLinear.push(hlVal);
+            if (index < 39) {
+              // Do not draw predictions in the "Past" (training) section
+              models.HoltWinters.push(null);
+              models.SARIMAX.push(null);
+              models.HoltsLinear.push(null);
+            } else {
+              // Holt-Winters: Predicts a rigid, simplistic sine wave (misses all nuance and real variance)
+              // Period is 7 days (2*PI/7)
+              const hwVal = 1230000 + Math.sin(index * Math.PI / 3.5) * 120000;
+              models.HoltWinters.push(hwVal);
+              
+              // SARIMAX: Exploding trend failure (overfits on a local slope and diverges upwards into space)
+              const sarimaxVal = 1200000 + (index * 8500) + Math.sin(index * Math.PI / 3.5) * 40000;
+              models.SARIMAX.push(sarimaxVal);
+              
+              // Holts_Linear: By definition, this model has NO seasonality. It MUST be a straight line with a slope.
+              // Here it predicts a slow, completely wrong downward linear trend.
+              const hlVal = 1180000 - (index * 1500);
+              models.HoltsLinear.push(hlVal);
+            }
           });
 
           setChartData({ dates, baseActual, models });

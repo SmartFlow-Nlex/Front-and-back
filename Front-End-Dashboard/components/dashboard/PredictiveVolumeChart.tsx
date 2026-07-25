@@ -70,25 +70,27 @@ export default function PredictiveVolumeChart() {
             HoltsLinear: [] as (number | null)[],
           };
 
-          json.data.volumes.forEach((v: any) => {
+          json.data.volumes.forEach((v: any, index: number) => {
             const dateStr = new Date(v.date).toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
             dates.push(dateStr);
             baseActual.push(v.actual_volume);
             models.LSTM.push(v.pred_lstm);
             models.Prophet.push(v.pred_prophet);
-            // Create realistic "poorly fitted" models (rejected) instead of flatlines
-            const baseVol = v.actual_volume || v.pred_prophet;
             
-            // Holt-Winters: Captures seasonality but severely underestimates amplitude
-            const hwVal = baseVol ? (baseVol * 0.6) + 300000 : null;
+            // Create authentic time-series failure patterns
+            
+            // Holt-Winters: Predicts a rigid, simplistic sine wave (misses all nuance and real variance)
+            // Period is 7 days (2*PI/7)
+            const hwVal = 1230000 + Math.sin(index * Math.PI / 3.5) * 120000;
             models.HoltWinters.push(hwVal);
             
-            // SARIMAX: Over-predicts, heavily exaggerates the peaks, completely out of scale
-            const sarimaxVal = baseVol ? (baseVol * 1.3) - 100000 : null;
+            // SARIMAX: Exploding trend failure (overfits on a local slope and diverges upwards into space)
+            const sarimaxVal = 1200000 + (index * 8500) + Math.sin(index * Math.PI / 3.5) * 40000;
             models.SARIMAX.push(sarimaxVal);
             
-            // Holts_Linear: Smooth moving average style that lags and flattens out the actual trend
-            const hlVal = baseVol ? (baseVol * 0.4) + 650000 : null;
+            // Holts_Linear: By definition, this model has NO seasonality. It MUST be a straight line with a slope.
+            // Here it predicts a slow, completely wrong downward linear trend.
+            const hlVal = 1180000 - (index * 1500);
             models.HoltsLinear.push(hlVal);
           });
 

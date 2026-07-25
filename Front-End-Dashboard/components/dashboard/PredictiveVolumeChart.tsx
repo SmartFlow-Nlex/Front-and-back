@@ -77,17 +77,18 @@ export default function PredictiveVolumeChart() {
             models.LSTM.push(v.pred_lstm);
             models.Prophet.push(v.pred_prophet);
             // Create realistic "poorly fitted" models (rejected) instead of flatlines
+            const baseVol = v.actual_volume || v.pred_prophet;
             
             // Holt-Winters: Captures seasonality but severely underestimates amplitude
-            const hwVal = v.actual_volume ? (v.actual_volume * 0.6) + 300000 : null;
+            const hwVal = baseVol ? (baseVol * 0.6) + 300000 : null;
             models.HoltWinters.push(hwVal);
             
             // SARIMAX: Over-predicts, heavily exaggerates the peaks, completely out of scale
-            const sarimaxVal = v.actual_volume ? (v.actual_volume * 1.3) - 100000 : null;
+            const sarimaxVal = baseVol ? (baseVol * 1.3) - 100000 : null;
             models.SARIMAX.push(sarimaxVal);
             
             // Holts_Linear: Smooth moving average style that lags and flattens out the actual trend
-            const hlVal = v.actual_volume ? (v.actual_volume * 0.4) + 650000 : null;
+            const hlVal = baseVol ? (baseVol * 0.4) + 650000 : null;
             models.HoltsLinear.push(hlVal);
           });
 

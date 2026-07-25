@@ -1,0 +1,6 @@
+scikit-learn
+xgboost
+statsmodels
+SQLAlchemy
+mgwr
+pysal

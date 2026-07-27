@@ -170,6 +170,7 @@ export default function TrafficPage() {
   const [plazaSel, setPlazaSel] = useState<string[]>([]); // empty = All
   const [direction, setDirection] = useState<Direction>("Both");
   const [vClass, setVClass] = useState<VehicleClass>("All");
+  const [weather, setWeather] = useState<"all" | "dry" | "wet">("all");
 
   // Chart-local interactivity
   const [grain, setGrain] = useState<Granularity>("daily");
@@ -199,6 +200,7 @@ export default function TrafficPage() {
     if (plazaSel.length > 0) qs.set("plazas", plazaSel.join(","));
     if (direction !== "Both") qs.set("direction", direction);
     if (vClass !== "All") qs.set("vehicleClass", vClass);
+    if (weather !== "all") qs.set("weather", weather);
     fetch(`${BACKEND}/api/traffic/analytics?${qs}`, { cache: "no-store" })
       .then((r) => r.json())
       .then((json) => {
@@ -211,7 +213,7 @@ export default function TrafficPage() {
     return () => {
       cancelled = true;
     };
-  }, [rangeMode, customFrom, customTo, plazaSel, direction, vClass]);
+  }, [rangeMode, customFrom, customTo, plazaSel, direction, vClass, weather]);
 
   // Hourly grain exists only when the server shipped hourly rows (spans <= ~3 months)
   const hourlyAvailable = !!data?.hourlyTrend;
@@ -646,7 +648,30 @@ export default function TrafficPage() {
 
   const kpiValue = (v: string | null) => (loading && !data ? "…" : v ?? "—");
 
-  // Remove the old if (activeTab !== "Descriptive") block
+  // ---------- Predictive / Prescriptive keep the classic scrolling layout ----------
+  if (activeTab !== "Descriptive") {
+    return (
+      <section className="ds-content ds-long">
+        <h1 className="tab-title">Traffic Overview</h1>
+        <div className="mode-tabs">
+          {(["Descriptive", "Predictive", "Prescriptive"] as const).map((t) => (
+            <button key={t} className={activeTab === t ? "active" : ""} onClick={() => setActiveTab(t)}>{t}</button>
+          ))}
+        </div>
+        {activeTab === "Predictive" ? (
+          <div className="chart-grid" style={{ display: "flex", flexDirection: "column", gap: "24px" }}>
+            <PredictiveVolumeChart />
+            <PredictiveCongestionChart />
+            <PredictiveEventChart />
+          </div>
+        ) : (
+          <div className="chart-grid">
+            <article className="chart-card wide"><div className="chart-head"><h3>Projected Impact of Strategies (Throughput Gain)</h3><span className="pill green">Optimized</span></div><DashboardChart option={prescriptiveImpactOption} /></article>
+          </div>
+        )}
+      </section>
+    );
+  }
 
   return (
     <section className={styles.page}>
@@ -675,6 +700,19 @@ export default function TrafficPage() {
           )}
         </div>
 
+        <div className={styles.filterGroup}>
+          <svg width="15" height="15" viewBox="0 0 16 16" fill="none" style={{ color: "var(--text-muted)" }}><path d="M4.5 11.5a3 3 0 1 1 .4-5.97 4 4 0 0 1 7.75 1.1A2.5 2.5 0 0 1 12 11.5H4.5z" stroke="currentColor" strokeWidth="1.4" strokeLinejoin="round" /><path d="M6 13.2v1M9 13.2v1M12 13.2v1" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" /></svg>
+          <span className={styles.filterLabel}>Weather</span>
+          <div className={styles.segmented}>
+            {(["all", "dry", "wet"] as const).map((w) => (
+              <button key={w} className={weather === w ? "active" : ""} onClick={() => setWeather(w)}>
+                {weather === w && <svg width="12" height="12" viewBox="0 0 16 16" fill="none" style={{ marginRight: 4, marginBottom: -1 }}><path d="M3.5 8.5l3 3 6-7" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" /></svg>}
+                {w === "all" ? "All" : w === "dry" ? "Dry" : "Wet"}
+              </button>
+            ))}
+          </div>
+        </div>
+
         {loading && data && <span className={styles.updating}>Updating…</span>}
         <span className={styles.spacer} />
 
@@ -689,72 +727,54 @@ export default function TrafficPage() {
       </div>
 
       {/* Row B — KPI tiles */}
-      {activeTab === "Descriptive" && (
-        <div className={styles.kpiRow}>
-          <article className={styles.kpiTile}>
-            <h3>Total Volume</h3>
-            <div className={styles.kpiValue} title={data ? `${fmtInt(data.kpis.totalVolume)} vehicles` : undefined}>
-              {kpiValue(data ? fmtCompact(data.kpis.totalVolume) : null)}
-            </div>
-            <p className={styles.kpiHint}>
-              {derived ? (
-                <span className={derived.volumeDeltaPct >= 0 ? styles.deltaUp : styles.deltaDown}>{fmtPct(derived.volumeDeltaPct)}</span>
-              ) : "—"}{" "}
-              vs previous period
-            </p>
-          </article>
-          <article className={styles.kpiTile}>
-            <h3>Avg Daily Volume</h3>
-            <div className={styles.kpiValue}>{kpiValue(derived ? fmtInt(derived.curAdt) : null)}</div>
-            <div className={styles.sparkBox}>
-              {sparkOption && <ReactECharts option={sparkOption} style={{ width: "100%", height: "100%" }} opts={{ renderer: "canvas" }} />}
-            </div>
-          </article>
-          <article className={styles.kpiTile}>
-            <h3>Peak Hour (Weekdays)</h3>
-            <div className={styles.kpiValue}>{kpiValue(derived ? fmtHour(derived.peakHour) : null)}</div>
-            <p className={styles.kpiHint}>{derived ? `${fmtInt(derived.peakHourVolume)} vehicles/hr avg` : "—"}</p>
-          </article>
-          <article className={styles.kpiTile}>
-            <h3>Busiest Plaza</h3>
-            <div className={styles.kpiValue}>{kpiValue(derived?.busiest ? derived.busiest.plaza : null)}</div>
-            <p className={styles.kpiHint}>
-              {derived?.busiest && derived.plazaTotal > 0 ? `${((derived.busiest.v / derived.plazaTotal) * 100).toFixed(1)}% of selected volume` : "—"}
-            </p>
-          </article>
-          <article className={styles.kpiTile}>
-            <h3>Congestion Index</h3>
-            <div className={styles.kpiValue}>{kpiValue(data?.kpis.congestionIndex != null ? `${data.kpis.congestionIndex.toFixed(2)} / 5` : null)}</div>
-            <p className={styles.kpiHint}>
-              {derived?.congestionDelta != null ? (
-                <>
-                  <span className={derived.congestionDelta <= 0 ? styles.deltaUp : styles.deltaDown}>
-                    {derived.congestionDelta >= 0 ? "+" : ""}{derived.congestionDelta.toFixed(2)}
-                  </span>{" "}
-                  vs prev · Waze jam level
-                </>
-              ) : data ? "no prior data" : "—"}
-            </p>
-          </article>
-        </div>
-      )}
+      <div className={styles.kpiRow}>
+        <article className={styles.kpiTile}>
+          <h3>Total Volume</h3>
+          <div className={styles.kpiValue} title={data ? `${fmtInt(data.kpis.totalVolume)} vehicles` : undefined}>
+            {kpiValue(data ? fmtCompact(data.kpis.totalVolume) : null)}
+          </div>
+          <p className={styles.kpiHint}>
+            {derived ? (
+              <span className={derived.volumeDeltaPct >= 0 ? styles.deltaUp : styles.deltaDown}>{fmtPct(derived.volumeDeltaPct)}</span>
+            ) : "—"}{" "}
+            vs previous period
+          </p>
+        </article>
+        <article className={styles.kpiTile}>
+          <h3>Avg Daily Volume</h3>
+          <div className={styles.kpiValue}>{kpiValue(derived ? fmtInt(derived.curAdt) : null)}</div>
+          <div className={styles.sparkBox}>
+            {sparkOption && <ReactECharts option={sparkOption} style={{ width: "100%", height: "100%" }} opts={{ renderer: "canvas" }} />}
+          </div>
+        </article>
+        <article className={styles.kpiTile}>
+          <h3>Peak Hour (Weekdays)</h3>
+          <div className={styles.kpiValue}>{kpiValue(derived ? fmtHour(derived.peakHour) : null)}</div>
+          <p className={styles.kpiHint}>{derived ? `${fmtInt(derived.peakHourVolume)} vehicles/hr avg` : "—"}</p>
+        </article>
+        <article className={styles.kpiTile}>
+          <h3>Busiest Plaza</h3>
+          <div className={styles.kpiValue}>{kpiValue(derived?.busiest ? derived.busiest.plaza : null)}</div>
+          <p className={styles.kpiHint}>
+            {derived?.busiest && derived.plazaTotal > 0 ? `${((derived.busiest.v / derived.plazaTotal) * 100).toFixed(1)}% of selected volume` : "—"}
+          </p>
+        </article>
+        <article className={styles.kpiTile}>
+          <h3>Congestion Index</h3>
+          <div className={styles.kpiValue}>{kpiValue(data?.kpis.congestionIndex != null ? `${data.kpis.congestionIndex.toFixed(2)} / 5` : null)}</div>
+          <p className={styles.kpiHint}>
+            {derived?.congestionDelta != null ? (
+              <>
+                <span className={derived.congestionDelta <= 0 ? styles.deltaUp : styles.deltaDown}>
+                  {derived.congestionDelta >= 0 ? "+" : ""}{derived.congestionDelta.toFixed(2)}
+                </span>{" "}
+                vs prev · Waze jam level
+              </>
+            ) : data ? "no prior data" : "—"}
+          </p>
+        </article>
+      </div>
 
-      {activeTab === "Predictive" && (
-        <div style={{ marginTop: "24px", gridColumn: "1 / -1", display: "flex", flexDirection: "column", gap: "24px" }}>
-          <PredictiveVolumeChart />
-          <PredictiveCongestionChart />
-          <PredictiveEventChart />
-        </div>
-      )}
-
-      {activeTab === "Prescriptive" && (
-        <div style={{ marginTop: "24px", gridColumn: "1 / -1" }}>
-          <article className="chart-card wide"><div className="chart-head"><h3>Projected Impact of Strategies (Throughput Gain)</h3><span className="pill green">Optimized</span></div><DashboardChart option={prescriptiveImpactOption} /></article>
-        </div>
-      )}
-
-      {activeTab === "Descriptive" && (
-        <div style={{ display: "contents" }}>
       {/* Row C — hero chart */}
       <article className={`${styles.chartCard} ${styles.chart1} ${styles.hero}`}>
         <div className={styles.chartHead}>
@@ -1011,8 +1031,6 @@ export default function TrafficPage() {
               )}
             </div>
           </div>
-        </div>
-      )}
         </div>
       )}
     </section>

@@ -26,7 +26,7 @@ const CACHE_TTL_MS = 10 * 60 * 1000;
 // Response minutes are computed mod 24h to survive midnight wrap, capped at 120.
 const INCIDENTS_CTE = `
   incidents AS (
-    SELECT to_date(date, 'MM/DD/YYYY') AS d, reported_time AS rt, response_time AS resp,
+    SELECT CASE WHEN date LIKE '%/%' THEN to_date(date, 'MM/DD/YYYY') ELSE date::date END AS d, reported_time AS rt, response_time AS resp,
            location, cause_of_accident AS cause, type_of_accident AS itype,
            weather_condition,
            COALESCE(injuries_male, 0) + COALESCE(injuries_female, 0) AS inj,
@@ -34,24 +34,24 @@ const INCIDENTS_CTE = `
            'road' AS src
     FROM nlex_road_crashes WHERE date IS NOT NULL
     UNION ALL
-    SELECT to_date(date, 'MM/DD/YYYY'), reported_time, response_time,
+    SELECT CASE WHEN date LIKE '%/%' THEN to_date(date, 'MM/DD/YYYY') ELSE date::date END, reported_time, response_time,
            location, cause_of_accident, type_of_accident, weather_condition,
            COALESCE(injuries_male, 0) + COALESCE(injuries_female, 0),
            COALESCE(fatalities_male, 0) + COALESCE(fatalities_female, 0),
            'moto'
     FROM nlex_motorcycle_crashes WHERE date IS NOT NULL
     UNION ALL
-    SELECT to_date(date, 'DD-Mon-YY'), reported_time, responded_time,
+    SELECT CASE WHEN date LIKE '%/%' THEN to_date(date, 'MM/DD/YYYY') ELSE date::date END, reported_time, responded_time,
            location, vehicle_cause, 'Stalled vehicle', NULL, 0, 0, 'stalled'
     FROM nlex_stalled_vehicles WHERE date IS NOT NULL
   )`;
 
 const RESPONSE_MIN = `
   CASE WHEN rt IS NOT NULL AND resp IS NOT NULL THEN
-    MOD((EXTRACT(EPOCH FROM (to_timestamp(resp, 'HH12:MI PM') - to_timestamp(rt, 'HH12:MI PM'))) / 60)::int + 1440, 1440)
+    MOD((EXTRACT(EPOCH FROM (resp::time - rt::time)) / 60)::int + 1440, 1440)
   END`;
 
-const HOUR_OF = `EXTRACT(hour FROM to_timestamp(rt, 'HH12:MI PM'))::int`;
+const HOUR_OF = `EXTRACT(hour FROM rt::time)::int`;
 const KM_OF = `(regexp_match(location, 'Km\\s*(\\d+)'))[1]::int`;
 
 export async function getIncidentAnalyticsFromDb(filters: IncidentAnalyticsFilters) {
@@ -63,7 +63,7 @@ export async function getIncidentAnalyticsFromDb(filters: IncidentAnalyticsFilte
 
   try {
     const bounds = await db.query(
-      `SELECT min(to_date(date, 'MM/DD/YYYY'))::text AS lo, max(to_date(date, 'MM/DD/YYYY'))::text AS hi FROM nlex_road_crashes`
+      `SELECT min(CASE WHEN date LIKE '%/%' THEN to_date(date, 'MM/DD/YYYY') ELSE date::date END)::text AS lo, max(CASE WHEN date LIKE '%/%' THEN to_date(date, 'MM/DD/YYYY') ELSE date::date END)::text AS hi FROM nlex_road_crashes`
     );
     const minDate: string = bounds.rows[0].lo;
     const maxDate: string = bounds.rows[0].hi;
@@ -178,7 +178,7 @@ export async function getIncidentAnalyticsFromDb(filters: IncidentAnalyticsFilte
         db.query(
           `WITH ${INCIDENTS_CTE}, ${WX_CTE}
            SELECT (w.rain > 0.3) AS wet, i.src, COUNT(*)::int AS n
-           FROM incidents i JOIN wx w ON w.d = i.d AND w.h = EXTRACT(hour FROM to_timestamp(i.rt, 'HH12:MI PM'))::int
+           FROM incidents i JOIN wx w ON w.d = i.d AND w.h = EXTRACT(hour FROM i.rt::time)::int
            WHERE i.d BETWEEN $1 AND $2 AND ($3::text IS NULL OR i.src = $3) AND i.rt IS NOT NULL
              AND ($4::text IS NULL OR (w.rain > 0.3) = ($4 = 'wet'))
            GROUP BY 1, 2`,

@@ -1,0 +1,232 @@
+{
+    "model": "GWR",
+    "target": "incident_count_daily_per_2km_segment",
+    "task": "count regression",
+    "validation": "3-fold expanding-window walk-forward",
+    "metrics": {
+        "MAE": 0.9708,
+        "MSE": 1.7567,
+        "RMSE": 1.3254,
+        "MAPE": 50.5302,
+        "sMAPE": 109.5425,
+        "WMAPE": 68.4068,
+        "Poisson_Deviance": 1.2422,
+        "MASE": 0.8898,
+        "RMSSE": 0.8162,
+        "R2": 0.2417,
+        "Adjusted_R2": 0.2415,
+        "_mape_coverage_pct": 63.733
+    },
+    "split_r2_diagnostic": {
+        "Train_R2": 0.2264,
+        "Val_R2": 0.2417,
+        "Gap": -0.0153
+    },
+    "per_fold": [
+        {
+            "fold": 1,
+            "MAE": 0.9608,
+            "MSE": 1.724,
+            "RMSE": 1.313,
+            "MAPE": 50.1,
+            "sMAPE": 107.9621,
+            "WMAPE": 66.4331,
+            "Poisson_Deviance": 1.2053,
+            "MASE": 0.888,
+            "RMSSE": 0.8139,
+            "R2": 0.2477,
+            "Adjusted_R2": 0.2475,
+            "_mape_coverage_pct": 64.8965,
+            "Train_R2": 0.2223,
+            "Val_R2": 0.2477,
+            "Gap": -0.0254
+        },
+        {
+            "fold": 2,
+            "MAE": 0.9799,
+            "MSE": 1.7968,
+            "RMSE": 1.3405,
+            "MAPE": 50.655,
+            "sMAPE": 110.533,
+            "WMAPE": 69.0526,
+            "Poisson_Deviance": 1.2535,
+            "MASE": 0.8978,
+            "RMSSE": 0.8259,
+            "R2": 0.2449,
+            "Adjusted_R2": 0.2447,
+            "_mape_coverage_pct": 63.0017,
+            "Train_R2": 0.227,
+            "Val_R2": 0.2449,
+            "Gap": -0.0179
+        },
+        {
+            "fold": 3,
+            "MAE": 0.9717,
+            "MSE": 1.7494,
+            "RMSE": 1.3226,
+            "MAPE": 50.8357,
+            "sMAPE": 110.1323,
+            "WMAPE": 69.7346,
+            "Poisson_Deviance": 1.2677,
+            "MASE": 0.8836,
+            "RMSSE": 0.8089,
+            "R2": 0.2324,
+            "Adjusted_R2": 0.2322,
+            "_mape_coverage_pct": 63.3009,
+            "Train_R2": 0.2299,
+            "Val_R2": 0.2324,
+            "Gap": -0.0025
+        }
+    ],
+    "folds_meta": [
+        {
+            "fold": 1,
+            "train_days": 1822,
+            "test_days": 191
+        },
+        {
+            "fold": 2,
+            "train_days": 2013,
+            "test_days": 191
+        },
+        {
+            "fold": 3,
+            "train_days": 2204,
+            "test_days": 191
+        }
+    ],
+    "gwr_surface_last_fold": {
+        "bandwidth_nearest_neighbours": 16,
+        "n_segments": 21,
+        "local_R2_mean": 0.372,
+        "per_segment": {
+            "km 4-6": {
+                "fitted_daily_rate": 1.9197,
+                "intercept": 1.97337,
+                "beta_seg_km": -0.01341,
+                "local_R2": 0.204
+            },
+            "km 6-8": {
+                "fitted_daily_rate": 1.8939,
+                "intercept": 1.97478,
+                "beta_seg_km": -0.01349,
+                "local_R2": 0.2053
+            },
+            "km 8-10": {
+                "fitted_daily_rate": 1.8686,
+                "intercept": 1.97776,
+                "beta_seg_km": -0.01364,
+                "local_R2": 0.2081
+            },
+            "km 10-12": {
+                "fitted_daily_rate": 1.8434,
+                "intercept": 1.9823,
+                "beta_seg_km": -0.01389,
+                "local_R2": 0.2129
+            },
+            "km 12-14": {
+                "fitted_daily_rate": 1.8175,
+                "intercept": 1.98772,
+                "beta_seg_km": -0.01418,
+                "local_R2": 0.2185
+            },
+            "km 14-16": {
+                "fitted_daily_rate": 1.7908,
+                "intercept": 1.99426,
+                "beta_seg_km": -0.01453,
+                "local_R2": 0.225
+            },
+            "km 16-18": {
+                "fitted_daily_rate": 1.7629,
+                "intercept": 2.00176,
+                "beta_seg_km": -0.01493,
+                "local_R2": 0.2321
+            },
+            "km 18-20": {
+                "fitted_daily_rate": 1.7336,
+                "intercept": 2.01044,
+                "beta_seg_km": -0.01538,
+                "local_R2": 0.24
+            },
+            "km 20-22": {
+                "fitted_daily_rate": 1.7024,
+                "intercept": 2.02898,
+                "beta_seg_km": -0.01633,
+                "local_R2": 0.2555
+            },
+            "km 22-24": {
+                "fitted_daily_rate": 1.6679,
+                "intercept": 2.04992,
+                "beta_seg_km": -0.01737,
+                "local_R2": 0.2713
+            },
+            "km 24-26": {
+                "fitted_daily_rate": 1.6296,
+                "intercept": 2.07254,
+                "beta_seg_km": -0.01846,
+                "local_R2": 0.2865
+            },
+            "km 26-28": {
+                "fitted_daily_rate": 1.5863,
+                "intercept": 2.10244,
+                "beta_seg_km": -0.01985,
+                "local_R2": 0.3041
+            },
+            "km 28-30": {
+                "fitted_daily_rate": 1.5503,
+                "intercept": 2.08988,
+                "beta_seg_km": -0.01927,
+                "local_R2": 0.2969
+            },
+            "km 30-32": {
+                "fitted_daily_rate": 1.51,
+                "intercept": 2.0944,
+                "beta_seg_km": -0.01948,
+                "local_R2": 0.2996
+            },
+            "km 56-58": {
+                "fitted_daily_rate": 0.6713,
+                "intercept": 2.17655,
+                "beta_seg_km": -0.02688,
+                "local_R2": 0.6861
+            },
+            "km 66-68": {
+                "fitted_daily_rate": 0.4488,
+                "intercept": 1.98655,
+                "beta_seg_km": -0.0233,
+                "local_R2": 0.6415
+            },
+            "km 72-74": {
+                "fitted_daily_rate": 0.3183,
+                "intercept": 1.92972,
+                "beta_seg_km": -0.02238,
+                "local_R2": 0.6182
+            },
+            "km 74-76": {
+                "fitted_daily_rate": 0.2761,
+                "intercept": 1.91528,
+                "beta_seg_km": -0.02215,
+                "local_R2": 0.6117
+            },
+            "km 76-78": {
+                "fitted_daily_rate": 0.2344,
+                "intercept": 1.90242,
+                "beta_seg_km": -0.02195,
+                "local_R2": 0.6057
+            },
+            "km 78-80": {
+                "fitted_daily_rate": 0.1929,
+                "intercept": 1.8909,
+                "beta_seg_km": -0.02177,
+                "local_R2": 0.6002
+            },
+            "km 82-84": {
+                "fitted_daily_rate": 0.1111,
+                "intercept": 1.86946,
+                "beta_seg_km": -0.02144,
+                "local_R2": 0.5893
+            }
+        }
+    },
+    "note": "spatial risk surface; per-segment expected daily count"
+}

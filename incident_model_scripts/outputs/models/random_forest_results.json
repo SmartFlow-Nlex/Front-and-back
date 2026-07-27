@@ -1,0 +1,115 @@
+{
+    "model": "Random Forest",
+    "target": "incident_count",
+    "task": "count regression",
+    "validation": "3-fold expanding-window walk-forward",
+    "metrics": {
+        "MAE": 0.8848,
+        "MSE": 1.2851,
+        "RMSE": 1.1335,
+        "MAPE": 35.023,
+        "sMAPE": 89.1279,
+        "WMAPE": 71.2856,
+        "Poisson_Deviance": 1.1831,
+        "MASE": 0.8012,
+        "RMSSE": 0.7493,
+        "R2": 0.0364,
+        "Adjusted_R2": 0.0333,
+        "_mape_coverage_pct": 69.8402
+    },
+    "split_r2_diagnostic": {
+        "Train_R2": 0.1725,
+        "Val_R2": 0.0364,
+        "Gap": 0.136
+    },
+    "per_fold": [
+        {
+            "fold": 1,
+            "MAE": 0.905,
+            "MSE": 1.3389,
+            "RMSE": 1.1571,
+            "MAPE": 35.6116,
+            "sMAPE": 89.4482,
+            "WMAPE": 71.8647,
+            "Poisson_Deviance": 1.2092,
+            "MASE": 0.8271,
+            "RMSSE": 0.7701,
+            "R2": 0.0266,
+            "Adjusted_R2": 0.0234,
+            "_mape_coverage_pct": 69.9782,
+            "Train_R2": 0.1799,
+            "Val_R2": 0.0266,
+            "Gap": 0.1533
+        },
+        {
+            "fold": 2,
+            "MAE": 0.8717,
+            "MSE": 1.2387,
+            "RMSE": 1.113,
+            "MAPE": 34.8979,
+            "sMAPE": 88.097,
+            "WMAPE": 70.2942,
+            "Poisson_Deviance": 1.1539,
+            "MASE": 0.7877,
+            "RMSSE": 0.7343,
+            "R2": 0.0472,
+            "Adjusted_R2": 0.0441,
+            "_mape_coverage_pct": 70.2179,
+            "Train_R2": 0.1716,
+            "Val_R2": 0.0472,
+            "Gap": 0.1243
+        },
+        {
+            "fold": 3,
+            "MAE": 0.8777,
+            "MSE": 1.2778,
+            "RMSE": 1.1304,
+            "MAPE": 34.5594,
+            "sMAPE": 89.8385,
+            "WMAPE": 71.698,
+            "Poisson_Deviance": 1.1863,
+            "MASE": 0.7887,
+            "RMSSE": 0.7436,
+            "R2": 0.0354,
+            "Adjusted_R2": 0.0323,
+            "_mape_coverage_pct": 69.3246,
+            "Train_R2": 0.166,
+            "Val_R2": 0.0354,
+            "Gap": 0.1305
+        }
+    ],
+    "folds_meta": [
+        {
+            "fold": 1,
+            "train_rows": 43611,
+            "test_rows": 4590
+        },
+        {
+            "fold": 2,
+            "train_rows": 48201,
+            "test_rows": 4590
+        },
+        {
+            "fold": 3,
+            "train_rows": 52791,
+            "test_rows": 4590
+        }
+    ],
+    "feature_importance": {
+        "hour_sin": 0.04978,
+        "hour_cos": 0.04779,
+        "dow_sin": 0.12487,
+        "dow_cos": 0.01397,
+        "month_sin": 0.03102,
+        "month_cos": 0.03346,
+        "is_weekend": 0.0022,
+        "is_rush_hour": 0.00663,
+        "inc_lag_1h": 0.02727,
+        "inc_lag_2h": 0.02761,
+        "inc_lag_3h": 0.03089,
+        "inc_lag_24h": 0.02495,
+        "inc_lag_168h": 0.02581,
+        "inc_roll_24h": 0.12895,
+        "inc_roll_168h": 0.42479
+    }
+}

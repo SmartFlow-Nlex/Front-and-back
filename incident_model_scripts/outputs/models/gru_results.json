@@ -1,0 +1,98 @@
+{
+    "model": "GRU",
+    "target": "incident_count",
+    "task": "count regression",
+    "validation": "3-fold expanding-window walk-forward",
+    "metrics": {
+        "MAE": 0.8917,
+        "MSE": 1.2865,
+        "RMSE": 1.1341,
+        "MAPE": 35.6009,
+        "sMAPE": 89.1899,
+        "WMAPE": 71.8356,
+        "Poisson_Deviance": 1.1843,
+        "MASE": 0.8073,
+        "RMSSE": 0.7497,
+        "R2": 0.0354,
+        "Adjusted_R2": 0.0322,
+        "_mape_coverage_pct": 69.8402
+    },
+    "split_r2_diagnostic": {
+        "Train_R2": 0.0878,
+        "Val_R2": 0.0354,
+        "Gap": 0.0524
+    },
+    "per_fold": [
+        {
+            "fold": 1,
+            "MAE": 0.9166,
+            "MSE": 1.3438,
+            "RMSE": 1.1592,
+            "MAPE": 36.5867,
+            "sMAPE": 89.6528,
+            "WMAPE": 72.7887,
+            "Poisson_Deviance": 1.2133,
+            "MASE": 0.8377,
+            "RMSSE": 0.7715,
+            "R2": 0.023,
+            "Adjusted_R2": 0.0198,
+            "_mape_coverage_pct": 69.9782,
+            "Train_R2": 0.0924,
+            "Val_R2": 0.023,
+            "Gap": 0.0693
+        },
+        {
+            "fold": 2,
+            "MAE": 0.8785,
+            "MSE": 1.2372,
+            "RMSE": 1.1123,
+            "MAPE": 35.6588,
+            "sMAPE": 88.0157,
+            "WMAPE": 70.8398,
+            "Poisson_Deviance": 1.1529,
+            "MASE": 0.7937,
+            "RMSSE": 0.7338,
+            "R2": 0.0484,
+            "Adjusted_R2": 0.0453,
+            "_mape_coverage_pct": 70.2179,
+            "Train_R2": 0.0859,
+            "Val_R2": 0.0484,
+            "Gap": 0.0375
+        },
+        {
+            "fold": 3,
+            "MAE": 0.8799,
+            "MSE": 1.2786,
+            "RMSE": 1.1308,
+            "MAPE": 34.5572,
+            "sMAPE": 89.9011,
+            "WMAPE": 71.8784,
+            "Poisson_Deviance": 1.1868,
+            "MASE": 0.7906,
+            "RMSSE": 0.7438,
+            "R2": 0.0348,
+            "Adjusted_R2": 0.0316,
+            "_mape_coverage_pct": 69.3246,
+            "Train_R2": 0.0851,
+            "Val_R2": 0.0348,
+            "Gap": 0.0504
+        }
+    ],
+    "folds_meta": [
+        {
+            "fold": 1,
+            "train_rows": 43611,
+            "test_rows": 4590
+        },
+        {
+            "fold": 2,
+            "train_rows": 48201,
+            "test_rows": 4590
+        },
+        {
+            "fold": 3,
+            "train_rows": 52791,
+            "test_rows": 4590
+        }
+    ]
+}

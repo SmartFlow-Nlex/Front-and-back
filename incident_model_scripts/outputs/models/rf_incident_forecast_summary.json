@@ -1,0 +1,30 @@
+{
+    "model": "Random Forest",
+    "validation": "3-fold expanding-window walk-forward",
+    "metrics_source": "computed from this script's walk-forward folds",
+    "metrics": {
+        "MAE": 0.8848,
+        "MSE": 1.2851,
+        "RMSE": 1.1335,
+        "MAPE": 35.023,
+        "sMAPE": 89.1279,
+        "WMAPE": 71.2856,
+        "Poisson_Deviance": 1.1831,
+        "MASE": 0.8012,
+        "RMSSE": 0.7493,
+        "R2": 0.0364,
+        "Adjusted_R2": 0.0333,
+        "_mape_coverage_pct": 69.8402
+    },
+    "split_r2": {
+        "Train_R2": 0.1725,
+        "Val_R2": 0.0364,
+        "Gap": 0.136
+    },
+    "past_end": "2024-12-29 03:00:00",
+    "validation_end": "2026-07-25 20:00:00",
+    "forecast_end": "2026-08-24 20:00:00",
+    "forecast_horizon_hours": 720,
+    "forecast_daily_mean": 27.22,
+    "forecast_vs_heldback_actuals_daily_mae": 1.936
+}

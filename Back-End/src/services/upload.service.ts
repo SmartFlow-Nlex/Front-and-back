@@ -1,16 +1,35 @@
 import { db } from "../config/db.js";
 
-// [DEV-01 & DEV-03] Save Upload Record
-export async function saveUploadRecordInDb(filename: string, records: number) {
+// [ETL] Save Upload Record with detailed processing stats
+export async function saveUploadRecordInDb(
+  filename: string,
+  records: number,
+  datasetType?: string,
+  status?: string
+) {
   if (!db) return null;
   try {
     const { rows } = await db.query(`
-      INSERT INTO data_uploads (filename, processed_records, status) 
-      VALUES ($1, $2, 'processed')
+      INSERT INTO data_uploads (filename, processed_records, dataset_type, status) 
+      VALUES ($1, $2, $3, $4)
       RETURNING *
-    `, [filename, records]);
+    `, [filename, records, datasetType ?? "unknown", status ?? "processed"]);
     return rows[0];
-  } catch (error) {
+  } catch (error: any) {
+    // If dataset_type column doesn't exist yet, fall back to original schema
+    if (error.code === "42703") {
+      try {
+        const { rows } = await db.query(`
+          INSERT INTO data_uploads (filename, processed_records, status) 
+          VALUES ($1, $2, $3)
+          RETURNING *
+        `, [filename, records, status ?? "processed"]);
+        return rows[0];
+      } catch (fallbackErr) {
+        console.error("Database query failed for file upload save (fallback):", fallbackErr);
+        return null;
+      }
+    }
     console.error("Database query failed for file upload save:", error);
     return null;
   }

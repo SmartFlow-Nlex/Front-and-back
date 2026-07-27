@@ -1,6 +1,6 @@
 import type { Request, Response } from "express";
 import { TrafficQuerySchema, IncidentQuerySchema, ForecastQuerySchema, AnalyticsQuerySchema } from "../validators/traffic.validator.js";
-import { getTrafficVolumesFromDb, getDirectionalFlowFromDb, getVehicleClassDistributionFromDb, getTrafficAnalyticsFromDb } from "../services/traffic.service.js";
+import { getTrafficVolumesFromDb, getDirectionalFlowFromDb, getVehicleClassDistributionFromDb, getTrafficAnalyticsFromDb, getMLPredictiveVolume, getMLPredictiveCongestion, getMLEventSurge } from "../services/traffic.service.js";
 
 // GET /api/traffic/analytics — descriptive dashboard aggregates
 export const getTrafficAnalytics = async (req: Request, res: Response) => {
@@ -12,7 +12,6 @@ export const getTrafficAnalytics = async (req: Request, res: Response) => {
     plazas: query.plazas ? query.plazas.split(",").map((p) => p.trim()).filter(Boolean) : undefined,
     direction: query.direction,
     vehicleClass: query.vehicleClass,
-    weather: query.weather,
   });
 
   if (!data) {
@@ -57,7 +56,7 @@ export const getRealtimeTraffic = async (req: Request, res: Response) => {
 // [REQ-01] GET /api/v1/traffic/incidents
 export const getIncidents = async (req: Request, res: Response) => {
   const _query = IncidentQuerySchema.parse(req.query);
-  
+
   // Mock data representing Waze Reports
   const mockData = [
     { incidentId: "INC-992", type: "Traffic Jam", kmMarker: 14.5, direction: "NB", severity: "High", reportedAt: new Date().toISOString() },
@@ -65,24 +64,34 @@ export const getIncidents = async (req: Request, res: Response) => {
     { incidentId: "INC-994", type: "Accident", kmMarker: 12.0, direction: "NB", severity: "Critical", reportedAt: new Date().toISOString() }
   ];
 
-  res.json({ success: true, data: mockData });
+  res.json({ success: true, source: "mock", data: mockData });
 };
 
 // [REQ-01] GET /api/v1/traffic/forecast
 export const getForecast = async (req: Request, res: Response) => {
   const query = ForecastQuerySchema.parse(req.query);
   
-  // Mock data for AI Predictions
-  const mockData = {
-    horizon: query.horizon,
-    mlConfidence: 0.89,
-    segments: [
-      { segmentId: "NB-01", predictedCongestion: "Medium", estimatedTravelTimeMins: 12 },
-      { segmentId: "NB-02", predictedCongestion: "High", estimatedTravelTimeMins: 25 }
-    ]
-  };
+  // Fetch real ML predictions from AWS PostgreSQL DB
+  const [volumes, congestion, events] = await Promise.all([
+    getMLPredictiveVolume(),
+    getMLPredictiveCongestion(),
+    getMLEventSurge()
+  ]);
 
-  res.json({ success: true, data: mockData });
+  if (!volumes && !congestion && !events) {
+    return res.status(503).json({ success: false, message: "ML Predictions unavailable: database not reachable" });
+  }
+
+  res.json({ 
+    success: true, 
+    data: {
+      horizon: query.horizon,
+      mlConfidence: 0.89, // This could also be stored in DB
+      volumes: volumes || [],
+      congestion: congestion || [],
+      events: events || []
+    } 
+  });
 };
 
 // [REQ-01, DEV-01, DEV-02, DEV-03] GET /api/v1/traffic/volume-adt

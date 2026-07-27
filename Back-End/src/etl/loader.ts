@@ -12,7 +12,7 @@ export interface LoadResult {
   durationMs: number;
 }
 
-const BATCH_SIZE = 5000;
+const BATCH_SIZE = 1000;
 
 /**
  * Build a parameterized INSERT query for a batch of rows
@@ -31,7 +31,7 @@ function buildBatchInsert(tableName: string, columns: string[], rows: any[][]): 
   }
 
   const colList = columns.map((c) => `"${c}"`).join(", ");
-  const text = `INSERT INTO ${tableName} (${colList}) VALUES ${valueClauses.join(", ")} ON CONFLICT DO NOTHING`;
+  const text = `INSERT INTO ${tableName} (${colList}) VALUES ${valueClauses.join(", ")}`;
 
   return { text, values };
 }

@@ -20,21 +20,30 @@ from statsmodels.tsa.statespace.sarimax import SARIMAX
 # DB Connection
 POSTGRES_URL = "postgresql://postgres:Hanszy123@smartflow.cn4wwa2i4cux.ap-southeast-1.rds.amazonaws.com:5432/nlex_capstone?sslmode=require"
 
-# Dataset
-DATASET_PATH = 'C:/Users/Hans/.gemini/antigravity/scratch/predictive folder/training_and_testing_outputs/01_dataset/traffic_speed_dataset.csv'
-
 def main():
-    print("Loading dataset...")
-    df = pd.read_csv(DATASET_PATH)
-    df = df.dropna(subset=['total_volume'])
+    print("Loading dataset directly from AWS PostgreSQL...")
+    conn = psycopg2.connect(POSTGRES_URL)
     
-    # Filter strictly for 2022-2026 as per Waze data availability rule
-    df['date_day'] = pd.to_datetime(df['date_day'])
-    df = df[df['date_day'] >= '2022-01-01']
+    query = """
+    SELECT date AS date_day, 
+           SUM(
+               COALESCE(h00, 0) + COALESCE(h01, 0) + COALESCE(h02, 0) + COALESCE(h03, 0) + 
+               COALESCE(h04, 0) + COALESCE(h05, 0) + COALESCE(h06, 0) + COALESCE(h07, 0) + 
+               COALESCE(h08, 0) + COALESCE(h09, 0) + COALESCE(h10, 0) + COALESCE(h11, 0) + 
+               COALESCE(h12, 0) + COALESCE(h13, 0) + COALESCE(h14, 0) + COALESCE(h15, 0) + 
+               COALESCE(h16, 0) + COALESCE(h17, 0) + COALESCE(h18, 0) + COALESCE(h19, 0) + 
+               COALESCE(h20, 0) + COALESCE(h21, 0) + COALESCE(h22, 0) + COALESCE(h23, 0)
+           ) as total_volume
+    FROM bronze.traffic_volume
+    GROUP BY date
+    ORDER BY date
+    """
     
-    # Aggregate to daily total volume
-    daily_df = df.groupby('date_day')['total_volume'].sum().reset_index()
+    daily_df = pd.read_sql_query(query, conn)
+    daily_df['date_day'] = pd.to_datetime(daily_df['date_day'])
+    
     # Filter out empty/placeholder days
+    daily_df = daily_df.dropna(subset=['total_volume'])
     daily_df = daily_df[daily_df['total_volume'] > 0]
     daily_df = daily_df.sort_values('date_day').reset_index(drop=True)
     

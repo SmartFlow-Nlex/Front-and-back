@@ -17,7 +17,7 @@ const ACCEPTED_MIMES = [
 
 const ACCEPTED_EXTENSIONS = [".csv", ".tsv", ".json", ".xlsx", ".xls"];
 
-const MAX_FILE_SIZE = 100 * 1024 * 1024; // 100MB
+const MAX_FILE_SIZE = 500 * 1024 * 1024; // 500MB
 
 const storage = multer.diskStorage({
   destination: (_req, _file, cb) => {

@@ -36,9 +36,10 @@ function transformTrafficVolume(rows: RawRow[]): TransformResult {
 
     const hourlyValues: number[] = [];
     for (let h = 0; h < 24; h++) {
-      const key = `h${String(h).padStart(2, "0")}`;
-      const val = row[key];
-      hourlyValues.push(typeof val === "number" ? val : (val ? parseInt(String(val), 10) || 0 : 0));
+      const keyH = `h${String(h).padStart(2, "0")}`;
+      const keyNum = `${String(h).padStart(2, "0")}_00`;
+      const val = row[keyH] ?? row[keyNum];
+      hourlyValues.push(typeof val === "number" ? val : (val ? parseInt(String(val).replace(/,/g, ''), 10) || 0 : 0));
     }
 
     transformed.push([date, direction, type, plaza, vc, ...hourlyValues]);

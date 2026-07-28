@@ -1,6 +1,8 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { Car } from "lucide-react";
+import PageHeader from "../../../components/dashboard/PageHeader";
 import { TrafficSim, CLASS_META, mixHex, type Metrics, type Interventions } from "./simulation";
 
 const BACKEND = process.env.NEXT_PUBLIC_BACKEND_URL ?? "http://localhost:4000";
@@ -229,14 +231,11 @@ export default function AiSandboxPage() {
 
   return (
     <section className="ds-content sandbox-page">
-      <div className="dm-head" style={{ marginBottom: 4 }}>
-        <div>
-          <h1 className="tab-title">AI Traffic Sandbox</h1>
-          <p style={{ color: "var(--text-secondary)", margin: 0 }}>
-            Agent-based what-if simulation · {originExit.name} → {destExit.name} corridor
-          </p>
-        </div>
-      </div>
+      <PageHeader
+        icon={Car}
+        title="AI Traffic Sandbox"
+        subtitle={`Agent-based what-if simulation · ${originExit.name} → ${destExit.name} corridor`}
+      />
 
       {/* Live metric tiles */}
       <div className="sandbox-metric-row">

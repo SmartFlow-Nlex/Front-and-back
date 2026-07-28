@@ -3,7 +3,9 @@
 import { useEffect, useMemo, useState } from "react";
 import ReactECharts from "echarts-for-react";
 import type { EChartsOption } from "echarts";
+import { Leaf } from "lucide-react";
 import DashboardChart from "../../../components/dashboard/DashboardChart";
+import PageHeader from "../../../components/dashboard/PageHeader";
 import PredictiveEmissionChart from "../../../components/dashboard/PredictiveEmissionChart";
 import DateRangePicker from "../traffic/components/DateRangePicker";
 import styles from "../traffic/traffic.module.css";
@@ -602,10 +604,9 @@ export default function SustainabilityPage() {
   if (activeTab !== "Descriptive") {
     return (
       <section className={styles.page}>
+        <PageHeader icon={Leaf} title="Emissions Overview" subtitle="Vehicle emissions and air quality trends across NLEX" />
         <div className={styles.filterRow}>
-          <span className={styles.filterLabel}>
-            {activeTab === "Predictive" ? "Forecasts from the AI model" : "Projected emission reduction by strategy"}
-          </span>
+          {activeTab === "Prescriptive" && <span className={styles.filterLabel}>Projected emission reduction by strategy</span>}
           <span className={styles.spacer} />
           <div className={styles.modeTabs}>
             {(["Descriptive", "Predictive", "Prescriptive"] as const).map((t) => (
@@ -617,9 +618,7 @@ export default function SustainabilityPage() {
           </div>
         </div>
         {activeTab === "Predictive" ? (
-          <article className={`${styles.chartCard} ${styles.chart1}`}>
-            <PredictiveEmissionChart />
-          </article>
+          <div className={styles.spanFull}><PredictiveEmissionChart /></div>
         ) : (
           <article className={`${styles.chartCard} ${styles.chart1}`}>
             <div className={styles.chartHead}>
@@ -638,6 +637,8 @@ export default function SustainabilityPage() {
 
   return (
     <section className={styles.page}>
+      <PageHeader icon={Leaf} title="Emissions Overview" subtitle="Vehicle emissions and air quality trends across NLEX" />
+
       {/* Row A — global filters */}
       <div className={styles.filterRow}>
         <div className={styles.filterGroup}>

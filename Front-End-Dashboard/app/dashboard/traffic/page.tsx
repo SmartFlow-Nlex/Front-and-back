@@ -3,7 +3,9 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import ReactECharts from "echarts-for-react";
 import type { EChartsOption } from "echarts";
+import { TrendingUp } from "lucide-react";
 import DashboardChart from "../../../components/dashboard/DashboardChart";
+import PageHeader from "../../../components/dashboard/PageHeader";
 import PredictiveVolumeChart from "../../../components/dashboard/PredictiveVolumeChart";
 import PredictiveCongestionChart from "../../../components/dashboard/PredictiveCongestionChart";
 import PredictiveEventChart from "../../../components/dashboard/PredictiveEventChart";
@@ -648,26 +650,87 @@ export default function TrafficPage() {
 
   const kpiValue = (v: string | null) => (loading && !data ? "…" : v ?? "—");
 
-  // ---------- Predictive / Prescriptive keep the classic scrolling layout ----------
+  // ---------- Predictive / Prescriptive share the same shell ----------
   if (activeTab !== "Descriptive") {
     return (
-      <section className="ds-content ds-long">
-        <h1 className="tab-title">Traffic Overview</h1>
-        <div className="mode-tabs">
-          {(["Descriptive", "Predictive", "Prescriptive"] as const).map((t) => (
-            <button key={t} className={activeTab === t ? "active" : ""} onClick={() => setActiveTab(t)}>{t}</button>
-          ))}
+      <section className={styles.page}>
+        <PageHeader icon={TrendingUp} title="Traffic Overview" subtitle="Volume, congestion, and speed patterns across NLEX" />
+        <div className={styles.filterRow} style={{ flexWrap: "wrap", rowGap: 8 }}>
+          {/* Predictive carries the same Range/Weather controls as Descriptive */}
+          {activeTab === "Predictive" && (
+            <>
+              <div className={styles.filterGroup}>
+                <svg width="15" height="15" viewBox="0 0 16 16" fill="none" style={{ color: "var(--text-muted)" }}><rect x="2" y="2" width="12" height="12" rx="3" stroke="currentColor" strokeWidth="1.4" /><path d="M2 6h12" stroke="currentColor" strokeWidth="1.4" /><path d="M5.5 2V4M10.5 2V4" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" /></svg>
+                <span className={styles.filterLabel}>Range</span>
+                <div className={styles.segmented}>
+                  {(["3", "12", "all", "custom"] as const).map((m) => (
+                    <button key={m} className={rangeMode === m ? "active" : ""} onClick={() => setRangeMode(m)}>
+                      {rangeMode === m && <svg width="12" height="12" viewBox="0 0 16 16" fill="none" style={{ marginRight: 4, marginBottom: -1 }}><path d="M3.5 8.5l3 3 6-7" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" /></svg>}
+                      {m === "3" ? "3 mo" : m === "12" ? "12 mo" : m === "all" ? "All" : "Custom"}
+                    </button>
+                  ))}
+                </div>
+                {rangeMode === "custom" && (
+                  <DateRangePicker
+                    startDate={customFrom}
+                    endDate={customTo}
+                    onChange={(start, end) => {
+                      setCustomFrom(start);
+                      setCustomTo(end);
+                    }}
+                  />
+                )}
+              </div>
+
+              <div className={styles.filterGroup}>
+                <svg width="15" height="15" viewBox="0 0 16 16" fill="none" style={{ color: "var(--text-muted)" }}><path d="M4.5 11.5a3 3 0 1 1 .4-5.97 4 4 0 0 1 7.75 1.1A2.5 2.5 0 0 1 12 11.5H4.5z" stroke="currentColor" strokeWidth="1.4" strokeLinejoin="round" /><path d="M6 13.2v1M9 13.2v1M12 13.2v1" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" /></svg>
+                <span className={styles.filterLabel}>Weather</span>
+                <div className={styles.segmented}>
+                  {(["all", "dry", "wet"] as const).map((w) => (
+                    <button key={w} className={weather === w ? "active" : ""} onClick={() => setWeather(w)}>
+                      {weather === w && <svg width="12" height="12" viewBox="0 0 16 16" fill="none" style={{ marginRight: 4, marginBottom: -1 }}><path d="M3.5 8.5l3 3 6-7" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" /></svg>}
+                      {w === "all" ? "All" : w === "dry" ? "Dry" : "Wet"}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            </>
+          )}
+          {activeTab === "Prescriptive" && <span className={styles.filterLabel}>Projected impact of traffic strategies</span>}
+          <span className={styles.spacer} />
+          <div className={styles.modeTabs}>
+            {(["Descriptive", "Predictive", "Prescriptive"] as const).map((t) => (
+              <button key={t} className={`${styles.modeTab} ${activeTab === t ? styles.modeTabActive : ""}`} onClick={() => setActiveTab(t)}>
+                {activeTab === t && <svg width="12" height="12" viewBox="0 0 16 16" fill="none" style={{ marginRight: 6, marginBottom: -1 }}><path d="M3.5 8.5l3 3 6-7" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" /></svg>}
+                {t}
+              </button>
+            ))}
+          </div>
         </div>
         {activeTab === "Predictive" ? (
-          <div className="chart-grid" style={{ display: "flex", flexDirection: "column", gap: "24px" }}>
-            <PredictiveVolumeChart />
-            <PredictiveCongestionChart />
-            <PredictiveEventChart />
-          </div>
+          <>
+            <div className={styles.spanFull}>
+              <PredictiveVolumeChart
+                months={rangeMode === "custom" ? "all" : rangeMode}
+                from={rangeMode === "custom" ? customFrom : undefined}
+                to={rangeMode === "custom" ? customTo : undefined}
+                weather={weather}
+              />
+            </div>
+            <div className={styles.spanFull}><PredictiveCongestionChart /></div>
+            <div className={styles.spanFull}><PredictiveEventChart /></div>
+          </>
         ) : (
-          <div className="chart-grid">
-            <article className="chart-card wide"><div className="chart-head"><h3>Projected Impact of Strategies (Throughput Gain)</h3><span className="pill green">Optimized</span></div><DashboardChart option={prescriptiveImpactOption} /></article>
-          </div>
+          <article className={`${styles.chartCard} ${styles.chart1}`}>
+            <div className={styles.chartHead}>
+              <div className={styles.headText}>
+                <h3>Projected Impact of Strategies (Throughput Gain)</h3>
+              </div>
+            </div>
+            <div className={styles.chartBody}>
+              <DashboardChart option={prescriptiveImpactOption} height={280} />
+            </div>
+          </article>
         )}
       </section>
     );
@@ -675,6 +738,8 @@ export default function TrafficPage() {
 
   return (
     <section className={styles.page}>
+      <PageHeader icon={TrendingUp} title="Traffic Overview" subtitle="Volume, congestion, and speed patterns across NLEX" />
+
       {/* Row A — global filters */}
       <div className={styles.filterRow}>
         <div className={styles.filterGroup}>

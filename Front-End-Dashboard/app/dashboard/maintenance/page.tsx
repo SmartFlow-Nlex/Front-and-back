@@ -1,7 +1,8 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Calendar, ChevronDown, MapPin, Plus, Search, X } from "lucide-react";
+import { Calendar, ChevronDown, MapPin, Plus, Search, Wrench, X } from "lucide-react";
+import PageHeader from "../../../components/dashboard/PageHeader";
 import styles from "../traffic/traffic.module.css";
 import { supabase } from "../../../lib/supabase";
 
@@ -431,6 +432,8 @@ export default function MaintenancePage() {
 
   return (
     <section className={styles.page}>
+      <PageHeader icon={Wrench} title="Maintenance Overview" subtitle="Scheduled roadworks, closures, and asset upkeep across NLEX" />
+
       {/* Row A — filters + primary action */}
       <div className={styles.filterRow} style={{ flexWrap: "wrap", rowGap: 8 }}>
         <div className={styles.filterGroup}>

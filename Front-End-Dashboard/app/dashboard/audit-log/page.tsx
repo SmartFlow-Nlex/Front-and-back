@@ -1,7 +1,8 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { Activity, Shield, AlertCircle, Filter } from "lucide-react";
+import { Activity, Shield, AlertCircle, ClipboardList, Filter } from "lucide-react";
+import PageHeader from "../../../components/dashboard/PageHeader";
 
 const BACKEND = process.env.NEXT_PUBLIC_BACKEND_URL ?? "http://localhost:4000";
 
@@ -117,8 +118,7 @@ export default function AuditLogPage() {
 
   return (
     <section className="ds-content ds-long">
-      <h1 className="tab-title">Audit Log</h1>
-      <p className="muted" style={{ marginBottom: 14 }}>Track all system activities and user actions</p>
+      <PageHeader icon={ClipboardList} title="Audit Log" subtitle="Track all system activities and user actions" />
       <div className="tab-stat-grid compact">
         <article className="tab-stat-card">
           <div className="stat-content">

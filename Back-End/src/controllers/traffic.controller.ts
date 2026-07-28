@@ -1,6 +1,6 @@
 import type { Request, Response } from "express";
-import { TrafficQuerySchema, IncidentQuerySchema, ForecastQuerySchema, AnalyticsQuerySchema } from "../validators/traffic.validator.js";
-import { getTrafficVolumesFromDb, getDirectionalFlowFromDb, getVehicleClassDistributionFromDb, getTrafficAnalyticsFromDb, getMLPredictiveVolume, getMLPredictiveCongestion, getMLEventSurge } from "../services/traffic.service.js";
+import { TrafficQuerySchema, IncidentQuerySchema, ForecastQuerySchema, HourlyForecastQuerySchema, AnalyticsQuerySchema } from "../validators/traffic.validator.js";
+import { getTrafficVolumesFromDb, getDirectionalFlowFromDb, getVehicleClassDistributionFromDb, getTrafficAnalyticsFromDb, getMLPredictiveVolume, getMLPredictiveVolumeHourly, getMLPredictiveCongestion, getMLEventSurge } from "../services/traffic.service.js";
 
 // GET /api/traffic/analytics — descriptive dashboard aggregates
 export const getTrafficAnalytics = async (req: Request, res: Response) => {
@@ -74,7 +74,7 @@ export const getForecast = async (req: Request, res: Response) => {
   
   // Fetch real ML predictions from AWS PostgreSQL DB
   const [volumes, congestion, events] = await Promise.all([
-    getMLPredictiveVolume(),
+    getMLPredictiveVolume({ months: query.months, from: query.from, to: query.to }),
     getMLPredictiveCongestion(),
     getMLEventSurge()
   ]);
@@ -93,6 +93,20 @@ export const getForecast = async (req: Request, res: Response) => {
       events: events || []
     } 
   });
+};
+
+// GET /api/traffic/forecast/hourly?date=YYYY-MM-DD&model=LSTM
+// Drill-down for a single point on the predictive volume chart.
+export const getForecastHourly = async (req: Request, res: Response) => {
+  const query = HourlyForecastQuerySchema.parse(req.query);
+
+  const data = await getMLPredictiveVolumeHourly(query.date, query.model, query.weather);
+
+  if (!data) {
+    return res.status(404).json({ success: false, message: `No forecast found for ${query.date}` });
+  }
+
+  res.json({ success: true, data });
 };
 
 // [REQ-01, DEV-01, DEV-02, DEV-03] GET /api/v1/traffic/volume-adt

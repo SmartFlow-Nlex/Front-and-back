@@ -4,10 +4,11 @@ import { useState, useEffect } from "react";
 import { 
   CarFront, Cone, ShieldAlert, AlertTriangle, AlertCircle, 
   Clock, ChevronDown, Navigation, ZoomIn, ZoomOut, Search,
-  Milestone
+  Milestone, Map
 } from "lucide-react";
 import type { Feature } from "geojson";
 import TrafficMapPanel from "../../../components/maps/TrafficMapPanel";
+import PageHeader from "../../../components/dashboard/PageHeader";
 
 export default function MapComparisonPage() {
   const [activeReports, setActiveReports] = useState(5);
@@ -78,13 +79,17 @@ export default function MapComparisonPage() {
 
   return (
     <section className="ds-content ds-long">
-      <div className="mc-top-bar">
-        <h1 className="tab-title">Traffic Map Comparison</h1>
-        <div className="mc-search-bar">
-          <Search size={16} />
-          <input type="text" placeholder="Search exits (e.g., San Fernando)..." />
-        </div>
-      </div>
+      <PageHeader
+        icon={Map}
+        title="Traffic Map Comparison"
+        subtitle="Side-by-side live traffic sources across the NLEX corridor"
+        actions={
+          <div className="mc-search-bar">
+            <Search size={16} />
+            <input type="text" placeholder="Search exits (e.g., San Fernando)..." />
+          </div>
+        }
+      />
 
       <div className="map-grid mc-map-grid">
         {/* Left Map: Waze Real-Time */}

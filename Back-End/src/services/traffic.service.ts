@@ -428,10 +428,35 @@ export async function getVehicleClassDistributionFromDb() {
 }
 
 // [ML-01] Get Predictive Volume (All Models) from Database
-export async function getMLPredictiveVolume() {
+export type ForecastWindow = { months?: "3" | "12" | "all"; from?: string; to?: string };
+
+export async function getMLPredictiveVolume(window: ForecastWindow = {}) {
   if (!db) return null;
+  const cols = `forecast_date as "date", actual_volume, pred_lstm, pred_prophet, pred_xgboost, pred_holtwinters, pred_sarimax, pred_holts_linear, is_holdout, is_future`;
   try {
-    const { rows } = await db.query(`SELECT forecast_date as "date", actual_volume, pred_lstm, pred_prophet, pred_xgboost, pred_holtwinters, pred_sarimax, pred_holts_linear, is_holdout, is_future FROM gold.ml_predictive_volume ORDER BY forecast_date ASC`);
+    // An explicit from/to wins; otherwise months trims back from the newest
+    // forecast date the table holds.
+    if (window.from && window.to) {
+      const { rows } = await db.query(
+        `SELECT ${cols} FROM gold.ml_predictive_volume
+         WHERE forecast_date BETWEEN $1::date AND $2::date
+         ORDER BY forecast_date ASC`,
+        [window.from, window.to]
+      );
+      return rows;
+    }
+
+    if (window.months && window.months !== "all") {
+      const { rows } = await db.query(
+        `SELECT ${cols} FROM gold.ml_predictive_volume
+         WHERE forecast_date >= (SELECT MAX(forecast_date) FROM gold.ml_predictive_volume) - ($1::int * interval '1 month')
+         ORDER BY forecast_date ASC`,
+        [Number(window.months)]
+      );
+      return rows;
+    }
+
+    const { rows } = await db.query(`SELECT ${cols} FROM gold.ml_predictive_volume ORDER BY forecast_date ASC`);
     return rows;
   } catch (error) {
     console.error("Failed to fetch ML volume:", error);
@@ -452,13 +477,202 @@ export async function getMLPredictiveCongestion() {
 }
 
 // [ML-03] Get Event Surge Forecast (Prophet) from Database
+//
+// The forecast table only carries the handful of exits the model flagged. The
+// corridor has many more, and "which exits are NOT affected" is just as
+// operationally useful, so every plaza with real traffic is returned and the
+// forecast is left-joined onto it.
+//
+// Baselines come from observed volume for every exit — the forecast table's own
+// baseline_volume does not reconcile with the warehouse (see README note), so
+// the model's *uplift ratio* is applied to the observed baseline instead. That
+// keeps one honest scale across the whole chart.
 export async function getMLEventSurge() {
   if (!db) return null;
   try {
-    const { rows } = await db.query(`SELECT exit_name as "exit", event_name as "event", baseline_volume as "baseline", surge_volume as "surge" FROM gold.ml_event_surge_forecast`);
+    const { rows } = await db.query(`
+      WITH observed AS (
+        SELECT toll_plaza,
+               ROUND(AVG(${DAY_TOTAL}))::int AS baseline
+        FROM nlex_traffic_volume
+        WHERE type = 'Entries' AND vehicle_class = 'Total'
+          AND date >= (SELECT MAX(date) FROM nlex_traffic_volume) - interval '90 days'
+        GROUP BY 1
+        HAVING ROUND(AVG(${DAY_TOTAL})) > 0
+      ),
+      -- Forecast exit names are free text ("Bocaue Exit"); a prefix match would
+      -- also catch "Bocaue Barrier", which is a mainline barrier and not the
+      -- exit the model means. Map explicitly.
+      alias(forecast_name, plaza) AS (
+        VALUES ('Bocaue Exit', 'Bocaue Interchange'),
+               ('Marilao Exit', 'Marilao'),
+               ('Balagtas Exit', 'Balagtas')
+      ),
+      fc AS (
+        SELECT COALESCE(a.plaza, TRIM(REPLACE(f.exit_name, 'Exit', ''))) AS plaza,
+               f.event_name,
+               f.baseline_volume,
+               f.surge_volume,
+               CASE WHEN f.baseline_volume > 0
+                    THEN f.surge_volume::numeric / f.baseline_volume
+                    ELSE NULL END AS uplift
+        FROM gold.ml_event_surge_forecast f
+        LEFT JOIN alias a ON a.forecast_name = f.exit_name
+      )
+      SELECT o.toll_plaza AS "exit",
+             fc.event_name AS "event",
+             o.baseline AS "baseline",
+             CASE WHEN fc.uplift IS NOT NULL
+                  THEN ROUND(o.baseline * fc.uplift)::int
+                  ELSE NULL END AS "surge",
+             ROUND(fc.uplift::numeric, 4) AS "uplift",
+             fc.baseline_volume AS "modelBaseline",
+             fc.surge_volume AS "modelSurge"
+      FROM observed o
+      LEFT JOIN fc ON fc.plaza = o.toll_plaza
+      ORDER BY o.baseline DESC
+    `);
     return rows;
   } catch (error) {
     console.error("Failed to fetch ML event surge:", error);
+    return null;
+  }
+}
+
+// [ML-04] Hourly breakdown for one forecast day — powers the click-to-drill-down
+// on the predictive volume chart.
+//
+// Actuals come straight from nlex_traffic_volume when that date has been
+// observed. Future days have no hourly ground truth and the models only predict
+// a daily total, so the predicted curve is that total redistributed over the
+// station's typical shape for the same weekday (last 90 days of history).
+export type HourlyForecastPoint = { hour: number; actual: number | null; predicted: number | null };
+export type HourlyForecastResult = {
+  date: string;
+  weekday: string;
+  isFuture: boolean;
+  dayActual: number | null;
+  dayPredicted: number | null;
+  profileSource: "observed" | "weekday-profile" | null;
+  weather: "all" | "dry" | "wet";
+  observedHours: number;
+  hours: HourlyForecastPoint[];
+};
+
+const MODEL_COLUMN: Record<string, string> = {
+  LSTM: "pred_lstm",
+  Prophet: "pred_prophet",
+  XGBoost: "pred_xgboost",
+  HoltWinters: "pred_holtwinters",
+  SARIMAX: "pred_sarimax",
+  HoltsLinear: "pred_holts_linear",
+};
+
+export async function getMLPredictiveVolumeHourly(
+  date: string,
+  model = "LSTM",
+  weather: "all" | "dry" | "wet" = "all"
+): Promise<HourlyForecastResult | null> {
+  if (!db) return null;
+  const column = MODEL_COLUMN[model] ?? MODEL_COLUMN.LSTM;
+
+  // Weather narrows the observed hours to those recorded as wet (or dry). The
+  // ML models carry no weather dimension, so it never touches the day totals.
+  const wetFilter = weather === "all" ? null : weather === "wet";
+  const WX_CTE = `wx AS (
+    SELECT (timestamp_utc + interval '8 hours')::date AS d,
+           EXTRACT(hour FROM timestamp_utc + interval '8 hours')::int AS h,
+           AVG(rainfall) > 0.3 AS wet
+    FROM hourly_weather
+    WHERE (timestamp_utc + interval '8 hours')::date = $1::date
+    GROUP BY 1, 2
+  )`;
+
+  try {
+    const [dayRes, actualRes, profileRes] = await Promise.all([
+      // The day's totals as the models see them
+      db.query(
+        `SELECT forecast_date::text AS date, actual_volume, ${column} AS predicted, is_future
+         FROM gold.ml_predictive_volume WHERE forecast_date = $1::date`,
+        [date]
+      ),
+      // Observed hourly totals, if this date has been recorded
+      wetFilter === null
+        ? db.query(
+            `SELECT u.hr - 1 AS hour, COALESCE(SUM(u.v), 0)::bigint AS v
+             FROM nlex_traffic_volume t,
+                  LATERAL unnest(${HOUR_ARRAY}) WITH ORDINALITY AS u(v, hr)
+             WHERE t.date = $1::date
+             GROUP BY 1 ORDER BY 1`,
+            [date]
+          )
+        : db.query(
+            // The comma-join to LATERAL has to be isolated in its own CTE —
+            // a JOIN in the same FROM cannot reference `t` across it.
+            `WITH ${WX_CTE},
+             hv AS (
+               SELECT t.date AS d, u.hr - 1 AS hour, u.v AS v
+               FROM nlex_traffic_volume t,
+                    LATERAL unnest(${HOUR_ARRAY}) WITH ORDINALITY AS u(v, hr)
+               WHERE t.date = $1::date
+             )
+             SELECT hv.hour, COALESCE(SUM(hv.v), 0)::bigint AS v
+             FROM hv JOIN wx w ON w.d = hv.d AND w.h = hv.hour
+             WHERE w.wet = $2
+             GROUP BY 1 ORDER BY 1`,
+            [date, wetFilter]
+          ),
+      // Typical share of the day carried by each hour, same weekday, recent history
+      db.query(
+        `WITH hv AS (
+           SELECT t.date, u.hr - 1 AS hour, u.v
+           FROM nlex_traffic_volume t,
+                LATERAL unnest(${HOUR_ARRAY}) WITH ORDINALITY AS u(v, hr)
+           WHERE EXTRACT(dow FROM t.date) = EXTRACT(dow FROM $1::date)
+             AND t.date < $1::date
+             AND t.date >= $1::date - interval '90 days'
+         )
+         SELECT hour, AVG(v)::float AS v FROM hv GROUP BY 1 ORDER BY 1`,
+        [date]
+      ),
+    ]);
+
+    const day = dayRes.rows[0] as
+      | { date: string; actual_volume: number | null; predicted: number | null; is_future: boolean }
+      | undefined;
+    if (!day) return null;
+
+    const actualByHour = new Map<number, number>(
+      actualRes.rows.map((r: { hour: number; v: string }) => [Number(r.hour), Number(r.v)])
+    );
+    const profile = profileRes.rows.map((r: { hour: number; v: number }) => Number(r.v));
+    const profileTotal = profile.reduce((s, v) => s + v, 0);
+
+    const dayPredicted = day.predicted != null ? Number(day.predicted) : null;
+    const hasActualHours = actualByHour.size > 0;
+    const canShapePrediction = dayPredicted != null && profileTotal > 0 && profile.length === 24;
+
+    const hours: HourlyForecastPoint[] = Array.from({ length: 24 }, (_, h) => ({
+      hour: h,
+      // With a weather filter on, hours that don't match are absent rather
+      // than zero — a zero bar would read as "no traffic".
+      actual: !hasActualHours ? null : wetFilter === null ? actualByHour.get(h) ?? 0 : actualByHour.get(h) ?? null,
+      predicted: canShapePrediction ? Math.round((profile[h] / profileTotal) * dayPredicted) : null,
+    }));
+
+    return {
+      date: day.date,
+      weekday: new Date(`${day.date}T00:00:00`).toLocaleDateString("en-US", { weekday: "long" }),
+      isFuture: Boolean(day.is_future),
+      dayActual: day.actual_volume != null ? Number(day.actual_volume) : null,
+      dayPredicted,
+      profileSource: hasActualHours ? "observed" : canShapePrediction ? "weekday-profile" : null,
+      weather,
+      observedHours: actualByHour.size,
+      hours,
+    };
+  } catch (error) {
+    console.error("Failed to fetch hourly ML volume:", error);
     return null;
   }
 }

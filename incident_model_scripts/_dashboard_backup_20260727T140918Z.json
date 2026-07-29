@@ -1,0 +1,720 @@
+{
+  "ml_daily_actuals": [
+    {
+      "d": "2026-03-03",
+      "total": 2099.858529650819
+    },
+    {
+      "d": "2026-03-04",
+      "total": 2186.2778213931233
+    },
+    {
+      "d": "2026-03-05",
+      "total": 1957.3129096089187
+    },
+    {
+      "d": "2026-03-06",
+      "total": 1665.1304855266314
+    },
+    {
+      "d": "2026-03-07",
+      "total": 1532.3709207896861
+    },
+    {
+      "d": "2026-03-08",
+      "total": 1661.5284471270015
+    },
+    {
+      "d": "2026-03-09",
+      "total": 1957.7701615711196
+    },
+    {
+      "d": "2026-03-10",
+      "total": 2200.3464179481202
+    },
+    {
+      "d": "2026-03-11",
+      "total": 2208.819123554272
+    },
+    {
+      "d": "2026-03-12",
+      "total": 1978.934643386324
+    },
+    {
+      "d": "2026-03-13",
+      "total": 1685.8262439339521
+    },
+    {
+      "d": "2026-03-14",
+      "total": 1552.1345712270677
+    },
+    {
+      "d": "2026-03-15",
+      "total": 1680.3541331982601
+    },
+    {
+      "d": "2026-03-16",
+      "total": 1975.6523048191766
+    },
+    {
+      "d": "2026-03-17",
+      "total": 2217.2797195079966
+    },
+    {
+      "d": "2026-03-18",
+      "total": 2224.7985657232384
+    },
+    {
+      "d": "2026-03-19",
+      "total": 1993.95549111082
+    },
+    {
+      "d": "2026-03-20",
+      "total": 1699.884046212632
+    },
+    {
+      "d": "2026-03-21",
+      "total": 1565.225162429698
+    },
+    {
+      "d": "2026-03-22",
+      "total": 1692.4736343002073
+    },
+    {
+      "d": "2026-03-23",
+      "total": 1986.797124550674
+    },
+    {
+      "d": "2026-03-24",
+      "total": 2227.4465554184526
+    },
+    {
+      "d": "2026-03-25",
+      "total": 2233.9844051597665
+    },
+    {
+      "d": "2026-03-26",
+      "total": 2002.1576121109051
+    },
+    {
+      "d": "2026-03-27",
+      "total": 1707.100018310832
+    },
+    {
+      "d": "2026-03-28",
+      "total": 1571.4528473777261
+    },
+    {
+      "d": "2026-03-29",
+      "total": 1697.7111867005844
+    },
+    {
+      "d": "2026-03-30",
+      "total": 1991.042992403606
+    },
+    {
+      "d": "2026-03-31",
+      "total": 2230.6994805816603
+    },
+    {
+      "d": "2026-04-01",
+      "total": 2236.2434237213124
+    },
+    {
+      "d": "2026-04-02",
+      "total": 2003.4220546748847
+    },
+    {
+      "d": "2026-04-03",
+      "total": 1707.3695101956134
+    },
+    {
+      "d": "2026-04-04",
+      "total": 1570.7273087270405
+    },
+    {
+      "d": "2026-04-05",
+      "total": 1695.9908325072204
+    },
+    {
+      "d": "2026-04-06",
+      "total": 1988.3283324455997
+    },
+    {
+      "d": "2026-04-07",
+      "total": 2226.991319271358
+    },
+    {
+      "d": "2026-04-08",
+      "total": 2231.5428598669137
+    },
+    {
+      "d": "2026-04-09",
+      "total": 1997.7304811548945
+    },
+    {
+      "d": "2026-04-10",
+      "total": 1700.6886135461018
+    },
+    {
+      "d": "2026-04-11",
+      "total": 1563.059068641891
+    },
+    {
+      "d": "2026-04-12",
+      "total": 1687.3375212514434
+    },
+    {
+      "d": "2026-04-13",
+      "total": 1978.6925141821134
+    },
+    {
+      "d": "2026-04-14",
+      "total": 2216.37584930108
+    },
+    {
+      "d": "2026-04-15",
+      "total": 2219.95088378269
+    },
+    {
+      "d": "2026-04-16",
+      "total": 1985.1654339094298
+    },
+    {
+      "d": "2026-04-17",
+      "total": 1687.1542184340376
+    },
+    {
+      "d": "2026-04-18",
+      "total": 1548.5593361966073
+    },
+    {
+      "d": "2026-04-19",
+      "total": 1671.8767480565627
+    },
+    {
+      "d": "2026-04-20",
+      "total": 1962.2752815984122
+    },
+    {
+      "d": "2026-04-21",
+      "total": 2199.0070221088827
+    },
+    {
+      "d": "2026-04-22",
+      "total": 2201.6356087403406
+    },
+    {
+      "d": "2026-04-23",
+      "total": 1965.9091382281972
+    },
+    {
+      "d": "2026-04-24",
+      "total": 1666.9626081699473
+    },
+    {
+      "d": "2026-04-25",
+      "total": 1527.438394559548
+    },
+    {
+      "d": "2026-04-26",
+      "total": 1649.832733637399
+    },
+    {
+      "d": "2026-04-27",
+      "total": 1939.3147265143477
+    },
+    {
+      "d": "2026-04-28",
+      "total": 2175.1367300678967
+    },
+    {
+      "d": "2026-04-29",
+      "total": 2176.8626530251536
+    },
+    {
+      "d": "2026-04-30",
+      "total": 1940.2408596001806
+    },
+    {
+      "d": "2026-05-01",
+      "total": 1640.406612694054
+    },
+    {
+      "d": "2026-05-02",
+      "total": 1500.0025513503465
+    },
+    {
+      "d": "2026-05-03",
+      "total": 1621.525172527334
+    },
+    {
+      "d": "2026-05-04",
+      "total": 1910.1438356447168
+    },
+    {
+      "d": "2026-05-05",
+      "total": 2145.11115340325
+    },
+    {
+      "d": "2026-05-06",
+      "total": 2145.9912877918473
+    },
+    {
+      "d": "2026-05-07",
+      "total": 1908.5328536500338
+    },
+    {
+      "d": "2026-05-08",
+      "total": 1607.8713617935143
+    },
+    {
+      "d": "2026-05-09",
+      "total": 1466.6496963964296
+    },
+    {
+      "d": "2026-05-10",
+      "total": 1587.3645966907825
+    },
+    {
+      "d": "2026-05-11",
+      "total": 1875.1856614413473
+    },
+    {
+      "d": "2026-05-12",
+      "total": 2109.365739694556
+    },
+    {
+      "d": "2026-05-13",
+      "total": 2109.469226715359
+    },
+    {
+      "d": "2026-05-14",
+      "total": 1871.2449674806448
+    },
+    {
+      "d": "2026-05-15",
+      "total": 1569.8286997366447
+    },
+    {
+      "d": "2026-05-16",
+      "total": 1427.8635313139077
+    },
+    {
+      "d": "2026-05-17",
+      "total": 1547.8464217603691
+    },
+    {
+      "d": "2026-05-18",
+      "total": 1834.9471867511927
+    },
+    {
+      "d": "2026-05-19",
+      "total": 2068.4188887731125
+    },
+    {
+      "d": "2026-05-20",
+      "total": 2067.8261329982474
+    },
+    {
+      "d": "2026-05-21",
+      "total": 1828.9179707152864
+    },
+    {
+      "d": "2026-05-22",
+      "total": 1526.830342325617
+    },
+    {
+      "d": "2026-05-23",
+      "total": 1384.2065545985035
+    },
+    {
+      "d": "2026-05-24",
+      "total": 1503.5437622449845
+    },
+    {
+      "d": "2026-05-25",
+      "total": 1790.0119722699667
+    },
+    {
+      "d": "2026-05-26",
+      "total": 2022.8644345998794
+    },
+    {
+      "d": "2026-05-27",
+      "total": 2021.6659379009618
+    },
+    {
+      "d": "2026-05-28",
+      "total": 1782.165712955936
+    },
+    {
+      "d": "2026-05-29",
+      "total": 1479.4998756072237
+    },
+    {
+      "d": "2026-05-30",
+      "total": 1336.3119039598212
+    },
+    {
+      "d": "2026-05-31",
+      "total": 1455.0991199046298
+    },
+    {
+      "d": "2026-06-01",
+      "total": 1741.0316934210061
+    },
+    {
+      "d": "2026-06-02",
+      "total": 1973.3630331559712
+    },
+    {
+      "d": "2026-06-03",
+      "total": 1971.6580821956977
+    },
+    {
+      "d": "2026-06-04",
+      "total": 1731.666221396213
+    },
+    {
+      "d": "2026-06-05",
+      "total": 1428.5237122822398
+    },
+    {
+      "d": "2026-06-06",
+      "total": 1284.8741742069426
+    },
+    {
+      "d": "2026-06-07",
+      "total": 1403.2150658333187
+    },
+    {
+      "d": "2026-06-08",
+      "total": 1688.7166893962421
+    },
+    {
+      "d": "2026-06-09",
+      "total": 1920.632581242496
+    },
+    {
+      "d": "2026-06-10",
+      "total": 1918.527807564432
+    },
+    {
+      "d": "2026-06-11",
+      "total": 1678.1518676941628
+    },
+    {
+      "d": "2026-06-12",
+      "total": 1374.6411369673745
+    },
+    {
+      "d": "2026-06-13",
+      "total": 1230.639343849166
+    },
+    {
+      "d": "2026-06-14",
+      "total": 1348.6440513833486
+    },
+    {
+      "d": "2026-06-15",
+      "total": 1633.8256614233633
+    },
+    {
+      "d": "2026-06-16",
+      "total": 1865.437805142968
+    },
+    {
+      "d": "2026-06-17",
+      "total": 1863.0456387416205
+    },
+    {
+      "d": "2026-06-18",
+      "total": 1622.3987467121094
+    },
+    {
+      "d": "2026-06-19",
+      "total": 1318.6335846790842
+    },
+    {
+      "d": "2026-06-20",
+      "total": 1174.3939565011128
+    },
+    {
+      "d": "2026-06-21",
+      "total": 1292.1774956977154
+    },
+    {
+      "d": "2026-06-22",
+      "total": 1577.154669659212
+    },
+    {
+      "d": "2026-06-23",
+      "total": 1808.5791701382466
+    },
+    {
+      "d": "2026-06-24",
+      "total": 1806.0162089369499
+    },
+    {
+      "d": "2026-06-25",
+      "total": 1565.215421158348
+    },
+    {
+      "d": "2026-06-26",
+      "total": 1261.3133080296684
+    },
+    {
+      "d": "2026-06-27",
+      "total": 1116.9537139911192
+    },
+    {
+      "d": "2026-06-28",
+      "total": 1234.6343081106422
+    },
+    {
+      "d": "2026-06-29",
+      "total": 1519.5255882834508
+    },
+    {
+      "d": "2026-06-30",
+      "total": 1750.8812717143624
+    },
+    {
+      "d": "2026-07-17",
+      "total": 64.8278600622263
+    }
+  ],
+  "ml_predictive_incidents": [
+    {
+      "forecast_date": "2026-06-07",
+      "prediction_type": "validation",
+      "predicted_incident_count": 1413.0749784941268,
+      "champion_model": "Random Forest",
+      "created_at": "2026-07-24 15:08:44.470023+00:00"
+    },
+    {
+      "forecast_date": "2026-06-08",
+      "prediction_type": "validation",
+      "predicted_incident_count": 1842.707133177773,
+      "champion_model": "Random Forest",
+      "created_at": "2026-07-24 15:08:44.470023+00:00"
+    },
+    {
+      "forecast_date": "2026-06-09",
+      "prediction_type": "validation",
+      "predicted_incident_count": 2078.7728483521846,
+      "champion_model": "Random Forest",
+      "created_at": "2026-07-24 15:08:44.470023+00:00"
+    },
+    {
+      "forecast_date": "2026-06-10",
+      "prediction_type": "validation",
+      "predicted_incident_count": 2054.606870773135,
+      "champion_model": "Random Forest",
+      "created_at": "2026-07-24 15:08:44.470023+00:00"
+    },
+    {
+      "forecast_date": "2026-06-11",
+      "prediction_type": "validation",
+      "predicted_incident_count": 1824.9235473610026,
+      "champion_model": "Random Forest",
+      "created_at": "2026-07-24 15:08:44.470023+00:00"
+    },
+    {
+      "forecast_date": "2026-06-12",
+      "prediction_type": "validation",
+      "predicted_incident_count": 1479.6678147449202,
+      "champion_model": "Random Forest",
+      "created_at": "2026-07-24 15:08:44.470023+00:00"
+    },
+    {
+      "forecast_date": "2026-06-13",
+      "prediction_type": "validation",
+      "predicted_incident_count": 1400.3521600808463,
+      "champion_model": "Random Forest",
+      "created_at": "2026-07-24 15:08:44.470023+00:00"
+    },
+    {
+      "forecast_date": "2026-06-14",
+      "prediction_type": "validation",
+      "predicted_incident_count": 1503.044071424815,
+      "champion_model": "Random Forest",
+      "created_at": "2026-07-24 15:08:44.470023+00:00"
+    },
+    {
+      "forecast_date": "2026-06-15",
+      "prediction_type": "validation",
+      "predicted_incident_count": 1849.0581985853778,
+      "champion_model": "Random Forest",
+      "created_at": "2026-07-24 15:08:44.470023+00:00"
+    },
+    {
+      "forecast_date": "2026-06-16",
+      "prediction_type": "validation",
+      "predicted_incident_count": 2096.114321184039,
+      "champion_model": "Random Forest",
+      "created_at": "2026-07-24 15:08:44.470023+00:00"
+    },
+    {
+      "forecast_date": "2026-06-17",
+      "prediction_type": "validation",
+      "predicted_incident_count": 2110.21778779213,
+      "champion_model": "Random Forest",
+      "created_at": "2026-07-24 15:08:44.470023+00:00"
+    },
+    {
+      "forecast_date": "2026-06-18",
+      "prediction_type": "validation",
+      "predicted_incident_count": 1891.4248662056114,
+      "champion_model": "Random Forest",
+      "created_at": "2026-07-24 15:08:44.470023+00:00"
+    },
+    {
+      "forecast_date": "2026-06-19",
+      "prediction_type": "validation",
+      "predicted_incident_count": 1475.3434019084368,
+      "champion_model": "Random Forest",
+      "created_at": "2026-07-24 15:08:44.470023+00:00"
+    },
+    {
+      "forecast_date": "2026-06-20",
+      "prediction_type": "validation",
+      "predicted_incident_count": 1421.774733900297,
+      "champion_model": "Random Forest",
+      "created_at": "2026-07-24 15:08:44.470023+00:00"
+    },
+    {
+      "forecast_date": "2026-06-21",
+      "prediction_type": "validation",
+      "predicted_incident_count": 1517.4503576647394,
+      "champion_model": "Random Forest",
+      "created_at": "2026-07-24 15:08:44.470023+00:00"
+    },
+    {
+      "forecast_date": "2026-06-22",
+      "prediction_type": "validation",
+      "predicted_incident_count": 1847.1130233310164,
+      "champion_model": "Random Forest",
+      "created_at": "2026-07-24 15:08:44.470023+00:00"
+    },
+    {
+      "forecast_date": "2026-06-23",
+      "prediction_type": "validation",
+      "predicted_incident_count": 2059.8420727122675,
+      "champion_model": "Random Forest",
+      "created_at": "2026-07-24 15:08:44.470023+00:00"
+    },
+    {
+      "forecast_date": "2026-06-24",
+      "prediction_type": "validation",
+      "predicted_incident_count": 2033.400531025619,
+      "champion_model": "Random Forest",
+      "created_at": "2026-07-24 15:08:44.470023+00:00"
+    },
+    {
+      "forecast_date": "2026-06-25",
+      "prediction_type": "validation",
+      "predicted_incident_count": 1850.2683638089316,
+      "champion_model": "Random Forest",
+      "created_at": "2026-07-24 15:08:44.470023+00:00"
+    },
+    {
+      "forecast_date": "2026-06-26",
+      "prediction_type": "validation",
+      "predicted_incident_count": 1512.3849458950492,
+      "champion_model": "Random Forest",
+      "created_at": "2026-07-24 15:08:44.470023+00:00"
+    },
+    {
+      "forecast_date": "2026-06-27",
+      "prediction_type": "validation",
+      "predicted_incident_count": 1442.5838166265523,
+      "champion_model": "Random Forest",
+      "created_at": "2026-07-24 15:08:44.470023+00:00"
+    },
+    {
+      "forecast_date": "2026-06-28",
+      "prediction_type": "validation",
+      "predicted_incident_count": 1522.4617394821873,
+      "champion_model": "Random Forest",
+      "created_at": "2026-07-24 15:08:44.470023+00:00"
+    },
+    {
+      "forecast_date": "2026-06-29",
+      "prediction_type": "validation",
+      "predicted_incident_count": 1835.5230695652706,
+      "champion_model": "Random Forest",
+      "created_at": "2026-07-24 15:08:44.470023+00:00"
+    },
+    {
+      "forecast_date": "2026-06-30",
+      "prediction_type": "validation",
+      "predicted_incident_count": 2020.3219051469023,
+      "champion_model": "Random Forest",
+      "created_at": "2026-07-24 15:08:44.470023+00:00"
+    },
+    {
+      "forecast_date": "2026-07-17",
+      "prediction_type": "validation",
+      "predicted_incident_count": 74.59504829959859,
+      "champion_model": "Random Forest",
+      "created_at": "2026-07-24 15:08:44.470023+00:00"
+    },
+    {
+      "forecast_date": "2026-07-18",
+      "prediction_type": "future",
+      "predicted_incident_count": 78.50420571193874,
+      "champion_model": "Random Forest",
+      "created_at": "2026-07-24 15:08:44.470023+00:00"
+    },
+    {
+      "forecast_date": "2026-07-19",
+      "prediction_type": "future",
+      "predicted_incident_count": 79.4696878605077,
+      "champion_model": "Random Forest",
+      "created_at": "2026-07-24 15:08:44.470023+00:00"
+    },
+    {
+      "forecast_date": "2026-07-20",
+      "prediction_type": "future",
+      "predicted_incident_count": 76.76446699518638,
+      "champion_model": "Random Forest",
+      "created_at": "2026-07-24 15:08:44.470023+00:00"
+    },
+    {
+      "forecast_date": "2026-07-21",
+      "prediction_type": "future",
+      "predicted_incident_count": 72.4256296040108,
+      "champion_model": "Random Forest",
+      "created_at": "2026-07-24 15:08:44.470023+00:00"
+    },
+    {
+      "forecast_date": "2026-07-22",
+      "prediction_type": "future",
+      "predicted_incident_count": 69.72040873868947,
+      "champion_model": "Random Forest",
+      "created_at": "2026-07-24 15:08:44.470023+00:00"
+    },
+    {
+      "forecast_date": "2026-07-23",
+      "prediction_type": "future",
+      "predicted_incident_count": 70.68589088725844,
+      "champion_model": "Random Forest",
+      "created_at": "2026-07-24 15:08:44.470023+00:00"
+    },
+    {
+      "forecast_date": "2026-07-24",
+      "prediction_type": "future",
+      "predicted_incident_count": 74.59504829959859,
+      "champion_model": "Random Forest",
+      "created_at": "2026-07-24 15:08:44.470023+00:00"
+    }
+  ],
+  "ml_training_metadata": [
+    {
+      "metadata_json": "{\"champion_model\": \"Random Forest\", \"metrics\": {\"MAE\": 8.987826506965856, \"Poisson_Deviance\": 1.3976052226639122}, \"training_timestamp\": \"2026-07-24T15:08:46.548003+00:00\", \"training_period\": \"2026-03-03 to 2026-06-07\", \"validation_period\": \"2026-06-07 to 2026-07-17\", \"training_samples\": 2304, \"validation_samples\": 576, \"feature_importance\": {\"hour_of_day\": 0.1593861220107081, \"temperature\": 0.1050412660798001, \"rainfall\": 0.0037637193172524, \"wind_speed\": 0.0648663212838663, \"humidity\": 0.2076479050755326, \"day_of_week\": 0.2900905748507562, \"is_weekend\": 0.1692040913820839}, \"models_evaluated\": [\"Random Forest\", \"Negative Binomial Regression\", \"Geographically Weighted Regression (GWR)\"]}",
+      "created_at": "2026-07-24 15:08:46.548232+00:00"
+    }
+  ]
+}

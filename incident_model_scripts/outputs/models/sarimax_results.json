@@ -1,0 +1,99 @@
+{
+    "model": "SARIMAX",
+    "target": "incident_count",
+    "task": "count regression",
+    "validation": "3-fold expanding-window walk-forward",
+    "metrics": {
+        "MAE": 1.0883,
+        "MSE": 2.1092,
+        "RMSE": 1.441,
+        "MAPE": 70.088,
+        "sMAPE": 142.1419,
+        "WMAPE": 87.7675,
+        "Poisson_Deviance": 18.2981,
+        "MASE": 0.9037,
+        "RMSSE": 0.8995,
+        "R2": -0.591,
+        "Adjusted_R2": -0.5937,
+        "_mape_coverage_pct": 69.8402
+    },
+    "split_r2_diagnostic": {
+        "Train_R2": 0.0285,
+        "Val_R2": -0.591,
+        "Gap": 0.6194
+    },
+    "per_fold": [
+        {
+            "fold": 1,
+            "MAE": 0.9547,
+            "MSE": 1.4062,
+            "RMSE": 1.1858,
+            "MAPE": 38.6972,
+            "sMAPE": 90.0543,
+            "WMAPE": 75.8163,
+            "Poisson_Deviance": 1.2584,
+            "MASE": 0.8032,
+            "RMSSE": 0.748,
+            "R2": -0.0223,
+            "Adjusted_R2": -0.0241,
+            "_mape_coverage_pct": 69.9782,
+            "Train_R2": 0.0228,
+            "Val_R2": -0.0223,
+            "Gap": 0.0451
+        },
+        {
+            "fold": 2,
+            "MAE": 1.1654,
+            "MSE": 2.4867,
+            "RMSE": 1.5769,
+            "MAPE": 86.7554,
+            "sMAPE": 170.0929,
+            "WMAPE": 93.9782,
+            "Poisson_Deviance": 28.798,
+            "MASE": 0.9343,
+            "RMSSE": 0.9513,
+            "R2": -0.9127,
+            "Adjusted_R2": -0.916,
+            "_mape_coverage_pct": 70.2179,
+            "Train_R2": 0.0209,
+            "Val_R2": -0.9127,
+            "Gap": 0.9336
+        },
+        {
+            "fold": 3,
+            "MAE": 1.1447,
+            "MSE": 2.4346,
+            "RMSE": 1.5603,
+            "MAPE": 84.8115,
+            "sMAPE": 166.2784,
+            "WMAPE": 93.5081,
+            "Poisson_Deviance": 24.838,
+            "MASE": 0.9735,
+            "RMSSE": 0.9992,
+            "R2": -0.8379,
+            "Adjusted_R2": -0.8411,
+            "_mape_coverage_pct": 69.3246,
+            "Train_R2": 0.0417,
+            "Val_R2": -0.8379,
+            "Gap": 0.8796
+        }
+    ],
+    "folds_meta": [
+        {
+            "fold": 1,
+            "train_rows": 43611,
+            "test_rows": 4590
+        },
+        {
+            "fold": 2,
+            "train_rows": 48201,
+            "test_rows": 4590
+        },
+        {
+            "fold": 3,
+            "train_rows": 52791,
+            "test_rows": 4590
+        }
+    ],
+    "note": "ARIMA(2,0,2)+exog, trailing 5000h train window"
+}

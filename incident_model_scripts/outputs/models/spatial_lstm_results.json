@@ -1,0 +1,100 @@
+{
+    "model": "Spatial LSTM",
+    "target": "incident_count_daily_per_2km_segment",
+    "task": "count regression",
+    "validation": "3-fold expanding-window walk-forward",
+    "metrics": {
+        "MAE": 0.9153,
+        "MSE": 1.5546,
+        "RMSE": 1.2468,
+        "MAPE": 52.3009,
+        "sMAPE": 105.9003,
+        "WMAPE": 64.5044,
+        "Poisson_Deviance": 1.0821,
+        "MASE": 0.5969,
+        "RMSSE": 0.6062,
+        "R2": 0.3288,
+        "Adjusted_R2": 0.3244,
+        "_mape_coverage_pct": 63.733
+    },
+    "split_r2_diagnostic": {
+        "Train_R2": 0.3555,
+        "Val_R2": 0.3288,
+        "Gap": 0.0267
+    },
+    "per_fold": [
+        {
+            "fold": 1,
+            "MAE": 0.9025,
+            "MSE": 1.5065,
+            "RMSE": 1.2274,
+            "MAPE": 52.4551,
+            "sMAPE": 103.5833,
+            "WMAPE": 62.4024,
+            "Poisson_Deviance": 1.038,
+            "MASE": 0.5963,
+            "RMSSE": 0.6028,
+            "R2": 0.3426,
+            "Adjusted_R2": 0.3383,
+            "_mape_coverage_pct": 64.8965,
+            "Train_R2": 0.3503,
+            "Val_R2": 0.3426,
+            "Gap": 0.0077
+        },
+        {
+            "fold": 2,
+            "MAE": 0.9116,
+            "MSE": 1.566,
+            "RMSE": 1.2514,
+            "MAPE": 49.6172,
+            "sMAPE": 107.3791,
+            "WMAPE": 64.2352,
+            "Poisson_Deviance": 1.0856,
+            "MASE": 0.5944,
+            "RMSSE": 0.6085,
+            "R2": 0.3419,
+            "Adjusted_R2": 0.3376,
+            "_mape_coverage_pct": 63.0017,
+            "Train_R2": 0.3584,
+            "Val_R2": 0.3419,
+            "Gap": 0.0165
+        },
+        {
+            "fold": 3,
+            "MAE": 0.9319,
+            "MSE": 1.5913,
+            "RMSE": 1.2615,
+            "MAPE": 54.8305,
+            "sMAPE": 106.7386,
+            "WMAPE": 66.8757,
+            "Poisson_Deviance": 1.1226,
+            "MASE": 0.5999,
+            "RMSSE": 0.6073,
+            "R2": 0.3018,
+            "Adjusted_R2": 0.2972,
+            "_mape_coverage_pct": 63.3009,
+            "Train_R2": 0.3577,
+            "Val_R2": 0.3018,
+            "Gap": 0.0559
+        }
+    ],
+    "folds_meta": [
+        {
+            "fold": 1,
+            "train_days": 1822,
+            "test_days": 191
+        },
+        {
+            "fold": 2,
+            "train_days": 2013,
+            "test_days": 191
+        },
+        {
+            "fold": 3,
+            "train_days": 2204,
+            "test_days": 191
+        }
+    ],
+    "n_segments": 21,
+    "note": "multivariate LSTM; forecasts all segments jointly 1 day ahead"
+}

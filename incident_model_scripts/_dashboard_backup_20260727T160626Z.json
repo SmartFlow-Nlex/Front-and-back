@@ -1,0 +1,1362 @@
+{
+  "ml_daily_actuals": [
+    {
+      "d": "2026-01-04",
+      "total": 64.0
+    },
+    {
+      "d": "2026-01-05",
+      "total": 26.0
+    },
+    {
+      "d": "2026-01-06",
+      "total": 25.0
+    },
+    {
+      "d": "2026-01-07",
+      "total": 23.0
+    },
+    {
+      "d": "2026-01-08",
+      "total": 36.0
+    },
+    {
+      "d": "2026-01-09",
+      "total": 36.0
+    },
+    {
+      "d": "2026-01-10",
+      "total": 23.0
+    },
+    {
+      "d": "2026-01-11",
+      "total": 41.0
+    },
+    {
+      "d": "2026-01-12",
+      "total": 12.0
+    },
+    {
+      "d": "2026-01-13",
+      "total": 20.0
+    },
+    {
+      "d": "2026-01-14",
+      "total": 34.0
+    },
+    {
+      "d": "2026-01-15",
+      "total": 22.0
+    },
+    {
+      "d": "2026-01-16",
+      "total": 24.0
+    },
+    {
+      "d": "2026-01-17",
+      "total": 38.0
+    },
+    {
+      "d": "2026-01-18",
+      "total": 37.0
+    },
+    {
+      "d": "2026-01-19",
+      "total": 30.0
+    },
+    {
+      "d": "2026-01-20",
+      "total": 35.0
+    },
+    {
+      "d": "2026-01-21",
+      "total": 20.0
+    },
+    {
+      "d": "2026-01-22",
+      "total": 21.0
+    },
+    {
+      "d": "2026-01-23",
+      "total": 34.0
+    },
+    {
+      "d": "2026-01-24",
+      "total": 27.0
+    },
+    {
+      "d": "2026-01-25",
+      "total": 54.0
+    },
+    {
+      "d": "2026-01-26",
+      "total": 24.0
+    },
+    {
+      "d": "2026-01-27",
+      "total": 35.0
+    },
+    {
+      "d": "2026-01-28",
+      "total": 21.0
+    },
+    {
+      "d": "2026-01-29",
+      "total": 13.0
+    },
+    {
+      "d": "2026-01-30",
+      "total": 28.0
+    },
+    {
+      "d": "2026-01-31",
+      "total": 15.0
+    },
+    {
+      "d": "2026-02-01",
+      "total": 25.0
+    },
+    {
+      "d": "2026-02-02",
+      "total": 21.0
+    },
+    {
+      "d": "2026-02-03",
+      "total": 26.0
+    },
+    {
+      "d": "2026-02-04",
+      "total": 28.0
+    },
+    {
+      "d": "2026-02-05",
+      "total": 12.0
+    },
+    {
+      "d": "2026-02-06",
+      "total": 21.0
+    },
+    {
+      "d": "2026-02-07",
+      "total": 33.0
+    },
+    {
+      "d": "2026-02-08",
+      "total": 45.0
+    },
+    {
+      "d": "2026-02-09",
+      "total": 30.0
+    },
+    {
+      "d": "2026-02-10",
+      "total": 39.0
+    },
+    {
+      "d": "2026-02-11",
+      "total": 18.0
+    },
+    {
+      "d": "2026-02-12",
+      "total": 30.0
+    },
+    {
+      "d": "2026-02-13",
+      "total": 27.0
+    },
+    {
+      "d": "2026-02-14",
+      "total": 22.0
+    },
+    {
+      "d": "2026-02-15",
+      "total": 41.0
+    },
+    {
+      "d": "2026-02-16",
+      "total": 27.0
+    },
+    {
+      "d": "2026-02-17",
+      "total": 23.0
+    },
+    {
+      "d": "2026-02-18",
+      "total": 24.0
+    },
+    {
+      "d": "2026-02-19",
+      "total": 24.0
+    },
+    {
+      "d": "2026-02-20",
+      "total": 37.0
+    },
+    {
+      "d": "2026-02-21",
+      "total": 28.0
+    },
+    {
+      "d": "2026-02-22",
+      "total": 34.0
+    },
+    {
+      "d": "2026-02-23",
+      "total": 25.0
+    },
+    {
+      "d": "2026-02-24",
+      "total": 26.0
+    },
+    {
+      "d": "2026-02-25",
+      "total": 18.0
+    },
+    {
+      "d": "2026-02-26",
+      "total": 32.0
+    },
+    {
+      "d": "2026-02-27",
+      "total": 47.0
+    },
+    {
+      "d": "2026-02-28",
+      "total": 22.0
+    },
+    {
+      "d": "2026-03-01",
+      "total": 37.0
+    },
+    {
+      "d": "2026-03-02",
+      "total": 27.0
+    },
+    {
+      "d": "2026-03-03",
+      "total": 17.0
+    },
+    {
+      "d": "2026-03-04",
+      "total": 34.0
+    },
+    {
+      "d": "2026-03-05",
+      "total": 24.0
+    },
+    {
+      "d": "2026-03-06",
+      "total": 26.0
+    },
+    {
+      "d": "2026-03-07",
+      "total": 26.0
+    },
+    {
+      "d": "2026-03-08",
+      "total": 33.0
+    },
+    {
+      "d": "2026-03-09",
+      "total": 28.0
+    },
+    {
+      "d": "2026-03-10",
+      "total": 31.0
+    },
+    {
+      "d": "2026-03-11",
+      "total": 21.0
+    },
+    {
+      "d": "2026-03-12",
+      "total": 18.0
+    },
+    {
+      "d": "2026-03-13",
+      "total": 39.0
+    },
+    {
+      "d": "2026-03-14",
+      "total": 18.0
+    },
+    {
+      "d": "2026-03-15",
+      "total": 32.0
+    },
+    {
+      "d": "2026-03-16",
+      "total": 21.0
+    },
+    {
+      "d": "2026-03-17",
+      "total": 17.0
+    },
+    {
+      "d": "2026-03-18",
+      "total": 28.0
+    },
+    {
+      "d": "2026-03-19",
+      "total": 34.0
+    },
+    {
+      "d": "2026-03-20",
+      "total": 18.0
+    },
+    {
+      "d": "2026-03-21",
+      "total": 28.0
+    },
+    {
+      "d": "2026-03-22",
+      "total": 26.0
+    },
+    {
+      "d": "2026-03-23",
+      "total": 26.0
+    },
+    {
+      "d": "2026-03-24",
+      "total": 26.0
+    },
+    {
+      "d": "2026-03-25",
+      "total": 28.0
+    },
+    {
+      "d": "2026-03-26",
+      "total": 30.0
+    },
+    {
+      "d": "2026-03-27",
+      "total": 44.0
+    },
+    {
+      "d": "2026-03-28",
+      "total": 37.0
+    },
+    {
+      "d": "2026-03-29",
+      "total": 42.0
+    },
+    {
+      "d": "2026-03-30",
+      "total": 49.0
+    },
+    {
+      "d": "2026-03-31",
+      "total": 42.0
+    },
+    {
+      "d": "2026-04-01",
+      "total": 40.0
+    },
+    {
+      "d": "2026-04-02",
+      "total": 28.0
+    },
+    {
+      "d": "2026-04-03",
+      "total": 70.0
+    },
+    {
+      "d": "2026-04-04",
+      "total": 37.0
+    },
+    {
+      "d": "2026-04-05",
+      "total": 52.0
+    },
+    {
+      "d": "2026-04-06",
+      "total": 22.0
+    },
+    {
+      "d": "2026-04-07",
+      "total": 20.0
+    },
+    {
+      "d": "2026-04-08",
+      "total": 22.0
+    },
+    {
+      "d": "2026-04-09",
+      "total": 27.0
+    },
+    {
+      "d": "2026-04-10",
+      "total": 28.0
+    },
+    {
+      "d": "2026-04-11",
+      "total": 34.0
+    },
+    {
+      "d": "2026-04-12",
+      "total": 25.0
+    },
+    {
+      "d": "2026-04-13",
+      "total": 25.0
+    },
+    {
+      "d": "2026-04-14",
+      "total": 35.0
+    },
+    {
+      "d": "2026-04-15",
+      "total": 27.0
+    },
+    {
+      "d": "2026-04-16",
+      "total": 29.0
+    },
+    {
+      "d": "2026-04-17",
+      "total": 25.0
+    },
+    {
+      "d": "2026-04-18",
+      "total": 26.0
+    },
+    {
+      "d": "2026-04-19",
+      "total": 36.0
+    },
+    {
+      "d": "2026-04-20",
+      "total": 25.0
+    },
+    {
+      "d": "2026-04-21",
+      "total": 22.0
+    },
+    {
+      "d": "2026-04-22",
+      "total": 35.0
+    },
+    {
+      "d": "2026-04-23",
+      "total": 17.0
+    },
+    {
+      "d": "2026-04-24",
+      "total": 33.0
+    },
+    {
+      "d": "2026-04-25",
+      "total": 47.0
+    },
+    {
+      "d": "2026-04-26",
+      "total": 25.0
+    },
+    {
+      "d": "2026-04-27",
+      "total": 32.0
+    },
+    {
+      "d": "2026-04-28",
+      "total": 30.0
+    },
+    {
+      "d": "2026-04-29",
+      "total": 24.0
+    },
+    {
+      "d": "2026-04-30",
+      "total": 34.0
+    },
+    {
+      "d": "2026-05-01",
+      "total": 39.0
+    },
+    {
+      "d": "2026-05-02",
+      "total": 45.0
+    },
+    {
+      "d": "2026-05-03",
+      "total": 34.0
+    },
+    {
+      "d": "2026-05-04",
+      "total": 27.0
+    },
+    {
+      "d": "2026-05-05",
+      "total": 25.0
+    },
+    {
+      "d": "2026-05-06",
+      "total": 27.0
+    },
+    {
+      "d": "2026-05-07",
+      "total": 30.0
+    },
+    {
+      "d": "2026-05-08",
+      "total": 44.0
+    },
+    {
+      "d": "2026-05-09",
+      "total": 48.0
+    },
+    {
+      "d": "2026-05-10",
+      "total": 37.0
+    },
+    {
+      "d": "2026-05-11",
+      "total": 32.0
+    },
+    {
+      "d": "2026-05-12",
+      "total": 45.0
+    },
+    {
+      "d": "2026-05-13",
+      "total": 23.0
+    },
+    {
+      "d": "2026-05-14",
+      "total": 30.0
+    },
+    {
+      "d": "2026-05-15",
+      "total": 45.0
+    },
+    {
+      "d": "2026-05-16",
+      "total": 27.0
+    },
+    {
+      "d": "2026-05-17",
+      "total": 26.0
+    },
+    {
+      "d": "2026-05-18",
+      "total": 26.0
+    },
+    {
+      "d": "2026-05-19",
+      "total": 31.0
+    },
+    {
+      "d": "2026-05-20",
+      "total": 38.0
+    },
+    {
+      "d": "2026-05-21",
+      "total": 12.0
+    },
+    {
+      "d": "2026-05-22",
+      "total": 39.0
+    },
+    {
+      "d": "2026-05-23",
+      "total": 51.0
+    },
+    {
+      "d": "2026-05-24",
+      "total": 39.0
+    },
+    {
+      "d": "2026-05-25",
+      "total": 20.0
+    },
+    {
+      "d": "2026-05-26",
+      "total": 20.0
+    },
+    {
+      "d": "2026-05-27",
+      "total": 33.0
+    },
+    {
+      "d": "2026-05-28",
+      "total": 30.0
+    },
+    {
+      "d": "2026-05-29",
+      "total": 41.0
+    },
+    {
+      "d": "2026-05-30",
+      "total": 34.0
+    },
+    {
+      "d": "2026-05-31",
+      "total": 48.0
+    },
+    {
+      "d": "2026-06-01",
+      "total": 26.0
+    },
+    {
+      "d": "2026-06-02",
+      "total": 13.0
+    },
+    {
+      "d": "2026-06-03",
+      "total": 17.0
+    },
+    {
+      "d": "2026-06-04",
+      "total": 19.0
+    },
+    {
+      "d": "2026-06-05",
+      "total": 34.0
+    },
+    {
+      "d": "2026-06-06",
+      "total": 22.0
+    },
+    {
+      "d": "2026-06-07",
+      "total": 31.0
+    },
+    {
+      "d": "2026-06-08",
+      "total": 18.0
+    },
+    {
+      "d": "2026-06-09",
+      "total": 22.0
+    },
+    {
+      "d": "2026-06-10",
+      "total": 19.0
+    },
+    {
+      "d": "2026-06-11",
+      "total": 28.0
+    },
+    {
+      "d": "2026-06-12",
+      "total": 31.0
+    },
+    {
+      "d": "2026-06-13",
+      "total": 28.0
+    },
+    {
+      "d": "2026-06-14",
+      "total": 20.0
+    },
+    {
+      "d": "2026-06-15",
+      "total": 23.0
+    },
+    {
+      "d": "2026-06-16",
+      "total": 20.0
+    },
+    {
+      "d": "2026-06-17",
+      "total": 21.0
+    },
+    {
+      "d": "2026-06-18",
+      "total": 31.0
+    },
+    {
+      "d": "2026-06-19",
+      "total": 36.0
+    },
+    {
+      "d": "2026-06-20",
+      "total": 39.0
+    },
+    {
+      "d": "2026-06-21",
+      "total": 28.0
+    },
+    {
+      "d": "2026-06-22",
+      "total": 24.0
+    },
+    {
+      "d": "2026-06-23",
+      "total": 30.0
+    },
+    {
+      "d": "2026-06-24",
+      "total": 27.0
+    },
+    {
+      "d": "2026-06-25",
+      "total": 33.0
+    },
+    {
+      "d": "2026-06-26",
+      "total": 35.0
+    },
+    {
+      "d": "2026-06-27",
+      "total": 30.0
+    },
+    {
+      "d": "2026-06-28",
+      "total": 48.0
+    },
+    {
+      "d": "2026-06-29",
+      "total": 25.0
+    },
+    {
+      "d": "2026-06-30",
+      "total": 25.0
+    },
+    {
+      "d": "2026-07-01",
+      "total": 18.0
+    },
+    {
+      "d": "2026-07-02",
+      "total": 30.0
+    }
+  ],
+  "ml_predictive_incidents": [
+    {
+      "forecast_date": "2026-05-04",
+      "prediction_type": "validation",
+      "predicted_incident_count": 27.61488820943313,
+      "champion_model": "Random Forest",
+      "created_at": null
+    },
+    {
+      "forecast_date": "2026-05-05",
+      "prediction_type": "validation",
+      "predicted_incident_count": 24.704614775694143,
+      "champion_model": "Random Forest",
+      "created_at": null
+    },
+    {
+      "forecast_date": "2026-05-06",
+      "prediction_type": "validation",
+      "predicted_incident_count": 26.662797802101828,
+      "champion_model": "Random Forest",
+      "created_at": null
+    },
+    {
+      "forecast_date": "2026-05-07",
+      "prediction_type": "validation",
+      "predicted_incident_count": 26.654505849807258,
+      "champion_model": "Random Forest",
+      "created_at": null
+    },
+    {
+      "forecast_date": "2026-05-08",
+      "prediction_type": "validation",
+      "predicted_incident_count": 38.18213924209095,
+      "champion_model": "Random Forest",
+      "created_at": null
+    },
+    {
+      "forecast_date": "2026-05-09",
+      "prediction_type": "validation",
+      "predicted_incident_count": 36.16698212850987,
+      "champion_model": "Random Forest",
+      "created_at": null
+    },
+    {
+      "forecast_date": "2026-05-10",
+      "prediction_type": "validation",
+      "predicted_incident_count": 42.973976049990604,
+      "champion_model": "Random Forest",
+      "created_at": null
+    },
+    {
+      "forecast_date": "2026-05-11",
+      "prediction_type": "validation",
+      "predicted_incident_count": 27.21514444292672,
+      "champion_model": "Random Forest",
+      "created_at": null
+    },
+    {
+      "forecast_date": "2026-05-12",
+      "prediction_type": "validation",
+      "predicted_incident_count": 32.38228581423654,
+      "champion_model": "Random Forest",
+      "created_at": null
+    },
+    {
+      "forecast_date": "2026-05-13",
+      "prediction_type": "validation",
+      "predicted_incident_count": 35.18323378995208,
+      "champion_model": "Random Forest",
+      "created_at": null
+    },
+    {
+      "forecast_date": "2026-05-14",
+      "prediction_type": "validation",
+      "predicted_incident_count": 26.49205299607954,
+      "champion_model": "Random Forest",
+      "created_at": null
+    },
+    {
+      "forecast_date": "2026-05-15",
+      "prediction_type": "validation",
+      "predicted_incident_count": 39.415667715792644,
+      "champion_model": "Random Forest",
+      "created_at": null
+    },
+    {
+      "forecast_date": "2026-05-16",
+      "prediction_type": "validation",
+      "predicted_incident_count": 32.33366989131317,
+      "champion_model": "Random Forest",
+      "created_at": null
+    },
+    {
+      "forecast_date": "2026-05-17",
+      "prediction_type": "validation",
+      "predicted_incident_count": 35.48885030807624,
+      "champion_model": "Random Forest",
+      "created_at": null
+    },
+    {
+      "forecast_date": "2026-05-18",
+      "prediction_type": "validation",
+      "predicted_incident_count": 25.101473421840897,
+      "champion_model": "Random Forest",
+      "created_at": null
+    },
+    {
+      "forecast_date": "2026-05-19",
+      "prediction_type": "validation",
+      "predicted_incident_count": 27.523729010985413,
+      "champion_model": "Random Forest",
+      "created_at": null
+    },
+    {
+      "forecast_date": "2026-05-20",
+      "prediction_type": "validation",
+      "predicted_incident_count": 27.868938721728128,
+      "champion_model": "Random Forest",
+      "created_at": null
+    },
+    {
+      "forecast_date": "2026-05-21",
+      "prediction_type": "validation",
+      "predicted_incident_count": 24.97624202093785,
+      "champion_model": "Random Forest",
+      "created_at": null
+    },
+    {
+      "forecast_date": "2026-05-22",
+      "prediction_type": "validation",
+      "predicted_incident_count": 34.72346761069464,
+      "champion_model": "Random Forest",
+      "created_at": null
+    },
+    {
+      "forecast_date": "2026-05-23",
+      "prediction_type": "validation",
+      "predicted_incident_count": 33.843120916443404,
+      "champion_model": "Random Forest",
+      "created_at": null
+    },
+    {
+      "forecast_date": "2026-05-24",
+      "prediction_type": "validation",
+      "predicted_incident_count": 39.531206022955935,
+      "champion_model": "Random Forest",
+      "created_at": null
+    },
+    {
+      "forecast_date": "2026-05-25",
+      "prediction_type": "validation",
+      "predicted_incident_count": 25.30273424501384,
+      "champion_model": "Random Forest",
+      "created_at": null
+    },
+    {
+      "forecast_date": "2026-05-26",
+      "prediction_type": "validation",
+      "predicted_incident_count": 24.137386394337458,
+      "champion_model": "Random Forest",
+      "created_at": null
+    },
+    {
+      "forecast_date": "2026-05-27",
+      "prediction_type": "validation",
+      "predicted_incident_count": 26.389852198286448,
+      "champion_model": "Random Forest",
+      "created_at": null
+    },
+    {
+      "forecast_date": "2026-05-28",
+      "prediction_type": "validation",
+      "predicted_incident_count": 26.364706498483578,
+      "champion_model": "Random Forest",
+      "created_at": null
+    },
+    {
+      "forecast_date": "2026-05-29",
+      "prediction_type": "validation",
+      "predicted_incident_count": 36.42745448990431,
+      "champion_model": "Random Forest",
+      "created_at": null
+    },
+    {
+      "forecast_date": "2026-05-30",
+      "prediction_type": "validation",
+      "predicted_incident_count": 34.50289029792501,
+      "champion_model": "Random Forest",
+      "created_at": null
+    },
+    {
+      "forecast_date": "2026-05-31",
+      "prediction_type": "validation",
+      "predicted_incident_count": 37.90334299875384,
+      "champion_model": "Random Forest",
+      "created_at": null
+    },
+    {
+      "forecast_date": "2026-06-01",
+      "prediction_type": "validation",
+      "predicted_incident_count": 26.830443091407787,
+      "champion_model": "Random Forest",
+      "created_at": null
+    },
+    {
+      "forecast_date": "2026-06-02",
+      "prediction_type": "validation",
+      "predicted_incident_count": 24.006244380218746,
+      "champion_model": "Random Forest",
+      "created_at": null
+    },
+    {
+      "forecast_date": "2026-06-03",
+      "prediction_type": "validation",
+      "predicted_incident_count": 24.712715451991475,
+      "champion_model": "Random Forest",
+      "created_at": null
+    },
+    {
+      "forecast_date": "2026-06-04",
+      "prediction_type": "validation",
+      "predicted_incident_count": 24.782075011541313,
+      "champion_model": "Random Forest",
+      "created_at": null
+    },
+    {
+      "forecast_date": "2026-06-05",
+      "prediction_type": "validation",
+      "predicted_incident_count": 32.719012072580746,
+      "champion_model": "Random Forest",
+      "created_at": null
+    },
+    {
+      "forecast_date": "2026-06-06",
+      "prediction_type": "validation",
+      "predicted_incident_count": 30.48173145212682,
+      "champion_model": "Random Forest",
+      "created_at": null
+    },
+    {
+      "forecast_date": "2026-06-07",
+      "prediction_type": "validation",
+      "predicted_incident_count": 30.746214185557523,
+      "champion_model": "Random Forest",
+      "created_at": null
+    },
+    {
+      "forecast_date": "2026-06-08",
+      "prediction_type": "validation",
+      "predicted_incident_count": 21.259797258736942,
+      "champion_model": "Random Forest",
+      "created_at": null
+    },
+    {
+      "forecast_date": "2026-06-09",
+      "prediction_type": "validation",
+      "predicted_incident_count": 20.498149115460738,
+      "champion_model": "Random Forest",
+      "created_at": null
+    },
+    {
+      "forecast_date": "2026-06-10",
+      "prediction_type": "validation",
+      "predicted_incident_count": 21.51102909475605,
+      "champion_model": "Random Forest",
+      "created_at": null
+    },
+    {
+      "forecast_date": "2026-06-11",
+      "prediction_type": "validation",
+      "predicted_incident_count": 22.497383269094673,
+      "champion_model": "Random Forest",
+      "created_at": null
+    },
+    {
+      "forecast_date": "2026-06-12",
+      "prediction_type": "validation",
+      "predicted_incident_count": 30.62631625033985,
+      "champion_model": "Random Forest",
+      "created_at": null
+    },
+    {
+      "forecast_date": "2026-06-13",
+      "prediction_type": "validation",
+      "predicted_incident_count": 30.74216119851124,
+      "champion_model": "Random Forest",
+      "created_at": null
+    },
+    {
+      "forecast_date": "2026-06-14",
+      "prediction_type": "validation",
+      "predicted_incident_count": 29.743490101058722,
+      "champion_model": "Random Forest",
+      "created_at": null
+    },
+    {
+      "forecast_date": "2026-06-15",
+      "prediction_type": "validation",
+      "predicted_incident_count": 22.30930272511576,
+      "champion_model": "Random Forest",
+      "created_at": null
+    },
+    {
+      "forecast_date": "2026-06-16",
+      "prediction_type": "validation",
+      "predicted_incident_count": 21.53363213327135,
+      "champion_model": "Random Forest",
+      "created_at": null
+    },
+    {
+      "forecast_date": "2026-06-17",
+      "prediction_type": "validation",
+      "predicted_incident_count": 23.047262953487607,
+      "champion_model": "Random Forest",
+      "created_at": null
+    },
+    {
+      "forecast_date": "2026-06-18",
+      "prediction_type": "validation",
+      "predicted_incident_count": 23.11675309349497,
+      "champion_model": "Random Forest",
+      "created_at": null
+    },
+    {
+      "forecast_date": "2026-06-19",
+      "prediction_type": "validation",
+      "predicted_incident_count": 33.56734164067846,
+      "champion_model": "Random Forest",
+      "created_at": null
+    },
+    {
+      "forecast_date": "2026-06-20",
+      "prediction_type": "validation",
+      "predicted_incident_count": 30.863433024411737,
+      "champion_model": "Random Forest",
+      "created_at": null
+    },
+    {
+      "forecast_date": "2026-06-21",
+      "prediction_type": "validation",
+      "predicted_incident_count": 35.33389881209192,
+      "champion_model": "Random Forest",
+      "created_at": null
+    },
+    {
+      "forecast_date": "2026-06-22",
+      "prediction_type": "validation",
+      "predicted_incident_count": 24.4445641845552,
+      "champion_model": "Random Forest",
+      "created_at": null
+    },
+    {
+      "forecast_date": "2026-06-23",
+      "prediction_type": "validation",
+      "predicted_incident_count": 24.675173422165805,
+      "champion_model": "Random Forest",
+      "created_at": null
+    },
+    {
+      "forecast_date": "2026-06-24",
+      "prediction_type": "validation",
+      "predicted_incident_count": 25.97823474993453,
+      "champion_model": "Random Forest",
+      "created_at": null
+    },
+    {
+      "forecast_date": "2026-06-25",
+      "prediction_type": "validation",
+      "predicted_incident_count": 25.88395481396334,
+      "champion_model": "Random Forest",
+      "created_at": null
+    },
+    {
+      "forecast_date": "2026-06-26",
+      "prediction_type": "validation",
+      "predicted_incident_count": 35.44622675950641,
+      "champion_model": "Random Forest",
+      "created_at": null
+    },
+    {
+      "forecast_date": "2026-06-27",
+      "prediction_type": "validation",
+      "predicted_incident_count": 31.990574289841632,
+      "champion_model": "Random Forest",
+      "created_at": null
+    },
+    {
+      "forecast_date": "2026-06-28",
+      "prediction_type": "validation",
+      "predicted_incident_count": 36.837173457323374,
+      "champion_model": "Random Forest",
+      "created_at": null
+    },
+    {
+      "forecast_date": "2026-06-29",
+      "prediction_type": "validation",
+      "predicted_incident_count": 26.740430518941814,
+      "champion_model": "Random Forest",
+      "created_at": null
+    },
+    {
+      "forecast_date": "2026-06-30",
+      "prediction_type": "validation",
+      "predicted_incident_count": 24.37731408539657,
+      "champion_model": "Random Forest",
+      "created_at": null
+    },
+    {
+      "forecast_date": "2026-07-01",
+      "prediction_type": "validation",
+      "predicted_incident_count": 24.49641675560625,
+      "champion_model": "Random Forest",
+      "created_at": null
+    },
+    {
+      "forecast_date": "2026-07-02",
+      "prediction_type": "validation",
+      "predicted_incident_count": 25.52317966252687,
+      "champion_model": "Random Forest",
+      "created_at": null
+    },
+    {
+      "forecast_date": "2026-07-03",
+      "prediction_type": "future",
+      "predicted_incident_count": 36.76045768062301,
+      "champion_model": "Random Forest",
+      "created_at": null
+    },
+    {
+      "forecast_date": "2026-07-04",
+      "prediction_type": "future",
+      "predicted_incident_count": 34.69490513658129,
+      "champion_model": "Random Forest",
+      "created_at": null
+    },
+    {
+      "forecast_date": "2026-07-05",
+      "prediction_type": "future",
+      "predicted_incident_count": 36.731184086999974,
+      "champion_model": "Random Forest",
+      "created_at": null
+    },
+    {
+      "forecast_date": "2026-07-06",
+      "prediction_type": "future",
+      "predicted_incident_count": 25.691252261692807,
+      "champion_model": "Random Forest",
+      "created_at": null
+    },
+    {
+      "forecast_date": "2026-07-07",
+      "prediction_type": "future",
+      "predicted_incident_count": 25.033042175270634,
+      "champion_model": "Random Forest",
+      "created_at": null
+    },
+    {
+      "forecast_date": "2026-07-08",
+      "prediction_type": "future",
+      "predicted_incident_count": 25.388231787868754,
+      "champion_model": "Random Forest",
+      "created_at": null
+    },
+    {
+      "forecast_date": "2026-07-09",
+      "prediction_type": "future",
+      "predicted_incident_count": 25.138047070929794,
+      "champion_model": "Random Forest",
+      "created_at": null
+    },
+    {
+      "forecast_date": "2026-07-10",
+      "prediction_type": "future",
+      "predicted_incident_count": 33.6738561783717,
+      "champion_model": "Random Forest",
+      "created_at": null
+    },
+    {
+      "forecast_date": "2026-07-11",
+      "prediction_type": "future",
+      "predicted_incident_count": 32.62889139334797,
+      "champion_model": "Random Forest",
+      "created_at": null
+    },
+    {
+      "forecast_date": "2026-07-12",
+      "prediction_type": "future",
+      "predicted_incident_count": 36.5671724438904,
+      "champion_model": "Random Forest",
+      "created_at": null
+    },
+    {
+      "forecast_date": "2026-07-13",
+      "prediction_type": "future",
+      "predicted_incident_count": 25.626764568370493,
+      "champion_model": "Random Forest",
+      "created_at": null
+    },
+    {
+      "forecast_date": "2026-07-14",
+      "prediction_type": "future",
+      "predicted_incident_count": 24.833147973950158,
+      "champion_model": "Random Forest",
+      "created_at": null
+    },
+    {
+      "forecast_date": "2026-07-15",
+      "prediction_type": "future",
+      "predicted_incident_count": 25.217963576049303,
+      "champion_model": "Random Forest",
+      "created_at": null
+    },
+    {
+      "forecast_date": "2026-07-16",
+      "prediction_type": "future",
+      "predicted_incident_count": 25.037780605114452,
+      "champion_model": "Random Forest",
+      "created_at": null
+    },
+    {
+      "forecast_date": "2026-07-17",
+      "prediction_type": "future",
+      "predicted_incident_count": 33.92159483904953,
+      "champion_model": "Random Forest",
+      "created_at": null
+    },
+    {
+      "forecast_date": "2026-07-18",
+      "prediction_type": "future",
+      "predicted_incident_count": 32.377701703262936,
+      "champion_model": "Random Forest",
+      "created_at": null
+    },
+    {
+      "forecast_date": "2026-07-19",
+      "prediction_type": "future",
+      "predicted_incident_count": 36.60171493429106,
+      "champion_model": "Random Forest",
+      "created_at": null
+    },
+    {
+      "forecast_date": "2026-07-20",
+      "prediction_type": "future",
+      "predicted_incident_count": 25.623734756421246,
+      "champion_model": "Random Forest",
+      "created_at": null
+    },
+    {
+      "forecast_date": "2026-07-21",
+      "prediction_type": "future",
+      "predicted_incident_count": 24.833147973950158,
+      "champion_model": "Random Forest",
+      "created_at": null
+    },
+    {
+      "forecast_date": "2026-07-22",
+      "prediction_type": "future",
+      "predicted_incident_count": 25.217963576049307,
+      "champion_model": "Random Forest",
+      "created_at": null
+    },
+    {
+      "forecast_date": "2026-07-23",
+      "prediction_type": "future",
+      "predicted_incident_count": 25.03778060511445,
+      "champion_model": "Random Forest",
+      "created_at": null
+    },
+    {
+      "forecast_date": "2026-07-24",
+      "prediction_type": "future",
+      "predicted_incident_count": 33.91283094361162,
+      "champion_model": "Random Forest",
+      "created_at": null
+    },
+    {
+      "forecast_date": "2026-07-25",
+      "prediction_type": "future",
+      "predicted_incident_count": 32.29823184971526,
+      "champion_model": "Random Forest",
+      "created_at": null
+    },
+    {
+      "forecast_date": "2026-07-26",
+      "prediction_type": "future",
+      "predicted_incident_count": 36.584844376920095,
+      "champion_model": "Random Forest",
+      "created_at": null
+    },
+    {
+      "forecast_date": "2026-07-27",
+      "prediction_type": "future",
+      "predicted_incident_count": 25.62373475642125,
+      "champion_model": "Random Forest",
+      "created_at": null
+    },
+    {
+      "forecast_date": "2026-07-28",
+      "prediction_type": "future",
+      "predicted_incident_count": 24.833147973950158,
+      "champion_model": "Random Forest",
+      "created_at": null
+    },
+    {
+      "forecast_date": "2026-07-29",
+      "prediction_type": "future",
+      "predicted_incident_count": 25.217963576049307,
+      "champion_model": "Random Forest",
+      "created_at": null
+    },
+    {
+      "forecast_date": "2026-07-30",
+      "prediction_type": "future",
+      "predicted_incident_count": 25.03778060511445,
+      "champion_model": "Random Forest",
+      "created_at": null
+    },
+    {
+      "forecast_date": "2026-07-31",
+      "prediction_type": "future",
+      "predicted_incident_count": 33.90889235255378,
+      "champion_model": "Random Forest",
+      "created_at": null
+    },
+    {
+      "forecast_date": "2026-08-01",
+      "prediction_type": "future",
+      "predicted_incident_count": 32.32908486221943,
+      "champion_model": "Random Forest",
+      "created_at": null
+    }
+  ],
+  "ml_training_metadata": [
+    {
+      "metadata_json": "{\"champion_model\": \"Random Forest\", \"metrics\": {\"MAE\": 0.8883, \"Poisson_Deviance\": 1.2085, \"RMSE\": 1.1508, \"MASE\": 0.7946, \"Train_R2\": 0.1624, \"Val_R2\": 0.0336, \"Gap\": 0.1288}, \"training_timestamp\": \"2026-07-27T14:24:27.276324+00:00\", \"training_period\": \"2020-01-08 to 2026-05-04\", \"validation_period\": \"2026-05-04 to 2026-07-03\", \"training_samples\": 55392, \"validation_samples\": 1440, \"forecast_origin\": \"2026-07-03\", \"forecast_horizon_days\": 30, \"feature_importance\": {\"7-day rolling average\": 0.4240010584148363, \"Day of week (cyclical)\": 0.14015275872620314, \"24h rolling average\": 0.12952226149879947, \"Hour of day (cyclical)\": 0.09711825380005229, \"Month (seasonal)\": 0.06457853947263396, \"Incidents 3h ago\": 0.03052726739787211, \"Incidents 1h ago\": 0.027643045823807978, \"Incidents 2h ago\": 0.02684984475874471, \"Incidents 1 week ago\": 0.02559825840645234, \"Incidents 24h ago\": 0.025323723840194438, \"Rush hour flag\": 0.006561219624322261, \"Weekend flag\": 0.002123768236081023}, \"models_evaluated\": [\"Random Forest\", \"XGBoost\", \"LSTM\", \"GRU\", \"Poisson GLM\", \"Negative Binomial Regression\", \"SARIMAX\", \"Geographically Weighted Regression (GWR)\", \"Spatial LSTM\"], \"data_sources\": [\"bronze.road_crashes\", \"bronze.motorcycle_crashes\", \"bronze.stalled_vehicles\"], \"excludes_weather\": true, \"target_variable\": \"incident_count\"}",
+      "created_at": "2026-07-27 14:23:25.848484+00:00"
+    }
+  ]
+}

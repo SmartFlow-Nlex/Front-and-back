@@ -1,0 +1,12 @@
+{
+  "permissions": {
+    "allow": [
+      "Read(//d/Front-and-back-Ver1-Merged-BE-FE/Back-End/**)",
+      "Read(//d/Front-and-back-Ver1-Merged-BE-FE/Back-End/src/routes/**)",
+      "Read(//d/Front-and-back-Ver1-Merged-BE-FE/Back-End/src/controllers/**)",
+      "Bash(git -C \"D:/Front-and-back-Ver1-Merged-BE-FE\" rev-parse --is-inside-work-tree)",
+      "Bash(npx tsc *)",
+      "Bash(npm install *)"
+    ]
+  }
+}

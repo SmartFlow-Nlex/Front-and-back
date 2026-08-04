@@ -22,7 +22,10 @@ async function backfill() {
         id SERIAL PRIMARY KEY,
         forecast_date DATE NOT NULL,
         actual_volume INTEGER,
-        predicted_volume INTEGER,
+        pred_lstm INTEGER,
+        pred_prophet INTEGER,
+        pred_xgboost INTEGER,
+        pred_holtwinters INTEGER,
         is_holdout BOOLEAN DEFAULT false,
         is_future BOOLEAN DEFAULT false
       );
@@ -45,12 +48,11 @@ async function backfill() {
     `);
 
     console.log("Clearing old data...");
-    await client.query(`TRUNCATE TABLE gold.ml_predictive_volume;`);
     await client.query(`TRUNCATE TABLE gold.ml_predictive_congestion;`);
     await client.query(`TRUNCATE TABLE gold.ml_event_surge_forecast;`);
 
-    // 2. Generate Volume Data (LSTM)
-    console.log("Backfilling Volume Data (LSTM)...");
+    // 2. Generate Volume Data (For 4 Models)
+    console.log("Backfilling Volume Data (LSTM, Prophet, XGBoost, Holt-Winters)...");
     const dates = Array.from({ length: 60 }, (_, i) => {
       const d = new Date();
       d.setDate(d.getDate() - 40 + i); // 40 days past, 20 days future (10 holdout, 10 pure future)
@@ -61,7 +63,10 @@ async function backfill() {
       let is_holdout = false;
       let is_future = false;
       let actual = null;
-      let predicted = null;
+      let pred_lstm = null;
+      let pred_prophet = null;
+      let pred_xgboost = null;
+      let pred_holtwinters = null;
 
       if (i < 40) {
         // Past Training
@@ -70,17 +75,33 @@ async function backfill() {
         // Present Holdout
         is_holdout = true;
         actual = 185000 + Math.random() * 20000 + (Math.sin(i)*10000);
-        predicted = actual * (0.96 + Math.random() * 0.08); // LSTM is very accurate here WMAPE 3.7%
+        pred_lstm = actual * (0.96 + Math.random() * 0.08); // LSTM is very accurate here WMAPE 3.7%
+        pred_prophet = actual * (0.90 + Math.random() * 0.18); // Prophet struggles slightly
+        pred_xgboost = actual * (0.87 + Math.random() * 0.22); // XGBoost overfits
+        pred_holtwinters = actual * (0.80 + Math.random() * 0.35); // Holt-Winters is worst
       } else {
         // Future Forecast
         is_future = true;
-        predicted = 190000 + Math.random() * 15000 + (Math.sin(i)*10000);
+        let base_future = 190000 + Math.random() * 15000 + (Math.sin(i)*10000);
+        pred_lstm = base_future * (0.96 + Math.random() * 0.08);
+        pred_prophet = base_future * (0.90 + Math.random() * 0.18);
+        pred_xgboost = base_future * (0.87 + Math.random() * 0.22);
+        pred_holtwinters = base_future * (0.80 + Math.random() * 0.35);
       }
 
       await client.query(`
-        INSERT INTO gold.ml_predictive_volume (forecast_date, actual_volume, predicted_volume, is_holdout, is_future)
-        VALUES ($1, $2, $3, $4, $5)
-      `, [dates[i], actual ? Math.round(actual) : null, predicted ? Math.round(predicted) : null, is_holdout, is_future]);
+        INSERT INTO gold.ml_predictive_volume (forecast_date, actual_volume, pred_lstm, pred_prophet, pred_xgboost, pred_holtwinters, is_holdout, is_future)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+      `, [
+        dates[i], 
+        actual ? Math.round(actual) : null, 
+        pred_lstm ? Math.round(pred_lstm) : null, 
+        pred_prophet ? Math.round(pred_prophet) : null, 
+        pred_xgboost ? Math.round(pred_xgboost) : null, 
+        pred_holtwinters ? Math.round(pred_holtwinters) : null, 
+        is_holdout, 
+        is_future
+      ]);
     }
 
     // 3. Generate Congestion Data (XGBoost)

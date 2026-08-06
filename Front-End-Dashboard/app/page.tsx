@@ -50,7 +50,7 @@ export default function Home() {
       }
 
       goToDashboard();
-    } catch (err: any) {
+    } catch (_err: unknown) {
       setErrorMessage("An unexpected error occurred. Please try again.");
       setIsLoading(false);
     }
@@ -109,7 +109,7 @@ export default function Home() {
       }
 
       goToDashboard();
-    } catch (err: any) {
+    } catch (_err: unknown) {
       setErrorMessage("An unexpected error occurred. Please try again.");
       setIsLoading(false);
     }
@@ -367,7 +367,7 @@ export default function Home() {
               </form>
 
               <div className="login-footer-link">
-                Don't have an account? <button 
+                Don&apos;t have an account? <button 
                   type="button" 
                   onClick={() => {
                     setIsSignUp(true);

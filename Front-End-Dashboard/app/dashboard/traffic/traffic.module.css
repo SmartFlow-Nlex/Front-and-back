@@ -7,6 +7,21 @@
   padding: 20px 28px 32px;
 }
 
+/* ---------- Shared page header, adapted to this 12-column grid ----------
+   Visual styling lives in globals.css (.ds-page-header); here it only needs to
+   span the grid and cancel the page's own top padding. */
+.page > :global(.ds-page-header) {
+  grid-column: 1 / -1;
+  margin: -20px -28px 2px;
+  padding: 16px 28px 0;
+}
+
+/* The filter row pulls itself up into the page padding; cancel that when a
+   header already occupies that space. */
+.page > :global(.ds-page-header) + .filterRow {
+  margin-top: 0;
+}
+
 /* Filters stay in reach while scrolling (pinned below the 64px sticky topbar) */
 .filterRow {
   position: sticky;
@@ -537,6 +552,13 @@
   font-size: 0.8rem;
   text-align: center;
   padding: 8px;
+}
+
+/* Full-width grid slot for children that already bring their own card chrome
+   (the Predictive* chart components render their own .chart-card). */
+.spanFull {
+  grid-column: 1 / -1;
+  min-width: 0;
 }
 
 .chart1 { grid-column: 1 / -1; }

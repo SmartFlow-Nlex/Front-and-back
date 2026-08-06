@@ -1,6 +1,8 @@
 "use client";
 
 import { ChangeEvent, useState } from "react";
+import { Brain } from "lucide-react";
+import PageHeader from "../../../components/dashboard/PageHeader";
 
 type PipelineGateLog = {
   gate: string;
@@ -85,13 +87,12 @@ export default function DataManagementPage() {
 
   return (
     <section className="ds-content ds-long">
-      <div className="dm-head">
-        <div>
-          <h1 className="tab-title">Data Management</h1>
-          <p>Upload your data here. The ETL pipeline will classify, validate, and load traffic volume and incident data into the AWS database.</p>
-        </div>
-        <span className="pill blue">ETL Pipeline Ready</span>
-      </div>
+      <PageHeader
+        icon={Brain}
+        title="Data Management"
+        subtitle="Upload datasets — the ETL pipeline classifies, validates, and loads them into the AWS database"
+        actions={<span className="pill blue">ETL Pipeline Ready</span>}
+      />
 
       <article className="upload-zone">
         <div className="upload-icon">?</div>

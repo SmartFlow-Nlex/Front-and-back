@@ -1,215 +1,544 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import type { EChartsOption } from "echarts";
 import DashboardChart from "./DashboardChart";
 
+type State = "Low" | "Med" | "High";
+
+type RawRow = { segment: string; hours: number; state: State; probability: number | string };
+
+// Segments are laid out along the corridor, not alphabetically — congestion
+// propagates between neighbours, and that pattern is only visible when the
+// rows are in km-post order.
+const KM_POST: Record<string, number> = {
+  Balintawak: 0,
+  "Mindanao Ave": 2,
+  Karuhatan: 4,
+  Valenzuela: 8,
+  Meycauayan: 16,
+  Marilao: 22,
+  Bocaue: 26,
+  Balagtas: 30,
+  Tabang: 35,
+  "Santa Rita": 40,
+};
+
+// Solid fills only. Confidence used to be encoded as opacity, which made a
+// low-confidence SEVERE cell look calmer than a solid HEAVY one — the opacity
+// channel fought the colour channel. Free flow is deliberately muted so the
+// eye lands on the problems; label colours are chosen for contrast on the fill.
+const STATE_META: Record<State, { rank: number; color: string; text: string; label: string; short: string; speed: string }> = {
+  Low: { rank: 0, color: "#bbf7d0", text: "#166534", label: "Free flow", short: "", speed: "> 60 km/h" },
+  Med: { rank: 1, color: "#fbbf24", text: "#7c2d12", label: "Heavy", short: "HEAVY", speed: "30–60 km/h" },
+  High: { rank: 2, color: "#ef4444", text: "#ffffff", label: "Severe", short: "SEVERE", speed: "< 30 km/h" },
+};
+
+const LOW_CONF = 0.8;
+
+type CellItem = { value: [number, number, number]; state: State; conf: number; label: { color: string } };
+type Alert = { segment: string; state: State; from: number; to: number; conf: number };
+
 export default function PredictiveCongestionChart() {
-  const [chartData, setChartData] = useState<{
-    segments: string[];
-    hours: string[];
-    heatmapData: [number, number, number, number][]; // [xIndex, yIndex, value, probability]
-    alerts: string[];
-  } | null>(null);
+  const [raw, setRaw] = useState<RawRow[] | null>(null);
+  const [alertsOpen, setAlertsOpen] = useState(false);
 
   useEffect(() => {
-    async function fetchData() {
-      try {
-        const res = await fetch("http://localhost:4000/api/traffic/forecast");
-        const json = await res.json();
-        
-        if (json.success && json.data.congestion) {
-          const raw = json.data.congestion;
-          
-          const uniqueSegments = Array.from(new Set(raw.map((d: any) => d.segment))) as string[];
-          const uniqueHoursSet = new Set(raw.map((d: any) => d.hours));
-          const maxHour = Math.max(...Array.from(uniqueHoursSet) as number[]);
-          const hours = Array.from({ length: maxHour }, (_, i) => `+${i + 1}h`);
-
-          const heatmapData: [number, number, number, number][] = [];
-          const alerts: string[] = [];
-          
-          raw.forEach((d: any) => {
-            const yIndex = uniqueSegments.indexOf(d.segment);
-            const xIndex = d.hours - 1;
-            
-            let val = 0;
-            if (d.state === 'High') {
-              val = 2;
-              if (d.probability >= 0.8) {
-                alerts.push(`⚠️ Alert: A severe bottleneck is forming at ${d.segment} in +${d.hours}h with ${(d.probability * 100).toFixed(1)}% probability. Proactive deployment is recommended.`);
-              }
-            } else if (d.state === 'Med') {
-              val = 1;
-            }
-
-            heatmapData.push([xIndex, yIndex, val, d.probability]);
-          });
-
-          setChartData({ segments: uniqueSegments, hours, heatmapData, alerts });
-        }
-      } catch (err) {
-        console.error("Failed to fetch ML congestion forecast", err);
-      }
-    }
-    fetchData();
+    let cancelled = false;
+    fetch("http://localhost:4000/api/traffic/forecast")
+      .then((r) => r.json())
+      .then((json) => {
+        if (cancelled || !json.success || !json.data.congestion) return;
+        setRaw(json.data.congestion as RawRow[]);
+      })
+      .catch((err) => console.error("Failed to fetch ML congestion forecast", err));
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
-  if (!chartData) {
+  useEffect(() => {
+    if (!alertsOpen) return;
+    const onKey = (e: KeyboardEvent) => e.key === "Escape" && setAlertsOpen(false);
+    document.addEventListener("keydown", onKey);
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      document.removeEventListener("keydown", onKey);
+      document.body.style.overflow = prev;
+    };
+  }, [alertsOpen]);
+
+  const model = useMemo(() => {
+    if (!raw || raw.length === 0) return null;
+
+    const byKm = Array.from(new Set(raw.map((d) => d.segment))).sort(
+      (a, b) => (KM_POST[a] ?? 999) - (KM_POST[b] ?? 999)
+    );
+    const maxHour = Math.max(...raw.map((d) => d.hours));
+    const hourLabels = Array.from({ length: maxHour }, (_, i) => `+${i + 1}h`);
+
+    // ECharts draws a category y-axis bottom-up, so reverse to read north-bound
+    // down the page (Balintawak on top).
+    const segments = [...byKm].reverse();
+
+    const states: (State | null)[][] = segments.map(() => Array(maxHour).fill(null));
+    const confs: number[][] = segments.map(() => Array(maxHour).fill(0));
+    const cells: CellItem[] = [];
+
+    raw.forEach((d) => {
+      const y = segments.indexOf(d.segment);
+      const x = d.hours - 1;
+      if (y < 0 || x < 0 || x >= maxHour) return;
+      const conf = Number(d.probability);
+      states[y][x] = d.state;
+      confs[y][x] = conf;
+      const meta = STATE_META[d.state] ?? STATE_META.Low;
+      cells.push({ value: [x, y, meta.rank], state: d.state, conf, label: { color: meta.text } });
+    });
+
+    // ---- Operational summary ----
+    const atRisk = new Set<string>();
+    const severeSegments = new Set<string>();
+    let severeCells = 0;
+    const perHour = Array(maxHour).fill(0) as number[];
+    const perSegment = segments.map(() => 0);
+
+    states.forEach((row, y) =>
+      row.forEach((st, x) => {
+        if (!st) return;
+        if (st === "High") {
+          severeCells++;
+          severeSegments.add(segments[y]);
+        }
+        if (st !== "Low") {
+          atRisk.add(segments[y]);
+          perHour[x]++;
+          perSegment[y]++;
+        }
+      })
+    );
+
+    // One alert per contiguous run of the same state — "Bocaue severe +4h→+6h"
+    // instead of three near-identical cards.
+    const alerts: Alert[] = [];
+    states.forEach((row, y) => {
+      let run: Alert | null = null;
+      row.forEach((st, x) => {
+        const on = st !== null && st !== "Low";
+        if (on && run && run.state === st && run.to === x) {
+          run.to = x + 1;
+          run.conf = Math.max(run.conf, confs[y][x]);
+        } else {
+          if (run) alerts.push(run);
+          run = on ? { segment: segments[y], state: st as State, from: x + 1, to: x + 1, conf: confs[y][x] } : null;
+        }
+      });
+      if (run) alerts.push(run);
+    });
+    alerts.sort((a, b) => {
+      const r = STATE_META[b.state].rank - STATE_META[a.state].rank;
+      if (r !== 0) return r;
+      const span = b.to - b.from - (a.to - a.from);
+      return span !== 0 ? span : b.conf - a.conf;
+    });
+
+    const peakIdx = perHour.indexOf(Math.max(...perHour));
+    const worstIdx = perSegment.indexOf(Math.max(...perSegment));
+    const firstSevere = alerts.find((a) => a.state === "High");
+
+    return {
+      segments,
+      hourLabels,
+      cells,
+      perHour,
+      alerts,
+      severeCount: alerts.filter((a) => a.state === "High").length,
+      atRisk: atRisk.size,
+      severeSegments: [...severeSegments],
+      severeCells,
+      peakHour: perHour[peakIdx] > 0 ? peakIdx + 1 : null,
+      peakHourCount: perHour[peakIdx],
+      worstSegment: perSegment[worstIdx] > 0 ? segments[worstIdx] : null,
+      worstSegmentCount: perSegment[worstIdx],
+      firstSevere,
+      lowConfCount: cells.filter((c) => c.state !== "Low" && c.conf < LOW_CONF).length,
+    };
+  }, [raw]);
+
+  if (!model) {
     return (
-      <article className="chart-card wide" style={{ padding: "24px", display: "flex", flexDirection: "column", gap: "20px", marginTop: "24px" }}>
-        <div>Loading ML Congestion Forecast from AWS...</div>
+      <article className="chart-card wide" style={{ padding: "24px", marginTop: "24px" }}>
+        <div style={{ color: "#64748b" }}>Loading ML congestion forecast from AWS…</div>
       </article>
     );
   }
 
-  const { segments, hours, heatmapData, alerts } = chartData;
-  const displayAlerts = alerts.length > 0 ? alerts.slice(0, 3) : ["✅ No severe bottlenecks detected in the next 12 hours. Normal flow expected."];
+  const { segments, hourLabels, cells, perHour, alerts } = model;
+  const maxPerHour = Math.max(...perHour, 1);
+  const heatTop = 34;
+  const heatHeight = segments.length * 34;
+  const stripTop = heatTop + heatHeight + 34;
+  const stripHeight = 44;
+  const chartHeight = stripTop + stripHeight + 20;
 
   const option: EChartsOption = {
-    tooltip: {
-      position: "top",
-      backgroundColor: 'rgba(255, 255, 255, 0.95)',
-      borderColor: '#e2e8f0',
-      borderWidth: 1,
-      textStyle: { color: '#334155' },
-      extraCssText: 'box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06); border-radius: 8px;',
-      formatter: (params: any) => {
-        const xName = hours[params.data[0]];
-        const yName = segments[params.data[1]];
-        const val = params.data[2];
-        const prob = params.data[3];
-        const status = val === 2 ? "Severe Bottleneck" : val === 1 ? "Heavy Traffic" : "Free Flow";
-        const color = val === 2 ? "#ef4444" : val === 1 ? "#eab308" : "#22c55e";
-        const speed = val === 2 ? "&lt; 30 km/h" : val === 1 ? "30 - 60 km/h" : "&gt; 60 km/h";
-        
-        return `
-          <div style="padding: 4px; font-family: Inter, sans-serif;">
-            <b style="font-size: 1.1em; color: #0f172a;">${yName}</b><br/>
-            <div style="margin-top: 6px; display: grid; grid-template-columns: 130px 1fr; gap: 4px;">
-              <span style="color: #64748b;">Time:</span> <span style="font-weight: 500;">${xName}</span>
-              <span style="color: #64748b;">Prediction:</span> <span style="color:${color}; font-weight:700;">${status}</span>
-              <span style="color: #64748b;">Predicted Speed:</span> <span style="font-weight: 500;">${speed}</span>
-              <span style="color: #64748b;">AI Confidence:</span> <span style="font-weight: 500;">${(prob * 100).toFixed(1)}%</span>
-            </div>
-          </div>
-        `;
-      },
-    },
-    grid: { left: 100, right: 20, top: 20, bottom: 40 },
-    xAxis: {
-      type: "category",
-      data: hours,
-      name: "Future Hours",
-      nameLocation: "middle",
-      nameGap: 25,
-      splitArea: { show: true },
-      axisLabel: { color: "#64748b", fontWeight: 500 },
-      axisLine: { lineStyle: { color: "#cbd5e1" } },
-    },
-    yAxis: {
-      type: "category",
-      data: segments,
-      splitArea: { show: true },
-      axisLabel: { color: "#64748b", fontWeight: 500 },
-      axisLine: { lineStyle: { color: "#cbd5e1" } },
-    },
+    // A cartesian heatmap throws "Heatmap must use with visualMap" without
+    // this — it is what drives the cell fill from the third data value.
     visualMap: {
       show: false,
-      min: 0,
-      max: 2,
-      inRange: {
-        color: ["#86efac", "#fde047", "#f87171"],
+      type: "piecewise",
+      dimension: 2,
+      seriesIndex: 0,
+      pieces: [
+        { value: 0, color: STATE_META.Low.color },
+        { value: 1, color: STATE_META.Med.color },
+        { value: 2, color: STATE_META.High.color },
+      ],
+    },
+    title: [
+      {
+        text: "SEGMENTS CONGESTED PER HOUR",
+        left: 0,
+        top: stripTop - 20,
+        textStyle: { fontSize: 10, fontWeight: 700, color: "#94a3b8" },
+      },
+    ],
+    tooltip: {
+      backgroundColor: "rgba(255,255,255,0.97)",
+      borderColor: "#e2e8f0",
+      borderWidth: 1,
+      textStyle: { color: "#334155" },
+      extraCssText: "box-shadow: 0 6px 16px rgba(15,23,42,0.12); border-radius: 8px;",
+      formatter: (params: unknown) => {
+        const p = params as { seriesIndex: number; data: CellItem | number; dataIndex: number };
+        if (p.seriesIndex === 1) {
+          const n = p.data as number;
+          return `<b>${hourLabels[p.dataIndex]}</b><br/>${n} of ${segments.length} segments congested`;
+        }
+        const d = p.data as CellItem;
+        const [x, y] = d.value;
+        const meta = STATE_META[d.state];
+        const low = d.conf < LOW_CONF;
+        return `
+          <div style="padding:2px 4px; min-width:215px;">
+            <b style="font-size:1.05em; color:#0f172a;">${segments[y]}</b>
+            <span style="color:#94a3b8; font-size:0.85em;"> · km ${KM_POST[segments[y]] ?? "—"}</span>
+            <div style="margin-top:8px; display:grid; grid-template-columns:112px 1fr; gap:5px 8px; font-size:0.9em;">
+              <span style="color:#64748b;">Horizon</span><span style="font-weight:600;">${hourLabels[x]}</span>
+              <span style="color:#64748b;">Predicted state</span><span style="color:${d.state === "Low" ? "#166534" : d.state === "Med" ? "#b45309" : "#dc2626"}; font-weight:700;">${meta.label}</span>
+              <span style="color:#64748b;">Speed band</span><span style="font-weight:500;">${meta.speed}</span>
+              <span style="color:#64748b;">Model confidence</span><span style="font-weight:600; color:${low ? "#b45309" : "#334155"};">${(d.conf * 100).toFixed(1)}%${low ? " · lower" : ""}</span>
+            </div>
+          </div>`;
       },
     },
+    grid: [
+      { left: 150, right: 24, top: heatTop, height: heatHeight },
+      { left: 150, right: 24, top: stripTop, height: stripHeight },
+    ],
+    xAxis: [
+      {
+        gridIndex: 0,
+        type: "category",
+        data: hourLabels,
+        position: "top",
+        axisTick: { show: false },
+        axisLine: { show: false },
+        axisLabel: { color: "#64748b", fontWeight: 600, fontSize: 11 },
+      },
+      {
+        gridIndex: 1,
+        type: "category",
+        data: hourLabels,
+        axisTick: { show: false },
+        axisLine: { show: false },
+        axisLabel: { show: false },
+      },
+    ],
+    yAxis: [
+      {
+        gridIndex: 0,
+        type: "category",
+        data: segments.map((s) => `${s}  ·  km ${KM_POST[s] ?? "—"}`),
+        axisTick: { show: false },
+        axisLine: { show: false },
+        axisLabel: { color: "#334155", fontWeight: 600, fontSize: 11 },
+      },
+      {
+        gridIndex: 1,
+        type: "value",
+        max: segments.length,
+        splitLine: { show: false },
+        axisLabel: { show: false },
+        axisLine: { show: false },
+        axisTick: { show: false },
+      },
+    ],
     series: [
       {
-        name: "Congestion Probability",
+        name: "Predicted congestion state",
         type: "heatmap",
-        data: heatmapData,
+        xAxisIndex: 0,
+        yAxisIndex: 0,
+        data: cells,
+        // Only states that need action carry text; free-flow cells stay quiet.
+        // A trailing * flags predictions the model is less sure about.
         label: {
           show: true,
-          formatter: (params: any) => {
-            const val = params.data[2];
-            return val === 2 ? "High" : val === 1 ? "Med" : "Low";
+          formatter: (params: unknown) => {
+            const d = (params as { data: CellItem }).data;
+            if (d.state === "Low") return "";
+            return d.conf < LOW_CONF ? `${STATE_META[d.state].short}*` : STATE_META[d.state].short;
           },
-          color: "#334155",
+          fontSize: 9,
+          fontWeight: 700,
+        },
+        itemStyle: { borderColor: "#fff", borderWidth: 3, borderRadius: 4 },
+        emphasis: { itemStyle: { borderColor: "#0f172a", borderWidth: 2, shadowBlur: 10, shadowColor: "rgba(15,23,42,0.3)" } },
+      },
+      {
+        name: "Segments congested",
+        type: "bar",
+        xAxisIndex: 1,
+        yAxisIndex: 1,
+        data: perHour.map((n) => ({
+          value: n,
+          itemStyle: { color: n === maxPerHour && n > 0 ? "#f59e0b" : "#e2e8f0", borderRadius: [3, 3, 0, 0] },
+          label: { color: n === maxPerHour && n > 0 ? "#b45309" : "#94a3b8" },
+        })),
+        barMaxWidth: 40,
+        label: {
+          show: true,
+          position: "top",
+          formatter: (p: unknown) => String((p as { value: number }).value || ""),
           fontSize: 11,
-          fontWeight: 600,
-        },
-        itemStyle: {
-          borderColor: "#ffffff",
-          borderWidth: 2,
-        },
-        emphasis: {
-          itemStyle: {
-            shadowBlur: 15,
-            shadowColor: "rgba(0, 0, 0, 0.4)",
-            borderColor: "#334155",
-            borderWidth: 2
-          },
+          fontWeight: 700,
         },
       },
     ],
   };
 
+  const kpi = (label: string, value: string, sub: string, tone?: string) => (
+    <div style={{ background: "#f8fafc", border: "1px solid #e2e8f0", borderRadius: "8px", padding: "11px 13px" }}>
+      <div style={{ fontSize: "0.68rem", color: "#64748b", textTransform: "uppercase", letterSpacing: "0.05em", fontWeight: 600 }}>{label}</div>
+      <div style={{ fontSize: "1.1rem", fontWeight: 700, color: tone ?? "#0f172a", margin: "2px 0 1px" }}>{value}</div>
+      <div style={{ fontSize: "0.72rem", color: "#94a3b8" }}>{sub}</div>
+    </div>
+  );
+
+  const VISIBLE_ALERTS = 4;
+  const shown = alerts.slice(0, VISIBLE_ALERTS);
+
+  // Grouped by location for the full list — scanning "what happens at Bocaue"
+  // beats scrolling 29 loose cards.
+  const bySegment = segments
+    .map((seg) => ({ seg, runs: alerts.filter((a) => a.segment === seg).sort((a, b) => a.from - b.from) }))
+    .filter((g) => g.runs.length > 0)
+    .sort((a, b) => (KM_POST[a.seg] ?? 999) - (KM_POST[b.seg] ?? 999));
+
+  const alertCard = (a: Alert, key: string) => {
+    const severe = a.state === "High";
+    const span = a.to - a.from + 1;
+    return (
+      <div
+        key={key}
+        style={{
+          display: "flex", alignItems: "center", gap: "12px",
+          padding: "10px 12px", borderRadius: "8px",
+          background: severe ? "#fef2f2" : "#fffbeb",
+          border: `1px solid ${severe ? "#fecaca" : "#fde68a"}`,
+        }}
+      >
+        <span
+          style={{
+            flex: "none", padding: "3px 8px", borderRadius: "999px",
+            background: severe ? "#dc2626" : "#f59e0b", color: "#fff",
+            fontSize: "0.64rem", fontWeight: 800, letterSpacing: "0.04em",
+          }}
+        >
+          {severe ? "SEVERE" : "HEAVY"}
+        </span>
+        <div style={{ minWidth: 0, fontSize: "0.82rem", lineHeight: 1.4 }}>
+          <div style={{ fontWeight: 700, color: "#0f172a" }}>
+            {a.segment} <span style={{ fontWeight: 500, color: "#94a3b8" }}>km {KM_POST[a.segment] ?? "—"}</span>
+          </div>
+          <div style={{ color: "#64748b" }}>
+            {a.from === a.to ? `+${a.from}h` : `+${a.from}h → +${a.to}h`} · {span}h · {(a.conf * 100).toFixed(0)}% confidence
+          </div>
+        </div>
+      </div>
+    );
+  };
+
+  // A one-sentence read of the whole card, for stakeholders who will not
+  // decode a 108-cell grid.
+  const headline = model.firstSevere
+    ? `${model.severeSegments.join(" and ")} ${model.severeSegments.length > 1 ? "are" : "is"} forecast to hit severe congestion — first at ${model.firstSevere.segment}, +${model.firstSevere.from}h. The corridor is busiest at +${model.peakHour}h with ${model.peakHourCount} of ${segments.length} segments congested.`
+    : `No severe congestion forecast in the next ${hourLabels.length} hours. Busiest window is +${model.peakHour}h with ${model.peakHourCount} of ${segments.length} segments running heavy.`;
+
   return (
-    <article className="chart-card wide" style={{ padding: "24px", display: "flex", flexDirection: "column", gap: "24px", marginTop: "24px", background: "linear-gradient(to bottom, #ffffff, #f8fafc)" }}>
-      <div className="chart-head" style={{ borderBottom: "none", paddingBottom: 0, margin: 0 }}>
-        <div style={{ display: "flex", justifyContent: "space-between", width: "100%", alignItems: "flex-start" }}>
-          <div>
-            <h3 style={{ fontSize: "1.25rem", color: "#0f172a", fontWeight: 700, margin: 0, display: "flex", alignItems: "center", gap: "8px" }}>
-              Predictive Congestion State Map <span style={{ fontSize: "0.8rem", padding: "2px 8px", background: "#f1f5f9", borderRadius: "12px", border: "1px solid #cbd5e1", color: "#475569" }}>XGBoost</span>
-            </h3>
-            <p style={{ color: "#64748b", fontSize: "0.9rem", margin: "6px 0 0 0" }}>
-              12-hour spatial forecast of segment congestion probabilities identifying future bottleneck states.
-            </p>
-          </div>
-          <div style={{ display: "flex", gap: "16px", alignItems: "center", fontSize: "0.85rem", color: "#64748b", fontWeight: 500 }}>
-            <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
-              <div style={{ width: "16px", height: "16px", background: "#86efac", border: "1px solid #22c55e", borderRadius: "4px" }}></div> Low Risk (Free Flow)
-            </div>
-            <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
-              <div style={{ width: "16px", height: "16px", background: "#fde047", border: "1px solid #eab308", borderRadius: "4px" }}></div> Med Risk (Heavy)
-            </div>
-            <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
-              <div style={{ width: "16px", height: "16px", background: "#f87171", border: "1px solid #ef4444", borderRadius: "4px" }}></div> High Risk (Severe)
-            </div>
-          </div>
+    <article className="chart-card wide" style={{ padding: "24px", display: "flex", flexDirection: "column", gap: "16px", marginTop: "24px" }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: "16px", flexWrap: "wrap" }}>
+        <div>
+          <h3 style={{ fontSize: "1.05rem", color: "#0f172a", fontWeight: 700, margin: 0, letterSpacing: "-0.01em", display: "flex", alignItems: "center", gap: "8px" }}>
+            Predictive Congestion State Map
+            <span style={{ fontSize: "0.72rem", padding: "2px 8px", background: "#f1f5f9", borderRadius: "999px", border: "1px solid #dce2ef", color: "#475569", fontWeight: 600 }}>
+              XGBoost
+            </span>
+          </h3>
+          <p style={{ color: "#64748b", fontSize: "0.82rem", margin: "4px 0 0 0" }}>
+            Each cell is one segment at one hour ahead · rows run north-bound by km-post · hover for model confidence
+          </p>
+        </div>
+        <div style={{ display: "flex", gap: "14px", alignItems: "center", fontSize: "0.76rem", color: "#64748b", fontWeight: 500, flexWrap: "wrap" }}>
+          {(["Low", "Med", "High"] as State[]).map((s) => (
+            <span key={s} style={{ display: "inline-flex", alignItems: "center", gap: "6px", whiteSpace: "nowrap" }}>
+              <span style={{ width: 13, height: 13, background: STATE_META[s].color, borderRadius: "3px" }} />
+              {STATE_META[s].label} <span style={{ color: "#94a3b8" }}>({STATE_META[s].speed})</span>
+            </span>
+          ))}
+          {model.lowConfCount > 0 && (
+            <span style={{ color: "#94a3b8", whiteSpace: "nowrap" }}>
+              <b style={{ color: "#64748b" }}>*</b> lower confidence (&lt;80%)
+            </span>
+          )}
         </div>
       </div>
 
-      <div style={{ display: "flex", gap: "24px", flexWrap: "wrap" }}>
-        <div style={{ flex: "1 1 600px", height: "400px" }}>
-          <DashboardChart option={option} height={400} />
-        </div>
-        
-        {/* Actionable Insights Panel */}
-        <div style={{ flex: "0 0 300px", display: "flex", flexDirection: "column", gap: "12px", background: "#ffffff", padding: "16px", borderRadius: "8px", border: "1px solid #e2e8f0", boxShadow: "0 1px 3px 0 rgba(0, 0, 0, 0.1)" }}>
-          <h4 style={{ margin: 0, fontSize: "1rem", color: "#0f172a", fontWeight: 700, borderBottom: "2px solid #f1f5f9", paddingBottom: "8px", display: "flex", alignItems: "center", gap: "8px" }}>
-            <span style={{ fontSize: "1.2rem" }}>🎯</span> Operational Insights
+      {/* Plain-language read of the grid */}
+      <div
+        style={{
+          padding: "11px 14px",
+          borderRadius: "8px",
+          background: model.firstSevere ? "#fef2f2" : "#f0fdf4",
+          border: `1px solid ${model.firstSevere ? "#fecaca" : "#bbf7d0"}`,
+          color: model.firstSevere ? "#991b1b" : "#166534",
+          fontSize: "0.86rem",
+          lineHeight: 1.5,
+        }}
+      >
+        {headline}
+      </div>
+
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(165px, 1fr))", gap: "10px" }}>
+        {kpi("Severe risk", `${model.severeSegments.length} of ${segments.length}`, `segments · ${model.severeCells} hours below 30 km/h`, model.severeSegments.length > 0 ? "#b91c1c" : "#15803d")}
+        {kpi("Peak risk window", model.peakHour ? `+${model.peakHour}h` : "—", model.peakHour ? `${model.peakHourCount} of ${segments.length} segments congested` : "no congestion predicted")}
+        {kpi("Most-affected segment", model.worstSegment ?? "—", model.worstSegment ? `${model.worstSegmentCount} of ${hourLabels.length} hours at risk` : "—")}
+        {kpi("Heavy or worse", `${model.atRisk} of ${segments.length}`, "segments congested at some point", model.atRisk > 0 ? "#b45309" : "#15803d")}
+      </div>
+
+      <div style={{ width: "100%", height: `${chartHeight}px` }}>
+        <DashboardChart option={option} height={chartHeight} />
+      </div>
+
+      <div>
+        <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: "12px", marginBottom: "10px" }}>
+          <h4 style={{ margin: 0, fontSize: "0.9rem", color: "#0f172a", fontWeight: 700 }}>
+            What to act on{" "}
+            <span style={{ color: "#94a3b8", fontWeight: 500 }}>
+              · {model.severeCount} severe, {alerts.length - model.severeCount} heavy
+            </span>
           </h4>
-          <div style={{ display: "flex", flexDirection: "column", gap: "12px", overflowY: "auto", maxHeight: "330px", paddingRight: "4px" }}>
-            {displayAlerts.map((alert, idx) => {
-              const isDanger = alert.includes("⚠️");
-              return (
-                <div key={idx} style={{ 
-                  padding: "12px", 
-                  background: isDanger ? "#fef2f2" : "#f0fdf4", 
-                  border: `1px solid ${isDanger ? "#fecaca" : "#bbf7d0"}`, 
-                  borderRadius: "6px",
-                  fontSize: "0.85rem",
-                  color: isDanger ? "#991b1b" : "#166534",
-                  lineHeight: "1.5",
-                  fontWeight: 500
-                }}>
-                  {alert}
-                </div>
-              );
-            })}
-          </div>
+          {alerts.length > VISIBLE_ALERTS && (
+            <button
+              onClick={() => setAlertsOpen(true)}
+              style={{
+                display: "inline-flex", alignItems: "center", gap: "6px",
+                border: "1px solid #dce2ef", background: "#fff", borderRadius: "999px",
+                padding: "5px 13px", fontSize: "0.76rem", fontWeight: 600, color: "#475569", cursor: "pointer",
+              }}
+            >
+              View all {alerts.length}
+              <svg width="12" height="12" viewBox="0 0 16 16" fill="none">
+                <path d="M6 3.5L10.5 8L6 12.5" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+              </svg>
+            </button>
+          )}
+        </div>
+
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(320px, 1fr))", gap: "10px" }}>
+          {alerts.length === 0 ? (
+            <div style={{ padding: "12px 14px", background: "#f0fdf4", border: "1px solid #bbf7d0", borderRadius: "8px", fontSize: "0.85rem", color: "#166534" }}>
+              No heavy or severe congestion predicted in the next {hourLabels.length} hours.
+            </div>
+          ) : (
+            shown.map((a, i) => alertCard(a, `${a.segment}-${a.from}-${i}`))
+          )}
         </div>
       </div>
+
+      {/* Full list in a dialog — the inline expander pushed the rest of the
+          page down and trapped 29 cards in a small scroll box. */}
+      {alertsOpen && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-label="All predicted congestion episodes"
+          onClick={() => setAlertsOpen(false)}
+          style={{
+            position: "fixed", inset: 0, zIndex: 200,
+            background: "rgba(15, 23, 42, 0.55)",
+            display: "grid", placeItems: "center", padding: "24px",
+          }}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            style={{
+              width: "min(980px, 100%)", maxHeight: "84vh",
+              display: "flex", flexDirection: "column",
+              background: "#fff", borderRadius: "14px",
+              boxShadow: "0 24px 60px rgba(15,23,42,0.3)", overflow: "hidden",
+            }}
+          >
+            <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: "16px", padding: "18px 22px", borderBottom: "1px solid #e2e8f0" }}>
+              <div>
+                <h3 style={{ margin: 0, fontSize: "1.05rem", fontWeight: 700, color: "#0f172a" }}>
+                  Predicted congestion · next {hourLabels.length} hours
+                </h3>
+                <p style={{ margin: "4px 0 0 0", fontSize: "0.8rem", color: "#64748b" }}>
+                  {alerts.length} episodes across {bySegment.length} segments ·{" "}
+                  <b style={{ color: "#b91c1c" }}>{model.severeCount} severe</b>,{" "}
+                  <b style={{ color: "#b45309" }}>{alerts.length - model.severeCount} heavy</b> · grouped by location
+                </p>
+              </div>
+              <button
+                onClick={() => setAlertsOpen(false)}
+                aria-label="Close"
+                style={{
+                  flex: "none", width: 32, height: 32, borderRadius: "8px",
+                  border: "1px solid #e2e8f0", background: "#fff", color: "#475569",
+                  cursor: "pointer", display: "grid", placeItems: "center", fontSize: "1rem", lineHeight: 1,
+                }}
+              >
+                ✕
+              </button>
+            </div>
+
+            <div style={{ overflowY: "auto", padding: "18px 22px", display: "flex", flexDirection: "column", gap: "18px" }}>
+              {bySegment.map(({ seg, runs }) => (
+                <div key={seg}>
+                  <div style={{ display: "flex", alignItems: "baseline", gap: "8px", marginBottom: "8px" }}>
+                    <span style={{ fontSize: "0.88rem", fontWeight: 700, color: "#0f172a" }}>{seg}</span>
+                    <span style={{ fontSize: "0.74rem", color: "#94a3b8" }}>km {KM_POST[seg] ?? "—"}</span>
+                    <span style={{ flex: 1, borderBottom: "1px solid #eef2f7" }} />
+                    <span style={{ fontSize: "0.74rem", color: "#94a3b8" }}>
+                      {runs.length} {runs.length === 1 ? "episode" : "episodes"}
+                    </span>
+                  </div>
+                  <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(290px, 1fr))", gap: "8px" }}>
+                    {runs.map((a, i) => alertCard(a, `modal-${seg}-${a.from}-${i}`))}
+                  </div>
+                </div>
+              ))}
+            </div>
+
+            <div style={{ padding: "12px 22px", borderTop: "1px solid #e2e8f0", background: "#f8fafc", fontSize: "0.75rem", color: "#94a3b8" }}>
+              Confidence is the model&apos;s certainty in its classification, not the probability of congestion. Press Esc to close.
+            </div>
+          </div>
+        </div>
+      )}
     </article>
   );
 }

@@ -8,9 +8,11 @@ const IncidentAnalyticsQuerySchema = z.object({
   from: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
   to: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
   source: z.enum(["all", "road", "moto", "stalled"]).optional().default("all"),
+  weather: z.enum(["all", "dry", "wet"]).optional().default("all"),
 });
 
 // GET /api/incident/analytics — descriptive dashboard aggregates
+// weather=dry|wet keeps only incidents whose hour had expressway-avg rainfall <=/> 0.3 mm
 export const getIncidentAnalytics = async (req: Request, res: Response) => {
   const query = IncidentAnalyticsQuerySchema.parse(req.query);
   const data = await getIncidentAnalyticsFromDb(query);

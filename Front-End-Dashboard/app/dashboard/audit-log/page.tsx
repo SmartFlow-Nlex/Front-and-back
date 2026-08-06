@@ -1,7 +1,53 @@
 "use client";
 
-import { useState } from "react";
-import { Activity, Shield, AlertCircle, Filter } from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
+import { Activity, Shield, AlertCircle, ClipboardList, Filter } from "lucide-react";
+import PageHeader from "../../../components/dashboard/PageHeader";
+
+const BACKEND = process.env.NEXT_PUBLIC_BACKEND_URL ?? "http://localhost:4000";
+
+type LogRow = {
+  id: number;
+  timestamp: string;
+  user: string;
+  category: string;
+  action: string;
+  details: string;
+  severity: string;
+};
+
+const cap = (w: string) => w.charAt(0).toUpperCase() + w.slice(1);
+
+// Raw rows are `domain.action_name` + a JSON details blob; render them readably.
+function mapLog(r: {
+  id: number;
+  timestamp: string;
+  user_id: string;
+  action: string;
+  target_resource: string;
+  details: Record<string, unknown> | null;
+}): LogRow {
+  const [domain, ...rest] = String(r.action).split(".");
+  const category = cap(domain);
+  const action = rest.length ? rest.join(".").split("_").map(cap).join(" ") : r.action;
+  const d = r.details ?? {};
+  const bits: string[] = [];
+  if (typeof d.title === "string") bits.push(d.title);
+  if (d.startKm != null && d.endKm != null) bits.push(`Km ${d.startKm}–${d.endKm}`);
+  if (typeof d.to === "string") bits.push(`status → ${d.to.replace("_", " ")}`);
+  if (typeof d.reason === "string") bits.push(`reason: ${d.reason}`);
+  const severity =
+    d.to === "cancelled" || action.toLowerCase().includes("deleted") ? "Warning" : "Info";
+  return {
+    id: r.id,
+    timestamp: r.timestamp,
+    user: r.user_id,
+    category,
+    action,
+    details: bits.join(" · ") || r.target_resource,
+    severity,
+  };
+}
 
 export default function AuditLogPage() {
   const [searchText, setSearchText] = useState("");
@@ -9,81 +55,27 @@ export default function AuditLogPage() {
   const [selectedSeverity, setSelectedSeverity] = useState("All");
   const [selectedDateRange, setSelectedDateRange] = useState("All Time");
 
+  const [auditLogs, setAuditLogs] = useState<LogRow[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    fetch(`${BACKEND}/api/audit-log/list`, { cache: "no-store" })
+      .then((r) => r.json())
+      .then((json) => {
+        if (!json.success) throw new Error(json.message ?? "Request failed");
+        setAuditLogs(json.data.map(mapLog));
+      })
+      .catch((e) => setError(e instanceof Error ? e.message : "Failed to load"))
+      .finally(() => setLoading(false));
+  }, []);
+
+  const categories = useMemo(
+    () => [...new Set(auditLogs.map((l) => l.category))].sort(),
+    [auditLogs]
+  );
+
   const now = new Date();
-  const auditLogs = [
-    {
-      id: 1,
-      timestamp: new Date(now.getTime() - 2 * 60 * 60 * 1000).toISOString(),
-      user: "admin",
-      category: "Navigation",
-      action: "Page Navigation",
-      details: "Navigated to Audit Log",
-      severity: "Info",
-    },
-    {
-      id: 2,
-      timestamp: new Date(now.getTime() - 20 * 60 * 60 * 1000).toISOString(),
-      user: "traffic.ops",
-      category: "Traffic",
-      action: "Traffic Status Update",
-      details: "Updated Bocaue Barrier congestion alert",
-      severity: "Warning",
-    },
-    {
-      id: 3,
-      timestamp: new Date(now.getTime() - 2 * 24 * 60 * 60 * 1000).toISOString(),
-      user: "system",
-      category: "System",
-      action: "Cache Refresh",
-      details: "Refreshed dashboard cache after scheduled sync",
-      severity: "Info",
-    },
-    {
-      id: 4,
-      timestamp: new Date(now.getTime() - 4 * 24 * 60 * 60 * 1000).toISOString(),
-      user: "audit.bot",
-      category: "Data Operations",
-      action: "Record Export",
-      details: "Exported 86 audit log rows for review",
-      severity: "Info",
-    },
-    {
-      id: 5,
-      timestamp: new Date(now.getTime() - 6 * 24 * 60 * 60 * 1000).toISOString(),
-      user: "security.admin",
-      category: "Authentication",
-      action: "Login Success",
-      details: "Signed in from approved workstation",
-      severity: "Info",
-    },
-    {
-      id: 6,
-      timestamp: new Date(now.getTime() - 11 * 24 * 60 * 60 * 1000).toISOString(),
-      user: "ops.lead",
-      category: "Authentication",
-      action: "Permission Review",
-      details: "Reviewed role access for incident dashboard",
-      severity: "Warning",
-    },
-    {
-      id: 7,
-      timestamp: new Date(now.getTime() - 18 * 24 * 60 * 60 * 1000).toISOString(),
-      user: "system",
-      category: "System",
-      action: "Alert Triggered",
-      details: "High latency threshold exceeded for traffic feed",
-      severity: "Critical",
-    },
-    {
-      id: 8,
-      timestamp: new Date(now.getTime() - 33 * 24 * 60 * 60 * 1000).toISOString(),
-      user: "admin",
-      category: "Navigation",
-      action: "Route Change",
-      details: "Opened sustainability analytics page",
-      severity: "Info",
-    },
-  ];
 
   const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate());
   const startOfLast7Days = new Date(startOfToday);
@@ -126,8 +118,7 @@ export default function AuditLogPage() {
 
   return (
     <section className="ds-content ds-long">
-      <h1 className="tab-title">Audit Log</h1>
-      <p className="muted" style={{ marginBottom: 14 }}>Track all system activities and user actions</p>
+      <PageHeader icon={ClipboardList} title="Audit Log" subtitle="Track all system activities and user actions" />
       <div className="tab-stat-grid compact">
         <article className="tab-stat-card">
           <div className="stat-content">
@@ -138,15 +129,15 @@ export default function AuditLogPage() {
         </article>
         <article className="tab-stat-card">
           <div className="stat-content">
-            <h3>Auth Events</h3>
-            <div className="value">5</div>
+            <h3>Maintenance Events</h3>
+            <div className="value">{auditLogs.filter((l) => l.category === "Maintenance").length}</div>
           </div>
           <div className="icon-box tone-green"><Shield size={20} /></div>
         </article>
         <article className="tab-stat-card">
           <div className="stat-content">
-            <h3>Critical Events</h3>
-            <div className="value">0</div>
+            <h3>Warnings</h3>
+            <div className="value">{auditLogs.filter((l) => l.severity !== "Info").length}</div>
           </div>
           <div className="icon-box tone-red"><AlertCircle size={20} /></div>
         </article>
@@ -167,11 +158,9 @@ export default function AuditLogPage() {
           />
           <select value={selectedCategory} onChange={(event) => setSelectedCategory(event.target.value)}>
             <option value="All">All Categories</option>
-            <option>Authentication</option>
-            <option>Navigation</option>
-            <option>Data Operations</option>
-            <option>System</option>
-            <option>Traffic</option>
+            {categories.map((c) => (
+              <option key={c}>{c}</option>
+            ))}
           </select>
           <select value={selectedSeverity} onChange={(event) => setSelectedSeverity(event.target.value)}>
             <option value="All">All Severities</option>
@@ -213,6 +202,15 @@ export default function AuditLogPage() {
                 </tr>
             </thead>
             <tbody>
+              {loading && (
+                <tr><td colSpan={7} style={{ textAlign: "center", color: "var(--text-muted)", padding: 24 }}>Loading…</td></tr>
+              )}
+              {error && !loading && (
+                <tr><td colSpan={7} style={{ textAlign: "center", color: "var(--text-muted)", padding: 24 }}>Live data unavailable — is the backend running on port 4000?</td></tr>
+              )}
+              {!loading && !error && filteredLogs.length === 0 && (
+                <tr><td colSpan={7} style={{ textAlign: "center", color: "var(--text-muted)", padding: 24 }}>No audit events yet — actions like scheduling maintenance will appear here.</td></tr>
+              )}
               {filteredLogs.map((log) => (
                 <tr key={log.id}>
                   <td className="font-mono text-xs text-gray-500">{`#${String(log.id).padStart(3, '0')}`}</td>

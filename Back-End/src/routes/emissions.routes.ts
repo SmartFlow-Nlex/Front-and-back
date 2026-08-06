@@ -1,10 +1,13 @@
 import { Router } from "express";
-import { getEmissionsIndex, getPeakPenalty, getClimateResilience } from "../controllers/emissions.controller.js";
+import { getEmissionsIndex, getPeakPenalty, getClimateResilience, getEmissionsAnalytics } from "../controllers/emissions.controller.js";
 import { authenticateToken, authorizeRoles } from "../middleware/auth.middleware.js";
 
 const router = Router();
 
-// Apply auth middleware to all emissions endpoints
+// Public like the traffic/incident analytics endpoints (before auth middleware)
+router.get("/analytics", getEmissionsAnalytics);
+
+// Apply auth middleware to all remaining emissions endpoints
 router.use(authenticateToken);
 router.use(authorizeRoles(["data-analyst"]));
 

@@ -1572,6 +1572,55 @@ body {
   letter-spacing: -0.03em;
 }
 
+/* ---------- Shared page header (every dashboard tab) ---------- */
+.ds-page-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+  margin: 0 0 18px;
+}
+
+.ds-page-header-icon {
+  display: grid;
+  place-items: center;
+  width: 38px;
+  height: 38px;
+  flex: none;
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--brand-primary) 12%, transparent);
+  color: var(--brand-primary);
+}
+
+.ds-page-header-text {
+  min-width: 0;
+}
+
+.ds-page-title {
+  margin: 0;
+  font-size: 1.3rem;
+  font-weight: 800;
+  line-height: 1.2;
+  letter-spacing: -0.015em;
+  color: var(--text-primary);
+}
+
+.ds-page-subtitle {
+  margin: 3px 0 0;
+  font-size: 0.78rem;
+  font-weight: 500;
+  line-height: 1.3;
+  color: var(--text-secondary);
+}
+
+.ds-page-header-actions {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex: none;
+}
+
 /* KPI Stat Grid */
 .tab-stat-grid {
   display: grid;
@@ -2141,6 +2190,66 @@ body {
   gap: 14px;
 }
 
+/* ---------- AI Sandbox: fit the page to the viewport so the whole page
+   no longer scrolls; only the Scenario card's controls scroll, while its
+   "Scenario" title stays pinned in place. ---------- */
+.sandbox-page {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.sandbox-page .dm-head,
+.sandbox-page .sandbox-metric-row {
+  flex-shrink: 0;
+}
+
+.sandbox-page .sandbox-grid {
+  flex: 1;
+  min-height: 0;
+  grid-template-rows: minmax(0, 1fr);
+}
+
+.sandbox-page .sandbox-main,
+.sandbox-page .sandbox-side {
+  min-height: 0;
+}
+
+/* Left card: let the simulation canvas grow to fill the card so there is no
+   empty space below the prescriptive recommendation. */
+.sandbox-page .sandbox-main {
+  display: flex;
+  flex-direction: column;
+}
+
+.sandbox-page .sandbox-canvas {
+  flex: 1;
+  height: auto;
+  min-height: 280px;
+}
+
+/* Scenario card becomes a fixed-height column: pinned title + scrolling body */
+.sandbox-page .sandbox-side {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.sandbox-page .sandbox-side > h2,
+.sandbox-page .sandbox-side > .sandbox-side-head {
+  flex-shrink: 0;
+}
+
+.sandbox-side-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  /* pull the scrollbar to the card edge without shifting the controls */
+  margin-right: -8px;
+  padding-right: 8px;
+}
+
 .sandbox-main,
 .sandbox-side {
   background: var(--bg-surface);
@@ -2227,6 +2336,239 @@ body {
   right: 70px;
   top: 38px;
   border-top: 4px dashed rgba(255, 255, 255, .4);
+}
+
+/* ---- Live agent sandbox ---- */
+.sandbox-metric-row {
+  display: grid;
+  grid-template-columns: repeat(6, 1fr);
+  gap: 10px;
+  margin-top: 12px;
+}
+.sandbox-metric {
+  background: var(--bg-surface);
+  border: 1px solid #e7ebf4;
+  border-radius: var(--radius-md);
+  padding: 12px 14px;
+  box-shadow: var(--shadow-card);
+}
+.sandbox-metric h3 {
+  margin: 0;
+  font-size: 0.68rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-muted);
+}
+.sandbox-metric-val {
+  font-size: 1.35rem;
+  font-weight: 800;
+  color: var(--text-primary);
+  margin-top: 4px;
+  line-height: 1.1;
+}
+.sandbox-metric-delta {
+  font-size: 0.72rem;
+  font-weight: 700;
+}
+.sandbox-metric-delta.up { color: #16a34a; }
+.sandbox-metric-delta.down { color: var(--color-danger); }
+.sandbox-metric-delta.muted { color: var(--text-muted); font-weight: 500; }
+
+.sandbox-canvas {
+  width: 100%;
+  height: 300px;
+  margin-top: 12px;
+  border-radius: var(--radius-md);
+  display: block;
+}
+
+.sandbox-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+  margin-top: 10px;
+  font-size: 0.78rem;
+  color: var(--text-secondary);
+}
+.sandbox-legend span { display: inline-flex; align-items: center; gap: 6px; }
+.sandbox-legend i { width: 12px; height: 12px; border-radius: 3px; display: inline-block; }
+
+.sandbox-reco {
+  margin-top: 14px;
+  border-radius: var(--radius-md);
+  padding: 12px 14px;
+  border-left: 4px solid;
+}
+.sandbox-reco strong { font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.05em; }
+.sandbox-reco p { margin: 4px 0 0; font-size: 0.9rem; line-height: 1.45; color: var(--text-primary); }
+.sandbox-reco.good { background: #ddf3e7; border-color: #1d7a4c; }
+.sandbox-reco.good strong { color: #1d7a4c; }
+.sandbox-reco.warn { background: #fdf3d6; border-color: #b45309; }
+.sandbox-reco.warn strong { color: #b45309; }
+.sandbox-reco.bad { background: var(--color-danger-bg); border-color: var(--color-danger); }
+.sandbox-reco.bad strong { color: var(--color-danger); }
+
+.sandbox-speed-seg {
+  display: inline-flex;
+  gap: 2px;
+  background: #e7ecf5;
+  border-radius: var(--radius-sm);
+  padding: 2px;
+  margin-right: 6px;
+  vertical-align: middle;
+}
+.sandbox-speed-seg button {
+  border: 0;
+  background: transparent;
+  padding: 5px 9px;
+  font-size: 0.8rem;
+  font-weight: 700;
+  border-radius: 5px;
+  cursor: pointer;
+  color: #3b4f6b;
+}
+.sandbox-speed-seg button.active { background: #fff; color: var(--brand-primary); box-shadow: var(--shadow-sm); }
+
+.sandbox-mini-label {
+  display: block;
+  font-size: 0.78rem;
+  color: var(--text-secondary);
+  margin: 12px 0 6px;
+}
+.sandbox-lane-toggles { display: flex; gap: 6px; }
+.sandbox-lane-toggles button {
+  flex: 1;
+  border: 1px solid #d7deec;
+  background: var(--bg-surface);
+  border-radius: var(--radius-sm);
+  padding: 8px 0;
+  font-weight: 700;
+  font-size: 0.82rem;
+  cursor: pointer;
+  color: var(--text-secondary);
+  transition: all var(--transition-fast);
+}
+.sandbox-lane-toggles button.closed {
+  background: var(--color-danger-bg);
+  border-color: var(--color-danger-border);
+  color: var(--color-danger);
+}
+.sandbox-btn-row { display: flex; gap: 8px; margin-top: 10px; }
+.sandbox-btn-row .btn-primary, .sandbox-btn-row .btn-muted { margin-left: 0; }
+
+/* Incident placement mode */
+.sandbox-canvas.placing { cursor: crosshair; }
+.btn-muted.active {
+  background: var(--color-danger-bg);
+  color: var(--color-danger);
+  box-shadow: inset 0 0 0 1px var(--color-danger-border);
+}
+.sandbox-place-hint {
+  margin: 8px 0 0;
+  font-size: 0.76rem;
+  font-weight: 600;
+  color: var(--color-danger);
+}
+
+/* ---------- Simulation Controls / Command mode toggle ---------- */
+.sandbox-side-head {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-bottom: 14px;
+}
+.sandbox-side-head h2 {
+  margin: 0;
+}
+.sandbox-mode-seg {
+  display: flex;
+  gap: 3px;
+  background: #e7ecf5;
+  border-radius: var(--radius-sm);
+  padding: 3px;
+}
+.sandbox-mode-seg button {
+  flex: 1;
+  border: 0;
+  background: transparent;
+  padding: 7px 10px;
+  font-size: 0.82rem;
+  font-weight: 700;
+  border-radius: 6px;
+  cursor: pointer;
+  color: #3b4f6b;
+  transition: background-color var(--transition-fast), color var(--transition-fast);
+}
+.sandbox-mode-seg button.active {
+  background: #fff;
+  color: var(--brand-primary);
+  box-shadow: var(--shadow-sm);
+}
+
+/* ---------- AI Command Prompt (preview) ---------- */
+.ai-command {
+  border: 1px solid #e7ebf4;
+  border-radius: var(--radius-lg);
+  padding: 16px;
+  background: linear-gradient(180deg, #faf8ff, var(--bg-surface));
+}
+.ai-command-sub {
+  margin: 0 0 12px;
+  font-size: 0.82rem;
+  color: var(--text-secondary);
+}
+.ai-command-input {
+  width: 100%;
+  resize: vertical;
+  min-height: 96px;
+  border: 1px dashed #c7b6f0;
+  border-radius: var(--radius-md);
+  padding: 12px;
+  font-size: 0.88rem;
+  font-family: inherit;
+  line-height: 1.45;
+  color: var(--text-primary);
+  background: #ffffff;
+  outline: none;
+  transition: border-color var(--transition-fast), box-shadow var(--transition-fast);
+}
+.ai-command-input::placeholder { color: var(--text-muted); }
+.ai-command-input:focus {
+  border-style: solid;
+  border-color: var(--brand-primary);
+  box-shadow: 0 0 0 3px rgba(49, 83, 232, 0.15);
+}
+.ai-command-btn {
+  width: 100%;
+  margin-top: 12px;
+  border: 0;
+  border-radius: var(--radius-md);
+  padding: 12px;
+  font-size: 0.92rem;
+  font-weight: 700;
+  color: #fff;
+  cursor: pointer;
+  background: linear-gradient(90deg, #7c3aed, #2d46d2);
+  transition: filter var(--transition-fast), opacity var(--transition-fast);
+}
+.ai-command-btn:hover:not(:disabled) { filter: brightness(1.08); }
+.ai-command-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+.ai-command-note {
+  margin: 12px 0 0;
+  font-size: 0.8rem;
+  line-height: 1.5;
+  color: var(--text-secondary);
+  background: var(--color-purple-bg);
+  border-left: 3px solid var(--brand-primary);
+  border-radius: 8px;
+  padding: 10px 12px;
+}
+.sandbox-baseline-note {
+  font-size: 0.76rem;
+  color: var(--text-muted);
+  margin: 8px 0 0;
+  line-height: 1.4;
 }
 
 .sandbox-side label {
@@ -2640,6 +2982,23 @@ body {
     grid-template-columns: 1fr;
   }
 
+  /* Stacked layout: revert to normal full-page scroll, drop the
+     viewport-locked Scenario-card scrolling used on wide screens. */
+  .sandbox-page,
+  .sandbox-page .sandbox-side {
+    overflow: visible;
+  }
+
+  .sandbox-page .sandbox-grid {
+    grid-template-rows: none;
+  }
+
+  .sandbox-side-scroll {
+    overflow: visible;
+    margin-right: 0;
+    padding-right: 0;
+  }
+
   .ds-feature-grid {
     grid-template-columns: 1fr;
   }
@@ -2654,6 +3013,10 @@ body {
 
   .tab-title {
     font-size: 1.5rem;
+  }
+
+  .ds-page-title {
+    font-size: 1.15rem;
   }
 
   .mini-stats-grid {
@@ -2699,6 +3062,21 @@ body {
 
   .tab-title {
     font-size: 1.3rem;
+  }
+
+  /* Narrow screens: let header actions (search, badges) wrap under the title */
+  .ds-page-header {
+    flex-wrap: wrap;
+    row-gap: 10px;
+  }
+
+  .ds-page-header-actions {
+    margin-left: 0;
+    width: 100%;
+  }
+
+  .ds-page-title {
+    font-size: 1.1rem;
   }
 
   .tab-stat-card .value {
@@ -3517,6 +3895,12 @@ body {
   border: 1px solid #f5b5b5;
 }
 
+.ms-badge.green {
+  background: #ddf3e7;
+  color: #1d7a4c;
+  border: 1px solid #b3e2c8;
+}
+
 .ms-location {
   display: flex;
   align-items: center;
@@ -3890,6 +4274,47 @@ body {
 .map-canvas-container .map-canvas {
   position: absolute;
   inset: 0;
+  /* Override the fixed 380px height from the base .map-canvas rule.
+     With top/bottom AND height set, absolute positioning is over-constrained
+     and ignores `bottom`, leaving the map stuck at 380px. Force full height. */
+  height: 100%;
+  width: 100%;
+}
+
+/* Graceful fallback when Mapbox can't initialize (e.g. missing token) */
+.map-fallback {
+  position: absolute;
+  inset: 0;
+  z-index: 5;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  gap: 8px;
+  padding: 24px;
+  background: var(--bg-surface, #fff);
+  color: var(--text-muted, #6b7b94);
+}
+.map-fallback svg { color: var(--text-muted, #9aa4b8); opacity: 0.7; }
+.map-fallback-title {
+  margin: 4px 0 0;
+  font-size: 1rem;
+  font-weight: 700;
+  color: var(--text-secondary, #4b5e7d);
+}
+.map-fallback-body {
+  margin: 0;
+  max-width: 340px;
+  font-size: 0.82rem;
+  line-height: 1.5;
+}
+.map-fallback code {
+  background: var(--bg-body, #f3f5f9);
+  border-radius: 4px;
+  padding: 1px 5px;
+  font-size: 0.78rem;
+  margin: 0 2px;
 }
 
 /* Overlays */

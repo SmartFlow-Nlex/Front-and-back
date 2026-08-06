@@ -3,10 +3,12 @@
 import { useState, useEffect } from "react";
 import { 
   CarFront, Cone, ShieldAlert, AlertTriangle, AlertCircle, 
-  Clock, ChevronDown, Navigation, ZoomIn, ZoomOut, Search 
+  Clock, ChevronDown, Navigation, ZoomIn, ZoomOut, Search,
+  Milestone, Map
 } from "lucide-react";
 import type { Feature } from "geojson";
 import TrafficMapPanel from "../../../components/maps/TrafficMapPanel";
+import PageHeader from "../../../components/dashboard/PageHeader";
 
 export default function MapComparisonPage() {
   const [activeReports, setActiveReports] = useState(5);
@@ -77,13 +79,17 @@ export default function MapComparisonPage() {
 
   return (
     <section className="ds-content ds-long">
-      <div className="mc-top-bar">
-        <h1 className="tab-title">Traffic Map Comparison</h1>
-        <div className="mc-search-bar">
-          <Search size={16} />
-          <input type="text" placeholder="Search exits (e.g., San Fernando)..." />
-        </div>
-      </div>
+      <PageHeader
+        icon={Map}
+        title="Traffic Map Comparison"
+        subtitle="Side-by-side live traffic sources across the NLEX corridor"
+        actions={
+          <div className="mc-search-bar">
+            <Search size={16} />
+            <input type="text" placeholder="Search exits (e.g., San Fernando)..." />
+          </div>
+        }
+      />
 
       <div className="map-grid mc-map-grid">
         {/* Left Map: Waze Real-Time */}
@@ -91,15 +97,16 @@ export default function MapComparisonPage() {
           <TrafficMapPanel
             title="Waze Real-Time Traffic"
             subtitle="Live traffic conditions"
-            badge="LIVE"
+            badge={
+              <>
+                <i className="mc-dot green" style={{ display: "inline-block", marginRight: "6px", verticalAlign: "middle" }}></i>
+                LIVE | {timeStr || "Loading..."}
+              </>
+            }
             endpoint={`${process.env.NEXT_PUBLIC_BACKEND_URL ?? "http://localhost:4000"}/api/map-comparison/real-time`}
             layerColor="#4a6ff2"
             tone="blue"
           >
-            {/* Waze Live Clock Overlay */}
-            <div className="mc-live-clock">
-              <span className="mc-dot green"></span> LIVE | {timeStr || "Loading..."}
-            </div>
 
             {/* Waze Legend Overlay */}
             <div className="mc-legend-card waze-legend">
@@ -117,6 +124,8 @@ export default function MapComparisonPage() {
                 <div className="mc-report-row"><span className="mc-icon-bg blue"><ShieldAlert size={12} /></span> Police</div>
                 <div className="mc-report-row"><span className="mc-icon-bg darkred"><AlertTriangle size={12} /></span> Accident</div>
                 <div className="mc-report-row"><span className="mc-icon-bg yellow"><AlertCircle size={12} /></span> Hazard</div>
+                <div className="mc-report-row"><span className="mc-icon-bg cyan" style={{ backgroundColor: "#06b6d4" }}><Milestone size={12} /></span> Toll Plaza</div>
+                <div className="mc-report-row"><span className="mc-density-line" style={{ backgroundColor: "#14b8a6" }}></span> Entry / Exit Ramp</div>
               </div>
             </div>
           </TrafficMapPanel>
@@ -124,8 +133,8 @@ export default function MapComparisonPage() {
           {/* Waze Footer Stats */}
           <div className="mc-footer-stats">
             <div className="mc-stat-item">
-              <span className="mc-stat-label">NLEX Exits</span>
-              <span className="mc-stat-value blue">26</span>
+              <span className="mc-stat-label">Toll Plazas</span>
+              <span className="mc-stat-value blue">20</span>
             </div>
             <div className="mc-stat-item">
               <span className="mc-stat-label">Active Reports</span>
@@ -186,7 +195,7 @@ export default function MapComparisonPage() {
           <div className="mc-footer-stats">
             <div className="mc-stat-item">
               <span className="mc-stat-label">NLEX Exits</span>
-              <span className="mc-stat-value purple">26</span>
+              <span className="mc-stat-value purple">20</span>
             </div>
             <div className="mc-stat-item">
               <span className="mc-stat-label">ML Confidence</span>

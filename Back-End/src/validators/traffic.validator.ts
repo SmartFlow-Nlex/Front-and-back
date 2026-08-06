@@ -8,11 +8,20 @@ export const IncidentQuerySchema = z.object({
   activeOnly: z.enum(["true", "false"]).optional(),
 });
 
+const isoDate = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
+
 export const ForecastQuerySchema = z.object({
   horizon: z.enum(["30m", "60m", "2h"]).optional().default("30m"),
+  months: z.enum(["3", "12", "all"]).optional().default("all"),
+  from: isoDate.optional(), // custom window start — with `to`, overrides months
+  to: isoDate.optional(),
 });
 
-const isoDate = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
+export const HourlyForecastQuerySchema = z.object({
+  date: isoDate,
+  model: z.enum(["LSTM", "Prophet", "XGBoost", "HoltWinters", "SARIMAX", "HoltsLinear"]).optional().default("LSTM"),
+  weather: z.enum(["all", "dry", "wet"]).optional().default("all"),
+});
 
 export const AnalyticsQuerySchema = z.object({
   months: z.enum(["3", "12", "all"]).optional().default("12"),
@@ -21,6 +30,7 @@ export const AnalyticsQuerySchema = z.object({
   plazas: z.string().optional(), // comma-separated plaza names
   direction: z.enum(["NB", "SB"]).optional(),
   vehicleClass: z.enum(["Class 1", "Class 2", "Class 3"]).optional(),
+  weather: z.enum(["all", "dry", "wet"]).optional().default("all"),
 });
 
 // Response Schemas for Documentation and Type Checking

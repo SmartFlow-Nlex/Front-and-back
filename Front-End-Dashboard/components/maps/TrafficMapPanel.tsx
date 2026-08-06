@@ -1,14 +1,16 @@
 "use client";
 
-import "maplibre-gl/dist/maplibre-gl.css";
-import maplibregl, { GeoJSONSource } from "maplibre-gl";
+import "mapbox-gl/dist/mapbox-gl.css";
+import mapboxgl, { GeoJSONSource } from "mapbox-gl";
 import type { Point } from "geojson";
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
+import nlexGeometry from "./nlex-geometry.json";
+import nlexRamps from "./nlex-ramps.json";
 
 type Props = {
   title: string;
   subtitle: string;
-  badge: string;
+  badge: React.ReactNode;
   endpoint: string;
   layerColor: string;
   tone: "blue" | "purple";
@@ -16,102 +18,264 @@ type Props = {
 };
 
 export default function TrafficMapPanel({ title, subtitle, badge, endpoint, layerColor, tone, children }: Props) {
-  const mapRef = useRef<maplibregl.Map | null>(null);
+  const mapRef = useRef<mapboxgl.Map | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
+  const activeMarkers = useRef<mapboxgl.Marker[]>([]);
+  const alertMarkersRef = useRef<mapboxgl.Marker[]>([]);
+  // "ok" once the map builds; otherwise show a graceful fallback instead of
+  // letting Mapbox throw and take the whole page down.
+  const [status, setStatus] = useState<"ok" | "no-token" | "error">("ok");
 
   useEffect(() => {
     if (!containerRef.current) return;
 
-    const map = new maplibregl.Map({
-      container: containerRef.current,
-      style: "https://basemaps.cartocdn.com/gl/voyager-gl-style/style.json", // Free premium Mapbox-compatible style
-      center: [121.002, 14.69],
-      zoom: 10.3,
-      attributionControl: false,
+    const token = process.env.NEXT_PUBLIC_MAPBOX_TOKEN;
+    if (!token) {
+      setStatus("no-token");
+      return;
+    }
+
+    mapboxgl.accessToken = token;
+    let map: mapboxgl.Map;
+    try {
+      map = new mapboxgl.Map({
+        container: containerRef.current,
+        style: "mapbox://styles/mapbox/light-v11", // Gray base map
+        center: [120.79, 14.94],
+        zoom: 9.2,
+        minZoom: 9.0, // Max zoom out restricted to this view
+        maxBounds: [
+          [120.4, 14.5], // Southwest bound (Manila Bay area)
+          [121.2, 15.3]  // Northeast bound (past Sta. Ines)
+        ],
+        pitch: 0, // Flat (2D)
+        bearing: 0, // North up
+        attributionControl: false,
+      });
+    } catch (err) {
+      console.error("Mapbox failed to initialize:", err);
+      setStatus("error");
+      return;
+    }
+
+    setStatus("ok");
+    mapRef.current = map;
+    map.addControl(new mapboxgl.NavigationControl({ showCompass: false }), "top-right");
+
+    // Hide all other roads from the base map so ONLY the NLEX corridor is visible
+    map.on("style.load", () => {
+      const layers = map.getStyle().layers;
+      if (layers) {
+        layers.forEach((layer) => {
+          if (
+            layer.id.includes("road") ||
+            layer.id.includes("bridge") ||
+            layer.id.includes("tunnel") ||
+            (layer as Record<string, unknown>)["source-layer"] === "road"
+          ) {
+            map.setLayoutProperty(layer.id, "visibility", "none");
+          }
+        });
+      }
     });
 
-    mapRef.current = map;
-    map.addControl(new maplibregl.NavigationControl({ showCompass: false }), "top-right");
+    const resizeObserver = new ResizeObserver(() => {
+      map.resize();
+    });
+    resizeObserver.observe(containerRef.current);
 
     map.on("load", async () => {
       const response = await fetch(endpoint, { cache: "no-store" });
       const data = await response.json();
+      console.log("TRAFFIC DATA LOADED:", data);
 
       const isRealtime = endpoint.includes("real-time");
+
+
 
       map.addSource("traffic", {
         type: "geojson",
         data,
       });
 
-      // Jam Lines Layer
+      // Add the base NLEX corridor source
+      map.addSource("nlex-corridor", {
+        type: "geojson",
+        data: {
+          type: "FeatureCollection",
+          features: [
+            {
+              type: "Feature",
+              properties: {},
+              geometry: nlexGeometry as GeoJSON.Geometry,
+            },
+          ],
+        },
+      });
+
+      // NLEX Entrance / Exit ramps (on- & off-ramps into and out of the corridor).
+      // Sourced from OSM motorway_link/motorway geometry, so they trace the real road centerlines.
+      // NOTE: the ramp layers themselves are added AFTER the mainline (further below) so that on
+      // entrance/exit sections the teal fully replaces the orange instead of the two overlapping.
+      map.addSource("nlex-ramps", {
+        type: "geojson",
+        data: nlexRamps as GeoJSON.FeatureCollection,
+      });
+
+      // Layer 1: Base NLEX Casing
+      map.addLayer({
+        id: "nlex-casing",
+        type: "line",
+        source: "nlex-corridor",
+        layout: {
+          "line-join": "round",
+          "line-cap": "round",
+        },
+        paint: {
+          "line-color": "#475569", // Slate grey border
+          "line-width": [
+            "interpolate", ["exponential", 1.5], ["zoom"],
+            8,   3,
+            12,  7,
+            16,  16,
+          ],
+          "line-opacity": 0.8,
+        },
+      }); 
+
+      // Layer 2: Base NLEX Surface
+      map.addLayer({
+        id: "nlex-surface",
+        type: "line",
+        source: "nlex-corridor",
+        layout: {
+          "line-join": "round",
+          "line-cap": "round",
+        },
+        paint: {
+          "line-color": "#f59e0b", // Solid Orange
+          "line-width": [
+            "interpolate", ["exponential", 1.5], ["zoom"],
+            8,   1.5,
+            12,  4.5,
+            16,  12,
+          ],
+          "line-opacity": 0.9,
+        },
+      });
+
+      // Entrance / Exit ramp casing — drawn ON TOP of the mainline and at least as wide as the
+      // corridor casing, so where a ramp coincides with the corridor the teal fully covers the
+      // orange (no orange/teal overlap on entrance & exit sections).
+      map.addLayer({
+        id: "nlex-ramp-casing",
+        type: "line",
+        source: "nlex-ramps",
+        layout: {
+          "line-join": "round",
+          "line-cap": "round",
+        },
+        paint: {
+          "line-color": "#0f766e", // Deep teal border (keeps ramps reading as teal, not grey)
+          "line-width": [
+            "interpolate", ["exponential", 1.5], ["zoom"],
+            8,   3.5,
+            12,  8,
+            16,  18,
+          ],
+          "line-opacity": 1,
+        },
+      });
+
+      // Entrance / Exit ramp surface — teal fill, matches the corridor width so it reads as the
+      // same expressway while clearly marking the on/off ramps.
+      map.addLayer({
+        id: "nlex-ramp-surface",
+        type: "line",
+        source: "nlex-ramps",
+        layout: {
+          "line-join": "round",
+          "line-cap": "round",
+        },
+        paint: {
+          "line-color": "#14b8a6", // Teal / Emerald — entrance & exit ramps
+          "line-width": [
+            "interpolate", ["exponential", 1.5], ["zoom"],
+            8,   1.6,
+            12,  4.8,
+            16,  12.5,
+          ],
+          "line-opacity": 1,
+        },
+      });
+
+      // Layer 3: Jam Lines Layer (Overlays on top for realtime)
       map.addLayer({
         id: "traffic-line",
         type: "line",
         source: "traffic",
-        paint: {
-          "line-color": isRealtime
-            ? [
-                "match",
-                ["get", "level"],
-                1, "#10b981", // Light (Green)
-                2, "#f59e0b", // Moderate (Yellow/Orange)
-                3, "#f97316", // Heavy (Orange)
-                4, "#ef4444", // Severe (Red)
-                layerColor    // Fallback
-              ]
-            : [
-                "interpolate",
-                ["linear"],
-                ["get", "congestion_score"],
-                0.2, "#a855f7",
-                0.6, "#8b5cf6",
-                0.9, "#6d28d9"
-              ],
-          "line-width": 5,
-          "line-opacity": 0.78,
+        layout: {
+          "line-join": "round",
+          "line-cap": "round",
         },
-        filter: ["==", ["geometry-type"], "LineString"],
+        paint: {
+          "line-color": [
+            "match",
+            ["get", "level"],
+            1, "#10b981", // Light (Green)
+            2, "#f59e0b", // Moderate (Yellow/Orange)
+            3, "#f97316", // Heavy (Orange)
+            4, "#ef4444", // Severe (Red)
+            5, "#b91c1c", // Standstill (Dark Red)
+            "#10b981"    // Fallback (Green)
+          ],
+          "line-width": [
+            "interpolate",
+            ["linear"],
+            ["zoom"],
+            8, 5,
+            12, 10,
+            16, 14
+          ],
+          "line-opacity": 0.85,
+        },
+        filter: ["==", ["get", "feature_type"], "jam"],
       });
 
-      // Incident / Alert Points Layer
+      // Incident / Alert Points Layer — native Mapbox circle (always pixel-perfect)
       map.addLayer({
         id: "traffic-points",
         type: "circle",
         source: "traffic",
         paint: {
-          "circle-radius": isRealtime ? 7 : 5,
-          "circle-color": isRealtime
-            ? [
-                "match",
-                ["get", "type"],
-                "ACCIDENT", "#b91c1c",     // Crimson
-                "JAM", "#ef4444",          // Red
-                "CONSTRUCTION", "#f97316", // Orange
-                "POLICE", "#3b82f6",       // Blue
-                "HAZARD", "#eab308",       // Yellow
-                "#ffffff"                  // Fallback
-              ]
-            : "#ffffff",
-          "circle-stroke-color": isRealtime ? "#ffffff" : layerColor,
-          "circle-stroke-width": 2,
+          "circle-radius": isRealtime ? 12 : 8,
+          "circle-color": "#ff0000",
+          "circle-stroke-color": "#ffffff",
+          "circle-stroke-width": 3,
+          "circle-opacity": 1,
         },
-        filter: ["==", ["geometry-type"], "Point"],
+        filter: [
+          "all",
+          ["==", ["get", "feature_type"], "alert"],
+          ["!=", ["get", "type"], "JAM"]
+        ],
       });
 
+
+
+
       // Hover popup logic
-      const popup = new maplibregl.Popup({
+      const popup = new mapboxgl.Popup({
         closeButton: false,
         closeOnClick: false,
       });
 
       // Point Hover
       map.on("mouseenter", "traffic-points", (e) => {
-        if (!isRealtime) return;
         map.getCanvas().style.cursor = "pointer";
         const features = map.queryRenderedFeatures(e.point, { layers: ["traffic-points"] });
         if (!features.length) return;
-        
+
         const feature = features[0];
         const geom = feature.geometry as Point;
         const coordinates = [...geom.coordinates] as [number, number];
@@ -124,24 +288,18 @@ export default function TrafficMapPanel({ title, subtitle, badge, endpoint, laye
 
         const typeLabel = props.type || "Alert";
         const iconEmoji = props.type === "ACCIDENT" ? "🚗💥" : props.type === "POLICE" ? "👮" : props.type === "CONSTRUCTION" ? "🚧" : props.type === "JAM" ? "🛑" : "⚠️";
-        const typeColor = props.type === "ACCIDENT" ? "#b91c1c" : props.type === "POLICE" ? "#3b82f6" : props.type === "CONSTRUCTION" ? "#f97316" : props.type === "JAM" ? "#ef4444" : "#eab308";
-        const typeBg = props.type === "ACCIDENT" ? "#fef2f2" : props.type === "POLICE" ? "#eff6ff" : props.type === "CONSTRUCTION" ? "#fff7ed" : props.type === "JAM" ? "#fef2f2" : "#fefce8";
-        
+
         const description = `
-          <div style="font-family: 'Inter', system-ui, -apple-system, sans-serif; width: 240px; border-radius: 14px; background: #fff; overflow: hidden; box-shadow: 0 12px 40px rgba(7,17,38,0.18);">
-            <div style="height: 3px; background: linear-gradient(90deg, ${typeColor}, ${typeColor}88);"></div>
-            <div style="padding: 14px 16px 12px;">
-              <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px;">
-                <span style="font-size: 16px; line-height: 1;">${iconEmoji}</span>
-                <span style="font-weight: 800; font-size: 12px; text-transform: uppercase; letter-spacing: 0.05em; color: ${typeColor}; background: ${typeBg}; padding: 3px 10px; border-radius: 20px;">${typeLabel}</span>
-              </div>
-              <div style="font-size: 12px; font-weight: 700; color: #1e293b; margin-bottom: 2px;">${props.street || "NLEX"}</div>
-              ${props.city ? `<div style="font-size: 11px; color: #64748b;">${props.city}</div>` : ""}
-              ${props.report_description ? `<div style="font-size: 11px; color: #475569; line-height: 1.45; background: #f8fafc; padding: 8px 10px; border-radius: 8px; margin-top: 8px; border-left: 3px solid ${typeColor}22;">${props.report_description}</div>` : ""}
-              <div style="display: flex; gap: 16px; margin-top: 10px; padding-top: 8px; border-top: 1px solid #f1f5f9;">
-                <div style="font-size: 10px; color: #94a3b8;">Reliability <span style="font-weight: 800; color: #475569;">${props.reliability || 0}/10</span></div>
-                <div style="font-size: 10px; color: #94a3b8;">Confidence <span style="font-weight: 800; color: #475569;">${props.confidence || 0}/5</span></div>
-              </div>
+          <div style="font-family: 'Inter', system-ui, -apple-system, sans-serif; padding: 10px; width: 220px; border-radius: 12px; background: white; box-shadow: 0 4px 20px rgba(0,0,0,0.08); color: #1e293b;">
+            <div style="font-weight: 700; font-size: 13px; text-transform: uppercase; display: flex; align-items: center; gap: 6px; color: ${props.type === "ACCIDENT" ? "#b91c1c" : props.type === "POLICE" ? "#3b82f6" : props.type === "CONSTRUCTION" ? "#f97316" : "#eab308"
+          }; margin-bottom: 4px;">
+              <span>${iconEmoji}</span> ${typeLabel}
+            </div>
+            <div style="font-size: 11px; font-weight: 600; color: #475569; margin-bottom: 6px;">${props.street || "NLEX"} ${props.city ? `(${props.city})` : ""}</div>
+            ${props.report_description ? `<div style="font-size: 11px; color: #334155; line-height: 1.4; background: #f8fafc; padding: 6px; border-radius: 6px; margin-bottom: 6px;">"${props.report_description}"</div>` : ""}
+            <div style="font-size: 10px; color: #94a3b8; border-top: 1px solid #f1f5f9; padding-top: 6px; display: flex; justify-content: space-between;">
+              <span>Reliability: <strong>${props.reliability || 0}/10</strong></span>
+              <span>Confidence: <strong>${props.confidence || 0}/5</strong></span>
             </div>
           </div>
         `;
@@ -154,12 +312,278 @@ export default function TrafficMapPanel({ title, subtitle, badge, endpoint, laye
         popup.remove();
       });
 
+      // Toll Plaza HTML Markers — All 20 NLEX exits with exact coordinates from official data
+      if (isRealtime) {
+        const tollPlazas = [
+          {
+            name: "Balintawak",
+            shortName: "Balintawak",
+            location: "Caloocan City",
+            type: "Exit",
+            rates: "Open system toll",
+            description: "Southern terminus of NLEX.",
+            coordinates: [121.00008900172813, 14.67876672198161],
+          },
+          {
+            name: "NLEX Harbor Link",
+            shortName: "Harbor Link",
+            location: "Valenzuela City",
+            type: "Entry and Exit",
+            rates: "Open system toll",
+            description: "Connects to NLEX Harbor Link / Connector segment.",
+            coordinates: [121.00030793375893, 14.69346529853609],
+          },
+          {
+            name: "Paso De Blas Valenzuela",
+            shortName: "Paso de Blas",
+            location: "Valenzuela City",
+            type: "Entry and Exit",
+            rates: "Open system toll",
+            description: "Exit to Paso de Blas, Valenzuela.",
+            coordinates: [120.99300157701673, 14.70821348617265],
+          },
+          {
+            name: "Meycauayan",
+            shortName: "Meycauayan",
+            location: "Meycauayan, Bulacan",
+            type: "Entry and Exit",
+            rates: "Open system toll",
+            description: "Interchange for Meycauayan, Bulacan.",
+            coordinates: [120.97231561928430, 14.74638836470472],
+          },
+          {
+            name: "Marilao",
+            shortName: "Marilao",
+            location: "Marilao, Bulacan",
+            type: "Entry and Exit",
+            rates: "Open system toll",
+            description: "Exit for Marilao, Bulacan. End of open toll system.",
+            coordinates: [120.95726732953010, 14.77456202043474],
+          },
+          {
+            name: "Cdv/Ph Arena",
+            shortName: "CdV/Ph Arena",
+            location: "Bocaue, Bulacan",
+            type: "Entry and Exit",
+            rates: "Open system toll",
+            description: "Exit to Ciudad de Victoria / Philippine Arena.",
+            coordinates: [120.94725606760602, 14.79312378515166],
+          },
+          {
+            name: "Bocaue Barrier",
+            shortName: "Bocaue Barrier",
+            location: "Bocaue, Bulacan",
+            type: "Exit",
+            rates: "Open system toll",
+            description: "Main toll barrier. Transition from open to closed system.",
+            coordinates: [120.94245608845259, 14.80245619390151],
+          },
+          {
+            name: "Bocaue Interchange",
+            shortName: "Bocaue Int.",
+            location: "Bocaue, Bulacan",
+            type: "Entry and Exit",
+            rates: "Closed system toll",
+            description: "Bocaue interchange entry/exit point.",
+            coordinates: [120.93939984817274, 14.80723392515467],
+          },
+          {
+            name: "Tambubong",
+            shortName: "Tambubong",
+            location: "Bocaue, Bulacan",
+            type: "Entry and Exit",
+            rates: "Closed system toll",
+            description: "Interchange exit for Tambubong, Bocaue.",
+            coordinates: [120.93507141724179, 14.81512389728283],
+          },
+          {
+            name: "Tabang Guiguinto",
+            shortName: "Tabang",
+            location: "Guiguinto, Bulacan",
+            type: "Entry",
+            rates: "Closed system toll",
+            description: "Entry point at Tabang, Guiguinto.",
+            coordinates: [120.90391121629810, 14.83274649661766],
+          },
+          {
+            name: "Balagtas",
+            shortName: "Balagtas",
+            location: "Balagtas, Bulacan",
+            type: "Entry",
+            rates: "Closed system toll",
+            description: "Entry point for Balagtas, Bulacan.",
+            coordinates: [120.90063378190028, 14.83443660148125],
+          },
+          {
+            name: "Sta. Rita Guiguinto",
+            shortName: "Sta. Rita",
+            location: "Guiguinto, Bulacan",
+            type: "Entry and Exit",
+            rates: "Closed system toll",
+            description: "Interchange for Sta. Rita, Guiguinto.",
+            coordinates: [120.85888660798751, 14.86245340592165],
+          },
+          {
+            name: "Pulilan",
+            shortName: "Pulilan",
+            location: "Pulilan, Bulacan",
+            type: "Entry and Exit",
+            rates: "Closed system toll",
+            description: "Exit to Pulilan, Bulacan.",
+            coordinates: [120.81701519028174, 14.90825804348608],
+          },
+          {
+            name: "San Simon",
+            shortName: "San Simon",
+            location: "San Simon, Pampanga",
+            type: "Entry and Exit",
+            rates: "Closed system toll",
+            description: "Interchange for San Simon, Pampanga.",
+            coordinates: [120.74996867688135, 14.99013450749262],
+          },
+          {
+            name: "San Fernando",
+            shortName: "San Fernando",
+            location: "San Fernando, Pampanga",
+            type: "Entry and Exit",
+            rates: "Closed system toll",
+            description: "Exit to the City of San Fernando, Pampanga capital.",
+            coordinates: [120.69485632354187, 15.04970605389222],
+          },
+          {
+            name: "Mexico",
+            shortName: "Mexico",
+            location: "Mexico, Pampanga",
+            type: "Entry and Exit",
+            rates: "Closed system toll",
+            description: "Interchange for Mexico, Pampanga.",
+            coordinates: [120.66361945309848, 15.10521677624212],
+          },
+          {
+            name: "Angeles",
+            shortName: "Angeles",
+            location: "Angeles City, Pampanga",
+            type: "Entry and Exit",
+            rates: "Closed system toll",
+            description: "Exit to Angeles City, Pampanga.",
+            coordinates: [120.61345871762175, 15.16311426503998],
+          },
+          {
+            name: "Dau",
+            shortName: "Dau",
+            location: "Mabalacat, Pampanga",
+            type: "Entry and Exit",
+            rates: "Closed system toll",
+            description: "Connects to SCTEX. Major junction for Clark & Subic.",
+            coordinates: [120.60462937006393, 15.17800946903190],
+          },
+          {
+            name: "SCTEX",
+            shortName: "SCTEX",
+            location: "Mabalacat, Pampanga",
+            type: "Exit",
+            rates: "Closed system toll",
+            description: "SCTEX interchange connection.",
+            coordinates: [120.59712067640591, 15.19630093067524],
+          },
+          {
+            name: "Sta. Ines",
+            shortName: "Sta. Ines",
+            location: "Mabalacat, Pampanga",
+            type: "Entry",
+            rates: "Closed system toll",
+            description: "Northern terminus of NLEX.",
+            coordinates: [120.58783493245980, 15.22203654424792],
+          },
+        ];
+
+        tollPlazas.forEach(toll => {
+          const el = document.createElement("div");
+          el.className = "custom-toll-marker";
+          el.innerHTML = `
+            <div style="
+              display: flex;
+              flex-direction: column;
+              align-items: center;
+              justify-content: center;
+              cursor: pointer;
+            ">
+              <!-- Custom Toll Gate Icon -->
+              <div style="
+                width: 24px;
+                height: 24px;
+                border-radius: 6px;
+                background: linear-gradient(135deg, #0e7490 0%, #06b6d4 100%);
+                border: 2px solid #ffffff;
+                box-shadow: 0 4px 10px rgba(6, 182, 212, 0.4);
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                color: white;
+              ">
+                <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                  <path d="M3 6h18v3H3z" fill="white" />
+                  <path d="M6 9v9M18 9v9" />
+                  <path d="M6 13h12" stroke="#eab308" stroke-width="3" />
+                </svg>
+              </div>
+              <!-- Text label -->
+              <div style="
+                margin-top: 3px;
+                background: rgba(15, 23, 42, 0.85);
+                backdrop-filter: blur(4px);
+                color: white;
+                font-size: 8px;
+                font-weight: 700;
+                padding: 1px 4px;
+                border-radius: 3px;
+                white-space: nowrap;
+                border: 1px solid rgba(255, 255, 255, 0.15);
+                box-shadow: 0 2px 5px rgba(0,0,0,0.2);
+                letter-spacing: 0.5px;
+              ">
+                ${toll.shortName}
+              </div>
+            </div>
+          `;
+
+          const marker = new mapboxgl.Marker({ element: el })
+            .setLngLat(toll.coordinates as [number, number])
+            .addTo(map);
+
+          el.addEventListener("mouseenter", () => {
+            const description = `
+              <div style="font-family: 'Inter', system-ui, -apple-system, sans-serif; padding: 12px; width: 240px; border-radius: 12px; background: white; box-shadow: 0 4px 20px rgba(0,0,0,0.08); color: #1e293b; border-left: 4px solid #06b6d4;">
+                <div style="font-weight: 700; font-size: 13px; display: flex; align-items: center; gap: 6px; color: #0891b2; margin-bottom: 4px;">
+                  <span>🛣️</span> ${toll.name}
+                </div>
+                <div style="font-size: 11px; font-weight: 600; color: #475569; margin-bottom: 4px;">${toll.location}</div>
+                <div style="display: inline-block; font-size: 9px; font-weight: 700; padding: 2px 6px; border-radius: 4px; background: #ecfeff; color: #0e7490; margin-bottom: 6px; letter-spacing: 0.3px;">${toll.type}</div>
+                <div style="font-size: 11px; color: #334155; line-height: 1.4; background: #f8fafc; padding: 8px; border-radius: 6px; margin-bottom: 6px; font-weight: 500;">
+                  ${toll.description}
+                </div>
+                <div style="font-size: 10px; color: #0891b2; border-top: 1px solid #e2e8f0; padding-top: 6px;">
+                  <strong>Toll System:</strong> <span style="color: #334155;">${toll.rates}</span>
+                </div>
+              </div>
+            `;
+            popup.setLngLat(toll.coordinates as [number, number]).setHTML(description).addTo(map);
+          });
+
+          el.addEventListener("mouseleave", () => {
+            popup.remove();
+          });
+
+          activeMarkers.current.push(marker);
+        });
+      }
+
       // Line Hover
       map.on("mouseenter", "traffic-line", (e) => {
         map.getCanvas().style.cursor = "pointer";
         const features = map.queryRenderedFeatures(e.point, { layers: ["traffic-line"] });
         if (!features.length) return;
-        
+
         const feature = features[0];
         const props = feature.properties;
         if (!props) return;
@@ -169,57 +593,31 @@ export default function TrafficMapPanel({ title, subtitle, badge, endpoint, laye
         if (isRealtime) {
           const severity = props.level === 4 ? "Severe" : props.level === 3 ? "Heavy" : props.level === 2 ? "Moderate" : "Light";
           const severityColor = props.level === 4 ? "#ef4444" : props.level === 3 ? "#f97316" : props.level === 2 ? "#f59e0b" : "#10b981";
-          const severityBg = props.level === 4 ? "#fef2f2" : props.level === 3 ? "#fff7ed" : props.level === 2 ? "#fffbeb" : "#f0fdf4";
-          const delayMin = Math.round((props.delay_seconds || 0) / 60);
-          
+
           description = `
-            <div style="font-family: 'Inter', system-ui, -apple-system, sans-serif; width: 220px; border-radius: 14px; background: #fff; overflow: hidden; box-shadow: 0 12px 40px rgba(7,17,38,0.18);">
-              <div style="height: 3px; background: linear-gradient(90deg, ${severityColor}, ${severityColor}66);"></div>
-              <div style="padding: 14px 16px 12px;">
-                <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px;">
-                  <span style="font-size: 15px; line-height: 1;">🚗</span>
-                  <span style="font-weight: 800; font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em; color: ${severityColor}; background: ${severityBg}; padding: 3px 10px; border-radius: 20px;">${severity} Jam</span>
-                </div>
-                <div style="font-size: 12px; font-weight: 700; color: #1e293b; margin-bottom: 2px;">${props.street || "NLEX Corridor"}</div>
-                ${props.city ? `<div style="font-size: 11px; color: #64748b;">${props.city}</div>` : ""}
-                <div style="display: flex; gap: 12px; margin-top: 10px; padding-top: 8px; border-top: 1px solid #f1f5f9;">
-                  <div style="flex: 1; text-align: center; padding: 6px; background: #f8fafc; border-radius: 8px;">
-                    <div style="font-size: 14px; font-weight: 800; color: #1e293b;">${props.speed || 0}</div>
-                    <div style="font-size: 9px; font-weight: 600; color: #94a3b8; text-transform: uppercase; letter-spacing: 0.04em;">km/h</div>
-                  </div>
-                  <div style="flex: 1; text-align: center; padding: 6px; background: #f8fafc; border-radius: 8px;">
-                    <div style="font-size: 14px; font-weight: 800; color: #1e293b;">${delayMin}</div>
-                    <div style="font-size: 9px; font-weight: 600; color: #94a3b8; text-transform: uppercase; letter-spacing: 0.04em;">min delay</div>
-                  </div>
-                </div>
+            <div style="font-family: 'Inter', system-ui, -apple-system, sans-serif; padding: 10px; width: 180px; border-radius: 12px; background: white; box-shadow: 0 4px 20px rgba(0,0,0,0.08); color: #1e293b;">
+              <div style="font-weight: 700; font-size: 13px; color: ${severityColor}; margin-bottom: 4px; display: flex; align-items: center; gap: 6px;">
+                🚗 ${severity} Jam
+              </div>
+              <div style="font-size: 11px; font-weight: 600; color: #475569; margin-bottom: 6px;">${props.street || "NLEX Corridor"} ${props.city ? `(${props.city})` : ""}</div>
+              <div style="font-size: 11px; color: #334155; line-height: 1.5; border-top: 1px solid #f1f5f9; padding-top: 6px;">
+                Avg Speed: <strong>${props.speed || 0} km/h</strong><br/>
+                Delay: <strong>${Math.round((props.delay_seconds || 0) / 60)} min</strong>
               </div>
             </div>
           `;
         } else {
           // Forecast map
           const score = Math.round((props.congestion_score || 0) * 100);
-          const congLevel = score >= 70 ? "High" : score >= 40 ? "Medium" : "Low";
-          const congColor = score >= 70 ? "#7c3aed" : score >= 40 ? "#8b5cf6" : "#a855f7";
-          const congBg = score >= 70 ? "#f3e8ff" : score >= 40 ? "#f5f0ff" : "#faf5ff";
           description = `
-            <div style="font-family: 'Inter', system-ui, -apple-system, sans-serif; width: 220px; border-radius: 14px; background: #fff; overflow: hidden; box-shadow: 0 12px 40px rgba(7,17,38,0.18);">
-              <div style="height: 3px; background: linear-gradient(90deg, #a855f7, #6d28d9);"></div>
-              <div style="padding: 14px 16px 12px;">
-                <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px;">
-                  <span style="font-size: 15px; line-height: 1;">🔮</span>
-                  <span style="font-weight: 800; font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em; color: ${congColor}; background: ${congBg}; padding: 3px 10px; border-radius: 20px;">${congLevel} Congestion</span>
-                </div>
-                <div style="font-size: 12px; font-weight: 700; color: #1e293b; margin-bottom: 6px;">Segment: ${props.segment_id || "NLEX"}</div>
-                <div style="display: flex; gap: 12px; margin-top: 4px; padding-top: 8px; border-top: 1px solid #f1f5f9;">
-                  <div style="flex: 1; text-align: center; padding: 6px; background: #faf5ff; border-radius: 8px;">
-                    <div style="font-size: 14px; font-weight: 800; color: #6d28d9;">${score}%</div>
-                    <div style="font-size: 9px; font-weight: 600; color: #94a3b8; text-transform: uppercase; letter-spacing: 0.04em;">congestion</div>
-                  </div>
-                  <div style="flex: 1; text-align: center; padding: 6px; background: #faf5ff; border-radius: 8px;">
-                    <div style="font-size: 14px; font-weight: 800; color: #6d28d9;">${props.horizon || "2h"}</div>
-                    <div style="font-size: 9px; font-weight: 600; color: #94a3b8; text-transform: uppercase; letter-spacing: 0.04em;">horizon</div>
-                  </div>
-                </div>
+            <div style="font-family: 'Inter', system-ui, -apple-system, sans-serif; padding: 10px; width: 180px; border-radius: 12px; background: white; box-shadow: 0 4px 20px rgba(0,0,0,0.08); color: #1e293b;">
+              <div style="font-weight: 700; font-size: 13px; color: #a855f7; margin-bottom: 4px; display: flex; align-items: center; gap: 6px;">
+                🔮 Predicted Traffic
+              </div>
+              <div style="font-size: 11px; font-weight: 600; color: #475569; margin-bottom: 6px;">Segment: ${props.segment_id || "NLEX"}</div>
+              <div style="font-size: 11px; color: #334155; line-height: 1.5; border-top: 1px solid #f1f5f9; padding-top: 6px;">
+                Congestion Index: <strong>${score}%</strong><br/>
+                Horizon: <strong>${props.horizon || "2h"}</strong>
               </div>
             </div>
           `;
@@ -233,11 +631,131 @@ export default function TrafficMapPanel({ title, subtitle, badge, endpoint, laye
         popup.remove();
       });
 
+      // Render alerts as HTML markers to ensure they are highly visible and don't rely on Mapbox GL circle layer filtering,
+      // but remove CSS transitions so they don't drift during zoom.
+      const renderAlerts = (geojson: GeoJSON.FeatureCollection | Record<string, unknown>) => {
+        // Clear old alert markers
+        alertMarkersRef.current.forEach((m) => m.remove());
+        alertMarkersRef.current = [];
+
+        if (!geojson || !("features" in geojson) || !Array.isArray(geojson.features)) return;
+        
+        geojson.features.forEach((feature: GeoJSON.Feature) => {
+          if (feature.properties?.feature_type !== "alert") return;
+          // Skip JAM point alerts since they are rendered as lines on the road
+          if (feature.properties?.type === "JAM") return;
+          if (feature.geometry?.type !== "Point") return;
+          
+          const coords = feature.geometry.coordinates;
+          const props = feature.properties;
+          const typeLabel = props.type || "Alert";
+          const iconEmoji = props.type === "ACCIDENT" ? "🚗💥" : props.type === "POLICE" ? "👮" : props.type === "CONSTRUCTION" ? "🚧" : props.type === "JAM" ? "🛑" : "⚠️";
+          
+          let color = "#eab308"; // Hazard/Fallback (Yellow)
+          let iconSvg = "";
+          
+          if (props.type === "ACCIDENT") {
+            color = "#991b1b"; // Dark red
+            iconSvg = `
+              <svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round">
+                <path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z"/>
+                <line x1="12" y1="9" x2="12" y2="13"/>
+                <line x1="12" y1="17" x2="12.01" y2="17"/>
+              </svg>
+            `;
+          } else if (props.type === "POLICE") {
+            color = "#2563eb"; // Blue
+            iconSvg = `
+              <svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
+              </svg>
+            `;
+          } else if (props.type === "CONSTRUCTION") {
+            color = "#ea580c"; // Orange
+            iconSvg = `
+              <svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round">
+                <path d="m6 21 6-18 6 18"/>
+                <path d="M4.5 21h15"/>
+                <path d="M8 15h8"/>
+                <path d="M9 11h6"/>
+              </svg>
+            `;
+          } else {
+            color = "#eab308"; // Yellow (Hazard / Default)
+            iconSvg = `
+              <svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round">
+                <circle cx="12" cy="12" r="10"/>
+                <line x1="12" y1="8" x2="12" y2="12"/>
+                <line x1="12" y1="16" x2="12.01" y2="16"/>
+              </svg>
+            `;
+          }
+
+          const el = document.createElement("div");
+          el.className = "waze-alert-marker";
+          el.style.display = "flex";
+          el.style.alignItems = "center";
+          el.style.justifyContent = "center";
+          el.style.width = "28px";
+          el.style.height = "28px";
+          el.style.cursor = "pointer";
+          
+          el.innerHTML = `
+            <div class="pulsing-marker-container">
+              <div class="pulsing-marker-glow ${props.type?.toLowerCase() || 'hazard'}"></div>
+              <div class="pulsing-marker-core ${props.type?.toLowerCase() || 'hazard'}" style="
+                width: 20px !important;
+                height: 20px !important;
+                border-radius: 50% !important;
+                border: 2px solid #ffffff !important;
+                box-shadow: 0 2px 6px rgba(0,0,0,0.3) !important;
+                background-color: ${color} !important;
+                display: flex !important;
+                align-items: center !important;
+                justify-content: center !important;
+                color: white !important;
+                z-index: 2 !important;
+              ">
+                ${iconSvg}
+              </div>
+            </div>
+          `;
+          
+          const popup = new mapboxgl.Popup({ offset: 15, closeButton: false }).setHTML(`
+            <div style="font-family: 'Inter', system-ui, -apple-system, sans-serif; padding: 10px; width: 220px; border-radius: 12px; background: white; box-shadow: 0 4px 20px rgba(0,0,0,0.08); color: #1e293b;">
+              <div style="font-weight: 700; font-size: 13px; text-transform: uppercase; display: flex; align-items: center; gap: 6px; color: ${color}; margin-bottom: 4px;">
+                <span>${iconEmoji}</span> ${typeLabel}
+              </div>
+              <div style="font-size: 11px; font-weight: 600; color: #475569; margin-bottom: 6px;">${props.street || "NLEX"} ${props.city ? `(${props.city})` : ""}</div>
+              ${props.report_description ? `<div style="font-size: 12px; line-height: 1.4; color: #334155; margin-bottom: 8px;">"${props.report_description}"</div>` : ""}
+              <div style="display: flex; gap: 12px; font-size: 10px; color: #64748b; font-weight: 500;">
+                <div>Reliability: ${props.reliability || 0}/10</div>
+                <div>Confidence: ${props.confidence || 0}/10</div>
+              </div>
+            </div>
+          `);
+
+          const marker = new mapboxgl.Marker({ element: el, anchor: "center" })
+            .setLngLat(coords as [number, number])
+            .setPopup(popup)
+            .addTo(map);
+            
+          alertMarkersRef.current.push(marker);
+        });
+      };
+      
+      if (isRealtime) {
+        renderAlerts(data);
+      }
+
       const source = map.getSource("traffic") as GeoJSONSource;
-      setInterval(async () => {
+      const _pollingInterval = setInterval(async () => {
         try {
           const fresh = await fetch(endpoint, { cache: "no-store" }).then((r) => r.json());
           source.setData(fresh);
+          if (isRealtime) {
+            renderAlerts(fresh);
+          }
         } catch {
           // No-op polling fallback
         }
@@ -245,6 +763,10 @@ export default function TrafficMapPanel({ title, subtitle, badge, endpoint, laye
     });
 
     return () => {
+      resizeObserver.disconnect();
+      activeMarkers.current.forEach(m => m.remove());
+      activeMarkers.current = [];
+
       map.remove();
       mapRef.current = null;
     };
@@ -261,6 +783,28 @@ export default function TrafficMapPanel({ title, subtitle, badge, endpoint, laye
       </header>
       <div className="map-canvas-container">
         <div className="map-canvas mapbox" ref={containerRef} />
+        {status !== "ok" && (
+          <div className="map-fallback">
+            <svg width="34" height="34" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M9 20 3 17V4l6 3 6-3 6 3v13l-6-3-6 3Z" />
+              <path d="M9 7v13M15 4v13" />
+            </svg>
+            {status === "no-token" ? (
+              <>
+                <p className="map-fallback-title">Map unavailable</p>
+                <p className="map-fallback-body">
+                  A Mapbox access token is required. Add <code>NEXT_PUBLIC_MAPBOX_TOKEN</code> to
+                  <code>Front-End-Dashboard/.env.local</code> and restart the dev server.
+                </p>
+              </>
+            ) : (
+              <>
+                <p className="map-fallback-title">Map failed to load</p>
+                <p className="map-fallback-body">The map could not be initialized. Check the access token and console for details.</p>
+              </>
+            )}
+          </div>
+        )}
         {children}
       </div>
     </article>

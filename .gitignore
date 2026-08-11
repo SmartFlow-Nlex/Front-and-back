@@ -1,0 +1,27 @@
+node_modules
+**/node_modules
+# Local tooling state, not project source
+.claude/
+**/__pycache__
+**/.venv
+.next
+**/.next
+out
+**/out
+dist
+**/dist
+coverage
+**/coverage
+.DS_Store
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+*.tsbuildinfo
+.env
+.env.*
+# ...but keep the templates that document which variables to set. Without these
+# a fresh clone has no way to reach the database and every panel reads as
+# "database not reachable".
+!.env.example
+!**/.env.example

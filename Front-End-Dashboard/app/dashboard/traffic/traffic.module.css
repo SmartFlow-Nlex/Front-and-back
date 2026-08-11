@@ -1,0 +1,809 @@
+/* Descriptive traffic dashboard. The page scrolls vertically; every chart gets
+   a comfortable fixed height instead of being squeezed into the viewport. */
+.page {
+  display: grid;
+  grid-template-columns: repeat(12, minmax(0, 1fr));
+  gap: 20px;
+  padding: 20px 28px 32px;
+}
+
+/* ---------- Shared page header, adapted to this 12-column grid ----------
+   Visual styling lives in globals.css (.ds-page-header); here it only needs to
+   span the grid and cancel the page's own top padding. */
+.page > :global(.ds-page-header) {
+  grid-column: 1 / -1;
+  margin: -20px -28px 2px;
+  padding: 16px 28px 0;
+}
+
+/* The filter row pulls itself up into the page padding; cancel that when a
+   header already occupies that space. */
+.page > :global(.ds-page-header) + .filterRow {
+  margin-top: 0;
+}
+
+/* Filters stay in reach while scrolling (pinned below the 64px sticky topbar) */
+.filterRow {
+  position: sticky;
+  top: 64px;
+  z-index: 30;
+  background: var(--bg-body, #f3f5f9);
+  margin: -20px -28px 0;
+  padding: 12px 28px;
+}
+
+/* ---------- Row A: filters ---------- */
+.filterRow {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.filterGroup {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.filterLabel {
+  font-size: 0.74rem;
+  font-weight: 700;
+  color: var(--text-secondary, #5b6474);
+  white-space: nowrap;
+  letter-spacing: 0.02em;
+}
+
+/* Segmented pill (global reusable) */
+.segmented {
+  display: inline-flex;
+  gap: 2px;
+  background: var(--bg-surface, #fff);
+  border: 1px solid #dce2ef;
+  border-radius: 999px;
+  padding: 3px;
+}
+
+.segmented button {
+  border: 0;
+  background: transparent;
+  padding: 5px 12px;
+  border-radius: 999px;
+  font-size: 0.76rem;
+  font-weight: 600;
+  color: var(--text-secondary, #5b6474);
+  cursor: pointer;
+  white-space: nowrap;
+  transition: all var(--transition-fast);
+}
+
+.segmented button:hover:not(:disabled):not(.active) {
+  background: #f0f3f8;
+  color: var(--text-primary, #1c2434);
+}
+
+.segmented button:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+
+.segmented button.active {
+  background: var(--brand-primary, #3e67ef);
+  color: #fff;
+  box-shadow: 0 1px 4px rgba(54, 96, 255, 0.25);
+}
+
+/* Date range inputs */
+.dateRange {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  background: var(--bg-surface, #fff);
+  border: 1px solid #dce2ef;
+  border-radius: 10px;
+  padding: 2px 4px;
+}
+
+.dateInput {
+  border: 0;
+  background: transparent;
+  padding: 5px 6px;
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: var(--text-primary, #1c2434);
+  cursor: pointer;
+  outline: none;
+  width: 125px;
+}
+
+.dateInput:focus {
+  background: #f0f3f8;
+  border-radius: 6px;
+}
+
+.dateSep {
+  font-size: 0.7rem;
+  color: var(--text-muted, #8a93a6);
+}
+
+/* Mode tabs (Descriptive / Predictive / Prescriptive) */
+.modeTabs {
+  display: flex;
+  gap: 2px;
+  background: var(--bg-surface, #fff);
+  border: 1px solid #dce2ef;
+  border-radius: 10px;
+  padding: 3px;
+}
+
+.modeTab {
+  border: 0;
+  background: transparent;
+  padding: 6px 14px;
+  border-radius: 8px;
+  font-size: 0.76rem;
+  font-weight: 600;
+  color: var(--text-secondary, #5b6474);
+  cursor: pointer;
+  white-space: nowrap;
+  transition: all var(--transition-fast);
+}
+
+.modeTab:hover:not(.modeTabActive) {
+  background: #f0f3f8;
+  color: var(--text-primary, #1c2434);
+}
+
+.modeTabActive {
+  background: var(--brand-primary, #3e67ef);
+  color: #fff;
+  box-shadow: 0 1px 4px rgba(54, 96, 255, 0.25);
+}
+
+.updating {
+  font-size: 0.74rem;
+  color: var(--text-muted, #8a93a6);
+  white-space: nowrap;
+  animation: pulse 1.4s ease infinite;
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.4; }
+}
+
+.spacer { flex: 1; }
+
+/* ---------- Hero (Volume Trend) local filter strip ---------- */
+.heroFilters {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 8px 14px;
+  margin: 0 -22px;
+  background: #f7f9fc;
+  border-top: 1px solid #eef1f7;
+  border-bottom: 1px solid #eef1f7;
+  flex-wrap: wrap;
+}
+
+.heroFilterGroup {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.heroFilterLabel {
+  font-size: 0.68rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-muted, #6b7b94);
+  white-space: nowrap;
+}
+
+.heroFilterDivider {
+  width: 0;
+  height: 24px;
+  border-left: 1px solid #cbd4e1;
+  flex-shrink: 0;
+}
+
+/* Compact segmented for chart-local controls */
+.segmentedSmall {
+  display: inline-flex;
+  gap: 1px;
+  background: #fff;
+  border: 1px solid #dce2ef;
+  border-radius: 8px;
+  padding: 2px;
+}
+
+.segmentedSmall button {
+  border: 0;
+  background: transparent;
+  padding: 4px 9px;
+  border-radius: 6px;
+  font-size: 0.72rem;
+  font-weight: 600;
+  color: var(--text-secondary, #5b6474);
+  cursor: pointer;
+  white-space: nowrap;
+  transition: all var(--transition-fast);
+}
+
+.segmentedSmall button:hover:not(:disabled):not(.active) {
+  background: #edf1f8;
+}
+
+.segmentedSmall button:disabled {
+  opacity: 0.3;
+  cursor: not-allowed;
+}
+
+.segmentedSmall button.active {
+  background: var(--brand-primary, #3e67ef);
+  color: #fff;
+  box-shadow: 0 1px 3px rgba(54, 96, 255, 0.2);
+}
+
+/* Custom Dropdown (replaces native select) */
+.customSelectWrap {
+  position: relative;
+  display: inline-block;
+}
+
+.customSelectBtn {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: #fff;
+  border: 1px solid #dce2ef;
+  border-radius: 8px;
+  padding: 5px 10px;
+  font-size: 0.74rem;
+  font-weight: 600;
+  color: var(--text-primary, #1c2434);
+  cursor: pointer;
+  outline: none;
+  transition: all var(--transition-fast);
+}
+
+.customSelectBtn:hover {
+  background: #f7f9fc;
+  border-color: #c9d2e3;
+}
+
+.customSelectBtn[aria-expanded="true"] {
+  border-color: var(--brand-primary, #3e67ef);
+  box-shadow: 0 0 0 3px rgba(62, 103, 239, 0.15);
+}
+
+.customSelectBtn[aria-expanded="true"] svg {
+  transform: rotate(180deg);
+}
+
+.customSelectMenu {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  z-index: 50;
+  min-width: 140px;
+  background: #fff;
+  border: 1px solid #dce2ef;
+  border-radius: 8px;
+  box-shadow: 0 10px 30px rgba(16, 24, 40, 0.12);
+  padding: 4px;
+  animation: fadeInDown 0.15s ease-out;
+}
+
+@keyframes fadeInDown {
+  from { opacity: 0; transform: translateY(-4px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+.customSelectOption {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  padding: 7px 10px;
+  border: 0;
+  background: transparent;
+  border-radius: 6px;
+  font-size: 0.74rem;
+  font-weight: 500;
+  color: var(--text-primary, #1c2434);
+  cursor: pointer;
+  text-align: left;
+  transition: background var(--transition-fast);
+}
+
+.customSelectOption:hover {
+  background: #f0f3f8;
+}
+
+.customSelectOptionActive {
+  background: #edf3ff;
+  color: var(--brand-primary, #3e67ef);
+  font-weight: 700;
+}
+
+/* Custom toggle switch */
+.heroToggle {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  cursor: pointer;
+  font-size: 0.72rem;
+  font-weight: 600;
+  color: var(--text-secondary, #5b6474);
+  white-space: nowrap;
+  user-select: none;
+}
+
+.heroToggle input {
+  position: absolute;
+  opacity: 0;
+  width: 0;
+  height: 0;
+}
+
+.heroToggleTrack {
+  width: 30px;
+  height: 16px;
+  border-radius: 999px;
+  background: #d0d5de;
+  position: relative;
+  transition: background var(--transition-fast);
+  flex-shrink: 0;
+}
+
+.heroToggle input:checked + .heroToggleTrack {
+  background: var(--brand-primary, #3e67ef);
+}
+
+.heroToggleThumb {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.15);
+  transition: transform var(--transition-fast);
+}
+
+.heroToggle input:checked + .heroToggleTrack .heroToggleThumb {
+  transform: translateX(14px);
+}
+
+/* ---------- Row B: KPI tiles ---------- */
+.kpiRow {
+  grid-column: 1 / -1;
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 20px;
+  min-height: 0;
+}
+
+/* KPIs: the quiet top layer — flat, low-contrast, no shadow competition */
+.kpiTile {
+  background: var(--bg-surface, #fff);
+  border: 1px solid #e7ebf4;
+  border-radius: var(--radius-lg, 14px);
+  padding: 14px 18px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.kpiTile h3 {
+  margin: 0;
+  font-size: 0.68rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-secondary, #5b6474);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.kpiValue {
+  font-size: 1.3rem;
+  font-weight: 800;
+  color: var(--text-primary, #1c2434);
+  line-height: 1.15;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.kpiHint {
+  margin: 0;
+  font-size: 0.72rem;
+  color: var(--text-muted, #8a93a6);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.deltaUp { color: #1d9d61; font-weight: 700; }
+.deltaDown { color: #d0483e; font-weight: 700; }
+
+.sparkBox { height: 26px; margin-top: 2px; }
+
+/* ---------- Chart cards ---------- */
+.chartCard {
+  background: var(--bg-surface, #fff);
+  border: 1px solid #e7ebf4;
+  border-radius: var(--radius-lg, 14px);
+  box-shadow: var(--shadow-card, 0 1px 2px rgba(16, 24, 40, 0.04));
+  padding: 20px 22px 16px;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  min-width: 0;
+}
+
+.chartHead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 8px;
+  flex-wrap: nowrap;
+}
+
+/* One title style for every chart (sentence case) */
+.chartHead h3 {
+  margin: 0;
+  font-size: 0.88rem;
+  font-weight: 650;
+  color: var(--text-primary, #1c2434);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* The hero (volume trend) leads the eye: heavier title, slightly larger */
+.hero .chartHead h3 {
+  font-size: 1rem;
+  font-weight: 800;
+}
+
+.headText { min-width: 0; flex: 1; }
+
+/* One-line data-driven caption slot beneath each title (filled in Phase 3) */
+.subtitle {
+  margin: 2px 0 0;
+  font-size: 0.74rem;
+  line-height: 1.3;
+  color: var(--text-muted, #8a93a6);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.secondaryButton {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: var(--bg-surface, #fff);
+  border: 1px solid #dce2ef;
+  border-radius: 8px;
+  padding: 5px 12px;
+  font-size: 0.74rem;
+  font-weight: 600;
+  color: var(--text-secondary, #5b6474);
+  cursor: pointer;
+  white-space: nowrap;
+  transition: all var(--transition-fast);
+  box-shadow: 0 1px 2px rgba(16, 24, 40, 0.04);
+}
+
+.secondaryButton:hover {
+  background: #f7f9fc;
+  color: var(--text-primary, #1c2434);
+  border-color: #c9d2e3;
+}
+
+.secondaryButton:active {
+  background: #edf1f8;
+  box-shadow: none;
+}
+
+.chartTools {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.checkbox {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 0.74rem;
+  font-weight: 600;
+  color: var(--text-secondary, #5b6474);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.chartBody {
+  height: 280px;
+  position: relative;
+}
+
+.hero .chartBody { height: 340px; }
+
+.placeholder {
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px dashed #dce2ef;
+  border-radius: 10px;
+  color: var(--text-muted, #9aa4b8);
+  font-size: 0.8rem;
+  text-align: center;
+  padding: 8px;
+}
+
+/* Full-width grid slot for children that already bring their own card chrome
+   (the Predictive* chart components render their own .chart-card). */
+.spanFull {
+  grid-column: 1 / -1;
+  min-width: 0;
+}
+
+.chart1 { grid-column: 1 / -1; }
+.chart2 { grid-column: span 7; }
+.chart3 { grid-column: span 5; }
+.chart4 { grid-column: span 6; }
+.chart5 { grid-column: span 6; }
+
+/* ---------- Premium Detail Modal ---------- */
+.detailBackdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(7, 17, 38, 0.52);
+  display: grid;
+  place-items: center;
+  z-index: 50;
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+  animation: fadeIn 0.18s ease-out;
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+
+@keyframes slideUp {
+  from { opacity: 0; transform: translateY(16px) scale(0.97); }
+  to   { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+.detailModal {
+  width: min(94vw, 400px);
+  background: var(--bg-surface, #fff);
+  border-radius: 18px;
+  overflow: hidden;
+  box-shadow:
+    0 24px 60px rgba(7, 17, 38, 0.22),
+    0 0 0 1px rgba(62, 103, 239, 0.06);
+  animation: slideUp 0.22s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.detailAccent {
+  height: 4px;
+  background: linear-gradient(90deg, var(--brand-primary, #3660ff), #7c3aed, var(--brand-accent, #ea8b0d));
+}
+
+.detailHeader {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 18px 20px 12px;
+}
+
+.detailIcon {
+  width: 40px;
+  height: 40px;
+  border-radius: 12px;
+  background: linear-gradient(135deg, #edf3ff, #ece0ff);
+  display: grid;
+  place-items: center;
+  font-size: 18px;
+  flex-shrink: 0;
+}
+
+.detailTitles {
+  flex: 1;
+  min-width: 0;
+}
+
+.detailTitles h3 {
+  margin: 0;
+  font-size: 1.05rem;
+  font-weight: 800;
+  color: var(--text-primary, #071a44);
+  line-height: 1.25;
+}
+
+.detailTitles p {
+  margin: 3px 0 0;
+  font-size: 0.8rem;
+  color: var(--text-secondary, #4b5e7d);
+  line-height: 1.3;
+}
+
+.detailClose {
+  border: 0;
+  background: transparent;
+  width: 32px;
+  height: 32px;
+  border-radius: 10px;
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+  color: var(--text-muted, #6b7b94);
+  flex-shrink: 0;
+  transition: background var(--transition-fast), color var(--transition-fast);
+}
+
+.detailClose:hover {
+  background: #f0f3f8;
+  color: var(--text-primary, #071a44);
+}
+
+/* KV rows */
+.detailBody {
+  padding: 4px 20px 16px;
+}
+
+.detailRow {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 12px;
+  padding: 9px 12px;
+  border-radius: 10px;
+  transition: background var(--transition-fast);
+}
+
+.detailRowAlt {
+  background: #f7f9fc;
+}
+
+.detailRow:hover {
+  background: #edf1f8;
+}
+
+.detailKey {
+  font-size: 0.82rem;
+  color: var(--text-secondary, #4b5e7d);
+  white-space: nowrap;
+}
+
+.detailVal {
+  font-size: 0.84rem;
+  font-weight: 700;
+  color: var(--text-primary, #071a44);
+  text-align: right;
+  word-break: break-word;
+}
+
+/* Info footer */
+.detailFooter {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin: 0 20px 18px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: var(--color-info-bg, #edf3ff);
+  border: 1px solid var(--color-info-border, #b8cffb);
+  color: var(--color-info, #2f57ea);
+}
+
+.detailFooter p {
+  margin: 0;
+  font-size: 0.74rem;
+  line-height: 1.45;
+  color: var(--text-secondary, #4b5e7d);
+}
+
+/* ---------- All-plazas modal ---------- */
+.plazaModal {
+  width: min(94vw, 480px);
+}
+
+.plazaTableWrap {
+  max-height: 55vh;
+  overflow-y: auto;
+  padding: 0 20px 20px;
+}
+
+.plazaTable {
+  width: 100%;
+  border-collapse: separate;
+  border-spacing: 0;
+  font-size: 0.82rem;
+}
+
+.plazaTable thead {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+}
+
+.plazaTable th {
+  text-align: left;
+  padding: 8px 10px;
+  font-size: 0.7rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-secondary, #4b5e7d);
+  background: var(--bg-surface, #fff);
+  border-bottom: 2px solid #e4eaf6;
+}
+
+.plazaTable td {
+  padding: 7px 10px;
+  color: var(--text-primary, #071a44);
+  border-bottom: 1px solid #f0f3f8;
+}
+
+.plazaTable tbody tr:hover td {
+  background: #f7f9fc;
+}
+
+.plazaRank {
+  font-weight: 700;
+  color: var(--text-muted, #6b7b94) !important;
+  font-size: 0.76rem;
+  min-width: 28px;
+}
+
+.plazaNum {
+  text-align: right !important;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---------- View-all events/holidays table ---------- */
+/* Events need more room than the plaza list: 5 columns + long concert titles */
+.impactModal {
+  width: min(94vw, 760px);
+}
+
+.eventName {
+  max-width: 300px;
+  overflow-wrap: break-word;
+  line-height: 1.35;
+}
+
+.clickableRow { cursor: pointer; }
+.clickableRow:hover td { background: #f0f3f8; }
+
+/* Deviation colors mirror the impact chart: above baseline = orange, below = blue */
+.devPos { color: #c85a38; font-weight: 600; }
+.devNeg { color: #3e67ef; font-weight: 600; }
+
+/* Mobile: stack everything */
+@media (max-width: 980px) {
+  .filterRow { flex-wrap: wrap; position: static; margin: 0; padding: 0; }
+  .kpiRow { grid-template-columns: repeat(2, 1fr); }
+
+  .chart1, .chart2, .chart3, .chart4, .chart5 {
+    grid-column: 1 / -1;
+  }
+}

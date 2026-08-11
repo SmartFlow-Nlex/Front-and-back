@@ -33,11 +33,11 @@ type ModelMeta = {
 // Ranked best → worst. Each model owns a distinct hue so several can share the
 // chart at once without the reader having to guess which line is which.
 const MODELS: ModelMeta[] = [
-  { key: "LSTM", label: "LSTM", note: "Rank #1", accepted: true, color: "#16a34a", rmse: "2,475", mae: "1,931", wmape: "3.85%", r2: "0.9911" },
-  { key: "Prophet", label: "Prophet", note: "Rank #2", accepted: true, color: "#f59e0b", rmse: "4,378", mae: "3,432", wmape: "6.84%", r2: "0.9725" },
-  { key: "HoltWinters", label: "Holt-Winters", note: "Rejected", accepted: false, color: "#8b5cf6", rmse: "312,178", mae: "264,098", wmape: "34.10%", r2: "-0.5590" },
-  { key: "SARIMAX", label: "SARIMAX", note: "Rejected", accepted: false, color: "#ef4444", rmse: "485,700", mae: "421,761", wmape: "64.97%", r2: "-1.2412" },
-  { key: "HoltsLinear", label: "Holts Linear", note: "Rejected", accepted: false, color: "#db2777", rmse: "612,210", mae: "539,351", wmape: "76.45%", r2: "-2.8960" },
+  { key: "LSTM", label: "LSTM", note: "Rank #1", accepted: true, color: "#16a34a", rmse: "6,317.96", mae: "4,423.75", wmape: "6.76%", r2: "0.9734" },
+  { key: "Prophet", label: "Prophet", note: "Rank #2", accepted: true, color: "#f59e0b", rmse: "15,909.76", mae: "11,666.76", wmape: "17.96%", r2: "0.8284" },
+  { key: "HoltWinters", label: "Holt-Winters", note: "Rejected", accepted: false, color: "#8b5cf6", rmse: "70,704.43", mae: "62,589.34", wmape: "94.70%", r2: "-3.5637" },
+  { key: "SARIMAX", label: "SARIMAX", note: "Rejected", accepted: false, color: "#ef4444", rmse: "130,329.14", mae: "112,243.97", wmape: "168.81%", r2: "-12.4108" },
+  { key: "HoltsLinear", label: "Holts Linear", note: "Rejected", accepted: false, color: "#db2777", rmse: "16,027,577.98", mae: "13,882,240.23", wmape: "22512.97%", r2: "-566627.48" },
 ];
 
 const META = Object.fromEntries(MODELS.map((m) => [m.key, m])) as Record<ModelType, ModelMeta>;
@@ -76,6 +76,8 @@ type ForecastRow = {
   pred_holts_linear: number | null;
   is_holdout: boolean;
   is_future: boolean;
+  weather_rainfall: number | null;
+  weather_temp: number | null;
 };
 
 type ChartData = {
@@ -85,6 +87,8 @@ type ChartData = {
   models: Record<ModelType, (number | null)[]>;
   holdoutStart: number;
   futureStart: number;
+  rainfall: (number | null)[];
+  temperature: (number | null)[];
 };
 
 /** Reads the day's shape off whichever series exists — actuals when observed,
@@ -115,6 +119,7 @@ export default function PredictiveVolumeChart({ months = "all", from, to, weathe
   const [chartData, setChartData] = useState<ChartData | null>(null);
   const [metricsMeta, setMetricsMeta] = useState<Record<ModelType, ModelMeta>>(META);
   const [showAllMetrics, setShowAllMetrics] = useState(false);
+  const [showWeather, setShowWeather] = useState(true);
 
   // Drill-down: which day is expanded to its 24-hour breakdown
   const [drillDate, setDrillDate] = useState<string | null>(null);
@@ -144,11 +149,15 @@ export default function PredictiveVolumeChart({ months = "all", from, to, weathe
         } else {
           qs.set("months", months);
         }
+        if (weather && weather !== "all") {
+          qs.set("weather", weather);
+        }
         const res = await fetch(`http://localhost:4000/api/traffic/forecast?${qs}`);
         const json = await res.json();
         if (cancelled || !json.success || !json.data.volumes) return;
 
         const rows = json.data.volumes as ForecastRow[];
+
         const models: Record<ModelType, (number | null)[]> = {
           LSTM: [], Prophet: [], HoltWinters: [], SARIMAX: [], HoltsLinear: [],
         };
@@ -164,7 +173,7 @@ export default function PredictiveVolumeChart({ months = "all", from, to, weathe
         // Zone boundaries come from the data itself — hardcoded indices break
         // the moment the walk-forward window is re-run with a different split.
         const holdoutStart = rows.findIndex((v) => v.is_holdout);
-                const futureStart = rows.findIndex((v) => v.is_future);
+        const futureStart = rows.findIndex((v) => v.is_future);
 
         if (json.data.metrics) {
           setMetricsMeta(prev => {
@@ -206,6 +215,8 @@ export default function PredictiveVolumeChart({ months = "all", from, to, weathe
           models,
           holdoutStart: holdoutStart === -1 ? rows.length : holdoutStart,
           futureStart: futureStart === -1 ? rows.length : futureStart,
+          rainfall: rows.map((v) => v.weather_rainfall != null ? Number(v.weather_rainfall) : null),
+          temperature: rows.map((v) => v.weather_temp != null ? Number(v.weather_temp) : null),
         });
       } catch (err) {
         console.error("Failed to fetch ML forecast", err);
@@ -215,7 +226,7 @@ export default function PredictiveVolumeChart({ months = "all", from, to, weathe
     return () => {
       cancelled = true;
     };
-  }, [months, from, to]);
+  }, [months, from, to, weather]);
 
   // Pull the 24-hour breakdown for every selected model whenever a day is open.
   useEffect(() => {
@@ -377,7 +388,7 @@ export default function PredictiveVolumeChart({ months = "all", from, to, weathe
     );
   }
 
-  const { dates, isoDates, baseActual, models, holdoutStart, futureStart } = chartData;
+  const { dates, isoDates, baseActual, models, holdoutStart, futureStart, rainfall, temperature } = chartData;
   const drillIndex = drillDate ? isoDates.indexOf(drillDate) : -1;
   const drillLabel = drillIndex >= 0 ? dates[drillIndex] : drillDate ?? "";
 
@@ -399,21 +410,64 @@ export default function PredictiveVolumeChart({ months = "all", from, to, weathe
     formatter: text,
   });
 
+  // Weather overlay series (only when toggled on)
+  const weatherSeries: any[] = showWeather ? [
+    {
+      name: "Rainfall (mm)",
+      type: "bar",
+      yAxisIndex: 1,
+      data: rainfall,
+      barMaxWidth: 16,
+      z: 2,
+      itemStyle: {
+        color: "rgba(56, 189, 248, 0.35)",
+        borderColor: "#0284c7",
+        borderWidth: 1,
+        borderRadius: [3, 3, 0, 0],
+      },
+    },
+    {
+      name: "Temperature (\u00B0C)",
+      type: "line",
+      yAxisIndex: 2,
+      data: temperature,
+      smooth: true,
+      connectNulls: true,
+      symbol: "circle",
+      symbolSize: 4,
+      lineStyle: { width: 2, color: "#f97316", type: "dashed" as const },
+      itemStyle: { color: "#f97316" },
+      z: 2,
+    },
+  ] : [];
+
   const dailyOption: EChartsOption = {
-    grid: { left: 80, right: 24, top: 28, bottom: 76 },
+    grid: { left: 80, right: showWeather ? 80 : 24, top: 28, bottom: 76 },
     tooltip: {
       trigger: "axis",
       formatter: (params: unknown) => {
         const items = params as { name: string; marker: string; seriesName: string; value: number | null }[];
         let tip = `<b>${items[0].name}</b><br/>`;
         items.forEach((p) => {
-          if (p.value != null) tip += `${p.marker} ${p.seriesName}: <b>${fmtVeh(Number(p.value))}</b><br/>`;
+          if (p.value != null) {
+            if (p.seriesName === "Rainfall (mm)") {
+              tip += `${p.marker} ${p.seriesName}: <b>${Number(p.value).toFixed(1)} mm</b><br/>`;
+            } else if (p.seriesName === "Temperature (\u00B0C)") {
+              tip += `${p.marker} ${p.seriesName}: <b>${Number(p.value).toFixed(1)}\u00B0C</b><br/>`;
+            } else {
+              tip += `${p.marker} ${p.seriesName}: <b>${fmtVeh(Number(p.value))}</b><br/>`;
+            }
+          }
         });
         return `${tip}<span style="color:#94a3b8;font-size:11px">Click to view hourly</span>`;
       },
     },
     legend: {
-      data: ["Actual Volume", ...selected.map((k) => `${metricsMeta[k].label} Prediction`)],
+      data: [
+        "Actual Volume",
+        ...selected.map((k) => `${metricsMeta[k].label} Prediction`),
+        ...(showWeather ? ["Rainfall (mm)", "Temperature (\u00B0C)"] : []),
+      ],
       bottom: 0,
       icon: "circle",
       itemGap: 16,
@@ -422,24 +476,45 @@ export default function PredictiveVolumeChart({ months = "all", from, to, weathe
     xAxis: {
       type: "category",
       data: dates,
-      // Labels are click targets too — a wider hit area than the line symbols
       triggerEvent: true,
       axisLabel: { color: "#64748b" },
       axisLine: { lineStyle: { color: "#cbd5e1" } },
     },
-    yAxis: {
-      type: "value",
-      name: "Total Vehicle Volume",
-      nameLocation: "middle",
-      nameGap: 60,
-      axisLabel: { color: "#64748b", formatter: (val: number) => `${(val / 1000).toFixed(0)}k` },
-      splitLine: { lineStyle: { color: "#e2e8f0", type: "dashed" } },
-      scale: true,
-    },
+    yAxis: [
+      {
+        type: "value",
+        name: "Total Vehicle Volume",
+        nameLocation: "middle",
+        nameGap: 60,
+        axisLabel: { color: "#64748b", formatter: (val: number) => `${(val / 1000).toFixed(0)}k` },
+        splitLine: { lineStyle: { color: "#e2e8f0", type: "dashed" } },
+        scale: true,
+      },
+      {
+        type: "value",
+        name: showWeather ? "Rainfall (mm)" : "",
+        nameLocation: "middle",
+        nameGap: 50,
+        nameTextStyle: { color: "#0284c7", fontSize: 11, fontWeight: "bold" },
+        position: "right",
+        axisLabel: { show: showWeather, color: "#0284c7", formatter: (val: number) => `${val.toFixed(0)}` },
+        axisLine: { show: showWeather, lineStyle: { color: "#0284c7" } },
+        splitLine: { show: false },
+        min: 0,
+        max: (value: { max: number }) => Math.max(Math.ceil(value.max * 2.5), 100),
+      },
+      {
+        type: "value",
+        show: false,
+        min: 15,
+        max: 45,
+      },
+    ],
     series: [
       {
         name: "Actual Volume",
         type: "line",
+        yAxisIndex: 0,
         data: baseActual,
         smooth: true,
         connectNulls: true,
@@ -449,8 +524,6 @@ export default function PredictiveVolumeChart({ months = "all", from, to, weathe
         lineStyle: { width: 2.5, color: ACTUAL_COLOR },
         itemStyle: { color: ACTUAL_COLOR },
         emphasis: { scale: 2.2 },
-        // Zones ride on the ground-truth series so they stay put no matter
-        // which models are toggled on.
         markArea: {
           silent: true,
           data: [
@@ -470,6 +543,7 @@ export default function PredictiveVolumeChart({ months = "all", from, to, weathe
       ...selected.map((key) => ({
         name: `${metricsMeta[key].label} Prediction`,
         type: "line" as const,
+        yAxisIndex: 0,
         data: models[key],
         smooth: true,
         connectNulls: true,
@@ -479,6 +553,7 @@ export default function PredictiveVolumeChart({ months = "all", from, to, weathe
         itemStyle: { color: metricsMeta[key].color },
         emphasis: { scale: 2.2 },
       })),
+      ...weatherSeries,
     ],
   };
 
@@ -487,16 +562,54 @@ export default function PredictiveVolumeChart({ months = "all", from, to, weathe
   const hourLabels = Array.from({ length: 24 }, (_, h) => fmtHour(h));
   const hasActualHours = Boolean(anyHourly?.hours.some((h) => h.actual != null));
 
+  const hourlyWeatherSeries: any[] = (showWeather && anyHourly) ? [
+    {
+      name: "Rainfall (mm)",
+      type: "bar",
+      yAxisIndex: 1,
+      data: anyHourly.hours.map((h) => h.rainfall != null ? h.rainfall : null),
+      barMaxWidth: 16,
+      z: 2,
+      itemStyle: {
+        color: "rgba(56, 189, 248, 0.35)",
+        borderColor: "#0284c7",
+        borderWidth: 1,
+        borderRadius: [3, 3, 0, 0],
+      },
+    },
+    {
+      name: "Temperature (\u00B0C)",
+      type: "line",
+      yAxisIndex: 2,
+      data: anyHourly.hours.map((h) => h.temperature != null ? h.temperature : null),
+      smooth: true,
+      connectNulls: true,
+      symbol: "circle",
+      symbolSize: 4,
+      lineStyle: { width: 2, color: "#f97316", type: "dashed" as const },
+      itemStyle: { color: "#f97316" },
+      z: 2,
+    },
+  ] : [];
+
   const hourlyOption: EChartsOption | null = anyHourly
     ? {
-        grid: { left: 80, right: 24, top: 28, bottom: 84 },
+        grid: { left: 80, right: showWeather ? 80 : 24, top: 28, bottom: 84 },
         tooltip: {
           trigger: "axis",
           formatter: (params: unknown) => {
             const items = params as { name: string; marker: string; seriesName: string; value: number | null }[];
             let tip = `<b>${items[0].name}</b><br/>`;
             items.forEach((p) => {
-              if (p.value != null) tip += `${p.marker} ${p.seriesName}: <b>${fmtVeh(Number(p.value))}</b><br/>`;
+              if (p.value != null) {
+                if (p.seriesName === "Rainfall (mm)") {
+                  tip += `${p.marker} ${p.seriesName}: <b>${Number(p.value).toFixed(1)} mm</b><br/>`;
+                } else if (p.seriesName === "Temperature (\u00B0C)") {
+                  tip += `${p.marker} ${p.seriesName}: <b>${Number(p.value).toFixed(1)}\u00B0C</b><br/>`;
+                } else {
+                  tip += `${p.marker} ${p.seriesName}: <b>${fmtVeh(Number(p.value))}</b><br/>`;
+                }
+              }
             });
             return tip;
           },
@@ -505,6 +618,7 @@ export default function PredictiveVolumeChart({ months = "all", from, to, weathe
           data: [
             ...(hasActualHours ? ["Actual Volume"] : []),
             ...selected.filter((k) => hourlyByModel[k]?.hours.some((h) => h.predicted != null)).map((k) => `${metricsMeta[k].label} Prediction`),
+            ...(showWeather ? ["Rainfall (mm)", "Temperature (\u00B0C)"] : []),
           ],
           bottom: 0,
           icon: "circle",
@@ -517,20 +631,42 @@ export default function PredictiveVolumeChart({ months = "all", from, to, weathe
           axisLabel: { color: "#64748b", interval: 1, rotate: 45 },
           axisLine: { lineStyle: { color: "#cbd5e1" } },
         },
-        yAxis: {
-          type: "value",
-          name: "Vehicle Volume",
-          nameLocation: "middle",
-          nameGap: 60,
-          axisLabel: { color: "#64748b", formatter: (val: number) => `${(val / 1000).toFixed(0)}k` },
-          splitLine: { lineStyle: { color: "#e2e8f0", type: "dashed" } },
-        },
+        yAxis: [
+          {
+            type: "value",
+            name: "Vehicle Volume",
+            nameLocation: "middle",
+            nameGap: 60,
+            axisLabel: { color: "#64748b", formatter: (val: number) => `${(val / 1000).toFixed(0)}k` },
+            splitLine: { lineStyle: { color: "#e2e8f0", type: "dashed" } },
+          },
+          {
+            type: "value",
+            name: showWeather ? "Rainfall (mm)" : "",
+            nameLocation: "middle",
+            nameGap: 50,
+            nameTextStyle: { color: "#0284c7", fontSize: 11, fontWeight: "bold" },
+            position: "right",
+            axisLabel: { show: showWeather, color: "#0284c7", formatter: (val: number) => `${val.toFixed(0)}` },
+            axisLine: { show: showWeather, lineStyle: { color: "#0284c7" } },
+            splitLine: { show: false },
+            min: 0,
+            max: (value: { max: number }) => Math.max(Math.ceil(value.max * 2.5), 10),
+          },
+          {
+            type: "value",
+            show: false,
+            min: 15,
+            max: 45,
+          },
+        ],
         series: [
           ...(hasActualHours
             ? [
                 {
                   name: "Actual Volume",
                   type: "bar" as const,
+                  yAxisIndex: 0,
                   data: anyHourly.hours.map((h) => h.actual),
                   itemStyle: { color: ACTUAL_COLOR, borderRadius: [4, 4, 0, 0] as [number, number, number, number] },
                   barMaxWidth: 26,
@@ -543,14 +679,16 @@ export default function PredictiveVolumeChart({ months = "all", from, to, weathe
             .map((k) => ({
               name: `${metricsMeta[k].label} Prediction`,
               type: "line" as const,
+              yAxisIndex: 0,
               data: hourlyByModel[k]!.hours.map((h) => h.predicted),
               smooth: true,
               symbol: "circle",
               symbolSize: 5,
-              z: 2,
+              z: 3,
               lineStyle: { width: 2.2, color: metricsMeta[k].color },
               itemStyle: { color: metricsMeta[k].color },
             })),
+          ...hourlyWeatherSeries,
         ],
       }
     : null;
@@ -598,7 +736,32 @@ export default function PredictiveVolumeChart({ months = "all", from, to, weathe
           </button>
         </div>
 
-        {modelToolbar}
+        <div style={{ display: "flex", alignItems: "center", gap: "12px", flexWrap: "wrap" }}>
+          {modelToolbar}
+          <button
+            onClick={() => setShowWeather(!showWeather)}
+            style={{
+              display: "inline-flex", alignItems: "center", gap: "6px", padding: "5px 14px",
+              borderRadius: "999px", border: "1px solid #dce2ef",
+              fontSize: "0.76rem", fontWeight: 600, cursor: "pointer", transition: "all 0.15s",
+              background: showWeather ? "linear-gradient(135deg, #38bdf8, #0ea5e9)" : "var(--bg-surface, #fff)",
+              color: showWeather ? "#fff" : "var(--text-secondary, #4b5e7d)",
+              boxShadow: showWeather ? "0 1px 6px rgba(56,189,248,0.35)" : "none",
+            }}
+          >
+            {showWeather ? (
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" style={{ marginRight: 2 }}>
+                <path d="M12 2v2m0 16v2M4 12H2m20 0h-2m-2.93-7.07l-1.41 1.41m-9.32 9.32l-1.41 1.41m0-12.14l1.41 1.41m9.32 9.32l1.41 1.41M17 12a5 5 0 11-10 0 5 5 0 0110 0z" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+              </svg>
+            ) : (
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" style={{ marginRight: 2 }}>
+                <path d="M12 2v2m0 16v2M4 12H2m20 0h-2" stroke="currentColor" strokeWidth="2" />
+                <circle cx="12" cy="12" r="4" stroke="currentColor" strokeWidth="2" />
+              </svg>
+            )}
+            Weather
+          </button>
+        </div>
 
         {hourlyLoading && !anyHourly ? (
           <div style={{ height: "420px", display: "grid", placeItems: "center", color: "#64748b" }}>Loading hourly breakdown…</div>
@@ -652,7 +815,32 @@ export default function PredictiveVolumeChart({ months = "all", from, to, weathe
             Click any point to view that day&apos;s hourly breakdown · Toggle models to overlay predictions
           </p>
         </div>
-        {modelToolbar}
+        <div style={{ display: "flex", alignItems: "center", gap: "12px", flexWrap: "wrap" }}>
+          {modelToolbar}
+          <button
+            onClick={() => setShowWeather(!showWeather)}
+            style={{
+              display: "inline-flex", alignItems: "center", gap: "6px", padding: "5px 14px",
+              borderRadius: "999px", border: "1px solid #dce2ef",
+              fontSize: "0.76rem", fontWeight: 600, cursor: "pointer", transition: "all 0.15s",
+              background: showWeather ? "linear-gradient(135deg, #38bdf8, #0ea5e9)" : "var(--bg-surface, #fff)",
+              color: showWeather ? "#fff" : "var(--text-secondary, #4b5e7d)",
+              boxShadow: showWeather ? "0 1px 6px rgba(56,189,248,0.35)" : "none",
+            }}
+          >
+            {showWeather ? (
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" style={{ marginRight: 2 }}>
+                <path d="M12 2v2m0 16v2M4 12H2m20 0h-2m-2.93-7.07l-1.41 1.41m-9.32 9.32l-1.41 1.41m0-12.14l1.41 1.41m9.32 9.32l1.41 1.41M17 12a5 5 0 11-10 0 5 5 0 0110 0z" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+              </svg>
+            ) : (
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" style={{ marginRight: 2 }}>
+                <path d="M12 2v2m0 16v2M4 12H2m20 0h-2" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+                <circle cx="12" cy="12" r="4" stroke="currentColor" strokeWidth="2" />
+              </svg>
+            )}
+            Weather
+          </button>
+        </div>
       </div>
 
       <div style={{ height: "450px", width: "100%", cursor: "pointer" }}>

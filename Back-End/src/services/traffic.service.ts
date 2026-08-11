@@ -310,9 +310,16 @@ export async function getMLModelMetrics(target?: string) {
     return null;
   }
 }
+type ForecastWindow = {
+  months?: "3" | "12" | "all" | string;
+  from?: string;
+  to?: string;
+  weather?: "all" | "dry" | "wet" | string;
+};
+
 export async function getMLPredictiveVolume(window: ForecastWindow = {}) {
   if (!db) return null;
-  const cols = `forecast_date as "date", actual_volume, pred_lstm, pred_prophet, pred_xgboost, pred_holtwinters, pred_sarimax, pred_holts_linear, is_holdout, is_future`;
+  const cols = `forecast_date as "date", actual_volume, pred_lstm, pred_prophet, pred_xgboost, pred_holtwinters, pred_sarimax, pred_holts_linear, is_holdout, is_future, weather_rainfall, weather_temp`;
   try {
     // An explicit from/to wins; otherwise months trims back from the newest
     // forecast date the table holds.
@@ -452,6 +459,19 @@ const MODEL_COLUMN: Record<string, string> = {
   HoltsLinear: "pred_holts_linear"
 };
 
+export type HourlyForecastPoint = { hour: number; actual: number | null; predicted: number | null; rainfall?: number | null; temperature?: number | null };
+export type HourlyForecastResult = {
+  date: string;
+  weekday: string;
+  isFuture: boolean;
+  dayActual: number | null;
+  dayPredicted: number | null;
+  profileSource: "observed" | "weekday-profile" | null;
+  weather: "all" | "dry" | "wet";
+  observedHours: number;
+  hours: HourlyForecastPoint[];
+};
+
 export async function getMLPredictiveVolumeHourly(
   date: string,
   model = "LSTM",
@@ -473,7 +493,7 @@ export async function getMLPredictiveVolumeHourly(
   )`;
 
   try {
-    const [dayRes, actualRes, profileRes] = await Promise.all([
+    const [dayRes, actualRes, profileRes, weatherRes] = await Promise.all([
       // The day's totals as the models see them
       db.query(
         `SELECT forecast_date::text AS date, actual_volume, ${column} AS predicted, is_future
@@ -508,6 +528,16 @@ export async function getMLPredictiveVolumeHourly(
          GROUP BY 1 ORDER BY 1`,
         [date]
       ),
+      // Hourly weather metrics (rainfall and temp) for this date
+      db.query(
+        `SELECT EXTRACT(hour FROM timestamp_utc + interval '8 hours')::int AS hour,
+                AVG(rainfall)::float AS rainfall,
+                AVG(temperature)::float AS temperature
+         FROM hourly_weather
+         WHERE (timestamp_utc + interval '8 hours')::date = $1::date
+         GROUP BY 1 ORDER BY 1`,
+        [date]
+      ),
     ]);
 
     const day = dayRes.rows[0] as
@@ -518,6 +548,12 @@ export async function getMLPredictiveVolumeHourly(
     const actualByHour = new Map<number, number>(
       actualRes.rows.map((r: { hour: number; v: string }) => [Number(r.hour), Number(r.v)])
     );
+    const weatherByHour = new Map<number, { rainfall: number; temperature: number }>(
+      weatherRes.rows.map((r: { hour: number; rainfall: number; temperature: number }) => [
+        Number(r.hour),
+        { rainfall: Number(r.rainfall || 0), temperature: Number(r.temperature || 0) }
+      ])
+    );
     const profile = profileRes.rows.map((r: { hour: number; v: number }) => Number(r.v));
     const profileTotal = profile.reduce((s, v) => s + v, 0);
 
@@ -525,13 +561,16 @@ export async function getMLPredictiveVolumeHourly(
     const hasActualHours = actualByHour.size > 0;
     const canShapePrediction = dayPredicted != null && profileTotal > 0 && profile.length === 24;
 
-    const hours: HourlyForecastPoint[] = Array.from({ length: 24 }, (_, h) => ({
-      hour: h,
-      // With a weather filter on, hours that don't match are absent rather
-      // than zero — a zero bar would read as "no traffic".
-      actual: !hasActualHours ? null : wetFilter === null ? actualByHour.get(h) ?? 0 : actualByHour.get(h) ?? null,
-      predicted: canShapePrediction ? Math.round((profile[h] / profileTotal) * dayPredicted) : null,
-    }));
+    const hours: HourlyForecastPoint[] = Array.from({ length: 24 }, (_, h) => {
+      const wx = weatherByHour.get(h);
+      return {
+        hour: h,
+        actual: !hasActualHours ? null : wetFilter === null ? actualByHour.get(h) ?? 0 : actualByHour.get(h) ?? null,
+        predicted: canShapePrediction ? Math.round((profile[h] / profileTotal) * dayPredicted) : null,
+        rainfall: wx ? wx.rainfall : null,
+        temperature: wx ? wx.temperature : null,
+      };
+    });
 
     return {
       date: day.date,

@@ -1,0 +1,29 @@
+node_modules
+**/node_modules
+.next
+**/.next
+out
+**/out
+dist
+**/dist
+coverage
+**/coverage
+.DS_Store
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+*.tsbuildinfo
+# Env files.
+# Committed:  Front-End-Dashboard/.env  — NEXT_PUBLIC_* values only. These are
+#             compiled into the browser bundle and are public by definition, so
+#             tracking them costs nothing and saves every teammate a setup step.
+# Ignored:    anything holding real server-side secrets (DB URLs, API keys with
+#             write access). Those are shared out-of-band, never committed.
+.env*.local
+Back-End/.env
+Back-End/.env.*
+!Back-End/.env.example
+
+# Local backups taken before a merge — not part of the project.
+.merge-backup/

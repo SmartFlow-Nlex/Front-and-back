@@ -308,7 +308,8 @@ export async function getWeatherCorrelationFromDb() {
 // [ML-01] Get Predictive Incident Forecast from Database
 //
 // Three tables, written together by the incident forecasting pipeline
-// (Back-End/incident_model_scripts/run_predictive_pipeline.py), unqualified —
+// (Back-End/incident_model_scripts/train_incident_models.py --write-db; the
+// older run_predictive_pipeline.py is the single-model fallback), unqualified —
 // they live in the default/public schema, not gold like the traffic ML tables:
 //   ml_daily_actuals(d date, total float)                     — observed daily incident counts
 //   ml_predictive_incidents(forecast_date date, prediction_type
@@ -345,6 +346,14 @@ type PredictiveIncidentRow = {
   rainfall_mm: string | number | null;
 } & Partial<Record<(typeof INCIDENT_MODELS)[number]["column"], string | number | null>>;
 
+export type IncidentPredictiveFilters = {
+  // Absent = keep the chart's original fixed context width (PAST_CONTEXT_DAYS).
+  months?: "3" | "12" | "all";
+  from?: string;
+  to?: string;
+  weather: IncidentWeather;
+};
+
 export type IncidentPredictiveResult = {
   summary: {
     totalPredictedNext7Days: number;
@@ -360,6 +369,10 @@ export type IncidentPredictiveResult = {
     // Rain (mm) for this date, aligned with the forecast so the chart can
     // overlay rainfall and incident count on the same timeline.
     rainfallMm: number | null;
+    // Whether this day counts as wet under the same rule the descriptive tab
+    // uses for hours (expressway-average rainfall > 0.3 mm), so both tabs
+    // agree on what "Wet" selects.
+    isWet: boolean | null;
     // One entry per candidate that has stored predictions, so the chart can
     // overlay several at once the way the traffic chart does.
     models: Record<string, number | null>;
@@ -389,13 +402,50 @@ export type IncidentPredictiveResult = {
     // the reported R² came from the ten days on screen.
     scoredDays: number | null;
   };
+  // Accuracy recomputed over just the wet (or just the dry) days of the
+  // validation window. null when weather=all, since modelMetrics already covers
+  // that case. Computed here rather than in the pipeline because the split is a
+  // view the user chooses, not a property of the trained model.
+  weatherMetrics: {
+    weather: IncidentWeather;
+    days: number;
+    models: { model: string; MAE: number; RMSE: number; R2: number | null; isChampion: boolean }[];
+  } | null;
+  // What the filter strip resolved to, so the UI can caption the chart with the
+  // window actually drawn instead of restating the button the user pressed.
+  appliedFilters: {
+    months: "3" | "12" | "all" | null;
+    weather: IncidentWeather;
+    contextFrom: string | null;
+    contextTo: string | null;
+  };
 };
 
-// Chart geometry, matched to the traffic walk-forward chart (Past 40 / Present 10
-// / Future 15) so the two forecasts read as one family. Shipping all ~6.5 years of
-// actuals made the response ~170 KB and squeezed 2,400 points into one line, which
-// hid the validation and forecast windows entirely.
+// A day is wet when the expressway-wide average rainfall across its hours clears
+// 0.3 mm — the same threshold getIncidentAnalyticsFromDb applies per hour, just
+// aggregated to a day so it can align with the daily forecast series. Averaging
+// matters: hourly_weather carries ~20 station rows per hour, so SUM would report
+// 20x the real depth (the pipeline's own rainfall_mm column has that flaw).
+const DAILY_WET_SQL = `
+  SELECT (timestamp_utc + interval '8 hours')::date::text AS date,
+         AVG(rainfall) > 0.3 AS is_wet
+  FROM hourly_weather
+  GROUP BY 1
+`;
+
+const MONTHS_TO_CONTEXT_DAYS: Record<"3" | "12", number> = { "3": 90, "12": 365 };
+
+// Fallback context width when no Range is supplied, matched to the traffic
+// walk-forward chart (Past 40 / Present 10 / Future 15) so the two forecasts read
+// as one family. Shipping all ~6.5 years of actuals made the response ~170 KB and
+// squeezed 2,400 points into one line, which hid the validation and forecast
+// windows entirely — which is why "All" is still capped below.
 const PAST_CONTEXT_DAYS = 40;
+
+// Ceiling on the "All" range. 2,400 daily points in one line is unreadable and
+// pushes the payload past ~170 KB; three years keeps every annual cycle the
+// model's yoy features lean on while staying legible.
+const MAX_CONTEXT_DAYS = 1095;
 
 // The model is SCORED on the full validation window — 90 days, recorded in
 // ml_training_metadata.evaluation.holdout_days — because R² cannot be estimated
@@ -405,11 +455,15 @@ const PAST_CONTEXT_DAYS = 40;
 // from this array.
 const DISPLAY_VALIDATION_DAYS = 10;
 
+const DEFAULT_PREDICTIVE_FILTERS: IncidentPredictiveFilters = { weather: "all" };
+
 export function buildIncidentPredictiveResponse(
   actuals: DailyActualRow[],
   predictions: PredictiveIncidentRow[],
   metadata: Record<string, unknown>,
-  trainedAt: string | Date | null
+  trainedAt: string | Date | null,
+  filters: IncidentPredictiveFilters = DEFAULT_PREDICTIVE_FILTERS,
+  wetByDate: Map<string, boolean> = new Map()
 ): IncidentPredictiveResult {
   const actualByDate = new Map(actuals.map((r) => [r.date, Number(r.total)]));
   const predByDate = new Map(predictions.map((r) => [r.date, r]));
@@ -435,6 +489,7 @@ export function buildIncidentPredictiveResponse(
       sameDayLastYear:
         pred?.same_day_last_year != null ? Number(pred.same_day_last_year) : null,
       rainfallMm: pred?.rainfall_mm != null ? Number(pred.rainfall_mm) : null,
+      isWet: wetByDate.has(date) ? wetByDate.get(date)! : null,
       models,
     };
   });
@@ -464,11 +519,32 @@ export function buildIncidentPredictiveResponse(
       : row
   );
 
-  const windowStart =
-    presentStart < 0
-      ? Math.max(0, shaped.length - PAST_CONTEXT_DAYS)
-      : Math.max(0, presentStart - PAST_CONTEXT_DAYS);
-  const daily = shaped.slice(windowStart);
+  // How much observed history to draw behind the Present band. An explicit
+  // from/to wins; otherwise Range maps to a day count. The forecast bands are
+  // never trimmed — a range narrower than the validation window would otherwise
+  // hide the thing the tab exists to show.
+  const contextDays =
+    filters.months === undefined
+      ? PAST_CONTEXT_DAYS
+      : filters.months === "all"
+        ? MAX_CONTEXT_DAYS
+        : MONTHS_TO_CONTEXT_DAYS[filters.months] ?? PAST_CONTEXT_DAYS;
+  const anchor = presentStart < 0 ? shaped.length : presentStart;
+  let windowStart = Math.max(0, anchor - contextDays);
+  if (filters.from) {
+    const fromIdx = shaped.findIndex((r) => r.date >= filters.from!);
+    if (fromIdx >= 0) windowStart = Math.min(fromIdx, anchor);
+  }
+  let windowEnd = shaped.length;
+  if (filters.to) {
+    const toIdx = shaped.findIndex((r) => r.date > filters.to!);
+    // Only honour `to` when it falls past the forecast bands. A custom range
+    // ending before them would otherwise slice the validation and future windows
+    // off the response entirely — an empty forecast on the forecast tab. Trimming
+    // history is the useful half of `to`; hiding the prediction is not.
+    if (toIdx > anchor) windowEnd = toIdx;
+  }
+  const daily = shaped.slice(windowStart, windowEnd);
 
   const futurePreds = predictions.filter((p) => p.prediction_type === "future");
   const totalPredictedNext7Days = futurePreds.reduce((sum, p) => sum + Number(p.predicted_incident_count), 0);
@@ -478,8 +554,11 @@ export function buildIncidentPredictiveResponse(
   );
   const championModel = predictions.find((p) => p.champion_model)?.champion_model ?? (metadata.champion_model as string | undefined) ?? null;
 
-  // The pipeline's own comparison table, reshaped for the UI. Ranked by R² to
-  // match the champion criterion recorded in evaluation.selected_by.
+  // The pipeline's own comparison table, reshaped for the UI. Ranked by the
+  // criterion that actually picked the champion (evaluation.selected_by), not
+  // always R² — with selected_by="mae" a hardcoded R² sort put the champion
+  // second, under a model that lost on the criterion in use.
+  const selectedBy = (metadata.evaluation as { selected_by?: string } | undefined)?.selected_by;
   const rawComparison =
     (metadata.model_comparison as Record<string, unknown>[] | undefined) ?? [];
   const numOrNull = (v: unknown) => (typeof v === "number" && Number.isFinite(v) ? v : null);
@@ -497,7 +576,53 @@ export function buildIncidentPredictiveResponse(
       Diagnosis: typeof r.Diagnosis === "string" ? r.Diagnosis : null,
       isChampion: String(r.model) === championModel,
     }))
-    .sort((a, b) => (b.R2 ?? -Infinity) - (a.R2 ?? -Infinity));
+    .sort((a, b) =>
+      selectedBy === "mae"
+        ? (a.MAE ?? Infinity) - (b.MAE ?? Infinity)
+        : (b.R2 ?? -Infinity) - (a.R2 ?? -Infinity)
+    );
+
+  // Weather split, scored over the FULL validation window rather than the days
+  // the chart happens to draw — the answer to "does the forecast hold up in the
+  // rain?" needs every scored day it can get, and there are only ~23 wet ones.
+  const weatherMetrics =
+    filters.weather === "all"
+      ? null
+      : (() => {
+          const wantWet = filters.weather === "wet";
+          const rows = predictions.filter(
+            (p) =>
+              p.prediction_type === "validation" &&
+              wetByDate.get(p.date) === wantWet &&
+              actualByDate.has(p.date)
+          );
+          if (rows.length === 0) {
+            return { weather: filters.weather, days: 0, models: [] };
+          }
+          const truth = rows.map((p) => actualByDate.get(p.date)!);
+          const mean = truth.reduce((s, v) => s + v, 0) / truth.length;
+          const ssTot = truth.reduce((s, v) => s + (v - mean) ** 2, 0);
+          const models = availableModels
+            .map((m) => {
+              const pairs = rows
+                .map((p, i) => ({ y: truth[i], p: p[m.column] != null ? Number(p[m.column]) : null }))
+                .filter((x): x is { y: number; p: number } => x.p != null);
+              if (pairs.length === 0) return null;
+              const absErr = pairs.reduce((s, x) => s + Math.abs(x.y - x.p), 0);
+              const sqErr = pairs.reduce((s, x) => s + (x.y - x.p) ** 2, 0);
+              return {
+                model: m.key as string,
+                MAE: absErr / pairs.length,
+                RMSE: Math.sqrt(sqErr / pairs.length),
+                // Undefined when every actual in the subset is identical.
+                R2: ssTot > 0 ? 1 - sqErr / ssTot : null,
+                isChampion: m.key === championModel,
+              };
+            })
+            .filter((r): r is NonNullable<typeof r> => r !== null)
+            .sort((a, b) => a.MAE - b.MAE);
+          return { weather: filters.weather, days: rows.length, models };
+        })();
 
   return {
     summary: {
@@ -516,10 +641,19 @@ export function buildIncidentPredictiveResponse(
       scoredDays:
         (metadata.evaluation as { holdout_days?: number } | undefined)?.holdout_days ?? null,
     },
+    weatherMetrics,
+    appliedFilters: {
+      months: filters.months ?? null,
+      weather: filters.weather,
+      contextFrom: daily[0]?.date ?? null,
+      contextTo: daily[daily.length - 1]?.date ?? null,
+    },
   };
 }
 
-export async function getIncidentPredictiveFromDb(): Promise<IncidentPredictiveResult | null> {
+export async function getIncidentPredictiveFromDb(
+  filters: IncidentPredictiveFilters = DEFAULT_PREDICTIVE_FILTERS
+): Promise<IncidentPredictiveResult | null> {
   if (!db) return null;
   try {
     const metaRes = await db.query(
@@ -527,16 +661,25 @@ export async function getIncidentPredictiveFromDb(): Promise<IncidentPredictiveR
     );
     if (metaRes.rows.length === 0) return null;
 
-    const [actualsRes, predsRes] = await Promise.all([
+    const [actualsRes, predsRes, wetRes] = await Promise.all([
       db.query<DailyActualRow>(`SELECT d::text AS date, total FROM ml_daily_actuals ORDER BY d ASC`),
       db.query<PredictiveIncidentRow>(
         `SELECT forecast_date::text AS date, prediction_type, predicted_incident_count, champion_model,
                 same_day_last_year, rainfall_mm, ${INCIDENT_MODELS.map((m) => m.column).join(", ")}
          FROM ml_predictive_incidents ORDER BY forecast_date ASC`
       ),
+      db.query<{ date: string; is_wet: boolean }>(DAILY_WET_SQL),
     ]);
 
-    return buildIncidentPredictiveResponse(actualsRes.rows, predsRes.rows, metaRes.rows[0].metadata_json ?? {}, metaRes.rows[0].created_at);
+    const wetByDate = new Map(wetRes.rows.map((r) => [r.date, r.is_wet]));
+    return buildIncidentPredictiveResponse(
+      actualsRes.rows,
+      predsRes.rows,
+      metaRes.rows[0].metadata_json ?? {},
+      metaRes.rows[0].created_at,
+      filters,
+      wetByDate
+    );
   } catch (error) {
     console.error("Failed to fetch ML incident forecast:", error);
     return null;

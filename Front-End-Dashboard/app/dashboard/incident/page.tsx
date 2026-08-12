@@ -536,12 +536,63 @@ export default function IncidentPage() {
 
   const kpiValue = (v: string | null) => (loading && !data ? "…" : v ?? "—");
 
+  // ---------- Global filter controls ----------
+  // Rendered on both the Descriptive shell and the Predictive one so the strip
+  // above the page means the same thing whichever tab is open. Defined once
+  // rather than duplicated, so a change to Range or Weather can't drift between
+  // the two branches.
+  const rangeFilter = (
+    <div className={styles.filterGroup}>
+      <svg width="15" height="15" viewBox="0 0 16 16" fill="none" style={{ color: "var(--text-muted)" }}><rect x="2" y="2" width="12" height="12" rx="3" stroke="currentColor" strokeWidth="1.4" /><path d="M2 6h12" stroke="currentColor" strokeWidth="1.4" /><path d="M5.5 2V4M10.5 2V4" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" /></svg>
+      <span className={styles.filterLabel}>Range</span>
+      <div className={styles.segmented}>
+        {(["3", "12", "all", "custom"] as const).map((m) => (
+          <button key={m} className={rangeMode === m ? "active" : ""} onClick={() => setRangeMode(m)}>
+            {rangeMode === m && <svg width="12" height="12" viewBox="0 0 16 16" fill="none" style={{ marginRight: 4, marginBottom: -1 }}><path d="M3.5 8.5l3 3 6-7" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" /></svg>}
+            {m === "3" ? "3 mo" : m === "12" ? "12 mo" : m === "all" ? "All" : "Custom"}
+          </button>
+        ))}
+      </div>
+      {rangeMode === "custom" && (
+        <DateRangePicker
+          startDate={customFrom}
+          endDate={customTo}
+          onChange={(start, end) => {
+            setCustomFrom(start);
+            setCustomTo(end);
+          }}
+        />
+      )}
+    </div>
+  );
+
+  const weatherFilter = (
+    <div className={styles.filterGroup}>
+      <svg width="15" height="15" viewBox="0 0 16 16" fill="none" style={{ color: "var(--text-muted)" }}><path d="M4.5 11.5a3 3 0 1 1 .4-5.97 4 4 0 0 1 7.75 1.1A2.5 2.5 0 0 1 12 11.5H4.5z" stroke="currentColor" strokeWidth="1.4" strokeLinejoin="round" /><path d="M6 13.2v1M9 13.2v1M12 13.2v1" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" /></svg>
+      <span className={styles.filterLabel}>Weather</span>
+      <div className={styles.segmented}>
+        {(["all", "dry", "wet"] as const).map((w) => (
+          <button key={w} className={weather === w ? "active" : ""} onClick={() => setWeather(w)}>
+            {weather === w && <svg width="12" height="12" viewBox="0 0 16 16" fill="none" style={{ marginRight: 4, marginBottom: -1 }}><path d="M3.5 8.5l3 3 6-7" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" /></svg>}
+            {w === "all" ? "All" : w === "dry" ? "Dry" : "Wet"}
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+
   // ---------- Predictive / Prescriptive share the same shell ----------
   if (activeTab !== "Descriptive") {
     return (
       <section className={styles.page}>
         <PageHeader icon={AlertTriangle} title="Incident Overview" subtitle="Road crashes, hazards, and response patterns across NLEX" />
         <div className={styles.filterRow}>
+          {activeTab === "Predictive" && (
+            <>
+              {rangeFilter}
+              {weatherFilter}
+            </>
+          )}
           {activeTab === "Prescriptive" && <span className={styles.filterLabel}>Recommended resource allocation</span>}
           <span className={styles.spacer} />
           <div className={styles.modeTabs}>
@@ -554,7 +605,12 @@ export default function IncidentPage() {
           </div>
         </div>
         {activeTab === "Predictive" ? (
-          <div className={styles.spanFull}><PredictiveIncidentChart /></div>
+          // Filters above are display-only on this tab for now — the chart keeps
+          // its original fixed window. Pass months/from/to/weather through to
+          // wire them up; the API and the component already accept them.
+          <div className={styles.spanFull}>
+            <PredictiveIncidentChart />
+          </div>
         ) : (
           <article className={`${styles.chartCard} ${styles.chart1}`}>
             <div className={styles.chartHead}>
@@ -577,41 +633,8 @@ export default function IncidentPage() {
 
       {/* Row A — global filters */}
       <div className={styles.filterRow}>
-        <div className={styles.filterGroup}>
-          <svg width="15" height="15" viewBox="0 0 16 16" fill="none" style={{ color: "var(--text-muted)" }}><rect x="2" y="2" width="12" height="12" rx="3" stroke="currentColor" strokeWidth="1.4" /><path d="M2 6h12" stroke="currentColor" strokeWidth="1.4" /><path d="M5.5 2V4M10.5 2V4" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" /></svg>
-          <span className={styles.filterLabel}>Range</span>
-          <div className={styles.segmented}>
-            {(["3", "12", "all", "custom"] as const).map((m) => (
-              <button key={m} className={rangeMode === m ? "active" : ""} onClick={() => setRangeMode(m)}>
-                {rangeMode === m && <svg width="12" height="12" viewBox="0 0 16 16" fill="none" style={{ marginRight: 4, marginBottom: -1 }}><path d="M3.5 8.5l3 3 6-7" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" /></svg>}
-                {m === "3" ? "3 mo" : m === "12" ? "12 mo" : m === "all" ? "All" : "Custom"}
-              </button>
-            ))}
-          </div>
-          {rangeMode === "custom" && (
-            <DateRangePicker
-              startDate={customFrom}
-              endDate={customTo}
-              onChange={(start, end) => {
-                setCustomFrom(start);
-                setCustomTo(end);
-              }}
-            />
-          )}
-        </div>
-
-        <div className={styles.filterGroup}>
-          <svg width="15" height="15" viewBox="0 0 16 16" fill="none" style={{ color: "var(--text-muted)" }}><path d="M4.5 11.5a3 3 0 1 1 .4-5.97 4 4 0 0 1 7.75 1.1A2.5 2.5 0 0 1 12 11.5H4.5z" stroke="currentColor" strokeWidth="1.4" strokeLinejoin="round" /><path d="M6 13.2v1M9 13.2v1M12 13.2v1" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" /></svg>
-          <span className={styles.filterLabel}>Weather</span>
-          <div className={styles.segmented}>
-            {(["all", "dry", "wet"] as const).map((w) => (
-              <button key={w} className={weather === w ? "active" : ""} onClick={() => setWeather(w)}>
-                {weather === w && <svg width="12" height="12" viewBox="0 0 16 16" fill="none" style={{ marginRight: 4, marginBottom: -1 }}><path d="M3.5 8.5l3 3 6-7" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" /></svg>}
-                {w === "all" ? "All" : w === "dry" ? "Dry" : "Wet"}
-              </button>
-            ))}
-          </div>
-        </div>
+        {rangeFilter}
+        {weatherFilter}
 
         {loading && data && <span className={styles.updating}>Updating…</span>}
         <span className={styles.spacer} />

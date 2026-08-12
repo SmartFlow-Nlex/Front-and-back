@@ -620,7 +620,15 @@ def format_report(comparison: list[dict], champion: str, degraded: bool, evaluat
     L.append(f"  Selected by   : {evaluation['selected_by']}")
     L.append("")
 
-    ranked = sorted(comparison, key=lambda r: (r.get("R2") is None, -(r.get("R2") or -1e9)))
+    # Rank by whichever criterion actually picked the champion. Ranking by R2
+    # while selecting by MAE printed the champion at #2, under a model that lost
+    # on the criterion in use — which reads as though the wrong model won.
+    def rank_key(r: dict):
+        if evaluation.get("selected_by") == "mae":
+            return r["MAE"] if r.get("MAE") is not None else float("inf")
+        return -(r["R2"] if r.get("R2") is not None else -1e9)
+
+    ranked = sorted(comparison, key=rank_key)
     for i, r in enumerate(ranked, 1):
         tag = "[SELECTED]" if r["model"] == champion else f"[RANK #{i}]"
         L.append(f"  {tag} {DISPLAY_NAME.get(r['model'], r['model'])}")

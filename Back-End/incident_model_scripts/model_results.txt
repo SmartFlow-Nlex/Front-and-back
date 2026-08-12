@@ -7,28 +7,9 @@
   Protocol      : holdout (90-day window)
   Holdout window: 2026-04-27 .. 2026-07-25
   Train rows    : 1942
-  Selected by   : r2
+  Selected by   : mae
 
-  [SELECTED] XGBoost
-  ------------------------------------------------------------
-    MAE              =       6.1489
-    MSE              =      59.9508
-    RMSE             =       7.7428
-    MAPE             =      25.4949 %
-    sMAPE            =      22.0883 %
-    WMAPE            =      21.2602 %
-    Poisson_Deviance =       2.1183
-    MASE             =       0.7398
-    RMSSE            =       0.7377
-    R2               =       0.2936
-    Adjusted_R2      =       0.1504
-    --- Split R2 (Adviser Diagnostic) ---
-    Train R2         =       0.6806
-    Val R2           =       0.2936
-    Gap              =       0.3870
-    DIAGNOSIS        = OVERFITTING
-
-  [RANK #2] Poisson GLM
+  [SELECTED] Poisson GLM
   ------------------------------------------------------------
     MAE              =       6.0471
     MSE              =      60.2613
@@ -47,7 +28,7 @@
     Gap              =       0.0727
     DIAGNOSIS        = JUST RIGHT
 
-  [RANK #3] Negative Binomial GLM
+  [RANK #2] Negative Binomial GLM
   ------------------------------------------------------------
     MAE              =       6.0667
     MSE              =      60.3286
@@ -65,6 +46,25 @@
     Val R2           =       0.2892
     Gap              =       0.0723
     DIAGNOSIS        = JUST RIGHT
+
+  [RANK #3] XGBoost
+  ------------------------------------------------------------
+    MAE              =       6.1489
+    MSE              =      59.9508
+    RMSE             =       7.7428
+    MAPE             =      25.4949 %
+    sMAPE            =      22.0883 %
+    WMAPE            =      21.2602 %
+    Poisson_Deviance =       2.1183
+    MASE             =       0.7398
+    RMSSE            =       0.7377
+    R2               =       0.2936
+    Adjusted_R2      =       0.1504
+    --- Split R2 (Adviser Diagnostic) ---
+    Train R2         =       0.6806
+    Val R2           =       0.2936
+    Gap              =       0.3870
+    DIAGNOSIS        = OVERFITTING
 
   [RANK #4] Random Forest
   ------------------------------------------------------------
@@ -125,19 +125,19 @@
 
   [RANK #7] SARIMAX
   ------------------------------------------------------------
-    MAE              =       8.1219
-    MSE              =     103.9881
-    RMSE             =      10.1975
-    MAPE             =      26.8723 %
-    sMAPE            =      30.3673 %
-    WMAPE            =      28.0818 %
-    Poisson_Deviance =       3.9595
-    MASE             =       0.9772
-    RMSSE            =       0.9715
-    R2               =      -0.2252
-    Adjusted_R2      =      -0.4736
+    MAE              =       8.0903
+    MSE              =     103.2951
+    RMSE             =      10.1634
+    MAPE             =      26.7873 %
+    sMAPE            =      30.2284 %
+    WMAPE            =      27.9726 %
+    Poisson_Deviance =       3.9296
+    MASE             =       0.9734
+    RMSSE            =       0.9683
+    R2               =      -0.2171
+    Adjusted_R2      =      -0.4638
     --- Split R2 (Adviser Diagnostic) ---
-    Train R2         =       0.1861
-    Val R2           =      -0.2252
-    Gap              =       0.4114
+    Train R2         =       0.1863
+    Val R2           =      -0.2171
+    Gap              =       0.4034
     DIAGNOSIS        = OVERFITTING

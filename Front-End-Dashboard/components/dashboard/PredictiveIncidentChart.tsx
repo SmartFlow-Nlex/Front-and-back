@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { EChartsOption } from "echarts";
 import DashboardChart from "./DashboardChart";
 
@@ -75,6 +75,26 @@ type PredictiveData = {
     metrics: Record<string, unknown> | null;
     scoredDays: number | null;
   };
+  weatherMetrics: {
+    weather: "all" | "dry" | "wet";
+    days: number;
+    models: { model: string; MAE: number; RMSE: number; R2: number | null; isChampion: boolean }[];
+  } | null;
+  appliedFilters: {
+    months: "3" | "12" | "all";
+    weather: "all" | "dry" | "wet";
+    contextFrom: string | null;
+    contextTo: string | null;
+  };
+};
+
+// Driven by the Range/Weather strip on the incident page so the Predictive tab
+// answers to the same controls the Descriptive tab does.
+type Props = {
+  months?: "3" | "12" | "all";
+  from?: string;
+  to?: string;
+  weather?: "all" | "dry" | "wet";
 };
 
 const fmtInt = (n: number) => Math.round(n).toLocaleString("en-US");
@@ -91,13 +111,18 @@ const zoneLabel = (text: string) => ({
   formatter: text,
 });
 
-export default function PredictiveIncidentChart() {
+// No defaults: with nothing passed the component sends no query params, so the
+// API returns the same fixed-window payload it always did and the chart keeps
+// its original shape.
+export default function PredictiveIncidentChart({ months, from, to, weather }: Props = {}) {
   const [data, setData] = useState<PredictiveData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   // Several models can be on screen at once; the list never empties so the
   // chart always has something to compare the ground truth against.
   const [selected, setSelected] = useState<ModelKey[]>([]);
+  // Guards the one-time "open on the champion" default against filter refetches.
+  const seededRef = useRef(false);
 
   const toggleModel = useCallback((key: ModelKey) => {
     setSelected((prev) => {
@@ -112,7 +137,16 @@ export default function PredictiveIncidentChart() {
     setLoading(true);
     setError(null);
 
-    fetch(`${BACKEND}/api/incident/predictive`, { cache: "no-store" })
+    const qs = new URLSearchParams();
+    if (months) qs.set("months", months);
+    if (weather) qs.set("weather", weather);
+    if (from) qs.set("from", from);
+    if (to) qs.set("to", to);
+    const url = qs.size > 0
+      ? `${BACKEND}/api/incident/predictive?${qs}`
+      : `${BACKEND}/api/incident/predictive`;
+
+    fetch(url, { cache: "no-store" })
       .then(async (res) => {
         const json = await res.json();
         if (cancelled) return;
@@ -122,9 +156,14 @@ export default function PredictiveIncidentChart() {
         if (!json.success) throw new Error(json.message ?? "Request failed");
         const payload = json.data as PredictiveData;
         setData(payload);
-        // Open on the champion so the default view matches the headline metrics.
-        const champ = MODELS.find((m) => m.key === payload.summary.championModel)?.key;
-        setSelected([champ ?? MODELS[0].key]);
+        // Open on the champion so the default view matches the headline metrics,
+        // but only on first load — re-seeding on every filter change would throw
+        // away a model comparison the user had set up.
+        if (!seededRef.current) {
+          const champ = MODELS.find((m) => m.key === payload.summary.championModel)?.key;
+          setSelected([champ ?? MODELS[0].key]);
+          seededRef.current = true;
+        }
       })
       .catch((e) => {
         if (!cancelled) setError(e instanceof Error ? e.message : "Failed to load predictive forecast");
@@ -136,9 +175,12 @@ export default function PredictiveIncidentChart() {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [months, from, to, weather]);
 
-  if (loading) {
+  // Only blank the card on the very first load. Changing Range or Weather
+  // refetches, and swapping the whole chart out for a spinner each time made the
+  // filter strip feel like it was resetting the page.
+  if (loading && !data) {
     return (
       <article className="chart-card wide" style={{ height: "480px", padding: "20px", display: "grid", placeItems: "center" }}>
         <div style={{ color: "#64748b" }}>Loading ML forecast from AWS…</div>
@@ -355,12 +397,6 @@ export default function PredictiveIncidentChart() {
         <h4 style={{ margin: 0, fontSize: "0.95rem", color: "#334155", fontWeight: 600 }}>
           Real-World ML Validation Metrics
         </h4>
-        {modelInfo.scoredDays != null && (
-          <span style={{ fontSize: "0.72rem", color: "#94a3b8" }}>
-            Scored on a {modelInfo.scoredDays}-day holdout
-            {shownMetrics.length > 1 ? " · ranked by R²" : ""}
-          </span>
-        )}
       </div>
       <div style={{ overflowX: "auto" }}>
         <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "0.85rem", minWidth: "560px" }}>
@@ -403,6 +439,66 @@ export default function PredictiveIncidentChart() {
     </div>
   );
 
+  // Weather split. The pipeline scores every model over the whole holdout; this
+  // re-scores it over only the wet (or only the dry) days of that same window,
+  // which is the question the Weather control is really asking.
+  const wm = data.weatherMetrics;
+  const weatherPanel =
+    wm == null ? null : (
+      <div style={{ background: wm.weather === "wet" ? "#f0f9ff" : "#fffbeb", borderRadius: "8px", padding: "16px", border: `1px solid ${wm.weather === "wet" ? "#bae6fd" : "#fde68a"}` }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", flexWrap: "wrap", gap: "8px", marginBottom: "12px" }}>
+          <h4 style={{ margin: 0, fontSize: "0.95rem", color: "#334155", fontWeight: 600 }}>
+            Accuracy on {wm.weather === "wet" ? "wet" : "dry"} days only
+          </h4>
+          <span style={{ fontSize: "0.72rem", color: "#94a3b8" }}>
+            {wm.days} of {modelInfo.scoredDays ?? "—"} holdout days · wet = expressway-average rainfall &gt; 0.3 mm
+          </span>
+        </div>
+        {wm.days === 0 ? (
+          <div style={{ fontSize: "0.85rem", color: "#94a3b8" }}>
+            No {wm.weather} days in the scored window.
+          </div>
+        ) : (
+          <div style={{ overflowX: "auto" }}>
+            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "0.85rem", minWidth: "420px" }}>
+              <thead>
+                <tr style={{ textAlign: "left", color: "#64748b", fontSize: "0.72rem", textTransform: "uppercase", letterSpacing: "0.05em" }}>
+                  <th style={{ padding: "6px 10px", fontWeight: 600 }}>Model</th>
+                  <th style={th}>MAE</th>
+                  <th style={th}>RMSE</th>
+                  <th style={th}>R² Score</th>
+                </tr>
+              </thead>
+              <tbody>
+                {wm.models
+                  .filter((m) => activeModels.includes(m.model as ModelKey))
+                  .map((m) => {
+                    const meta = META[m.model as ModelKey];
+                    const color = meta?.color ?? "#64748b";
+                    return (
+                      <tr key={m.model} style={{ background: "#fff", borderTop: "1px solid #e2e8f0" }}>
+                        <td style={{ padding: "10px", fontWeight: 700, color: "#0f172a" }}>
+                          <span style={{ display: "inline-flex", alignItems: "center", gap: "8px" }}>
+                            <span style={{ width: 10, height: 10, borderRadius: "50%", background: color }} />
+                            {meta?.label ?? m.model}
+                            {m.isChampion && (
+                              <span style={{ fontSize: "0.72rem", fontWeight: 600, color: "#15803d" }}>Champion</span>
+                            )}
+                          </span>
+                        </td>
+                        <td style={td}>{fmtNum(m.MAE)}</td>
+                        <td style={td}>{fmtNum(m.RMSE)}</td>
+                        <td style={{ ...td, fontWeight: 700, color }}>{fmtNum(m.R2, 4)}</td>
+                      </tr>
+                    );
+                  })}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+    );
+
   return (
     <article className="chart-card wide" style={{ padding: "24px", display: "flex", flexDirection: "column", gap: "18px" }}>
       {/* Title and model chips share one row and only stack when the card is
@@ -421,6 +517,7 @@ export default function PredictiveIncidentChart() {
       </div>
 
       {metricsTable}
+      {weatherPanel}
     </article>
   );
 }

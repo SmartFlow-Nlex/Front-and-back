@@ -47,7 +47,7 @@ function createPool(): Pool | null {
     // RDS across the public internet is slower to hand out connections than a
     // local socket; the pg default of 0 (no timeout) makes a bad host hang the
     // request forever instead of surfacing an error.
-    connectionTimeoutMillis: 15_000,
+    connectionTimeoutMillis: 3_000,
     idleTimeoutMillis: 30_000,
     max: 10,
   });

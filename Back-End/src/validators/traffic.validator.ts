@@ -15,6 +15,7 @@ export const ForecastQuerySchema = z.object({
   months: z.enum(["3", "12", "all"]).optional().default("all"),
   from: isoDate.optional(), // custom window start — with `to`, overrides months
   to: isoDate.optional(),
+  weather: z.enum(["all", "dry", "wet"]).optional().default("all"),
 });
 
 export const HourlyForecastQuerySchema = z.object({

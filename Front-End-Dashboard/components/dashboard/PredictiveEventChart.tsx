@@ -4,8 +4,6 @@ import { useEffect, useMemo, useState } from "react";
 import type { EChartsOption } from "echarts";
 import DashboardChart from "./DashboardChart";
 
-const BACKEND = process.env.NEXT_PUBLIC_BACKEND_URL ?? "http://localhost:4000";
-
 type RawRow = {
   exit: string;
   event: string | null;
@@ -40,7 +38,7 @@ export default function PredictiveEventChart() {
 
   useEffect(() => {
     let cancelled = false;
-    fetch(`${BACKEND}/api/traffic/forecast`)
+    fetch("http://localhost:4000/api/traffic/forecast")
       .then((r) => r.json())
       .then((json) => {
         if (cancelled || !json.success || !json.data.events?.length) return;

@@ -319,7 +319,7 @@ type ForecastWindow = {
 
 export async function getMLPredictiveVolume(window: ForecastWindow = {}) {
   if (!db) return null;
-  const cols = `forecast_date as "date", actual_volume, pred_lstm, pred_prophet, pred_xgboost, pred_holtwinters, pred_sarimax, pred_holts_linear, is_holdout, is_future, weather_rainfall, weather_temp`;
+  const cols = `forecast_date as "date", actual_volume, pred_lstm, pred_prophet, pred_xgboost, pred_holtwinters, pred_sarimax, pred_holts_linear, is_holdout, is_future, weather_rainfall, weather_temp, pred_prophet_nw, pred_sarimax_nw, pred_lstm_nw`;
   try {
     // An explicit from/to wins; otherwise months trims back from the newest
     // forecast date the table holds.
@@ -334,9 +334,17 @@ export async function getMLPredictiveVolume(window: ForecastWindow = {}) {
     }
 
     if (window.months && window.months !== "all") {
+      // Anchor the window on the last OBSERVED day, not MAX(forecast_date) — the
+      // table now runs past the present into the projected FUTURE block, so
+      // anchoring on the max silently ate months of history off the left edge.
+      // Future rows sit beyond the anchor and are always kept, so "3 mo" reads as
+      // three months of history plus the projection rather than clipping it.
       const { rows } = await db.query(
         `SELECT ${cols} FROM gold.ml_predictive_volume
-         WHERE forecast_date >= (SELECT MAX(forecast_date) FROM gold.ml_predictive_volume) - ($1::int * interval '1 month')
+         WHERE forecast_date >= (
+                 SELECT MAX(forecast_date) FROM gold.ml_predictive_volume
+                 WHERE actual_volume IS NOT NULL
+               ) - ($1::int * interval '1 month')
          ORDER BY forecast_date ASC`,
         [Number(window.months)]
       );

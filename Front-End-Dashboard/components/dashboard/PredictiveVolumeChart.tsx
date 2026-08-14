@@ -32,16 +32,22 @@ type ModelMeta = {
 
 // Ranked best → worst. Each model owns a distinct hue so several can share the
 // chart at once without the reader having to guess which line is which.
+//
+// No numbers here — this is the pre-fetch/fetch-failed state. gold.ml_model_metrics
+// is the only source of truth for rank/wmape/etc; hardcoding a snapshot here has
+// twice gone stale silently and shown fabricated figures on screen when the API
+// call failed. "—" makes a missing fetch visibly missing instead of confidently wrong.
 const MODELS: ModelMeta[] = [
-  { key: "LSTM", label: "LSTM", note: "Rank #1", accepted: true, color: "#16a34a", rmse: "6,317.96", mae: "4,423.75", wmape: "6.76%", r2: "0.9734" },
-  { key: "Prophet", label: "Prophet", note: "Rank #2", accepted: true, color: "#f59e0b", rmse: "15,909.76", mae: "11,666.76", wmape: "17.96%", r2: "0.8284" },
-  { key: "HoltWinters", label: "Holt-Winters", note: "Rejected", accepted: false, color: "#8b5cf6", rmse: "70,704.43", mae: "62,589.34", wmape: "94.70%", r2: "-3.5637" },
-  { key: "SARIMAX", label: "SARIMAX", note: "Rejected", accepted: false, color: "#ef4444", rmse: "130,329.14", mae: "112,243.97", wmape: "168.81%", r2: "-12.4108" },
-  { key: "HoltsLinear", label: "Holts Linear", note: "Rejected", accepted: false, color: "#db2777", rmse: "16,027,577.98", mae: "13,882,240.23", wmape: "22512.97%", r2: "-566627.48" },
+  { key: "LSTM", label: "LSTM", note: "Loading…", accepted: false, color: "#16a34a", rmse: "—", mae: "—", wmape: "—", r2: "—" },
+  { key: "Prophet", label: "Prophet", note: "Loading…", accepted: false, color: "#f59e0b", rmse: "—", mae: "—", wmape: "—", r2: "—" },
+  { key: "HoltWinters", label: "Holt-Winters", note: "Loading…", accepted: false, color: "#8b5cf6", rmse: "—", mae: "—", wmape: "—", r2: "—" },
+  { key: "SARIMAX", label: "SARIMAX", note: "Loading…", accepted: false, color: "#ef4444", rmse: "—", mae: "—", wmape: "—", r2: "—" },
+  { key: "HoltsLinear", label: "Holts Linear", note: "Loading…", accepted: false, color: "#db2777", rmse: "—", mae: "—", wmape: "—", r2: "—" },
 ];
 
 const META = Object.fromEntries(MODELS.map((m) => [m.key, m])) as Record<ModelType, ModelMeta>;
 const ACTUAL_COLOR = "#2563eb";
+const VALIDATED_HORIZON = 14; // must match retrain_honest.py HORIZON
 
 // The API hands back a DATE column that pg has already localised, so read the
 // calendar parts back out in local time to recover the original YYYY-MM-DD.
@@ -53,7 +59,7 @@ const toIsoDate = (value: string) => {
 const fmtVeh = (n: number) => Math.round(n).toLocaleString("en-US");
 const fmtHour = (h: number) => (h === 0 ? "12 AM" : h < 12 ? `${h} AM` : h === 12 ? "12 PM" : `${h - 12} PM`);
 
-type HourlyPoint = { hour: number; actual: number | null; predicted: number | null };
+type HourlyPoint = { hour: number; actual: number | null; predicted: number | null; rainfall?: number | null; temperature?: number | null };
 type HourlyForecast = {
   date: string;
   weekday: string;
@@ -74,6 +80,11 @@ type ForecastRow = {
   pred_holtwinters: number | null;
   pred_sarimax: number | null;
   pred_holts_linear: number | null;
+  // Weather-free counterparts. Holt-Winters and Holts Linear are univariate, so
+  // they have no variant — their line is the same either way.
+  pred_prophet_nw: number | null;
+  pred_sarimax_nw: number | null;
+  pred_lstm_nw: number | null;
   is_holdout: boolean;
   is_future: boolean;
   weather_rainfall: number | null;
@@ -85,6 +96,7 @@ type ChartData = {
   isoDates: string[];
   baseActual: (number | null)[];
   models: Record<ModelType, (number | null)[]>;
+  modelsNoWeather: Record<ModelType, (number | null)[]>;
   holdoutStart: number;
   futureStart: number;
   rainfall: (number | null)[];
@@ -120,6 +132,17 @@ export default function PredictiveVolumeChart({ months = "all", from, to, weathe
   const [metricsMeta, setMetricsMeta] = useState<Record<ModelType, ModelMeta>>(META);
   const [showAllMetrics, setShowAllMetrics] = useState(false);
   const [showWeather, setShowWeather] = useState(true);
+
+  // How much of each zone to display, in days. These trim the view only — the
+  // scored window and the forecast horizon are fixed by the model run, so
+  // narrowing PAST here can never change a metric.
+  //
+  // Defaults: short Past (7d — just enough to see the training → scoring
+  // transition) and full Future (28d). This keeps all three zones visible while
+  // giving the forecast enough visual space to read individual days.
+  //   7 past + 84 present + 28 future = 119 days → future ≈ 24% of chart.
+  const [pastDays, setPastDays] = useState<number>(7);
+  const [futureDays, setFutureDays] = useState<number>(28);
 
   // Drill-down: which day is expanded to its 24-hour breakdown
   const [drillDate, setDrillDate] = useState<string | null>(null);
@@ -158,7 +181,13 @@ export default function PredictiveVolumeChart({ months = "all", from, to, weathe
 
         const rows = json.data.volumes as ForecastRow[];
 
+        // Both variants are kept in state so toggling Weather is instant and does
+        // not refetch. Prophet/SARIMAX/LSTM differ; the two univariate models
+        // reuse the same series because weather was never an input to them.
         const models: Record<ModelType, (number | null)[]> = {
+          LSTM: [], Prophet: [], HoltWinters: [], SARIMAX: [], HoltsLinear: [],
+        };
+        const modelsNoWeather: Record<ModelType, (number | null)[]> = {
           LSTM: [], Prophet: [], HoltWinters: [], SARIMAX: [], HoltsLinear: [],
         };
 
@@ -168,6 +197,12 @@ export default function PredictiveVolumeChart({ months = "all", from, to, weathe
           models.HoltWinters.push(v.pred_holtwinters);
           models.SARIMAX.push(v.pred_sarimax);
           models.HoltsLinear.push(v.pred_holts_linear);
+
+          modelsNoWeather.LSTM.push(v.pred_lstm_nw ?? v.pred_lstm);
+          modelsNoWeather.Prophet.push(v.pred_prophet_nw ?? v.pred_prophet);
+          modelsNoWeather.SARIMAX.push(v.pred_sarimax_nw ?? v.pred_sarimax);
+          modelsNoWeather.HoltWinters.push(v.pred_holtwinters);
+          modelsNoWeather.HoltsLinear.push(v.pred_holts_linear);
         });
 
         // Zone boundaries come from the data itself — hardcoded indices break
@@ -213,6 +248,7 @@ export default function PredictiveVolumeChart({ months = "all", from, to, weathe
           isoDates: rows.map((v) => toIsoDate(v.date)),
           baseActual: rows.map((v) => v.actual_volume),
           models,
+          modelsNoWeather,
           holdoutStart: holdoutStart === -1 ? rows.length : holdoutStart,
           futureStart: futureStart === -1 ? rows.length : futureStart,
           rainfall: rows.map((v) => v.weather_rainfall != null ? Number(v.weather_rainfall) : null),
@@ -388,7 +424,26 @@ export default function PredictiveVolumeChart({ months = "all", from, to, weathe
     );
   }
 
-  const { dates, isoDates, baseActual, models, holdoutStart, futureStart, rainfall, temperature } = chartData;
+  // Weather ON => the weather-driven forecasts; OFF => the weather-free controls.
+  // The toggle therefore changes the prediction itself, not just the overlay.
+  const rawModels = showWeather ? chartData.models : chartData.modelsNoWeather;
+
+  // Trim to the requested zone widths. Slicing every series by the same window
+  // keeps the zone boundaries aligned with the data after the cut.
+  // All three zones (Past · Present · Future) are always fully visible.
+  const lo = Math.max(0, chartData.holdoutStart - pastDays);
+  const hi = Math.min(chartData.dates.length, chartData.futureStart + futureDays);
+  const cut = <T,>(a: T[]) => a.slice(lo, hi);
+
+  const dates = cut(chartData.dates);
+  const isoDates = cut(chartData.isoDates);
+  const baseActual = cut(chartData.baseActual);
+  const rainfall = cut(chartData.rainfall);
+  const holdoutStart = chartData.holdoutStart - lo;
+  const futureStart = chartData.futureStart - lo;
+  const models = Object.fromEntries(
+    (Object.keys(rawModels) as ModelType[]).map((k) => [k, cut(rawModels[k])])
+  ) as Record<ModelType, (number | null)[]>;
   const drillIndex = drillDate ? isoDates.indexOf(drillDate) : -1;
   const drillLabel = drillIndex >= 0 ? dates[drillIndex] : drillDate ?? "";
 
@@ -410,34 +465,32 @@ export default function PredictiveVolumeChart({ months = "all", from, to, weathe
     formatter: text,
   });
 
-  // Weather overlay series (only when toggled on)
+  // Weather overlay (only when toggled on). Temperature was dropped: it carries
+  // almost no signal here (Pearson r = -0.06 against volume) and a second axis
+  // for it made the chart harder to read than it was worth.
+  //
+  // Rainfall is shaded by intensity so the bars read as a weather condition at a
+  // glance rather than as anonymous blue blocks. Thresholds follow PAGASA's
+  // rainfall advisory bands.
+  const RAIN_BANDS = [
+    { max: 7.5, label: "Light", color: "rgba(56, 189, 248, 0.45)" },
+    { max: 15, label: "Moderate", color: "rgba(14, 165, 233, 0.65)" },
+    { max: 30, label: "Heavy", color: "rgba(2, 132, 199, 0.8)" },
+    { max: Infinity, label: "Intense", color: "rgba(30, 64, 175, 0.9)" },
+  ];
+  const rainBand = (mm: number) => RAIN_BANDS.find((b) => mm < b.max) ?? RAIN_BANDS[RAIN_BANDS.length - 1];
+
   const weatherSeries: any[] = showWeather ? [
     {
       name: "Rainfall (mm)",
       type: "bar",
       yAxisIndex: 1,
-      data: rainfall,
+      data: rainfall.map((mm) =>
+        mm == null ? null : { value: mm, itemStyle: { color: rainBand(mm).color } }
+      ),
       barMaxWidth: 16,
       z: 2,
-      itemStyle: {
-        color: "rgba(56, 189, 248, 0.35)",
-        borderColor: "#0284c7",
-        borderWidth: 1,
-        borderRadius: [3, 3, 0, 0],
-      },
-    },
-    {
-      name: "Temperature (\u00B0C)",
-      type: "line",
-      yAxisIndex: 2,
-      data: temperature,
-      smooth: true,
-      connectNulls: true,
-      symbol: "circle",
-      symbolSize: 4,
-      lineStyle: { width: 2, color: "#f97316", type: "dashed" as const },
-      itemStyle: { color: "#f97316" },
-      z: 2,
+      itemStyle: { borderRadius: [3, 3, 0, 0] },
     },
   ] : [];
 
@@ -451,9 +504,10 @@ export default function PredictiveVolumeChart({ months = "all", from, to, weathe
         items.forEach((p) => {
           if (p.value != null) {
             if (p.seriesName === "Rainfall (mm)") {
-              tip += `${p.marker} ${p.seriesName}: <b>${Number(p.value).toFixed(1)} mm</b><br/>`;
-            } else if (p.seriesName === "Temperature (\u00B0C)") {
-              tip += `${p.marker} ${p.seriesName}: <b>${Number(p.value).toFixed(1)}\u00B0C</b><br/>`;
+              // Name the band as well as the number \u2014 "12.4 mm" means nothing to a
+              // reader who doesn't already know what counts as heavy rain here.
+              const mm = Number(p.value);
+              tip += `${p.marker} Rainfall: <b>${mm.toFixed(1)} mm</b> \u00B7 ${rainBand(mm).label}<br/>`;
             } else {
               tip += `${p.marker} ${p.seriesName}: <b>${fmtVeh(Number(p.value))}</b><br/>`;
             }
@@ -466,7 +520,7 @@ export default function PredictiveVolumeChart({ months = "all", from, to, weathe
       data: [
         "Actual Volume",
         ...selected.map((k) => `${metricsMeta[k].label} Prediction`),
-        ...(showWeather ? ["Rainfall (mm)", "Temperature (\u00B0C)"] : []),
+        ...(showWeather ? ["Rainfall (mm)"] : []),
       ],
       bottom: 0,
       icon: "circle",
@@ -492,7 +546,7 @@ export default function PredictiveVolumeChart({ months = "all", from, to, weathe
       },
       {
         type: "value",
-        name: showWeather ? "Rainfall (mm)" : "",
+        name: showWeather ? "Daily rainfall (mm)" : "",
         nameLocation: "middle",
         nameGap: 50,
         nameTextStyle: { color: "#0284c7", fontSize: 11, fontWeight: "bold" },
@@ -501,13 +555,9 @@ export default function PredictiveVolumeChart({ months = "all", from, to, weathe
         axisLine: { show: showWeather, lineStyle: { color: "#0284c7" } },
         splitLine: { show: false },
         min: 0,
-        max: (value: { max: number }) => Math.max(Math.ceil(value.max * 2.5), 100),
-      },
-      {
-        type: "value",
-        show: false,
-        min: 15,
-        max: 45,
+        // Add a small margin above the tallest bar so it doesn't touch the top,
+        // but keep the scale truthful — no 2.5× inflation.
+        max: (value: { max: number }) => Math.ceil(value.max * 1.2) || 10,
       },
     ],
     series: [
@@ -526,18 +576,43 @@ export default function PredictiveVolumeChart({ months = "all", from, to, weathe
         emphasis: { scale: 2.2 },
         markArea: {
           silent: true,
+          // A zone is only drawn when the data actually contains it. A run where
+          // every row is scored has no Future block; emitting one anyway leaves an
+          // undefined bound, and ECharts responds by dropping the whole series —
+          // the chart goes blank rather than losing just the shading.
           data: [
-            [{ xAxis: dates[0], itemStyle: { color: "rgba(37, 99, 235, 0.05)" }, label: zoneLabel("Past") }, { xAxis: dates[Math.max(holdoutStart - 1, 0)] }],
-            [{ xAxis: dates[holdoutStart], itemStyle: { color: "rgba(249, 115, 22, 0.08)" }, label: zoneLabel("Present") }, { xAxis: dates[Math.max(futureStart - 1, 0)] }],
-            [{ xAxis: dates[futureStart], itemStyle: { color: "rgba(22, 163, 74, 0.08)" }, label: zoneLabel("Future") }, { xAxis: dates[dates.length - 1] }],
-          ],
+            { name: "Past", from: 0, to: holdoutStart - 1, color: "rgba(37, 99, 235, 0.05)" },
+            { name: "Present", from: holdoutStart, to: futureStart - 1, color: "rgba(249, 115, 22, 0.08)" },
+            { name: "Future", from: futureStart, to: dates.length - 1, color: "rgba(22, 163, 74, 0.08)" },
+          ]
+            .filter((z) => z.from <= z.to && dates[z.from] != null && dates[z.to] != null)
+            .map((z) => [
+              { xAxis: dates[z.from], itemStyle: { color: z.color }, label: zoneLabel(z.name) },
+              { xAxis: dates[z.to] },
+            ]),
         },
         markLine: {
           silent: true,
           symbol: "none",
-          label: { show: false },
           lineStyle: { type: "dashed", color: "#94a3b8" },
-          data: [{ xAxis: dates[holdoutStart] }, { xAxis: dates[futureStart] }],
+          data: [
+            ...[holdoutStart, futureStart]
+              .filter((i) => dates[i] != null)
+              .map((i) => ({ xAxis: dates[i], label: { show: false } })),
+            // Where the validated horizon ends. Past this point the projection is
+            // extrapolation beyond anything that was measured, and saying so on the
+            // chart is more honest than a footnote nobody reads.
+            ...(dates[futureStart + VALIDATED_HORIZON] != null
+              ? [{
+                  xAxis: dates[futureStart + VALIDATED_HORIZON],
+                  lineStyle: { type: "dotted" as const, color: "#f59e0b", width: 2 },
+                  label: {
+                    show: true, position: "end" as const, formatter: "beyond validated 14d",
+                    color: "#b45309", fontSize: 10, fontWeight: 600 as const,
+                  },
+                }]
+              : []),
+          ],
         },
       },
       ...selected.map((key) => ({
@@ -843,9 +918,85 @@ export default function PredictiveVolumeChart({ months = "all", from, to, weathe
         </div>
       </div>
 
+      {/* Zone window controls. These change what is DRAWN, never what was scored —
+          the PRESENT band is fixed by the evaluation run, so it has no control. */}
+      <div style={{
+        display: "flex", alignItems: "center", gap: "20px", flexWrap: "wrap",
+        padding: "10px 14px", borderRadius: "10px", background: "#f8fafc",
+        border: "1px solid #e8edf5", fontSize: "0.76rem",
+      }}>
+        <span style={{ display: "inline-flex", alignItems: "center", gap: "8px" }}>
+          <span style={{ width: 10, height: 10, borderRadius: 2, background: "rgba(37,99,235,0.25)" }} />
+          <b style={{ color: "#0f172a" }}>Past</b>
+          {[14, 28, 90, 180, 365].map((d) => (
+            <button key={d} onClick={() => setPastDays(d)} style={{
+              padding: "3px 10px", borderRadius: "999px", cursor: "pointer",
+              border: pastDays === d ? "1px solid #2563eb" : "1px solid #dce2ef",
+              background: pastDays === d ? "#2563eb" : "#fff",
+              color: pastDays === d ? "#fff" : "#4b5e7d", fontWeight: 600, fontSize: "0.72rem",
+            }}>{d >= 365 ? "1 yr" : d >= 90 ? `${d / 30} mo` : `${d / 7} wk`}</button>
+          ))}
+        </span>
+
+        <span style={{ display: "inline-flex", alignItems: "center", gap: "8px" }}>
+          <span style={{ width: 10, height: 10, borderRadius: 2, background: "rgba(249,115,22,0.35)" }} />
+          <b style={{ color: "#0f172a" }}>Present</b>
+          <span style={{ color: "#64748b" }}>
+            {chartData.futureStart - chartData.holdoutStart}d scored · fixed by the evaluation
+          </span>
+        </span>
+
+        <span style={{ display: "inline-flex", alignItems: "center", gap: "8px" }}>
+          <span style={{ width: 10, height: 10, borderRadius: 2, background: "rgba(22,163,74,0.3)" }} />
+          <b style={{ color: "#0f172a" }}>Future</b>
+          {[14, 28].map((d) => (
+            <button key={d} onClick={() => setFutureDays(d)}
+              disabled={d > chartData.dates.length - chartData.futureStart}
+              style={{
+                padding: "3px 10px", borderRadius: "999px",
+                cursor: d > chartData.dates.length - chartData.futureStart ? "not-allowed" : "pointer",
+                border: futureDays === d ? "1px solid #16a34a" : "1px solid #dce2ef",
+                background: futureDays === d ? "#16a34a" : "#fff",
+                color: futureDays === d ? "#fff" : "#4b5e7d", fontWeight: 600, fontSize: "0.72rem",
+                opacity: d > chartData.dates.length - chartData.futureStart ? 0.4 : 1,
+              }}>{d / 7} wk</button>
+          ))}
+          <span style={{ color: "#64748b" }}>· validated at 14d</span>
+        </span>
+      </div>
+
       <div style={{ height: "450px", width: "100%", cursor: "pointer" }}>
         <DashboardChart option={dailyOption} height={450} onEvents={{ click: onChartClick as (p: never) => void }} />
       </div>
+
+      {/* Without this key the rainfall bars are anonymous blue blocks — a reader
+          has no way to tell a drizzle from a storm, or why they should care. */}
+      {showWeather && (
+        <div style={{
+          display: "flex", alignItems: "center", gap: "18px", flexWrap: "wrap",
+          padding: "10px 14px", borderRadius: "10px", background: "#f8fafc",
+          border: "1px solid #e8edf5", fontSize: "0.75rem", color: "#4b5e7d",
+        }}>
+          <span style={{ fontWeight: 700, color: "#0f172a" }}>Daily rainfall</span>
+          {RAIN_BANDS.map((b, i) => (
+            <span key={b.label} style={{ display: "inline-flex", alignItems: "center", gap: "6px" }}>
+              <span style={{
+                width: 14, height: 10, borderRadius: 2, background: b.color,
+                border: "1px solid rgba(2,132,199,0.5)", display: "inline-block",
+              }} />
+              {b.label}
+              <span style={{ color: "#94a3b8" }}>
+                {i === 0 ? `< ${b.max} mm`
+                  : b.max === Infinity ? `≥ ${RAIN_BANDS[i - 1].max} mm`
+                  : `${RAIN_BANDS[i - 1].max}–${b.max} mm`}
+              </span>
+            </span>
+          ))}
+          <span style={{ color: "#64748b", borderLeft: "1px solid #dbe3ef", paddingLeft: "14px" }}>
+            Taller bar = wetter day. Heavy rain typically coincides with lower traffic volume.
+          </span>
+        </div>
+      )}
 
       {metricsTable}
     </article>

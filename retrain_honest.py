@@ -49,10 +49,24 @@ POSTGRES_URL = os.environ.get(
 )
 
 # ─── Evaluation settings ──────────────────────────────
-HORIZON   = 7    # days forecast per origin — must match what the dashboard shows
-STEP      = 7    # days the origin advances between refits
-N_ORIGINS = 12   # rolling origins => 12 * 7 = 84 evaluation days
+# A 2-week operating horizon. STEP == HORIZON so the forecast blocks tile the
+# evaluation window without overlapping — every scored day is predicted exactly
+# once, at a known number of days ahead, which is what makes the week-1 vs week-2
+# error breakdown in STEP 3 meaningful.
+HORIZON   = 14   # days forecast per origin = what the dashboard's FUTURE shows
+STEP      = 14   # non-overlapping blocks
+N_ORIGINS = 6    # 6 * 14 = 84 evaluation days
 SEASON    = 7    # weekly seasonality
+# Project 28 days even though only 14 are validated. Days 1-14 carry the measured
+# h=14 accuracy; days 15-28 are extrapolation beyond it and the chart marks them
+# as such. Showing the extra fortnight makes the FUTURE block legible instead of
+# a sliver, without overstating what was actually tested.
+FUTURE_DAYS = 28
+# Days of history shown before the evaluation window. This is display context
+# only — none of it is scored — but it sets how much of the chart PRESENT
+# occupies. At CTX=40 the scored band swallowed half the plot and read as if
+# most of the chart were holdout; 240 puts it back to a ~24% validation strip.
+CTX = 240
 LSTM_SEQ  = 30
 LSTM_EPOCHS = 40
 
@@ -116,27 +130,27 @@ print(f"  Traffic : {len(traffic_df):>5} days  {traffic_df.ds.min().date()} -> {
 print(f"  Weather : {len(weather_df):>5} days  {weather_df.ds.min().date()} -> {weather_df.ds.max().date()}")
 print(f"  Rainfall: mean {weather_df.total_rain.mean():.1f} mm/day, max {weather_df.total_rain.max():.1f} mm/day")
 
-# Weather stops before traffic does. Modelling past that point would mean
-# imputing every exogenous value, so the joint window is the honest limit.
-joint_end = min(traffic_df.ds.max(), weather_df.ds.max())
-df = (
-    traffic_df.merge(weather_df, on="ds", how="inner")
-    .sort_values("ds")
-    .reset_index(drop=True)
-)
-df = df[df.ds <= joint_end].reset_index(drop=True)
+# Weather stops before traffic does. Rather than throw away the tail of the
+# traffic series, gaps are filled with day-of-year climatological normals — the
+# standard operational substitute when no observation or forecast exists. Every
+# such day is flagged so the disclosure can be exact rather than hand-waved.
+df = traffic_df.merge(weather_df, on="ds", how="left").sort_values("ds").reset_index(drop=True)
 
-if df[WEATHER_COLS].isna().any().any():
-    n_missing = int(df[WEATHER_COLS].isna().any(axis=1).sum())
-    print(f"  [!] {n_missing} days have partial weather; dropping them rather than imputing.")
-    df = df.dropna(subset=WEATHER_COLS).reset_index(drop=True)
+doy = df["ds"].dt.dayofyear
+clim_by_doy = df.groupby(doy)[WEATHER_COLS].transform("mean")
+df["weather_is_climatology"] = df[WEATHER_COLS].isna().any(axis=1)
+for c in WEATHER_COLS:
+    df[c] = df[c].fillna(clim_by_doy[c]).fillna(df[c].mean())
 
+n_clim = int(df["weather_is_climatology"].sum())
 print(f"  Joint   : {len(df):>5} days  {df.ds.min().date()} -> {df.ds.max().date()}")
+if n_clim:
+    first_clim = df.loc[df["weather_is_climatology"], "ds"].min().date()
+    print(f"  [!] {n_clim} days from {first_clim} use CLIMATOLOGICAL weather (no observation).")
+    print("      Metrics below are reported separately for observed-weather days.")
 
-if traffic_df.ds.max() > joint_end:
-    lost = (traffic_df.ds.max() - joint_end).days
-    print(f"  [!] {lost} days of traffic after {joint_end.date()} have NO weather data.")
-    print("      They are excluded. Any weather-based claim about that period is unsupported.")
+# Day-of-year normals, used to drive the FUTURE window where no weather exists.
+HIST_BY_DOY = df.groupby(df["ds"].dt.dayofyear)[WEATHER_COLS].mean()
 
 need = N_ORIGINS * STEP + LSTM_SEQ + 400
 if len(df) < need:
@@ -281,6 +295,56 @@ def m_lstm(train, h, future_weather):
     return scaler.inverse_transform(pad)[:, 0]
 
 
+def m_sarimax_nw(train, h):
+    """Same order, no exogenous weather — the control for 'does weather help?'"""
+    from statsmodels.tsa.statespace.sarimax import SARIMAX
+    fit = SARIMAX(
+        train["y"].values, order=(1, 1, 1), seasonal_order=(1, 1, 1, SEASON),
+        enforce_stationarity=False, enforce_invertibility=False,
+    ).fit(disp=False)
+    return np.asarray(fit.forecast(steps=h), dtype=float)
+
+
+def m_prophet_nw(train, h, future_df):
+    from prophet import Prophet
+    mdl = Prophet(weekly_seasonality=True, yearly_seasonality=True, daily_seasonality=False)
+    mdl.fit(train[["ds", "y"]])
+    return mdl.predict(future_df[["ds"]])["yhat"].values
+
+
+def m_lstm_nw(train, h):
+    """Volume only — no weather channel in the input window."""
+    from sklearn.preprocessing import MinMaxScaler
+    from tensorflow.keras.models import Sequential
+    from tensorflow.keras.layers import LSTM, Dense, Dropout
+
+    scaler = MinMaxScaler()
+    scaled = scaler.fit_transform(train[["y"]].values)
+    X, Y = [], []
+    for i in range(LSTM_SEQ, len(scaled)):
+        X.append(scaled[i - LSTM_SEQ:i])
+        Y.append(scaled[i, 0])
+    X, Y = np.array(X), np.array(Y)
+
+    mdl = Sequential([
+        LSTM(64, return_sequences=True, input_shape=(LSTM_SEQ, 1)),
+        Dropout(0.2), LSTM(32), Dropout(0.2), Dense(1),
+    ])
+    mdl.compile(optimizer="adam", loss="mse")
+    mdl.fit(X, Y, epochs=LSTM_EPOCHS, batch_size=32, verbose=0)
+
+    window = scaled[-LSTM_SEQ:].copy()
+    out = []
+    for _ in range(h):
+        p = float(mdl.predict(window[np.newaxis, ...], verbose=0)[0, 0])
+        out.append(p)
+        window = np.vstack([window[1:], [[p]]])
+    return scaler.inverse_transform(np.array(out).reshape(-1, 1))[:, 0]
+
+
+# Each weather-using model is paired with an identical weather-free control so the
+# dashboard's Weather toggle switches between two genuinely different forecasts,
+# and so "does weather actually help?" becomes a measured answer rather than a claim.
 MODELS = {
     "SeasonalNaive": lambda tr, h, fut: m_seasonal_naive(tr, h),
     "Climatology":   lambda tr, h, fut: m_climatology(tr, h, fut["ds"]),
@@ -289,7 +353,14 @@ MODELS = {
     "SARIMAX":       lambda tr, h, fut: m_sarimax(tr, h, fut[WEATHER_COLS].values),
     "Prophet":       lambda tr, h, fut: m_prophet(tr, h, fut[["ds"] + WEATHER_COLS]),
     "LSTM":          lambda tr, h, fut: m_lstm(tr, h, fut[WEATHER_COLS]),
+    "SARIMAX_nw":    lambda tr, h, fut: m_sarimax_nw(tr, h),
+    "Prophet_nw":    lambda tr, h, fut: m_prophet_nw(tr, h, fut),
+    "LSTM_nw":       lambda tr, h, fut: m_lstm_nw(tr, h),
 }
+
+# name -> (uses_weather, weather-free twin) for reporting and DB writes
+NO_WEATHER_TWIN = {"SARIMAX": "SARIMAX_nw", "Prophet": "Prophet_nw", "LSTM": "LSTM_nw"}
+BASELINES = ("SeasonalNaive", "Climatology")
 
 
 # ─────────────────────────────────────────────────────
@@ -303,6 +374,7 @@ print(f"  First origin: {df.ds.iloc[origins[0]].date()}   "
 print(f"  Every model refits at every origin and forecasts {HORIZON} days blind.\n")
 
 preds = {name: {} for name in MODELS}   # name -> {date: prediction}
+steps_ahead = {}                        # date -> 1..HORIZON, how far out it was
 failures = {name: [] for name in MODELS}
 
 for oi, cut in enumerate(origins, 1):
@@ -312,6 +384,9 @@ for oi, cut in enumerate(origins, 1):
         break
     print(f"  Origin {oi}/{N_ORIGINS}  train={len(train)}d  "
           f"predict {future.ds.iloc[0].date()} -> {future.ds.iloc[-1].date()}")
+
+    for k, d in enumerate(future.ds.values, start=1):
+        steps_ahead[pd.Timestamp(d)] = k
 
     for name, fn in MODELS.items():
         try:
@@ -361,12 +436,24 @@ base = min(
 )
 print(f"\n  Baseline to beat (best of naive/climatology): WMAPE {base:.2f}%")
 
-learned = res.drop(index=[i for i in ("SeasonalNaive", "Climatology") if i in res.index])
+learned = res.drop(index=[i for i in BASELINES if i in res.index])
 learned = learned.assign(
     accepted=(learned.wmape < base) & (learned.mase < 1.0) & learned.wmape.notna()
 )
 learned = learned.sort_values("wmape")
 learned["rank"] = range(1, len(learned) + 1)
+
+# Does weather actually improve each model? Now a measured delta, not an assertion.
+print("\n  DOES WEATHER HELP? (same model, same protocol, weather in vs out)")
+for wet, dry in NO_WEATHER_TWIN.items():
+    if wet in res.index and dry in res.index:
+        w, d = res.loc[wet, "wmape"], res.loc[dry, "wmape"]
+        if np.isfinite(w) and np.isfinite(d):
+            delta = d - w   # positive => weather version is better
+            verdict = (f"weather HELPS by {delta:+.2f} pts" if delta > 0.05
+                       else f"weather HURTS by {-delta:.2f} pts" if delta < -0.05
+                       else "no meaningful difference")
+            print(f"    {wet:<10} {w:6.2f}%   vs   no-weather {d:6.2f}%   -> {verdict}")
 
 print("\n  VERDICT")
 for name, r in learned.iterrows():
@@ -377,6 +464,30 @@ for name, r in learned.iterrows():
     else:
         verdict = "rejected — does not beat the baseline"
     print(f"    {name:<14} WMAPE {r.wmape:7.2f}%   MASE {r.mase:6.3f}   {verdict}")
+
+# Does accuracy decay as the forecast reaches further out? Splitting the scored
+# window by how many days ahead each prediction was made answers that directly.
+# Week 2 error should exceed week 1; if it doesn't, the model isn't really using
+# recent information and is closer to a seasonal average than a forecast.
+banner("STEP 3b: Does error grow with horizon? (week 1 vs week 2 ahead)")
+
+step_arr = np.array([steps_ahead.get(pd.Timestamp(d), 0) for d in eval_df.ds])
+wk1 = step_arr <= 7
+wk2 = (step_arr > 7) & (step_arr <= 14)
+print(f"  Week 1 = days 1-7 ahead ({wk1.sum()} days)   "
+      f"Week 2 = days 8-14 ahead ({wk2.sum()} days)\n")
+print(f"  {'model':<16}{'wk1 WMAPE':>11}{'wk2 WMAPE':>11}{'change':>12}")
+for name in MODELS:
+    yhat = np.array([preds[name].get(pd.Timestamp(d), np.nan) for d in eval_df.ds])
+    act = eval_df["y"].values
+    def _wmape(mask):
+        m = mask & np.isfinite(yhat)
+        if m.sum() == 0:
+            return np.nan
+        return 100 * np.sum(np.abs(act[m] - yhat[m])) / np.sum(np.abs(act[m]))
+    a, b = _wmape(wk1), _wmape(wk2)
+    if np.isfinite(a) and np.isfinite(b):
+        print(f"  {name:<16}{a:>10.2f}%{b:>10.2f}%{b - a:>+11.2f} pts")
 
 # How much of each forecast is explained by weekday alone? A model near the
 # actual series' own value is responding to more than the weekly cycle.
@@ -398,11 +509,37 @@ print("  rather than reacting to conditions.")
 
 
 # ─────────────────────────────────────────────────────
-# 5. WRITE BACK — the chart shows exactly what was scored
+# 5. FUTURE — refit on everything, project past the last actual
 # ─────────────────────────────────────────────────────
-banner("STEP 5: Writing to AWS")
+banner(f"STEP 5: FUTURE forecast ({FUTURE_DAYS} days past the last actual)")
 
-CTX = 40
+future_dates = pd.date_range(df.ds.max() + pd.Timedelta(days=1), periods=FUTURE_DAYS, freq="D")
+future_df = pd.DataFrame({"ds": future_dates})
+for c in WEATHER_COLS:
+    future_df[c] = [float(HIST_BY_DOY[c].get(d.dayofyear, df[c].mean())) for d in future_dates]
+
+print(f"  {future_dates[0].date()} -> {future_dates[-1].date()}")
+print("  Weather for this window is day-of-year climatology, not observation.")
+print(f"  Metrics were validated at h={HORIZON}d; error grows beyond that.\n")
+
+future_preds = {}
+for name, fn in MODELS.items():
+    try:
+        yhat = np.asarray(fn(df, FUTURE_DAYS, future_df), dtype=float)
+        if yhat.shape != (FUTURE_DAYS,) or not np.isfinite(yhat).all():
+            raise ValueError("bad output")
+        future_preds[name] = yhat
+        print(f"  {name:<14} ok   mean {yhat.mean():,.0f}")
+    except Exception as exc:
+        future_preds[name] = np.full(FUTURE_DAYS, np.nan)
+        print(f"  {name:<14} FAILED: {str(exc)[:70]}")
+
+
+# ─────────────────────────────────────────────────────
+# 6. WRITE BACK — PAST context | PRESENT scored | FUTURE projected
+# ─────────────────────────────────────────────────────
+banner("STEP 6: Writing to AWS")
+
 ctx_df = df.iloc[max(0, eval_start - CTX):eval_start]
 
 # The original connection has been idle through many minutes of model fitting and
@@ -420,11 +557,13 @@ def put(d, actual, p, holdout, future):
         """INSERT INTO gold.ml_predictive_volume
            (forecast_date, actual_volume, pred_lstm, pred_prophet, pred_holtwinters,
             pred_sarimax, pred_holts_linear, is_holdout, is_future,
-            weather_rainfall, weather_temp)
-           VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)""",
+            weather_rainfall, weather_temp,
+            pred_prophet_nw, pred_sarimax_nw, pred_lstm_nw)
+           VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)""",
         (d["ds"].date(), int(actual) if actual is not None else None,
          p("LSTM"), p("Prophet"), p("HoltWinters"), p("SARIMAX"), p("Holts_Linear"),
-         holdout, future, float(d["total_rain"]), float(d["avg_temp"])),
+         holdout, future, float(d["total_rain"]), float(d["avg_temp"]),
+         p("Prophet_nw"), p("SARIMAX_nw"), p("LSTM_nw")),
     )
 
 for _, d in ctx_df.iterrows():
@@ -436,21 +575,30 @@ for _, d in eval_df.iterrows():
         return None if not np.isfinite(v) else int(round(v))
     put(d, d["y"], p, True, False)
 
+for i, (_, d) in enumerate(future_df.iterrows()):
+    def p(n, _i=i):
+        v = future_preds[n][_i]
+        return None if not np.isfinite(v) else int(round(v))
+    put(d, None, p, False, True)
+
 conn.commit()
-print(f"  ml_predictive_volume: {len(ctx_df)} context + {len(eval_df)} scored days")
+print(f"  ml_predictive_volume: {len(ctx_df)} PAST + {len(eval_df)} PRESENT + {len(future_df)} FUTURE")
 
 cur.execute("DELETE FROM gold.ml_model_metrics WHERE target = 'Total Traffic'")
+# The chart's metrics table shows the weather-driven models; the _nw controls are
+# stored alongside with uses_weather=false so the toggle can show their numbers too.
 for name, r in learned.iterrows():
     if not np.isfinite(r.wmape):
         continue
     cur.execute(
         """INSERT INTO gold.ml_model_metrics
            (model_name, target, rmse, mae, mse, wmape, r2, mase, mape, smape, rmsse,
-            rank, accepted, rejected_reason, updated_at)
-           VALUES (%s,'Total Traffic',%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,NOW())""",
+            rank, accepted, rejected_reason, uses_weather, updated_at)
+           VALUES (%s,'Total Traffic',%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,NOW())""",
         (name, r.rmse, r.mae, r.mse, r.wmape, r.r2, r.mase, r.mape, r.smape, r.rmsse,
          int(r["rank"]), bool(r.accepted),
-         None if r.accepted else f"WMAPE {r.wmape:.2f}% does not beat baseline {base:.2f}%"),
+         None if r.accepted else f"WMAPE {r.wmape:.2f}% does not beat baseline {base:.2f}%",
+         not name.endswith("_nw")),
     )
 conn.commit()
 cur.close()

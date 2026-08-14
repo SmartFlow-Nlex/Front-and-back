@@ -22,6 +22,7 @@ export default function TrafficMapPanel({ title, subtitle, badge, endpoint, laye
   const containerRef = useRef<HTMLDivElement | null>(null);
   const activeMarkers = useRef<mapboxgl.Marker[]>([]);
   const alertMarkersRef = useRef<mapboxgl.Marker[]>([]);
+  const flyToHandlerRef = useRef<((e: Event) => void) | null>(null);
   // "ok" once the map builds; otherwise show a graceful fallback instead of
   // letting Mapbox throw and take the whole page down.
   const [status, setStatus] = useState<"ok" | "no-token" | "error">("ok");
@@ -29,8 +30,14 @@ export default function TrafficMapPanel({ title, subtitle, badge, endpoint, laye
   useEffect(() => {
     if (!containerRef.current) return;
 
-    const token = process.env.NEXT_PUBLIC_MAPBOX_TOKEN;
-    if (!token) {
+    // A Mapbox public token always starts with "pk.". Checking only for a
+    // non-empty string is not enough: the committed .env ships a
+    // "YOUR_MAPBOX_PUBLIC_TOKEN_HERE" placeholder, which is truthy, so it slips
+    // past and Mapbox then fails at tile-fetch time with a 401. That failure is
+    // asynchronous, so the try/catch below never sees it and the panel sits
+    // blank with no explanation. Validate the shape up front instead.
+    const token = process.env.NEXT_PUBLIC_MAPBOX_TOKEN?.trim();
+    if (!token || !token.startsWith("pk.")) {
       setStatus("no-token");
       return;
     }
@@ -60,7 +67,29 @@ export default function TrafficMapPanel({ title, subtitle, badge, endpoint, laye
 
     setStatus("ok");
     mapRef.current = map;
+
+    // A syntactically valid but rejected token (revoked, wrong account, URL
+    // restriction not matching) only shows up here, as a 401 on the first tile
+    // or style request. Without this the panel would stay blank and silent.
+    map.on("error", (e: { error?: { status?: number; message?: string } }) => {
+      const status = e?.error?.status;
+      if (status === 401 || status === 403) {
+        console.error("Mapbox rejected the access token:", e.error?.message);
+        setStatus("error");
+      }
+    });
+
     map.addControl(new mapboxgl.NavigationControl({ showCompass: false }), "top-right");
+
+    // The header's exit search broadcasts a pick; both panels fly to it together
+    // so the two maps stay on the same place for comparison.
+    const onFlyTo = (e: Event) => {
+      const d = (e as CustomEvent<{ lng: number; lat: number }>).detail;
+      if (!d || !Number.isFinite(d.lng) || !Number.isFinite(d.lat)) return;
+      map.flyTo({ center: [d.lng, d.lat], zoom: 12.5, duration: 900 });
+    };
+    window.addEventListener("nlex:flyto", onFlyTo);
+    flyToHandlerRef.current = onFlyTo;
 
     // Hide all other roads from the base map so ONLY the NLEX corridor is visible
     map.on("style.load", () => {
@@ -767,6 +796,10 @@ export default function TrafficMapPanel({ title, subtitle, badge, endpoint, laye
       activeMarkers.current.forEach(m => m.remove());
       activeMarkers.current = [];
 
+      if (flyToHandlerRef.current) {
+        window.removeEventListener("nlex:flyto", flyToHandlerRef.current);
+        flyToHandlerRef.current = null;
+      }
       map.remove();
       mapRef.current = null;
     };
@@ -793,14 +826,20 @@ export default function TrafficMapPanel({ title, subtitle, badge, endpoint, laye
               <>
                 <p className="map-fallback-title">Map unavailable</p>
                 <p className="map-fallback-body">
-                  A Mapbox access token is required. Add <code>NEXT_PUBLIC_MAPBOX_TOKEN</code> to
-                  <code>Front-End-Dashboard/.env.local</code> and restart the dev server.
+                  No Mapbox token is set. Put your token (it starts with <code>pk.</code>) in{" "}
+                  <code>NEXT_PUBLIC_MAPBOX_TOKEN</code> inside{" "}
+                  <code>Front-End-Dashboard/.env.local</code>, then restart the dev server. The
+                  committed <code>.env</code> ships a placeholder, which does not count as a token.
                 </p>
               </>
             ) : (
               <>
-                <p className="map-fallback-title">Map failed to load</p>
-                <p className="map-fallback-body">The map could not be initialized. Check the access token and console for details.</p>
+                <p className="map-fallback-title">Map token rejected</p>
+                <p className="map-fallback-body">
+                  Mapbox refused the token. It may be revoked, from another account, or restricted
+                  to URLs that do not include this one. Check the browser console for the exact
+                  error.
+                </p>
               </>
             )}
           </div>

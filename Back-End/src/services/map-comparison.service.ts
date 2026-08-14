@@ -59,3 +59,67 @@ export async function searchExitsInDb(query: string) {
     return null;
   }
 }
+
+/**
+ * [DEV-02] Predicted congestion for the forecast map panel.
+ *
+ * Reads gold.ml_predictive_congestion (written by the traffic ML pipeline) and
+ * attaches the real corridor geometry from dim_location, so the panel draws
+ * actual model output. It previously returned a single hardcoded LineString
+ * with a fixed congestion_score of 0.78 and never touched the database.
+ *
+ * Segment naming differs between the two tables — the ML pipeline names a
+ * segment after its starting plaza ("Bocaue", "Valenzuela") while dim_location
+ * uses the full node name ("Bocaue Barrier", "Paso De Blas Valenzuela"). So the
+ * join tries a prefix match first and falls back to a contains match, taking
+ * the lowest location_id when several fit. Segments with no geometry match
+ * (currently Karuhatan and Mindanao Ave, which are absent from the rebuilt exit
+ * list) are simply omitted rather than drawn in the wrong place.
+ */
+export async function getForecastCongestionFromDb(hoursAhead: number) {
+  if (!db) return null;
+  try {
+    const { rows } = await db.query(
+      `SELECT g.segment_name,
+              g.hours_ahead,
+              g.congestion_state,
+              g.probability::float AS probability,
+              d.segment_name AS corridor_segment,
+              d.location_id,
+              ST_AsGeoJSON(d.geom::geometry) AS geojson
+       FROM gold.ml_predictive_congestion g
+       JOIN LATERAL (
+         SELECT dl.location_id, dl.segment_name, dl.geom
+         FROM dim_location dl
+         WHERE dl.geom IS NOT NULL
+           AND (dl.start_node ILIKE g.segment_name || '%'
+                OR dl.start_node ILIKE '%' || g.segment_name || '%')
+         ORDER BY (dl.start_node ILIKE g.segment_name || '%') DESC, dl.location_id
+         LIMIT 1
+       ) d ON TRUE
+       WHERE g.hours_ahead = $1
+       ORDER BY d.location_id`,
+      [hoursAhead]
+    );
+
+    return rows.map((r) => ({
+      type: "Feature" as const,
+      properties: {
+        feature_type: "forecast",
+        segment_id: r.segment_name,
+        corridor_segment: r.corridor_segment,
+        horizon: `${r.hours_ahead}h`,
+        hours_ahead: r.hours_ahead,
+        congestion_state: r.congestion_state,
+        probability: r.probability,
+        // Kept for backward compatibility with the existing map styling, which
+        // reads a 0-1 score rather than the Low/Med/High label.
+        congestion_score: r.probability,
+      },
+      geometry: JSON.parse(r.geojson),
+    }));
+  } catch (error) {
+    console.error("Database query failed for forecast congestion:", error);
+    return null;
+  }
+}

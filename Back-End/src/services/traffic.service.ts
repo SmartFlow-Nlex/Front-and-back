@@ -245,20 +245,44 @@ export async function getTrafficAnalyticsFromDb(filters: AnalyticsFilters) {
              SELECT p.* FROM pv p
              WHERE NOT EXISTS (SELECT 1 FROM philippine_arena_events x WHERE x.start_date = p.date)
                AND NOT EXISTS (SELECT 1 FROM ph_holidays h WHERE h.date_day = p.date)
+           ), plaza_of AS (
+             -- nlex_exits lists INTERCHANGES; nlex_traffic_volume counts at TOLL
+             -- PLAZAS. They are different things and only 9 of 20 names coincide,
+             -- so an exit has to be mapped to the plaza that meters it. Without
+             -- this the join silently matches nothing and the chart goes blank.
+             --
+             -- Only the exits that events actually use are mapped, and only where
+             -- the mapping is defensible:
+             --   Cdv/Ph Arena -> Bocaue  the Philippine Arena's own interchange
+             --                           has no toll-volume series; Bocaue is the
+             --                           nearest plaza at 2.4 km (next is Marilao
+             --                           at 4.1 km). A documented proxy.
+             --   Dau          -> Dau / Mabalacat   same place, different spelling.
+             -- Everything else falls through to an exact name match.
+             SELECT x.exit_id,
+                    x.exit_name,
+                    COALESCE(m.toll_plaza, x.exit_name) AS toll_plaza
+             FROM nlex_exits x
+             LEFT JOIN (VALUES
+               ('Cdv/Ph Arena', 'Bocaue'),
+               ('Dau', 'Dau / Mabalacat')
+             ) AS m(exit_name, toll_plaza) ON m.exit_name = x.exit_name
            ), ev_rows AS (
              -- Case-only duplicates exist in the source ("SEVENTEEN - BE THE
              -- SUN World Tour" vs "Seventeen - Be The Sun World Tour" on
              -- 2022-12-17), so titles are de-duplicated case-insensitively and
              -- one spelling is kept as the representative.
-             SELECT e.start_date, x.exit_name AS plaza,
+             SELECT e.start_date, x.toll_plaza AS plaza,
+                    MIN(x.exit_name) AS venue_exit,
                     MIN(e.title) AS title,
                     MAX(NULLIF(replace((regexp_match(e.attendance, '[0-9][0-9,]*'))[1], ',', ''), '')::bigint) AS attendance
              FROM philippine_arena_events e
-             JOIN nlex_exits x ON x.exit_id = e.nlex_exit_id
-             GROUP BY e.start_date, x.exit_name, lower(btrim(e.title))
+             JOIN plaza_of x ON x.exit_id = e.nlex_exit_id
+             GROUP BY e.start_date, x.toll_plaza, lower(btrim(e.title))
            ), ev AS (
              SELECT e.start_date,
                     e.plaza,
+                    MIN(e.venue_exit) AS venue_exit,
                     string_agg(e.title, ' + ' ORDER BY e.title) AS title,
                     COUNT(*)::int AS event_count,
                     -- attendance is free text ("54,589", "10,886 / 10,886",
@@ -269,7 +293,7 @@ export async function getTrafficAnalyticsFromDb(filters: AnalyticsFilters) {
              FROM ev_rows e
              GROUP BY 1, 2
            )
-           SELECT e.title AS label, e.start_date::text AS date, e.plaza,
+           SELECT e.title AS label, e.start_date::text AS date, e.plaza, e.venue_exit,
                   e.event_count, e.attendance, e.on_holiday,
                   p.v::bigint AS day_volume,
                   ROUND(b.bv)::bigint AS baseline,
@@ -447,8 +471,10 @@ export async function getTrafficAnalyticsFromDb(filters: AnalyticsFilters) {
         // Computed in SQL against the cleaned baseline rather than recomputed
         // here, so the figure and its sample size always come from the same set.
         deviationPct: r.deviation_pct,
-        /** Toll plaza serving the venue (Bocaue for the Philippine Arena). */
+        /** Toll plaza the volume is measured at. */
         plaza: r.plaza,
+        /** The venue's own interchange, which may differ from the metering plaza. */
+        venueExit: r.venue_exit,
         /** How many distinct events shared this date. */
         eventCount: r.event_count,
         /** Reported attendance, parsed from free text; null when not published. */

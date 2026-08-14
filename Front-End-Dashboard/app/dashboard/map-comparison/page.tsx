@@ -10,10 +10,42 @@ import type { Feature } from "geojson";
 import TrafficMapPanel from "../../../components/maps/TrafficMapPanel";
 import PageHeader from "../../../components/dashboard/PageHeader";
 
+const BACKEND = process.env.NEXT_PUBLIC_BACKEND_URL ?? "http://localhost:4000";
+
+type ExitHit = { exit_id: number; exit_name: string; latitude: number; longitude: number };
+
 export default function MapComparisonPage() {
   const [activeReports, setActiveReports] = useState(5);
   const [avgSpeed, setAvgSpeed] = useState(45);
   const [timeStr, setTimeStr] = useState("");
+
+  // Exit search — the box used to be a bare input with no handler.
+  const [exitQuery, setExitQuery] = useState("");
+  const [exitHits, setExitHits] = useState<ExitHit[]>([]);
+  const [exitOpen, setExitOpen] = useState(false);
+
+  useEffect(() => {
+    const q = exitQuery.trim();
+    if (q.length < 2) {
+      setExitHits([]);
+      return;
+    }
+    let cancelled = false;
+    // Debounced so a fast typist does not fire a request per keystroke.
+    const timer = setTimeout(async () => {
+      try {
+        const r = await fetch(`${BACKEND}/api/map-comparison/exits?query=${encodeURIComponent(q)}`);
+        const j = await r.json();
+        if (!cancelled) setExitHits(Array.isArray(j.data) ? j.data : []);
+      } catch {
+        if (!cancelled) setExitHits([]);
+      }
+    }, 250);
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+  }, [exitQuery]);
 
   // Live running clock
   useEffect(() => {
@@ -84,9 +116,63 @@ export default function MapComparisonPage() {
         title="Traffic Map Comparison"
         subtitle="Side-by-side live traffic sources across the NLEX corridor"
         actions={
-          <div className="mc-search-bar">
+          <div className="mc-search-bar" style={{ position: "relative" }}>
             <Search size={16} />
-            <input type="text" placeholder="Search exits (e.g., San Fernando)..." />
+            <input
+              type="text"
+              placeholder="Search exits (e.g., San Fernando)..."
+              value={exitQuery}
+              onChange={(e) => {
+                setExitQuery(e.target.value);
+                setExitOpen(true);
+              }}
+              onFocus={() => setExitOpen(true)}
+              onBlur={() => setTimeout(() => setExitOpen(false), 150)}
+              aria-label="Search NLEX exits"
+            />
+            {exitOpen && exitQuery.trim().length >= 2 && (
+              <ul
+                style={{
+                  position: "absolute", top: "calc(100% + 6px)", left: 0, right: 0, zIndex: 30,
+                  margin: 0, padding: "4px", listStyle: "none", maxHeight: "260px", overflowY: "auto",
+                  background: "var(--bg-surface, #fff)", border: "1px solid #dce2ef",
+                  borderRadius: "10px", boxShadow: "0 8px 24px rgba(15,23,42,0.12)",
+                }}
+              >
+                {exitHits.length === 0 ? (
+                  <li style={{ padding: "10px 12px", fontSize: "0.85rem", color: "#64748b" }}>
+                    No exit matches “{exitQuery.trim()}”
+                  </li>
+                ) : (
+                  exitHits.map((x) => (
+                    <li key={x.exit_id}>
+                      <button
+                        onMouseDown={(e) => e.preventDefault()}
+                        onClick={() => {
+                          setExitQuery(x.exit_name);
+                          setExitOpen(false);
+                          window.dispatchEvent(
+                            new CustomEvent("nlex:flyto", {
+                              detail: { lng: Number(x.longitude), lat: Number(x.latitude), name: x.exit_name },
+                            })
+                          );
+                        }}
+                        style={{
+                          display: "flex", width: "100%", alignItems: "baseline", gap: "8px",
+                          padding: "8px 12px", border: "none", background: "transparent",
+                          textAlign: "left", cursor: "pointer", borderRadius: "6px", fontSize: "0.88rem",
+                        }}
+                      >
+                        <span style={{ fontWeight: 600, color: "#0f172a" }}>{x.exit_name}</span>
+                        <span style={{ fontSize: "0.72rem", color: "#94a3b8", marginLeft: "auto" }}>
+                          Exit {x.exit_id}
+                        </span>
+                      </button>
+                    </li>
+                  ))
+                )}
+              </ul>
+            )}
           </div>
         }
       />

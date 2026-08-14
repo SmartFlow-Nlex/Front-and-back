@@ -45,7 +45,7 @@ type Analytics = {
   speedByHour: { hour: number; speed: number; jam_level: number }[];
   eventImpact: {
     label: string; date: string; dayVolume: number; baseline: number; deviationPct: number | null;
-    plaza?: string; eventCount?: number; attendance?: number | null; onHoliday?: boolean; baselineDays?: number;
+    plaza?: string; venueExit?: string; eventCount?: number; attendance?: number | null; onHoliday?: boolean; baselineDays?: number;
   }[];
   holidayImpact: {
     label: string; deviationPct: number; occurrences: number; baseline: number; volume: number;
@@ -620,7 +620,7 @@ export default function TrafficPage() {
           : ""
       }Baseline = average entries at the same plaza on the same weekday within ±45 days, excluding other event days and holidays. ${
         e.plaza === "Bocaue"
-          ? "The Philippine Arena is served by the Ciudad de Victoria interchange, which has no toll-volume series in this dataset — Bocaue is the nearest plaza (2.4 km) and stands in for it. "
+          ? `The venue exits at ${e.venueExit}, which has no toll-volume series of its own, so volume is read at the nearest metering plaza (${e.plaza}, 2.4 km away). `
           : ""
       }Figures are NLEX entries, so they capture traffic joining the expressway near the venue rather than arrivals.`,
     });

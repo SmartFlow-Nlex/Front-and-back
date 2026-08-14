@@ -47,8 +47,16 @@ function createPool(): Pool | null {
     // RDS across the public internet is slower to hand out connections than a
     // local socket; the pg default of 0 (no timeout) makes a bad host hang the
     // request forever instead of surfacing an error.
-    connectionTimeoutMillis: 15_000,
+    //
+    // 45s rather than 15s because this instance is shared: while a teammate runs
+    // the ML pipelines, a fresh connection has been measured taking >14s, which
+    // sat right on the old limit and made whole dashboards intermittently report
+    // "database not reachable" even though the database was fine.
+    connectionTimeoutMillis: 45_000,
     idleTimeoutMillis: 30_000,
+    // Keep a few connections warm so a slow handshake is paid once, not per
+    // request, during those periods.
+    min: 2,
     max: 10,
   });
 

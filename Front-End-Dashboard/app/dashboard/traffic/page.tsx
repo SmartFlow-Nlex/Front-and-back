@@ -618,11 +618,7 @@ export default function TrafficPage() {
         e.onHoliday
           ? "This date is also a public holiday, so the deviation reflects the holiday as much as the event. "
           : ""
-      }Baseline = average entries at the same plaza on the same weekday within ±45 days, excluding other event days and holidays. ${
-        e.plaza === "Bocaue"
-          ? `The venue exits at ${e.venueExit}, which has no toll-volume series of its own, so volume is read at the nearest metering plaza (${e.plaza}, 2.4 km away). `
-          : ""
-      }Figures are NLEX entries, so they capture traffic joining the expressway near the venue rather than arrivals.`,
+      }Baseline = average entries at ${e.plaza ?? "the same exit"} on the same weekday within ±45 days, excluding other event days and holidays. Figures are NLEX entries, so they capture traffic joining the expressway at the venue's own exit rather than arrivals.`,
     });
   };
 
@@ -956,7 +952,7 @@ export default function TrafficPage() {
       <article className={`${styles.chartCard} ${styles.chart5}`}>
         <div className={styles.chartHead}>
           <div className={styles.headText}>
-            <h3>{impactMode === "Events" ? "Arena Event Impact (Bocaue entries)" : "Holiday Impact vs Normal Days"}</h3>
+            <h3>{impactMode === "Events" ? "Arena Event Impact (venue exit entries)" : "Holiday Impact vs Normal Days"}</h3>
           </div>
           <button className={styles.secondaryButton} onClick={() => setImpactListOpen(true)}>
             View all

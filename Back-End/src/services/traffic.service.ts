@@ -217,17 +217,18 @@ export async function getTrafficAnalyticsFromDb(filters: AnalyticsFilters) {
         // DISTINCT ON also ranked by `attendance`, which is TEXT — so it sorted
         // "9,000" above "54,589" and often kept the smaller event.)
         //
-        // Which plaza — the Philippine Arena is served by the Ciudad de Victoria
-        // (CDV) interchange, NOT by Bocaue. But CDV has no toll-volume series in
-        // this warehouse: it appears only in dim_location as the segment
-        // boundaries "Marilao to Cdv/Ph Arena" and "Cdv/Ph Arena to Bocaue
-        // Barrier", and those segments carry just ~9 days of live Waze data
-        // (Aug 2026) against events running 2020-2026 — no historical signal.
+        // Which plaza — measured at the venue's OWN interchange. The events
+        // table points at Cdv/Ph Arena (the Philippine Arena's exit) and bronze
+        // now carries a volume series for it, so no proxy is needed. This
+        // previously fell back to Bocaue, 2.4 km away, because the public
+        // matview had no CDV series.
         //
-        // So Bocaue is used as the PROXY: it is the nearest toll plaza at 2.4 km
-        // (next nearest is Marilao at 4.1 km) and is what nlex_exit_id already
-        // points to for 148 of 155 events. This is a limitation of the volume
-        // dataset, not a claim that the Arena traffic exits at Bocaue.
+        // Source is bronze.nlex_traffic_volume rather than the nlex_traffic_volume
+        // matview: the matview is stale (it still holds the pre-rebuild plaza
+        // names and has no CDV at all) and it SUMs, which would double the three
+        // plazas that were loaded twice. DISTINCT ON de-duplicates by
+        // (plaza, date, hour, direction) at read time, so the figures are correct
+        // whether or not the duplicate rows are ever cleaned up.
         //
         // Also note the volume series only contains type = 'Entries', so this
         // counts vehicles ENTERING NLEX at the plaza — largely the post-event
@@ -237,48 +238,30 @@ export async function getTrafficAnalyticsFromDb(filters: AnalyticsFilters) {
         // really a holiday effect.
         db.query(
           `WITH pv AS (
-             SELECT t.toll_plaza, t.date, SUM(${DAY_TOTAL})::bigint AS v
-             FROM nlex_traffic_volume t
-             WHERE t.type = 'Entries' AND t.vehicle_class = 'Total'
+             SELECT q.toll_plaza, q.date_day AS date, SUM(q.total_volume)::bigint AS v
+             FROM (
+               SELECT DISTINCT ON (toll_plaza, date_day, hour_of_day, direction)
+                      toll_plaza, date_day, hour_of_day, direction, total_volume
+               FROM bronze.nlex_traffic_volume
+               ORDER BY toll_plaza, date_day, hour_of_day, direction, id
+             ) q
              GROUP BY 1, 2
            ), clean AS (
              SELECT p.* FROM pv p
              WHERE NOT EXISTS (SELECT 1 FROM philippine_arena_events x WHERE x.start_date = p.date)
                AND NOT EXISTS (SELECT 1 FROM ph_holidays h WHERE h.date_day = p.date)
-           ), plaza_of AS (
-             -- nlex_exits lists INTERCHANGES; nlex_traffic_volume counts at TOLL
-             -- PLAZAS. They are different things and only 9 of 20 names coincide,
-             -- so an exit has to be mapped to the plaza that meters it. Without
-             -- this the join silently matches nothing and the chart goes blank.
-             --
-             -- Only the exits that events actually use are mapped, and only where
-             -- the mapping is defensible:
-             --   Cdv/Ph Arena -> Bocaue  the Philippine Arena's own interchange
-             --                           has no toll-volume series; Bocaue is the
-             --                           nearest plaza at 2.4 km (next is Marilao
-             --                           at 4.1 km). A documented proxy.
-             --   Dau          -> Dau / Mabalacat   same place, different spelling.
-             -- Everything else falls through to an exact name match.
-             SELECT x.exit_id,
-                    x.exit_name,
-                    COALESCE(m.toll_plaza, x.exit_name) AS toll_plaza
-             FROM nlex_exits x
-             LEFT JOIN (VALUES
-               ('Cdv/Ph Arena', 'Bocaue'),
-               ('Dau', 'Dau / Mabalacat')
-             ) AS m(exit_name, toll_plaza) ON m.exit_name = x.exit_name
            ), ev_rows AS (
              -- Case-only duplicates exist in the source ("SEVENTEEN - BE THE
              -- SUN World Tour" vs "Seventeen - Be The Sun World Tour" on
              -- 2022-12-17), so titles are de-duplicated case-insensitively and
              -- one spelling is kept as the representative.
-             SELECT e.start_date, x.toll_plaza AS plaza,
+             SELECT e.start_date, x.exit_name AS plaza,
                     MIN(x.exit_name) AS venue_exit,
                     MIN(e.title) AS title,
                     MAX(NULLIF(replace((regexp_match(e.attendance, '[0-9][0-9,]*'))[1], ',', ''), '')::bigint) AS attendance
              FROM philippine_arena_events e
-             JOIN plaza_of x ON x.exit_id = e.nlex_exit_id
-             GROUP BY e.start_date, x.toll_plaza, lower(btrim(e.title))
+             JOIN nlex_exits x ON x.exit_id = e.nlex_exit_id
+             GROUP BY e.start_date, x.exit_name, lower(btrim(e.title))
            ), ev AS (
              SELECT e.start_date,
                     e.plaza,

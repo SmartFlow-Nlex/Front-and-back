@@ -223,12 +223,10 @@ export async function getTrafficAnalyticsFromDb(filters: AnalyticsFilters) {
         // previously fell back to Bocaue, 2.4 km away, because the public
         // matview had no CDV series.
         //
-        // Source is bronze.nlex_traffic_volume rather than the nlex_traffic_volume
-        // matview: the matview is stale (it still holds the pre-rebuild plaza
-        // names and has no CDV at all) and it SUMs, which would double the three
-        // plazas that were loaded twice. DISTINCT ON de-duplicates by
-        // (plaza, date, hour, direction) at read time, so the figures are correct
-        // whether or not the duplicate rows are ever cleaned up.
+        // Reads the nlex_traffic_volume serving matview like every other
+        // descriptive query. It briefly read bronze directly, while the matview
+        // was stale and its source held duplicate rows; both are fixed, so the
+        // layering is intact again.
         //
         // Also note the volume series only contains type = 'Entries', so this
         // counts vehicles ENTERING NLEX at the plaza — largely the post-event
@@ -238,13 +236,9 @@ export async function getTrafficAnalyticsFromDb(filters: AnalyticsFilters) {
         // really a holiday effect.
         db.query(
           `WITH pv AS (
-             SELECT q.toll_plaza, q.date_day AS date, SUM(q.total_volume)::bigint AS v
-             FROM (
-               SELECT DISTINCT ON (toll_plaza, date_day, hour_of_day, direction)
-                      toll_plaza, date_day, hour_of_day, direction, total_volume
-               FROM bronze.nlex_traffic_volume
-               ORDER BY toll_plaza, date_day, hour_of_day, direction, id
-             ) q
+             SELECT t.toll_plaza, t.date, SUM(${DAY_TOTAL})::bigint AS v
+             FROM nlex_traffic_volume t
+             WHERE t.type = 'Entries' AND t.vehicle_class = 'Total'
              GROUP BY 1, 2
            ), clean AS (
              SELECT p.* FROM pv p

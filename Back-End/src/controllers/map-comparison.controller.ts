@@ -226,13 +226,14 @@ export const getMapForecast = async (req: Request, res: Response) => {
 // [DEV-04] GET /api/v1/map-comparison/exits
 export const searchExits = async (req: Request, res: Response) => {
   const query = ExitSearchSchema.safeParse(req.query);
-  if (!query.success) return res.status(400).json({ success: false, error: "Missing query" });
+  if (!query.success) return res.status(400).json({ success: false, error: "Invalid query" });
 
+  // Empty query = the full corridor list, ordered Balintawak -> Sta. Ines.
   const dbRows = await searchExitsInDb(query.data.query);
   if (dbRows) {
     return res.json({ success: true, source: "database", data: dbRows });
   }
 
-  res.json({ success: true, source: "mock", data: [{ exit: "Balintawak" }] });
+  res.status(503).json({ success: false, message: "Exit list unavailable: database not reachable" });
 };
 

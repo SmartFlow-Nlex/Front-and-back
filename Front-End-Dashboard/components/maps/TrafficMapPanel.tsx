@@ -23,6 +23,7 @@ export default function TrafficMapPanel({ title, subtitle, badge, endpoint, laye
   const activeMarkers = useRef<mapboxgl.Marker[]>([]);
   const alertMarkersRef = useRef<mapboxgl.Marker[]>([]);
   const flyToHandlerRef = useRef<((e: Event) => void) | null>(null);
+  const resetViewHandlerRef = useRef<(() => void) | null>(null);
   // "ok" once the map builds; otherwise show a graceful fallback instead of
   // letting Mapbox throw and take the whole page down.
   const [status, setStatus] = useState<"ok" | "no-token" | "error">("ok");
@@ -88,8 +89,14 @@ export default function TrafficMapPanel({ title, subtitle, badge, endpoint, laye
       if (!d || !Number.isFinite(d.lng) || !Number.isFinite(d.lat)) return;
       map.flyTo({ center: [d.lng, d.lat], zoom: 12.5, duration: 900 });
     };
+    // "Whole corridor" returns both panels to the opening view.
+    const onResetView = () => {
+      map.flyTo({ center: [120.79, 14.94], zoom: 9.2, duration: 900 });
+    };
     window.addEventListener("nlex:flyto", onFlyTo);
+    window.addEventListener("nlex:resetview", onResetView);
     flyToHandlerRef.current = onFlyTo;
+    resetViewHandlerRef.current = onResetView;
 
     // Hide all other roads from the base map so ONLY the NLEX corridor is visible
     map.on("style.load", () => {
@@ -799,6 +806,10 @@ export default function TrafficMapPanel({ title, subtitle, badge, endpoint, laye
       if (flyToHandlerRef.current) {
         window.removeEventListener("nlex:flyto", flyToHandlerRef.current);
         flyToHandlerRef.current = null;
+      }
+      if (resetViewHandlerRef.current) {
+        window.removeEventListener("nlex:resetview", resetViewHandlerRef.current);
+        resetViewHandlerRef.current = null;
       }
       map.remove();
       mapRef.current = null;

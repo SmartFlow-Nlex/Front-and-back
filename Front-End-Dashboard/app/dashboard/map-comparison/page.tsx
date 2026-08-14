@@ -12,7 +12,9 @@ import PageHeader from "../../../components/dashboard/PageHeader";
 
 const BACKEND = process.env.NEXT_PUBLIC_BACKEND_URL ?? "http://localhost:4000";
 
-type ExitHit = { exit_id: number; exit_name: string; latitude: number; longitude: number };
+import { useNlexExits, type NlexExit } from "../../../lib/nlex-exits";
+
+type ExitHit = NlexExit;
 
 export default function MapComparisonPage() {
   const [activeReports, setActiveReports] = useState(5);
@@ -22,23 +24,10 @@ export default function MapComparisonPage() {
   // Exit picker. The whole corridor is loaded once and shown as a dropdown in
   // geographic order (Balintawak in the south through to Sta. Ines in the
   // north), so the list itself tells you where along NLEX you are.
-  const [exits, setExits] = useState<ExitHit[]>([]);
+  // Same corridor list as the dashboard road map, AI sandbox and maintenance.
+  const { exits } = useNlexExits();
   const [selectedExit, setSelectedExit] = useState<string>("");
   const [exitOpen, setExitOpen] = useState(false);
-
-  useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      try {
-        const r = await fetch(`${BACKEND}/api/map-comparison/exits`);
-        const j = await r.json();
-        if (!cancelled && Array.isArray(j.data)) setExits(j.data);
-      } catch {
-        if (!cancelled) setExits([]);
-      }
-    })();
-    return () => { cancelled = true; };
-  }, []);
 
   const flyToExit = (x: ExitHit) => {
     setSelectedExit(x.exit_name);
@@ -190,6 +179,9 @@ export default function MapComparisonPage() {
                             fontVariantNumeric: "tabular-nums",
                           }}>{x.exit_id}</span>
                           {x.exit_name}
+                          <span style={{ marginLeft: "auto", fontSize: "0.72rem", color: "#94a3b8" }}>
+                            Km {x.km}
+                          </span>
                         </button>
                       </li>
                     );

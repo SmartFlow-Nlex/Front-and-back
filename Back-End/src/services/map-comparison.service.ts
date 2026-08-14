@@ -42,15 +42,56 @@ export async function getRealtimeMapDataFromDb() {
   }
 }
 
-// [DEV-04] Exit search — nlex_exits is the corridor's exit reference table.
+// [DEV-04] Exit reference for the whole corridor — the single list every tab
+// should use. nlex_exits gives identity and position; the km-post is derived
+// from dim_location, whose segments carry length_meters, by running a cumulative
+// sum along segment_order. Balintawak is km 0 and Sta. Ines is km 76.25, which
+// matches the corridor's published length.
+//
+// Deriving km rather than hardcoding it is the point: the dashboard previously
+// carried three different hand-written exit lists (9 exits in the AI sandbox,
+// 26 in maintenance, 20 on the map) that disagreed with each other and with the
+// database.
 export async function searchExitsInDb(query: string) {
   if (!db) return null;
   try {
     const { rows } = await db.query(
-      `SELECT exit_id, exit_name, latitude, longitude
-       FROM nlex_exits
-       WHERE exit_name ILIKE $1
-       ORDER BY exit_id`,
+      `WITH seg AS (
+         SELECT segment_order, start_node, end_node, length_meters,
+                COALESCE(SUM(length_meters) OVER (
+                  ORDER BY segment_order
+                  ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING), 0) AS m_before
+         FROM dim_location
+         WHERE segment_order IS NOT NULL
+       ), nodes AS (
+         SELECT start_node AS node, m_before AS m FROM seg
+         UNION ALL
+         -- the corridor's final node is an end_node, never a start_node
+         SELECT end_node, m_before + length_meters
+         FROM seg WHERE segment_order = (SELECT MAX(segment_order) FROM seg)
+       )
+       SELECT x.exit_id,
+              x.exit_name,
+              x.latitude,
+              x.longitude,
+              ROUND((n.m / 1000.0)::numeric, 2)::float AS km,
+              -- Per-direction access from silver.nlex_exit_reference. A node
+              -- with no entry or exit either way is a mainline toll barrier,
+              -- not an interchange.
+              COALESCE(r.nb_entry, true) AS nb_entry,
+              COALESCE(r.nb_exit,  true) AS nb_exit,
+              COALESCE(r.sb_entry, true) AS sb_entry,
+              COALESCE(r.sb_exit,  true) AS sb_exit,
+              -- A mainline barrier is named as one. Inferring it from the access
+              -- flags does not work: Bocaue Barrier still carries sb_exit, so a
+              -- "no access at all" rule misses it.
+              CASE WHEN x.exit_name ILIKE '%barrier%'
+                   THEN 'toll-barrier' ELSE 'interchange' END AS node_type
+       FROM nlex_exits x
+       LEFT JOIN nodes n ON n.node = x.exit_name
+       LEFT JOIN silver.nlex_exit_reference r ON r.exit_name = x.exit_name
+       WHERE x.exit_name ILIKE $1
+       ORDER BY x.exit_id`,
       [`%${query}%`]
     );
     return rows;

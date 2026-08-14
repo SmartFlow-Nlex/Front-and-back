@@ -6,19 +6,10 @@ import PageHeader from "../../../components/dashboard/PageHeader";
 import styles from "../traffic/traffic.module.css";
 import { supabase } from "../../../lib/supabase";
 
+import { useNlexExits, exitNearestKm, type NlexExit } from "../../../lib/nlex-exits";
+
 const BACKEND = process.env.NEXT_PUBLIC_BACKEND_URL ?? "http://localhost:4000";
 
-const NLEX_EXITS = [
-  { name: "Balintawak", km: 0 }, { name: "Skyway Exit", km: 2 }, { name: "Libis Baesa", km: 4 },
-  { name: "Smart Connect", km: 6 }, { name: "Paso de Blas", km: 8 }, { name: "Lawang Bato", km: 10 },
-  { name: "Lingunan", km: 12 }, { name: "Libtong", km: 14 }, { name: "Meycauayan", km: 16 },
-  { name: "Pandayan", km: 18 }, { name: "F. Raymundo", km: 20 }, { name: "Marilao", km: 22 },
-  { name: "Ciudad de Victoria", km: 24 }, { name: "Bocaue", km: 26 }, { name: "Tambubong", km: 28 },
-  { name: "Balagtas", km: 30 }, { name: "Tabang", km: 35 }, { name: "Sta. Rita", km: 40 },
-  { name: "Pulilan", km: 45 }, { name: "San Simon", km: 52 }, { name: "San Fernando", km: 60 },
-  { name: "Mexico", km: 68 }, { name: "Angeles", km: 76 }, { name: "Dau", km: 82 },
-  { name: "Clark/SCTEX", km: 88 }, { name: "Sta. Ines", km: 94 },
-];
 
 const DIRECTIONS = ["Both", "NB", "SB"] as const;
 const LANE_CLOSURES = ["None", "Shoulder only", "1 lane", "2 lanes", "Full closure"] as const;
@@ -69,8 +60,9 @@ const fmtWindow = (startIso: string, endIso: string) => {
 const kmRange = (s: Schedule) =>
   `Km ${s.start_km}${s.end_km !== s.start_km ? `–${s.end_km}` : ""}`;
 
-const nearestExit = (km: number) =>
-  NLEX_EXITS.reduce((best, e) => (Math.abs(e.km - km) < Math.abs(best.km - km) ? e : best), NLEX_EXITS[0]);
+// Nearest exit to a km-post, against the shared corridor list.
+const nearestExitName = (exits: NlexExit[], km: number) =>
+  exitNearestKm(exits, km)?.exit_name ?? "-";
 
 // Modern dropdown — same look and behavior as the Traffic tab's custom select
 function Select({
@@ -242,6 +234,8 @@ const emptyForm = {
 };
 
 export default function MaintenancePage() {
+  // Same corridor list as the map and the AI sandbox. See lib/nlex-exits.
+  const { exits: NLEX_EXITS } = useNlexExits();
   const [schedules, setSchedules] = useState<Schedule[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -421,7 +415,7 @@ export default function MaintenancePage() {
 
   const segmentNote =
     form.startKm !== "" && form.endKm !== "" && !Number.isNaN(Number(form.startKm)) && !Number.isNaN(Number(form.endKm))
-      ? `${Math.abs(Number(form.endKm) - Number(form.startKm)).toFixed(1)} km · near ${nearestExit(Number(form.startKm)).name} → ${nearestExit(Number(form.endKm)).name}`
+      ? `${Math.abs(Number(form.endKm) - Number(form.startKm)).toFixed(1)} km · near ${nearestExitName(NLEX_EXITS, Number(form.startKm))} → ${nearestExitName(NLEX_EXITS, Number(form.endKm))}`
       : null;
 
   const check = (
@@ -562,7 +556,7 @@ export default function MaintenancePage() {
             <div className={styles.detailBody}>
               {([
                 ["Location", `${kmRange(detail)} · ${detail.direction}`],
-                ["Near", `${nearestExit(detail.start_km).name} → ${nearestExit(detail.end_km).name}`],
+                ["Near", `${nearestExitName(NLEX_EXITS, detail.start_km)} → ${nearestExitName(NLEX_EXITS, detail.end_km)}`],
                 ["Lane closure", detail.lane_closure],
                 ["Window", fmtWindow(detail.starts_at, detail.ends_at)],
                 ["Description", detail.description || "—"],
@@ -685,7 +679,7 @@ export default function MaintenancePage() {
                   <Select
                     value={form.startKm}
                     placeholder="Pick an exit…"
-                    options={NLEX_EXITS.map((x) => ({ label: `${x.name} (Km ${x.km})`, value: String(x.km) }))}
+                    options={NLEX_EXITS.map((x) => ({ label: `${x.exit_name} (Km ${x.km})`, value: String(x.km) }))}
                     onChange={(v) => set("startKm", v)}
                   />
                 </div>
@@ -698,7 +692,7 @@ export default function MaintenancePage() {
                   <Select
                     value={form.endKm}
                     placeholder="Pick an exit…"
-                    options={NLEX_EXITS.map((x) => ({ label: `${x.name} (Km ${x.km})`, value: String(x.km) }))}
+                    options={NLEX_EXITS.map((x) => ({ label: `${x.exit_name} (Km ${x.km})`, value: String(x.km) }))}
                     onChange={(v) => set("endKm", v)}
                   />
                 </div>

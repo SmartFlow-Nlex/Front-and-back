@@ -8,7 +8,9 @@ import { useEffect, useRef, useState } from "react";
    "toll-barrier" nodes (Bocaue Barrier) are flagged separately from ramp nodes.
 ══════════════════════════════════════════════════════════════════════════════ */
 
-type AccessType   = "Entry Only" | "Exit Only" | "Entry & Exit";
+import { useNlexExits, accessLabel, type NlexExit } from "../../../lib/nlex-exits";
+
+type AccessType   = "Entry Only" | "Exit Only" | "Entry & Exit" | "No Access";
 type NodeType     = "interchange" | "toll-barrier";
 
 interface StationDef {
@@ -18,43 +20,6 @@ interface StationDef {
   access: AccessType | null;   // null for toll-barrier nodes
 }
 
-/** NB — Balintawak (0 km) → Angeles (83 km) */
-const stationsNB: (StationDef & { dir: "NB" })[] = [
-  { km:  0, name: "Balintawak",          type: "interchange",  access: "Entry Only",    dir: "NB" },
-  { km:  8, name: "Karuhatan",           type: "interchange",  access: "Entry Only",    dir: "NB" },
-  { km: 12, name: "Mindanao Ave",        type: "interchange",  access: "Entry Only",    dir: "NB" },
-  { km: 16, name: "Paso de Blas",        type: "interchange",  access: "Entry & Exit",  dir: "NB" },
-  { km: 22, name: "Meycauayan",          type: "interchange",  access: "Entry & Exit",  dir: "NB" },
-  { km: 27, name: "Marilao",             type: "interchange",  access: "Entry & Exit",  dir: "NB" },
-  { km: 33, name: "Bocaue Interchange",  type: "interchange",  access: "Entry & Exit",  dir: "NB" },
-  { km: 35, name: "Bocaue Barrier",      type: "toll-barrier", access: null,            dir: "NB" },
-  { km: 37, name: "Tambubong",           type: "interchange",  access: "Entry & Exit",  dir: "NB" },
-  { km: 40, name: "Tabang Guiguinto",    type: "interchange",  access: "Exit Only",     dir: "NB" },
-  { km: 44, name: "Balagtas",            type: "interchange",  access: "Entry & Exit",  dir: "NB" },
-  { km: 50, name: "Pulilan",             type: "interchange",  access: "Entry & Exit",  dir: "NB" },
-  { km: 62, name: "San Simon",           type: "interchange",  access: "Entry & Exit",  dir: "NB" },
-  { km: 73, name: "San Fernando",        type: "interchange",  access: "Entry & Exit",  dir: "NB" },
-  { km: 83, name: "Angeles",             type: "interchange",  access: "Entry & Exit",  dir: "NB" },
-];
-
-/** SB — Angeles (83 km) → Balintawak (0 km) */
-const stationsSB: (StationDef & { dir: "SB" })[] = [
-  { km: 83, name: "Angeles",             type: "interchange",  access: "Entry & Exit",  dir: "SB" },
-  { km: 73, name: "San Fernando",        type: "interchange",  access: "Entry & Exit",  dir: "SB" },
-  { km: 62, name: "San Simon",           type: "interchange",  access: "Entry & Exit",  dir: "SB" },
-  { km: 50, name: "Pulilan",             type: "interchange",  access: "Entry & Exit",  dir: "SB" },
-  { km: 44, name: "Balagtas",            type: "interchange",  access: "Entry Only",    dir: "SB" },
-  { km: 40, name: "Tabang Guiguinto",    type: "interchange",  access: "Entry Only",    dir: "SB" },
-  { km: 37, name: "Tambubong",           type: "interchange",  access: "Entry & Exit",  dir: "SB" },
-  { km: 35, name: "Bocaue Barrier",      type: "toll-barrier", access: null,            dir: "SB" },
-  { km: 33, name: "Bocaue Interchange",  type: "interchange",  access: "Entry & Exit",  dir: "SB" },
-  { km: 27, name: "Marilao",             type: "interchange",  access: "Entry & Exit",  dir: "SB" },
-  { km: 22, name: "Meycauayan",          type: "interchange",  access: "Entry & Exit",  dir: "SB" },
-  { km: 16, name: "Paso de Blas",        type: "interchange",  access: "Entry & Exit",  dir: "SB" },
-  { km:  8, name: "Karuhatan",           type: "interchange",  access: "Entry & Exit",  dir: "SB" },
-  { km: 12, name: "Mindanao Ave",        type: "interchange",  access: "Entry & Exit",  dir: "SB" },
-  { km:  0, name: "Balintawak",          type: "interchange",  access: "Exit Only",     dir: "SB" },
-];
 
 /* ══════════════════════════════════════════════════════════════════════════════
    TRAFFIC STATE TYPES & LEVEL MAP
@@ -213,7 +178,25 @@ const SLOT_THUMB_LEFT = ["0%", "50%", "100%"]    as const;
    COMPONENT
 ══════════════════════════════════════════════════════════════════════════════ */
 
+/** Shared corridor list -> the station shape this component renders. */
+function toStations(exits: NlexExit[], dir: "NB" | "SB"): (StationDef & { dir: "NB" | "SB" })[] {
+  const rows = exits.map((x) => ({
+    km: x.km,
+    name: x.exit_name,
+    type: x.node_type,
+    access: accessLabel(x, dir) as AccessType | null,
+    dir,
+  }));
+  // Northbound runs up the km-posts, southbound back down them.
+  return dir === "NB" ? rows : [...rows].reverse();
+}
+
 export default function InteractiveRoadMap() {
+  // One corridor list for every tab. See lib/nlex-exits.
+  const { exits } = useNlexExits();
+  const stationsNB = toStations(exits, "NB");
+  const stationsSB = toStations(exits, "SB");
+
   const containerRef = useRef<HTMLDivElement>(null);
   const [isVisible,       setIsVisible]       = useState(false);
   const [activeStation,   setActiveStation]   = useState<string | null>(null);

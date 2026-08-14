@@ -114,6 +114,11 @@ const EMISSIONS_CACHE_TTL_MS = 10 * 60 * 1000;
 //
 // So no offset is applied here. (The measured-AQI queries further down do add
 // 8 hours, correctly — those read nlex_emissions.api_dt, a real Unix epoch.)
+// Measured AQI carries a real timestamptz observation time (silver derives it
+// from the source's api_dt epoch), so local time is a timezone conversion rather
+// than a manual +8h on a naive value.
+const AQI_LOCAL = `recorded_at AT TIME ZONE 'Asia/Manila'`;
+
 const LOCAL_DATE = `timestamp_utc::date`;
 const LOCAL_HOUR = `EXTRACT(hour FROM timestamp_utc)::int`;
 
@@ -199,13 +204,13 @@ export async function getEmissionsAnalyticsFromDb(filters: EmissionsAnalyticsFil
       ),
       // Measured air quality: monthly hours per AQI level + avg PM2.5
       db.query(
-        `SELECT to_char(to_timestamp(api_dt) + interval '8 hours', 'YYYY-MM') AS m,
+        `SELECT to_char(${AQI_LOCAL}, 'YYYY-MM') AS m,
                 COUNT(*) FILTER (WHERE aqi <= 2)::int AS good,
                 COUNT(*) FILTER (WHERE aqi = 3)::int AS moderate,
                 COUNT(*) FILTER (WHERE aqi >= 4)::int AS poor,
                 ROUND(AVG(pm2_5)::numeric, 1)::float AS pm25
          FROM nlex_emissions
-         WHERE (to_timestamp(api_dt) + interval '8 hours')::date BETWEEN $1 AND $2
+         WHERE (${AQI_LOCAL})::date BETWEEN $1 AND $2
          GROUP BY 1 ORDER BY 1`,
         params
       ),
@@ -214,7 +219,7 @@ export async function getEmissionsAnalyticsFromDb(filters: EmissionsAnalyticsFil
         `SELECT ROUND(AVG(aqi)::numeric, 2)::float AS avg_aqi, COUNT(*)::int AS samples,
                 ROUND(AVG(pm2_5)::numeric, 1)::float AS avg_pm25
          FROM nlex_emissions
-         WHERE (to_timestamp(api_dt) + interval '8 hours')::date BETWEEN $1 AND $2`,
+         WHERE (${AQI_LOCAL})::date BETWEEN $1 AND $2`,
         params
       ),
     ]);

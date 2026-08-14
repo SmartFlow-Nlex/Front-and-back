@@ -246,6 +246,8 @@ export default function InteractiveRoadMap() {
   ) => (
     <div className="ds-track-row">
       <h3 className="ds-track-title">{title}</h3>
+      {/* Scroll wrapper: 20 exits with long names do not fit a fixed width. */}
+      <div className="ds-track-scroll">
       <div className="ds-roadmap-track">
         {(stations as (StationDef & { dir: string })[]).map((station, i) => {
           const data        = getTrafficData(station.name, station.dir, predictionSlot);
@@ -316,6 +318,7 @@ export default function InteractiveRoadMap() {
             </div>
           );
         })}
+      </div>
       </div>
     </div>
   );

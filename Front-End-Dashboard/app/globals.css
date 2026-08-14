@@ -3295,18 +3295,36 @@ body {
 }
 
 /* ─── Track ─── */
+/* The corridor now renders all 20 exits from the shared list, and several names
+   are long ("Paso De Blas Valenzuela", "Sta. Rita Guiguinto"). Squeezing 20
+   stops into 100% width collided the 45-degree labels, so the track keeps a
+   minimum spacing per stop and the row scrolls horizontally instead. */
 .ds-roadmap-track {
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  justify-content: flex-start;
+  min-width: max-content;
+  padding-right: 30px;
+}
+
+.ds-track-scroll {
   width: 100%;
+  overflow-x: auto;
+  overflow-y: visible;
+  padding-bottom: 8px;
+  scrollbar-width: thin;
+}
+
+/* Give every stop room for its rotated label rather than dividing the width. */
+.ds-roadmap-stop {
+  min-width: 104px;
 }
 
 /* ─── Each stop (node + segment) ─── */
 .ds-roadmap-stop {
   display: flex;
   align-items: center;
-  flex: 1;
+  flex: 0 0 auto;
   opacity: 0;
   transform: translateY(18px);
   transition: opacity 0.5s ease, transform 0.5s ease;

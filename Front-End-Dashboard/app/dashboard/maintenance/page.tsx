@@ -6,7 +6,7 @@ import PageHeader from "../../../components/dashboard/PageHeader";
 import styles from "../traffic/traffic.module.css";
 import { supabase } from "../../../lib/supabase";
 
-import { useNlexExits, exitNearestKm, type NlexExit } from "../../../lib/nlex-exits";
+import { useNlexExits, exitNearestKm, CORRIDOR_KM, type NlexExit } from "../../../lib/nlex-exits";
 
 const BACKEND = process.env.NEXT_PUBLIC_BACKEND_URL ?? "http://localhost:4000";
 
@@ -672,7 +672,7 @@ export default function MaintenancePage() {
               <div style={{ display: "grid", gridTemplateColumns: "0.65fr 1.35fr 0.65fr 1.35fr", gap: 12 }}>
                 <div className="ms-input-group">
                   <label>Start Km <span className="ms-req">*</span></label>
-                  <input type="number" min={0} max={100} className="ms-input" placeholder="0–94" value={form.startKm} onChange={(e) => set("startKm", e.target.value)} />
+                  <input type="number" min={0} max={100} className="ms-input" placeholder={`0–${CORRIDOR_KM}`} value={form.startKm} onChange={(e) => set("startKm", e.target.value)} />
                 </div>
                 <div className="ms-input-group">
                   <label>Start exit</label>
@@ -685,7 +685,7 @@ export default function MaintenancePage() {
                 </div>
                 <div className="ms-input-group">
                   <label>End Km <span className="ms-req">*</span></label>
-                  <input type="number" min={0} max={100} className="ms-input" placeholder="0–94" value={form.endKm} onChange={(e) => set("endKm", e.target.value)} />
+                  <input type="number" min={0} max={100} className="ms-input" placeholder={`0–${CORRIDOR_KM}`} value={form.endKm} onChange={(e) => set("endKm", e.target.value)} />
                 </div>
                 <div className="ms-input-group">
                   <label>End exit</label>

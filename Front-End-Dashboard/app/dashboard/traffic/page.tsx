@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import { attachCategoryClick } from "../../../lib/chart-click";
 import ReactECharts from "echarts-for-react";
 import type { EChartsOption } from "echarts";
 import { TrendingUp } from "lucide-react";
@@ -658,6 +659,14 @@ export default function TrafficPage() {
         style={{ width: "100%", height: "100%" }}
         opts={{ renderer: "canvas" }}
         onEvents={onClick ? { click: onClick as (p: unknown) => void } : undefined}
+        // Lines are drawn with symbol:"none", so they have no clickable points
+        // and ECharts' item click never fires with the right index. Resolve the
+        // category from the cursor position instead.
+        onChartReady={
+          onClick
+            ? (chart) => attachCategoryClick(chart as never, onClick as never)
+            : undefined
+        }
       />
     );
   };

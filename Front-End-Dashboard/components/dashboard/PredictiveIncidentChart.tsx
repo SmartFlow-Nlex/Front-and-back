@@ -170,9 +170,8 @@ export default function PredictiveIncidentChart({
   // by recorded weather, which exists for the whole window including the
   // forecast horizon, and that page states when a day's incident log hasn't
   // caught up rather than drawing zeros for it.
-  const onChartClick = (p: { dataIndex?: number }) => {
-    const i = p?.dataIndex;
-    if (i == null || i < 0 || i >= daily.length) return;
+  const openDay = (i: number) => {
+    if (i < 0 || i >= daily.length) return;
     // Carry the current Range/Weather along so the drill-down's "Back to daily"
     // can restore the exact view it was opened from, rather than dropping the
     // user back on the default 12-month window.
@@ -182,6 +181,12 @@ export default function PredictiveIncidentChart({
     if (to) qs.set("to", to);
     if (weather) qs.set("weather", weather);
     router.push(`/dashboard/incident/hourly?${qs}`);
+  };
+  // x-axis labels are click targets too (xAxis.triggerEvent below) — a wider
+  // hit area than the line symbols, mirroring PredictiveVolumeChart's onChartClick.
+  const onChartClick = (p: { componentType?: string; dataIndex?: number; value?: string }) => {
+    if (p.componentType === "xAxis") return openDay(dates.indexOf(String(p.value)));
+    if (typeof p.dataIndex === "number") openDay(p.dataIndex);
   };
   const actualData = daily.map((d) => d.actual);
   const lastIndex = dates.length - 1;
@@ -320,6 +325,9 @@ export default function PredictiveIncidentChart({
     xAxis: {
       type: "category",
       data: dates,
+      // Labels are click targets too — a wider hit area than the line symbols
+      // (matches PredictiveVolumeChart's xAxis).
+      triggerEvent: true,
       axisLabel: { color: "#64748b" },
       axisLine: { lineStyle: { color: "#cbd5e1" } },
     },
@@ -618,8 +626,8 @@ export default function PredictiveIncidentChart({
           <h3 style={{ fontSize: "1.05rem", color: "#0f172a", fontWeight: 700, margin: 0, letterSpacing: "-0.01em" }}>
             Incident Walk-Forward Forecast
           </h3>
-          <p style={{ margin: "3px 0 0", fontSize: "0.78rem", color: "#94a3b8" }}>
-            Click any day to open its hour-by-hour breakdown against recorded rainfall
+          <p style={{ color: "#64748b", fontSize: "0.82rem", margin: "4px 0 0 0" }}>
+            Click any point to view that day&apos;s hourly breakdown
           </p>
         </div>
         {modelToolbar}

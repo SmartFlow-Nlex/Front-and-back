@@ -647,7 +647,15 @@ export default function TrafficPage() {
     else if (r.holiday) showHolidayDetail(r.holiday);
   };
 
-  const chartFrame = (option: EChartsOption | null, emptyNote: string, onClick?: (p: never) => void) => {
+  // `categoryFallback: false` for charts whose handler needs the native event
+  // payload (the heatmap reads p.value as [hour, dow, volume]); a synthesised
+  // { dataIndex } would not satisfy it.
+  const chartFrame = (
+    option: EChartsOption | null,
+    emptyNote: string,
+    onClick?: (p: never) => void,
+    categoryFallback = true,
+  ) => {
     if (loading && !data) return <div className={styles.placeholder}>Loading…</div>;
     if (error) return <div className={styles.placeholder}>Live data unavailable — is the backend running on port 4000?</div>;
     if (!option) return <div className={styles.placeholder}>{emptyNote}</div>;
@@ -663,7 +671,7 @@ export default function TrafficPage() {
         // and ECharts' item click never fires with the right index. Resolve the
         // category from the cursor position instead.
         onChartReady={
-          onClick
+          onClick && categoryFallback
             ? (chart) => attachCategoryClick(chart as never, onClick as never)
             : undefined
         }
@@ -932,7 +940,7 @@ export default function TrafficPage() {
             <h3>Average Volume by Hour × Day of Week</h3>
           </div>
         </div>
-        <div className={styles.chartBody}>{chartFrame(heatmapOption, "No data for the selected filters", onHeatmapClick)}</div>
+        <div className={styles.chartBody}>{chartFrame(heatmapOption, "No data for the selected filters", onHeatmapClick, false)}</div>
       </article>
 
       <article className={`${styles.chartCard} ${styles.chart3}`}>

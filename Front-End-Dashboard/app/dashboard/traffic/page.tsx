@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { attachCategoryClick } from "../../../lib/chart-click";
+import { useChartTheme, applyChartTheme } from "../../../lib/chart-theme";
 import ReactECharts from "echarts-for-react";
 import type { EChartsOption } from "echarts";
 import { TrendingUp } from "lucide-react";
@@ -170,6 +171,8 @@ function CustomSelect({ value, options, onChange }: { value: string; options: { 
 }
 
 export default function TrafficPage() {
+  // Chart furniture follows the active theme; series hues stay fixed.
+  const chartTheme = useChartTheme();
   const [activeTab, setActiveTab] = useState<"Descriptive" | "Predictive" | "Prescriptive">("Descriptive");
 
   // Global filters (Row A)
@@ -268,6 +271,62 @@ export default function TrafficPage() {
     return { curAdt, volumeDeltaPct, peakHour, peakHourVolume, busiest, plazaTotal, congestionDelta, sparkline };
   }, [data]);
 
+  /**
+   * One-sentence takeaway per chart.
+   *
+   * A title like "Volume by Plaza" names the axes but leaves the reader to find
+   * the finding themselves. These state it outright. They are computed from the
+   * loaded rows rather than written as copy, so they stay true when the range,
+   * direction or class filter changes — a hardcoded sentence would quietly start
+   * lying the moment someone moved a filter.
+   */
+  const takeaways = useMemo(() => {
+    if (!data || !derived) return null;
+    const { hourDow, byPlaza, speedByHour } = data;
+
+    // Trend: where the corridor sits now versus the comparable previous window.
+    const d = derived.volumeDeltaPct;
+    const trend =
+      derived.curAdt > 0
+        ? Math.abs(d) < 0.5
+          ? `Holding flat at ${fmtInt(derived.curAdt)} vehicles per day versus the previous period.`
+          : `Averaging ${fmtInt(derived.curAdt)} vehicles per day — ${d > 0 ? "up" : "down"} ${Math.abs(d).toFixed(1)}% on the previous period.`
+        : null;
+
+    // Heatmap: the single busiest hour-of-week cell.
+    let peak: { dow: number; hour: number; v: number } | null = null;
+    for (const r of hourDow) if (!peak || r.v > peak.v) peak = r;
+    const heatmap = peak
+      ? `Busiest window is ${DOW_LABELS[(peak.dow + 6) % 7]} at ${fmtHour(peak.hour)}, averaging ${fmtInt(peak.v)} vehicles.`
+      : null;
+
+    // Plaza: concentration of the corridor at its single busiest plaza.
+    const plaza =
+      derived.busiest && derived.plazaTotal > 0
+        ? `${derived.busiest.plaza} carries ${((derived.busiest.v / derived.plazaTotal) * 100).toFixed(1)}% of corridor volume, the heaviest of ${byPlaza.length} plazas.`
+        : null;
+
+    // Speed: only name a worst hour if the hours actually separate.
+    //
+    // On the live corridor this series is nearly flat (roughly 7-11 km/h at every
+    // hour), so picking the single minimum would crown whichever hour won by a
+    // decimal — and there are ties. When the spread is small relative to the
+    // level, the honest finding is the flatness itself, not an argmin.
+    const speeds = speedByHour.filter((r) => r.speed > 0);
+    let speed: string | null = null;
+    if (speeds.length > 0) {
+      const lo = speeds.reduce((a, b) => (b.speed < a.speed ? b : a));
+      const hi = speeds.reduce((a, b) => (b.speed > a.speed ? b : a));
+      const mean = speeds.reduce((s, r) => s + r.speed, 0) / speeds.length;
+      const separates = mean > 0 && (hi.speed - lo.speed) / mean >= 0.5;
+      speed = separates
+        ? `Jams are slowest at ${fmtHour(lo.hour)}, averaging ${lo.speed.toFixed(0)} km/h against ${hi.speed.toFixed(0)} km/h at best.`
+        : `Once a jam forms it crawls at much the same pace all day — ${lo.speed.toFixed(0)}–${hi.speed.toFixed(0)} km/h, easing slightly around ${fmtHour(hi.hour)}.`;
+    }
+
+    return { trend, heatmap, plaza, speed };
+  }, [data, derived]);
+
   // ---------- Chart options ----------
   const trendRows = useMemo(() => (data ? buildTrend(data, grain) : []), [data, grain]);
 
@@ -347,13 +406,16 @@ export default function TrafficPage() {
         itemWidth: 8,
         itemHeight: 110,
         padding: 0,
-        inRange: { color: SEQ },
+        // The lightest step is the theme's 'empty' tone: near-white on light,
+        // near-black on dark, so low values recede in both instead of glowing.
+        inRange: { color: [chartTheme.seqLightest, ...SEQ.slice(1)] },
         textStyle: { fontSize: 10 },
         formatter: (v) => fmtCompact(Number(v)),
       },
       series: [{ type: "heatmap", data: heatData, emphasis: { itemStyle: { borderColor: "#1d3aa8", borderWidth: 1 } } }],
     };
-  }, [data]);
+    // chartTheme is a dependency because the ramp's lightest step comes from it.
+  }, [data, chartTheme]);
 
   const plazaChart = useMemo<{
     option: EChartsOption;
@@ -486,6 +548,21 @@ export default function TrafficPage() {
         ],
       },
     };
+  }, [data, impactMode]);
+
+  // Separate from `takeaways` because it depends on the Events/Holidays toggle.
+  const impactTakeaway = useMemo(() => {
+    if (!data) return null;
+    if (impactMode === "Events") {
+      const rows = data.eventImpact.filter((e) => e.deviationPct != null);
+      if (rows.length === 0) return null;
+      const top = rows.reduce((a, b) => (Math.abs(b.deviationPct as number) > Math.abs(a.deviationPct as number) ? b : a));
+      const pct = top.deviationPct as number;
+      return `Largest swing: ${top.label} on ${top.date}, ${pct >= 0 ? "lifting" : "cutting"} venue-exit entries ${Math.abs(pct).toFixed(0)}% ${pct >= 0 ? "above" : "below"} its local baseline.`;
+    }
+    if (data.holidayImpact.length === 0) return null;
+    const top = data.holidayImpact.reduce((a, b) => (Math.abs(b.deviationPct) > Math.abs(a.deviationPct) ? b : a));
+    return `Largest swing: ${top.label}, ${top.deviationPct >= 0 ? "adding" : "removing"} ${Math.abs(top.deviationPct).toFixed(0)}% versus normal days across ${top.occurrences} occurrence${top.occurrences === 1 ? "" : "s"}.`;
   }, [data, impactMode]);
 
   const sparkOption = useMemo<EChartsOption | null>(() => {
@@ -661,7 +738,7 @@ export default function TrafficPage() {
     if (!option) return <div className={styles.placeholder}>{emptyNote}</div>;
     return (
       <ReactECharts
-        option={option}
+        option={applyChartTheme(option, chartTheme)}
         notMerge
         lazyUpdate
         style={{ width: "100%", height: "100%" }}
@@ -876,6 +953,7 @@ export default function TrafficPage() {
         <div className={styles.chartHead}>
           <div className={styles.headText}>
             <h3>Volume Trend</h3>
+            {takeaways?.trend && <p className={styles.takeaway}>{takeaways?.trend}</p>}
           </div>
         </div>
         <div className={styles.heroFilters}>
@@ -938,6 +1016,7 @@ export default function TrafficPage() {
         <div className={styles.chartHead}>
           <div className={styles.headText}>
             <h3>Average Volume by Hour × Day of Week</h3>
+            {takeaways?.heatmap && <p className={styles.takeaway}>{takeaways?.heatmap}</p>}
           </div>
         </div>
         <div className={styles.chartBody}>{chartFrame(heatmapOption, "No data for the selected filters", onHeatmapClick, false)}</div>
@@ -947,6 +1026,7 @@ export default function TrafficPage() {
         <div className={styles.chartHead}>
           <div className={styles.headText}>
             <h3>Volume by Plaza</h3>
+            {takeaways?.plaza && <p className={styles.takeaway}>{takeaways?.plaza}</p>}
           </div>
           <button className={styles.secondaryButton} onClick={() => setAllPlazasOpen(true)}>
             View all plazas
@@ -961,6 +1041,7 @@ export default function TrafficPage() {
         <div className={styles.chartHead}>
           <div className={styles.headText}>
             <h3>Average Speed in Jams by Hour</h3>
+            {takeaways?.speed && <p className={styles.takeaway}>{takeaways?.speed}</p>}
           </div>
         </div>
         <div className={styles.chartBody}>{chartFrame(speedOption, "No congestion data in the selected range", onSpeedClick)}</div>
@@ -970,6 +1051,7 @@ export default function TrafficPage() {
         <div className={styles.chartHead}>
           <div className={styles.headText}>
             <h3>{impactMode === "Events" ? "Arena Event Impact (venue exit entries)" : "Holiday Impact vs Normal Days"}</h3>
+            {impactTakeaway && <p className={styles.takeaway}>{impactTakeaway}</p>}
           </div>
           <button className={styles.secondaryButton} onClick={() => setImpactListOpen(true)}>
             View all

@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { attachCategoryClick } from "../../../lib/chart-click";
+import { useChartTheme, applyChartTheme } from "../../../lib/chart-theme";
 import ReactECharts from "echarts-for-react";
 import type { EChartsOption } from "echarts";
 import { Leaf } from "lucide-react";
@@ -74,6 +75,8 @@ const prescriptiveEmissionReduction: EChartsOption = {
 };
 
 export default function SustainabilityPage() {
+  // Chart furniture follows the active theme; series hues stay fixed.
+  const chartTheme = useChartTheme();
   const [activeTab, setActiveTab] = useState<"Descriptive" | "Predictive" | "Prescriptive">("Descriptive");
 
   // Global filters
@@ -133,6 +136,58 @@ export default function SustainabilityPage() {
 
     return { deltaPct, heavyVolPct, heavyCo2Pct, avgDailyT, totVol, totCo2 };
   }, [data]);
+
+  /**
+   * One-sentence takeaway per chart, computed from the loaded rows so they track
+   * the active range instead of going stale as fixed copy would.
+   *
+   * "Heavy" follows this page's own definition (Class 2 and above, set in
+   * `derived`) so the sentences agree with the KPI card rather than quietly
+   * using a different cut of the fleet.
+   */
+  const takeaways = useMemo(() => {
+    if (!data || !derived) return null;
+    const { kpis, heatmap, aqiMonthly } = data;
+
+    const d = derived.deltaPct;
+    const trend =
+      Math.abs(d) < 0.5
+        ? `${fmtInt(kpis.totalCo2T)} tonnes of CO₂ modelled, effectively flat against the previous period.`
+        : `${fmtInt(kpis.totalCo2T)} tonnes of CO₂ modelled — ${d > 0 ? "up" : "down"} ${Math.abs(d).toFixed(1)}% on the previous period.`;
+
+    // Two charts, two different points. The share chart states the disproportion;
+    // the fleet-mix chart states the per-km intensity that causes it.
+    const ratio = derived.heavyVolPct > 0 ? derived.heavyCo2Pct / derived.heavyVolPct : null;
+    const heavyShare =
+      ratio != null
+        ? `Heavy vehicles are ${fmt1(derived.heavyVolPct)}% of traffic but ${fmt1(derived.heavyCo2Pct)}% of CO₂ — ${fmt1(ratio)}× their share of the road.`
+        : null;
+
+    const lightest = data.classes.reduce((a, b) => (b.co2_g_per_km < a.co2_g_per_km ? b : a));
+    const dirtiest = data.classes.reduce((a, b) => (b.co2_g_per_km > a.co2_g_per_km ? b : a));
+    const fleet =
+      lightest.co2_g_per_km > 0
+        ? `The gap is per-kilometre intensity: ${dirtiest.label} emit ${fmtInt(dirtiest.co2_g_per_km)} g/km against ${fmtInt(lightest.co2_g_per_km)} g/km for ${lightest.label} — ${(dirtiest.co2_g_per_km / lightest.co2_g_per_km).toFixed(1)}× per vehicle-kilometre.`
+        : null;
+
+    let peak: { dow: number; hour: number; v: number } | null = null;
+    for (const r of heatmap) if (!peak || r.v > peak.v) peak = r;
+    const timing = peak
+      ? `Emissions peak ${DOW_LABELS[(peak.dow + 6) % 7]} at ${fmtHour(peak.hour)}, averaging ${fmtInt(peak.v)} kg of CO₂.`
+      : null;
+
+    // Dry season hazes over, the monsoon washes it out — worth stating plainly.
+    // Months with no PM2.5 reading would otherwise win "cleanest" at zero.
+    const pm = aqiMonthly.filter((r): r is typeof r & { pm25: number } => r.pm25 != null);
+    let aqi: string | null = null;
+    if (pm.length > 1) {
+      const worst = pm.reduce((a, b) => (b.pm25 > a.pm25 ? b : a));
+      const best = pm.reduce((a, b) => (b.pm25 < a.pm25 ? b : a));
+      aqi = `PM2.5 runs highest in ${monthLabel(worst.m)} at ${fmt1(worst.pm25)} µg/m³ and cleanest in ${monthLabel(best.m)} at ${fmt1(best.pm25)} — a ${(worst.pm25 / Math.max(best.pm25, 0.1)).toFixed(1)}× seasonal swing.`;
+    }
+
+    return { trend, fleet, heavyShare, timing, aqi };
+  }, [data, derived]);
 
   // ---------- Hero: CO2 trend by class ----------
   type TrendRow = { label: string; c1: number; c2: number; c3: number; nb: number; sb: number; total: number };
@@ -350,11 +405,12 @@ export default function SustainabilityPage() {
         type: "bar" as const,
         stack: "share",
         data: rows.map((r) => Number(r.shares[ci].toFixed(1))),
-        itemStyle: { color: CLASS_RAMP[ci], borderColor: "#fff", borderWidth: 1 },
+        itemStyle: { color: CLASS_RAMP[ci], borderColor: chartTheme.tooltipBg, borderWidth: 1 },
         barMaxWidth: 18,
       })),
     };
-  }, [fleetRows]);
+    // chartTheme supplies the stack divider colour.
+  }, [fleetRows, chartTheme]);
 
   // ---------- Heavy-vehicle share of CO2 over time ----------
   const heavyShareRows = useMemo(() => {
@@ -588,7 +644,7 @@ export default function SustainabilityPage() {
     if (!option) return <div className={styles.placeholder}>{emptyNote}</div>;
     return (
       <ReactECharts
-        option={option}
+        option={applyChartTheme(option, chartTheme)}
         notMerge
         lazyUpdate
         style={{ width: "100%", height: "100%" }}
@@ -739,6 +795,7 @@ export default function SustainabilityPage() {
         <div className={styles.chartHead}>
           <div className={styles.headText}>
             <h3>CO₂ Emissions Trend by Vehicle Class</h3>
+            {takeaways?.trend && <p className={styles.takeaway}>{takeaways?.trend}</p>}
           </div>
         </div>
         <div className={styles.heroFilters}>
@@ -762,6 +819,7 @@ export default function SustainabilityPage() {
         <div className={styles.chartHead}>
           <div className={styles.headText}>
             <h3>When Emissions Happen</h3>
+            {takeaways?.timing && <p className={styles.takeaway}>{takeaways?.timing}</p>}
             {timeTakeaway && <p className={styles.subtitle}>{timeTakeaway}</p>}
           </div>
           <div className={styles.segmentedSmall}>
@@ -780,6 +838,7 @@ export default function SustainabilityPage() {
         <div className={styles.chartHead}>
           <div className={styles.headText}>
             <h3>Fleet Mix vs Pollution Load</h3>
+            {takeaways?.fleet && <p className={styles.takeaway}>{takeaways?.fleet}</p>}
             {fleetTakeaway && <p className={styles.subtitle}>{fleetTakeaway}</p>}
           </div>
         </div>
@@ -791,6 +850,7 @@ export default function SustainabilityPage() {
         <div className={styles.chartHead}>
           <div className={styles.headText}>
             <h3>Heavy-Vehicle Share of CO₂</h3>
+            {takeaways?.heavyShare && <p className={styles.takeaway}>{takeaways?.heavyShare}</p>}
             {heavyShareTakeaway && <p className={styles.subtitle}>{heavyShareTakeaway}</p>}
           </div>
         </div>
@@ -801,6 +861,7 @@ export default function SustainabilityPage() {
         <div className={styles.chartHead}>
           <div className={styles.headText}>
             <h3>Measured Air Quality by Month</h3>
+            {takeaways?.aqi && <p className={styles.takeaway}>{takeaways?.aqi}</p>}
           </div>
         </div>
         <div className={styles.chartBody}>{chartFrame(aqiOption, "No station readings in the selected range", onAqiClick)}</div>

@@ -807,3 +807,15 @@
     grid-column: 1 / -1;
   }
 }
+
+/* Computed one-sentence finding under a chart title (see `takeaways`).
+   Wraps rather than truncating: a takeaway cut off mid-clause is worse than
+   none, and these are short enough to fit two lines at the narrowest card. */
+.takeaway {
+  margin: 3px 0 0;
+  font-size: 0.76rem;
+  line-height: 1.35;
+  font-weight: 500;
+  color: var(--text-secondary, #4b5e7d);
+  max-width: 62ch;
+}

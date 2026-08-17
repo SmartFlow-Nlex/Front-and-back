@@ -69,6 +69,135 @@
   /* Transitions */
   --transition-fast: 150ms ease;
   --transition-base: 220ms ease;
+
+  /* Chart surface tokens — read by ECharts through getComputedStyle so plots
+     follow the theme instead of hardcoding near-black text on any background. */
+  --chart-text: #4b5e7d;
+  --chart-axis: #c9d3e4;
+  --chart-split: #eaeef6;
+  --chart-tooltip-bg: #ffffff;
+  --chart-tooltip-text: #071a44;
+  --chart-seq-lightest: #eef2fb;
+}
+
+/* ============================================================
+   DARK THEME
+   Only tokens are redefined — no component rule below this point needs to
+   know which theme is active. Three states are covered deliberately:
+     :root                             the complete light palette (above)
+     prefers-color-scheme: dark        the default "System" setting, which
+                                       stamps no attribute at all
+     [data-theme="dark"]               an explicit user choice, which must win
+                                       even on a light OS
+   The media query is guarded with :not([data-theme="light"]) so choosing Light
+   on a dark OS is respected.
+   ============================================================ */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg-body: #0d1117;
+    --bg-surface: #161b22;
+    --bg-surface-hover: #1c2230;
+    --bg-sidebar: #0a0e14;
+    --bg-sidebar-active: #1a2942;
+    --bg-sidebar-hover: rgba(255, 255, 255, 0.06);
+    --bg-topbar: #161b22;
+    --bg-login: #0d1117;
+
+    --text-primary: #e6edf3;
+    --text-secondary: #9aa8bd;
+    --text-muted: #7d8b9e;
+
+    --brand-primary: #5c7aff;
+    --brand-primary-light: #7d93ff;
+    --brand-primary-dark: #3660ff;
+
+    /* Status colours keep their hue but drop the pale fills, which glow on a
+       dark ground; borders carry the meaning instead. */
+    --color-success: #3fb950;
+    --color-success-bg: rgba(63, 185, 80, 0.12);
+    --color-success-border: rgba(63, 185, 80, 0.35);
+    --color-warning: #f0883e;
+    --color-warning-bg: rgba(240, 136, 62, 0.12);
+    --color-warning-border: rgba(240, 136, 62, 0.35);
+    --color-danger: #f85149;
+    --color-danger-bg: rgba(248, 81, 73, 0.12);
+    --color-danger-border: rgba(248, 81, 73, 0.35);
+    --color-info: #6e9bff;
+    --color-info-bg: rgba(110, 155, 255, 0.12);
+    --color-info-border: rgba(110, 155, 255, 0.35);
+    --color-purple: #a371f7;
+    --color-purple-bg: rgba(163, 113, 247, 0.14);
+
+    /* Dark surfaces read depth from borders, not drop shadows. */
+    --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.4);
+    --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.45);
+    --shadow-lg: 0 10px 24px rgba(0, 0, 0, 0.55);
+    --shadow-card: 0 2px 8px rgba(0, 0, 0, 0.4);
+
+    --chart-text: #9aa8bd;
+    --chart-axis: #30363d;
+    --chart-split: #21262d;
+    --chart-tooltip-bg: #1c2230;
+    --chart-tooltip-text: #e6edf3;
+    --chart-seq-lightest: #1f2937;
+  }
+}
+
+:root[data-theme="dark"] {
+  --bg-body: #0d1117;
+  --bg-surface: #161b22;
+  --bg-surface-hover: #1c2230;
+  --bg-sidebar: #0a0e14;
+  --bg-sidebar-active: #1a2942;
+  --bg-sidebar-hover: rgba(255, 255, 255, 0.06);
+  --bg-topbar: #161b22;
+  --bg-login: #0d1117;
+
+  --text-primary: #e6edf3;
+  --text-secondary: #9aa8bd;
+  --text-muted: #7d8b9e;
+
+  --brand-primary: #5c7aff;
+  --brand-primary-light: #7d93ff;
+  --brand-primary-dark: #3660ff;
+
+  --color-success: #3fb950;
+  --color-success-bg: rgba(63, 185, 80, 0.12);
+  --color-success-border: rgba(63, 185, 80, 0.35);
+  --color-warning: #f0883e;
+  --color-warning-bg: rgba(240, 136, 62, 0.12);
+  --color-warning-border: rgba(240, 136, 62, 0.35);
+  --color-danger: #f85149;
+  --color-danger-bg: rgba(248, 81, 73, 0.12);
+  --color-danger-border: rgba(248, 81, 73, 0.35);
+  --color-info: #6e9bff;
+  --color-info-bg: rgba(110, 155, 255, 0.12);
+  --color-info-border: rgba(110, 155, 255, 0.35);
+  --color-purple: #a371f7;
+  --color-purple-bg: rgba(163, 113, 247, 0.14);
+
+  --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.4);
+  --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.45);
+  --shadow-lg: 0 10px 24px rgba(0, 0, 0, 0.55);
+  --shadow-card: 0 2px 8px rgba(0, 0, 0, 0.4);
+
+  --chart-text: #9aa8bd;
+  --chart-axis: #30363d;
+  --chart-split: #21262d;
+  --chart-tooltip-bg: #1c2230;
+  --chart-tooltip-text: #e6edf3;
+  --chart-seq-lightest: #1f2937;
+}
+
+/* Respect users who ask the OS to reduce motion. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
 }
 
 
@@ -4558,4 +4687,99 @@ body {
 
 .maplibregl-popup-tip {
   display: none !important;
+}
+/* ============================================================
+   NAV GROUPS — the sidebar "spine"
+   Grouping links by intent, with admin utilities pushed to the bottom, so the
+   list reads as a hierarchy instead of nine equal-weight items.
+   ============================================================ */
+.ds-nav-group {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.ds-nav-group + .ds-nav-group {
+  margin-top: var(--space-lg);
+}
+
+.ds-nav-group-label {
+  padding: 0 12px 6px;
+  font-size: 0.66rem;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--text-on-dark-muted);
+  opacity: 0.65;
+}
+
+/* Admin is separated by a rule and pushed down, away from daily-use links. */
+.ds-nav-group-admin {
+  margin-top: auto;
+  padding-top: var(--space-lg);
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+/* The nav must be able to grow for margin-top:auto to push Admin down. */
+.ds-sidebar-nav {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+/* ============================================================
+   THEME TOGGLE — Light / Dark / System
+   ============================================================ */
+.ds-theme-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 3px;
+  background: var(--bg-body);
+  border: 1px solid var(--color-info-border);
+  border-radius: var(--radius-full);
+}
+
+.ds-theme-option {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  border: none;
+  background: transparent;
+  border-radius: var(--radius-full);
+  color: var(--text-muted);
+  font: inherit;
+  font-size: 0.78rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background var(--transition-fast), color var(--transition-fast);
+}
+
+.ds-theme-option:hover {
+  color: var(--text-primary);
+  background: var(--bg-surface-hover);
+}
+
+.ds-theme-option.active {
+  background: var(--bg-surface);
+  color: var(--brand-primary);
+  box-shadow: var(--shadow-sm);
+}
+
+.ds-theme-option:focus-visible {
+  outline: 2px solid var(--brand-primary);
+  outline-offset: 1px;
+}
+
+/* Below ~1100px the labels are dropped and the control becomes three icons. */
+@media (max-width: 1100px) {
+  .ds-theme-option-label {
+    display: none;
+  }
+  .ds-theme-option {
+    padding: 6px 8px;
+  }
 }

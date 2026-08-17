@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { attachCategoryClick } from "../../../lib/chart-click";
+import { useChartTheme, applyChartTheme } from "../../../lib/chart-theme";
 import ReactECharts from "echarts-for-react";
 import type { EChartsOption } from "echarts";
 import { AlertTriangle } from "lucide-react";
@@ -85,6 +86,8 @@ const prescriptiveResourceOption: EChartsOption = {
 };
 
 export default function IncidentPage() {
+  // Chart furniture follows the active theme; series hues stay fixed.
+  const chartTheme = useChartTheme();
   const [activeTab, setActiveTab] = useState<"Descriptive" | "Predictive" | "Prescriptive">("Descriptive");
 
   // Global filters
@@ -152,6 +155,55 @@ export default function IncidentPage() {
 
     return { deltaPct, topHotspot, hotspotTotal, wetRate, dryRate, rainMultiplier };
   }, [data]);
+
+  /**
+   * One-sentence takeaway per chart, computed from the loaded rows so they follow
+   * the range and weather filters instead of going stale as fixed copy would.
+   *
+   * The hour-of-week chart deliberately gets a limitation instead of a finding:
+   * the operations log has no reported time on any row, so its hour column is
+   * derived rather than observed. Naming a "peak hour" from it would dress a
+   * modelling artefact up as evidence.
+   */
+  const takeaways = useMemo(() => {
+    if (!data || !derived) return null;
+    const { kpis, causes, types } = data;
+
+    const d = derived.deltaPct;
+    const trend =
+      Math.abs(d) < 0.5
+        ? `${fmtInt(kpis.totalIncidents)} incidents logged, essentially level with the previous period.`
+        : `${fmtInt(kpis.totalIncidents)} incidents logged — ${d > 0 ? "up" : "down"} ${Math.abs(d).toFixed(1)}% on the previous period.`;
+
+    const t = derived.topHotspot;
+    const hotspot =
+      t && derived.hotspotTotal > 0
+        ? `${kmLabel(t.km_bin)} is the worst stretch: ${fmtInt(t.total)} incidents, ${((t.total / derived.hotspotTotal) * 100).toFixed(1)}% of all located cases.`
+        : null;
+
+    const rows = causeMode === "Causes" ? causes : types;
+    const catTotal = rows.reduce((s, r) => s + r.total, 0);
+    const cause =
+      rows.length > 0 && catTotal > 0
+        ? `${rows[0].label} leads with ${fmtInt(rows[0].total)} cases, ${((rows[0].total / catTotal) * 100).toFixed(0)}% of those charted${rows[0].injuries > 0 ? `, and ${fmtInt(rows[0].injuries)} injuries` : ""}.`
+        : null;
+
+    // Rain raising crashes is the intuitive result, not the observed one here.
+    const m = derived.rainMultiplier;
+    const weatherLine =
+      m == null
+        ? null
+        : m >= 1.05
+          ? `Rain raises the crash rate ${m.toFixed(2)}× — ${fmt1(derived.wetRate)} crashes per day in wet hours against ${fmt1(derived.dryRate)} in dry.`
+          : m <= 0.95
+            ? `Rain does not raise crashes on this corridor — ${fmt1(derived.wetRate)} per day in wet hours against ${fmt1(derived.dryRate)} in dry, once the rarity of wet hours is accounted for.`
+            : `Wet and dry hours crash at much the same rate — ${fmt1(derived.wetRate)} versus ${fmt1(derived.dryRate)} per day.`;
+
+    const timing =
+      "Timing is modelled, not reported: no row in the operations log carries a reported time, so read this as a shape rather than evidence.";
+
+    return { trend, hotspot, cause, weather: weatherLine, timing };
+  }, [data, derived, causeMode]);
 
   // ---------- Trend ----------
   type TrendRow = { label: string; road: number; moto: number; stalled: number; total: number };
@@ -525,7 +577,7 @@ export default function IncidentPage() {
     if (!option) return <div className={styles.placeholder}>{emptyNote}</div>;
     return (
       <ReactECharts
-        option={option}
+        option={applyChartTheme(option, chartTheme)}
         notMerge
         lazyUpdate
         style={{ width: "100%", height: "100%" }}
@@ -703,6 +755,7 @@ export default function IncidentPage() {
         <div className={styles.chartHead}>
           <div className={styles.headText}>
             <h3>Incident Trend</h3>
+            {takeaways?.trend && <p className={styles.takeaway}>{takeaways?.trend}</p>}
           </div>
         </div>
         <div className={styles.heroFilters}>
@@ -726,6 +779,7 @@ export default function IncidentPage() {
         <div className={styles.chartHead}>
           <div className={styles.headText}>
             <h3>When Incidents Happen</h3>
+            {takeaways?.timing && <p className={styles.takeaway}>{takeaways?.timing}</p>}
             {timeTakeaway && <p className={styles.subtitle}>{timeTakeaway}</p>}
           </div>
           <div className={styles.segmentedSmall}>
@@ -744,6 +798,7 @@ export default function IncidentPage() {
         <div className={styles.chartHead}>
           <div className={styles.headText}>
             <h3>Hotspots by Km Segment</h3>
+            {takeaways?.hotspot && <p className={styles.takeaway}>{takeaways?.hotspot}</p>}
           </div>
           <button className={styles.secondaryButton} onClick={() => setAllHotspotsOpen(true)}>
             View all
@@ -758,6 +813,7 @@ export default function IncidentPage() {
         <div className={styles.chartHead}>
           <div className={styles.headText}>
             <h3>{causeMode === "Causes" ? "Top Incident Causes" : "Top Accident Types"}</h3>
+            {takeaways?.cause && <p className={styles.takeaway}>{takeaways?.cause}</p>}
           </div>
           <div className={styles.segmentedSmall}>
             {(["Causes", "Types"] as const).map((m) => (
@@ -775,6 +831,7 @@ export default function IncidentPage() {
         <div className={styles.chartHead}>
           <div className={styles.headText}>
             <h3>Incidents per Day: Dry vs Wet Weather</h3>
+            {takeaways?.weather && <p className={styles.takeaway}>{takeaways?.weather}</p>}
           </div>
         </div>
         <div className={styles.chartBody}>{chartFrame(weatherChart, "No weather data in range", onWeatherClick)}</div>

@@ -4632,173 +4632,106 @@ body {
 
 /* ===========================================================================
    HOME TAB — hero
+
+   The artwork carries the wordmark, tagline and brand graphic itself, so nothing
+   is drawn over it. These rules only frame it.
    =========================================================================== */
 
-.ds-hero {
+.ds-hero-card {
   position: relative;
-  /* Tall enough to be a front door, but capped against viewport height so it
-     never pushes the corridor status entirely below the fold on a laptop. */
-  height: clamp(340px, 46vh, 460px);
-  display: flex;
-  align-items: flex-end;
+  /* Was a flat 500px, which overwhelmed a laptop screen and pushed the corridor
+     panel out of sight. Scaling with the viewport keeps it generous on a large
+     display and sensible on a small one. */
+  height: clamp(300px, 42vw, 500px);
   border-radius: var(--radius-lg);
   overflow: hidden;
+  /* Border and shadow from tokens so the frame follows the theme; the original
+     had a bare shadow-sm and no edge, which left the panel floating against the
+     page in dark mode. */
   border: 1px solid var(--border-default);
-  box-shadow: var(--shadow-lg);
+  box-shadow: var(--shadow-md);
   margin-bottom: 22px;
   isolation: isolate;
+  animation: heroIn 420ms ease-out backwards;
 }
 
-.ds-hero-img {
+@keyframes heroIn {
+  from { opacity: 0; transform: translateY(8px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+.ds-hero-image {
   object-fit: cover;
-  object-position: center 42%;
-  /* The photograph is a stage for the wordmark, not the subject. Cooling and
-     desaturating it is what lets white type sit on it without a heavy slab. */
-  filter: saturate(0.42) contrast(1.06) brightness(0.92);
-  transform: scale(1.03);
+  /* Biased slightly above centre: the logo sits in the upper-middle of the
+     artwork, so this keeps it framed when the card is short and wide. */
+  object-position: center 45%;
 }
 
-/* Graded from deep navy at the lower-left, where the type sits, out to almost
-   nothing at the top-right so the tollbooths stay readable.
-   Both stops are dark, so this surface keeps white text in either theme — it is
-   the one panel that deliberately does not flip. */
-.ds-hero-wash {
+/* Only the bottom eighth, and only enough to seat the cue. Kept off the logo
+   entirely so the artwork reads as the designer drew it. */
+.ds-hero-fade {
   position: absolute;
-  inset: 0;
-  background:
-    linear-gradient(105deg, rgba(4, 18, 44, 0.95) 0%, rgba(4, 18, 44, 0.80) 38%, rgba(4, 18, 44, 0.30) 72%, rgba(4, 18, 44, 0.12) 100%),
-    linear-gradient(0deg, rgba(4, 18, 44, 0.72) 0%, rgba(4, 18, 44, 0) 55%);
-}
-
-/* Softens the corners so the image does not end on a hard rectangle. */
-.ds-hero-vignette {
-  position: absolute;
-  inset: 0;
-  background: radial-gradient(120% 80% at 50% 45%, transparent 55%, rgba(2, 10, 26, 0.45) 100%);
+  inset: auto 0 0 0;
+  height: 84px;
+  background: linear-gradient(to top, rgba(255, 255, 255, 0.92) 0%, rgba(255, 255, 255, 0.55) 45%, rgba(255, 255, 255, 0) 100%);
   pointer-events: none;
-}
-
-.ds-hero-inner {
-  position: relative;
   z-index: 1;
-  padding: 0 34px 34px;
-  max-width: 640px;
 }
 
-.ds-hero-eyebrow {
-  margin: 0 0 12px;
-  font-size: 0.68rem;
-  font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: 0.16em;
-  color: rgba(255, 255, 255, 0.62);
-}
-
-.ds-hero-title {
-  margin: 0;
-  font-size: clamp(2.1rem, 5.2vw, 3.6rem);
-  font-weight: 900;
-  line-height: 0.98;
-  letter-spacing: -0.03em;
-  color: #ffffff;
-  /* Lifts the type off a busy photograph without needing a darker wash. */
-  text-shadow: 0 2px 24px rgba(2, 10, 26, 0.55);
-}
-
-/* The wordmark's two-tone split, matching the logo. */
-.ds-hero-title span { color: var(--brand-accent); }
-
-.ds-hero-tagline {
-  margin: 10px 0 0;
-  font-size: clamp(0.86rem, 1.6vw, 1.02rem);
-  font-weight: 500;
-  letter-spacing: 0.03em;
-  color: rgba(255, 255, 255, 0.82);
-}
-
-.ds-hero-facts {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 9px;
-  margin: 20px 0 0;
-}
-
-.ds-hero-facts > div {
-  min-width: 88px;
-  padding: 9px 15px;
-  border-radius: var(--radius-sm);
-  /* Frosted rather than solid, so the photograph still reads through and the
-     hero does not turn into another opaque card. */
-  background: rgba(255, 255, 255, 0.10);
-  border: 1px solid rgba(255, 255, 255, 0.17);
-  backdrop-filter: blur(7px);
-}
-
-.ds-hero-facts dt {
-  display: flex;
-  align-items: center;
-  gap: 5px;
-  font-size: 0.63rem;
-  font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: 0.1em;
-  color: rgba(255, 255, 255, 0.66);
-}
-
-.ds-hero-facts dd {
-  margin: 4px 0 0;
-  font-size: 1.05rem;
-  font-weight: 800;
-  letter-spacing: -0.01em;
-  color: #ffffff;
-}
-
-/* Jump link to the corridor diagram, bottom-right so it does not crowd the
-   wordmark the way a centred one did. */
-.ds-hero-jump {
+.ds-scroll-down {
   position: absolute;
-  right: 26px;
-  bottom: 26px;
+  left: 50%;
+  bottom: 14px;
+  transform: translateX(-50%);
   z-index: 2;
   display: inline-flex;
   align-items: center;
   gap: 7px;
-  padding: 9px 16px;
+  padding: 8px 18px;
   border-radius: var(--radius-full);
-  border: 1px solid rgba(255, 255, 255, 0.24);
-  background: rgba(255, 255, 255, 0.12);
-  backdrop-filter: blur(7px);
-  color: #ffffff;
-  font-size: 0.78rem;
+  /* A defined pill rather than text floating on the photograph. The scrim behind
+     it is light in both themes because it sits on the artwork, not the page, so
+     the ink here is deliberately fixed rather than tokenised. */
+  background: rgba(255, 255, 255, 0.86);
+  border: 1px solid rgba(9, 30, 66, 0.10);
+  box-shadow: 0 2px 10px rgba(9, 30, 66, 0.12);
+  backdrop-filter: blur(6px);
+  color: #0b2350;
+  font-size: 0.8rem;
   font-weight: 700;
+  letter-spacing: 0.01em;
   text-decoration: none;
-  transition: background 160ms ease, transform 160ms ease, border-color 160ms ease;
+  transition: background 160ms ease, box-shadow 160ms ease, transform 160ms ease;
 }
 
-.ds-hero-jump:hover {
-  background: rgba(255, 255, 255, 0.2);
-  border-color: rgba(255, 255, 255, 0.4);
-  transform: translateY(-1px);
+.ds-scroll-down:hover {
+  background: #ffffff;
+  box-shadow: 0 4px 16px rgba(9, 30, 66, 0.18);
+  transform: translateX(-50%) translateY(-1px);
 }
 
-.ds-hero-jump:focus-visible { outline: 2px solid #ffffff; outline-offset: 2px; }
+.ds-scroll-down:focus-visible {
+  outline: 2px solid var(--brand-primary);
+  outline-offset: 2px;
+}
 
-.ds-hero-jump svg { animation: heroNudge 2.2s ease-in-out infinite; }
+/* A small nudge instead of the old 8px bounce, which drew more attention than a
+   secondary cue deserves. */
+.ds-scroll-down svg { animation: heroNudge 2.4s ease-in-out infinite; }
 
 @keyframes heroNudge {
   0%, 100% { transform: translateY(0); }
   50%      { transform: translateY(3px); }
 }
 
-@media (prefers-reduced-motion: reduce) {
-  .ds-hero-jump svg { animation: none; }
-  .ds-hero-jump:hover { transform: none; }
+@media (max-width: 720px) {
+  .ds-hero-card { height: clamp(190px, 46vw, 280px); }
+  .ds-hero-fade { height: 64px; }
+  .ds-scroll-down { font-size: 0.74rem; padding: 7px 14px; }
 }
 
-@media (max-width: 760px) {
-  .ds-hero { height: clamp(260px, 38vh, 320px); }
-  .ds-hero-inner { padding: 0 20px 22px; }
-  /* Below the wordmark there is no room for both; the jump link is the one that
-     can go, since the diagram is the next thing on the page anyway. */
-  .ds-hero-jump { display: none; }
+@media (prefers-reduced-motion: reduce) {
+  .ds-hero-card { animation: none; }
+  .ds-scroll-down svg { animation: none; }
+  .ds-scroll-down:hover { transform: translateX(-50%); }
 }

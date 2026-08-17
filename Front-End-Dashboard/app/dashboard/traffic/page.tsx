@@ -7,6 +7,7 @@ import ReactECharts from "echarts-for-react";
 import type { EChartsOption } from "echarts";
 import { TrendingUp } from "lucide-react";
 import DashboardChart from "../../../components/dashboard/DashboardChart";
+import ChartSkeleton, { KpiSkeleton } from "../../../components/dashboard/ChartSkeleton";
 import PageHeader from "../../../components/dashboard/PageHeader";
 import PredictiveVolumeChart from "../../../components/dashboard/PredictiveVolumeChart";
 import PredictiveCongestionChart from "../../../components/dashboard/PredictiveCongestionChart";
@@ -733,7 +734,7 @@ export default function TrafficPage() {
     onClick?: (p: never) => void,
     categoryFallback = true,
   ) => {
-    if (loading && !data) return <div className={styles.placeholder}>Loading…</div>;
+    if (loading && !data) return <ChartSkeleton />;
     if (error) return <div className={styles.placeholder}>Live data unavailable — is the backend running on port 4000?</div>;
     if (!option) return <div className={styles.placeholder}>{emptyNote}</div>;
     return (
@@ -756,7 +757,10 @@ export default function TrafficPage() {
     );
   };
 
-  const kpiValue = (v: string | null) => (loading && !data ? "…" : v ?? "—");
+  // A skeleton rather than an ellipsis: the tile keeps its height, so the KPI
+  // row does not resize under the cursor as the numbers arrive.
+  const kpiValue = (v: string | null) =>
+    loading && !data ? <KpiSkeleton /> : (v ?? "—");
 
   // ---------- Predictive / Prescriptive share the same shell ----------
   if (activeTab !== "Descriptive") {

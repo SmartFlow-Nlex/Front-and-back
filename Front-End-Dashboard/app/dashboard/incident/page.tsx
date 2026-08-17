@@ -7,6 +7,7 @@ import ReactECharts from "echarts-for-react";
 import type { EChartsOption } from "echarts";
 import { AlertTriangle } from "lucide-react";
 import DashboardChart from "../../../components/dashboard/DashboardChart";
+import ChartSkeleton, { KpiSkeleton } from "../../../components/dashboard/ChartSkeleton";
 import PageHeader from "../../../components/dashboard/PageHeader";
 import PredictiveIncidentChart from "../../../components/dashboard/PredictiveIncidentChart";
 import DateRangePicker from "../traffic/components/DateRangePicker";
@@ -572,7 +573,7 @@ export default function IncidentPage() {
   };
 
   const chartFrame = (option: EChartsOption | null, emptyNote: string, onClick?: (p: never) => void) => {
-    if (loading && !data) return <div className={styles.placeholder}>Loading…</div>;
+    if (loading && !data) return <ChartSkeleton />;
     if (error) return <div className={styles.placeholder}>Live data unavailable — is the backend running on port 4000?</div>;
     if (!option) return <div className={styles.placeholder}>{emptyNote}</div>;
     return (
@@ -595,7 +596,10 @@ export default function IncidentPage() {
     );
   };
 
-  const kpiValue = (v: string | null) => (loading && !data ? "…" : v ?? "—");
+  // A skeleton rather than an ellipsis: the tile keeps its height, so the KPI
+  // row does not resize under the cursor as the numbers arrive.
+  const kpiValue = (v: string | null) =>
+    loading && !data ? <KpiSkeleton /> : (v ?? "—");
 
   // ---------- Global filter controls ----------
   // Rendered on both the Descriptive shell and the Predictive one so the strip

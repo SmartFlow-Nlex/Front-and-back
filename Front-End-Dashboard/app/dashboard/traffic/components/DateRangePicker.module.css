@@ -9,7 +9,7 @@
   align-items: center;
   gap: 12px;
   background: #ffffff;
-  border: 1px solid #dce2ef;
+  border: 1px solid var(--border-strong);
   border-radius: 8px;
   padding: 6px 12px;
   font-size: 0.8rem;
@@ -87,7 +87,7 @@
 }
 
 .monthYearBtn:hover {
-  background: #f1f5f9;
+  background: var(--bg-surface-hover);
 }
 
 .monthsGrid, .yearsGrid {
@@ -113,7 +113,7 @@
 }
 
 .gridItemBtn:hover {
-  background: #f1f5f9;
+  background: var(--bg-surface-hover);
 }
 
 .gridItemBtn.selected {
@@ -136,7 +136,7 @@
 }
 
 .navBtn:hover {
-  background: #f1f5f9;
+  background: var(--bg-surface-hover);
   color: #0f172a;
 }
 
@@ -170,7 +170,7 @@
 }
 
 .dayBtn:hover:not(.disabled) {
-  background: #f1f5f9;
+  background: var(--bg-surface-hover);
 }
 
 .dayBtn.disabled {
@@ -210,7 +210,7 @@
 .presets {
   margin-top: 16px;
   padding-top: 12px;
-  border-top: 1px solid #f1f5f9;
+  border-top: 1px solid var(--bg-surface-hover);
   display: flex;
   gap: 8px;
   flex-wrap: wrap;

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 /* ══════════════════════════════════════════════════════════════════════════════
    OFFICIAL NLEX STATION DEFINITIONS
@@ -22,144 +22,80 @@ interface StationDef {
 
 
 /* ══════════════════════════════════════════════════════════════════════════════
-   TRAFFIC STATE TYPES & LEVEL MAP
+   LIVE CORRIDOR STATE
+
+   This section used to hold three hardcoded datasets (LIVE / +1HR / +2HR). It now
+   reads /api/dashboard/corridor-status, which derives per-exit, per-direction
+   status from the same Waze jam feed the Live Map uses.
+
+   Absence is information here: Waze only emits a record where there IS a jam, so
+   an exit with no recent row is flowing freely. Every exit therefore starts clear
+   and is darkened only by evidence.
 ══════════════════════════════════════════════════════════════════════════════ */
 
-type TrafficLevel  = "red" | "orange" | "green";
-type TrafficRecord = { speed: string; status: string; colorClass: string };
+const BACKEND = process.env.NEXT_PUBLIC_BACKEND_URL ?? "http://localhost:4000";
 
-const LEVEL_MAP: Record<TrafficLevel, TrafficRecord> = {
-  red:    { speed: "15 km/h", status: "CONGESTED (10%)", colorClass: "seg-red"    },
-  orange: { speed: "40 km/h", status: "SLOW (45%)",      colorClass: "seg-orange" },
-  green:  { speed: "95 km/h", status: "CLEAR (90%)",     colorClass: "seg-green"  },
+type SegmentStatus = "clear" | "slow" | "congested";
+
+type ExitStatus = {
+  exit: string;
+  direction: "NB" | "SB";
+  status: SegmentStatus;
+  level: number | null;
+  speedKmh: number | null;
+  jamCount: number;
+  observedAt: string | null;
 };
 
-/* ══════════════════════════════════════════════════════════════════════════════
-   THREE MOCK DATASETS  (key = "stationName-DIR")
-══════════════════════════════════════════════════════════════════════════════ */
-
-type DatasetKey = string;
-type Dataset    = Record<DatasetKey, TrafficLevel>;
-
-/** SLOT 0 — LIVE */
-const LIVE_DATA: Dataset = {
-  /* NB */
-  "Balintawak-NB":         "red",
-  "Karuhatan-NB":          "orange",
-  "Mindanao Ave-NB":       "orange",
-  "Paso de Blas-NB":       "green",
-  "Meycauayan-NB":         "red",
-  "Marilao-NB":            "green",
-  "Bocaue Interchange-NB": "green",
-  "Bocaue Barrier-NB":     "orange",   // toll plaza — traffic slows to pay
-  "Tambubong-NB":          "green",
-  "Tabang Guiguinto-NB":   "green",
-  "Balagtas-NB":           "green",
-  "Pulilan-NB":            "green",
-  "San Simon-NB":          "green",
-  "San Fernando-NB":       "green",
-  "Angeles-NB":            "green",
-  /* SB */
-  "Angeles-SB":            "green",
-  "San Fernando-SB":       "green",
-  "San Simon-SB":          "green",
-  "Pulilan-SB":            "green",
-  "Balagtas-SB":           "green",
-  "Tabang Guiguinto-SB":   "green",
-  "Tambubong-SB":          "green",
-  "Bocaue Barrier-SB":     "orange",   // toll collection point
-  "Bocaue Interchange-SB": "green",
-  "Marilao-SB":            "orange",
-  "Meycauayan-SB":         "red",
-  "Paso de Blas-SB":       "green",
-  "Karuhatan-SB":          "green",
-  "Mindanao Ave-SB":       "orange",
-  "Balintawak-SB":         "red",
+type CorridorStatus = {
+  windowMinutes: number;
+  segments: ExitStatus[];
+  feed: { newestAt: string | null; ageMinutes: number | null; stale: boolean };
 };
 
-/** SLOT 1 — +1 HR forecast: congestion spreads toward metro, toll backs up */
-const PLUS1HR_DATA: Dataset = {
-  /* NB */
-  "Balintawak-NB":         "orange",   // easing
-  "Karuhatan-NB":          "red",      // building
-  "Mindanao Ave-NB":       "red",
-  "Paso de Blas-NB":       "orange",   // new slow
-  "Meycauayan-NB":         "red",      // still heavy
-  "Marilao-NB":            "orange",   // spreading
-  "Bocaue Interchange-NB": "green",
-  "Bocaue Barrier-NB":     "red",      // toll queue growing
-  "Tambubong-NB":          "orange",
-  "Tabang Guiguinto-NB":   "green",
-  "Balagtas-NB":           "green",
-  "Pulilan-NB":            "green",
-  "San Simon-NB":          "green",
-  "San Fernando-NB":       "green",
-  "Angeles-NB":            "green",
-  /* SB */
-  "Angeles-SB":            "green",
-  "San Fernando-SB":       "green",
-  "San Simon-SB":          "green",
-  "Pulilan-SB":            "green",
-  "Balagtas-SB":           "orange",   // slow build
-  "Tabang Guiguinto-SB":   "orange",
-  "Tambubong-SB":          "green",
-  "Bocaue Barrier-SB":     "red",      // heavy toll queue
-  "Bocaue Interchange-SB": "orange",   // spill-back
-  "Marilao-SB":            "red",
-  "Meycauayan-SB":         "red",
-  "Paso de Blas-SB":       "orange",
-  "Karuhatan-SB":          "orange",
-  "Mindanao Ave-SB":       "red",
-  "Balintawak-SB":         "red",
+type TrafficRecord = {
+  colorClass: string;
+  status: string;
+  speed: string;
+  level: number | null;
+  jamCount: number;
 };
 
-/** SLOT 2 — +2 HR forecast: NB clears, SB hits evening peak */
-const PLUS2HR_DATA: Dataset = {
-  /* NB */
-  "Balintawak-NB":         "green",    // cleared
-  "Karuhatan-NB":          "orange",   // residual
-  "Mindanao Ave-NB":       "orange",
-  "Paso de Blas-NB":       "green",
-  "Meycauayan-NB":         "orange",   // easing
-  "Marilao-NB":            "green",
-  "Bocaue Interchange-NB": "green",
-  "Bocaue Barrier-NB":     "green",    // toll queue cleared
-  "Tambubong-NB":          "green",
-  "Tabang Guiguinto-NB":   "green",
-  "Balagtas-NB":           "green",
-  "Pulilan-NB":            "green",
-  "San Simon-NB":          "green",
-  "San Fernando-NB":       "green",
-  "Angeles-NB":            "green",
-  /* SB */
-  "Angeles-SB":            "green",
-  "San Fernando-SB":       "green",
-  "San Simon-SB":          "green",
-  "Pulilan-SB":            "green",
-  "Balagtas-SB":           "red",      // evening exodus
-  "Tabang Guiguinto-SB":   "orange",
-  "Tambubong-SB":          "orange",
-  "Bocaue Barrier-SB":     "orange",
-  "Bocaue Interchange-SB": "red",      // backed up
-  "Marilao-SB":            "red",
-  "Meycauayan-SB":         "red",
-  "Paso de Blas-SB":       "red",      // worst of day
-  "Karuhatan-SB":          "orange",
-  "Mindanao Ave-SB":       "red",
-  "Balintawak-SB":         "red",
+const CLEAR: TrafficRecord = {
+  colorClass: "seg-green",
+  status: "CLEAR",
+  speed: "Free flowing",
+  level: null,
+  jamCount: 0,
 };
 
-const DATASETS: [Dataset, Dataset, Dataset] = [LIVE_DATA, PLUS1HR_DATA, PLUS2HR_DATA];
+const COLOR_CLASS: Record<SegmentStatus, string> = {
+  clear: "seg-green",
+  slow: "seg-orange",
+  congested: "seg-red",
+};
 
-function getTrafficData(name: string, dir: string, slot: 0 | 1 | 2): TrafficRecord {
-  const level: TrafficLevel = DATASETS[slot][`${name}-${dir}`] ?? "green";
-  return LEVEL_MAP[level];
+/** Matches on name because the feed keys by exit name, as the shared list does. */
+function statusKey(name: string, dir: string) {
+  return `${name.toLowerCase().trim()}-${dir}`;
 }
 
-/* ══════════════════════════════════════════════════════════════════════════════
-   SVG ICON
-══════════════════════════════════════════════════════════════════════════════ */
+function buildLookup(data: CorridorStatus | null): Map<string, TrafficRecord> {
+  const map = new Map<string, TrafficRecord>();
+  if (!data) return map;
+  for (const s of data.segments) {
+    map.set(statusKey(s.exit, s.direction), {
+      colorClass: COLOR_CLASS[s.status],
+      status: s.status.toUpperCase(),
+      speed: s.speedKmh != null ? `${s.speedKmh} km/h` : "—",
+      level: s.level,
+      jamCount: s.jamCount,
+    });
+  }
+  return map;
+}
 
+/** Node glyph: a hexagon with lane markings, used for every station dot. */
 const HexagonRoad = () => (
   <svg width="24" height="24" viewBox="0 0 32 32" className="ds-hex-svg">
     <polygon points="16,2 30,10 30,22 16,30 2,22 2,10" fill="none" stroke="currentColor" strokeWidth="2.5" />
@@ -167,12 +103,37 @@ const HexagonRoad = () => (
   </svg>
 );
 
-/* ══════════════════════════════════════════════════════════════════════════════
-   CONSTANTS
-══════════════════════════════════════════════════════════════════════════════ */
+/** Polls the corridor feed. 60s because the ingester writes every few minutes —
+    faster would just re-fetch the same rows. */
+function useCorridorStatus() {
+  const [data, setData] = useState<CorridorStatus | null>(null);
+  const [error, setError] = useState(false);
+  const [loading, setLoading] = useState(true);
 
-const SLOT_LABELS    = ["LIVE", "+1 HR", "+2 HR"] as const;
-const SLOT_THUMB_LEFT = ["0%", "50%", "100%"]    as const;
+  useEffect(() => {
+    let cancelled = false;
+    const load = async () => {
+      try {
+        const r = await fetch(`${BACKEND}/api/dashboard/corridor-status`, { cache: "no-store" });
+        const json = await r.json();
+        if (cancelled) return;
+        if (!json.success) throw new Error(json.message ?? "Request failed");
+        setData(json.data);
+        setError(false);
+      } catch {
+        if (!cancelled) setError(true);
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    };
+    load();
+    const id = setInterval(load, 60_000);
+    return () => { cancelled = true; clearInterval(id); };
+  }, []);
+
+  return { data, error, loading };
+}
+
 
 /* ══════════════════════════════════════════════════════════════════════════════
    COMPONENT
@@ -200,7 +161,9 @@ export default function InteractiveRoadMap() {
   const containerRef = useRef<HTMLDivElement>(null);
   const [isVisible,       setIsVisible]       = useState(false);
   const [activeStation,   setActiveStation]   = useState<string | null>(null);
-  const [predictionSlot,  setPredictionSlot]  = useState<0 | 1 | 2>(0);
+
+  const { data: corridor, error: feedError, loading: feedLoading } = useCorridorStatus();
+  const statusByExit = useMemo(() => buildLookup(corridor), [corridor]);
 
   useEffect(() => {
     const el = containerRef.current;
@@ -250,7 +213,7 @@ export default function InteractiveRoadMap() {
       <div className="ds-track-scroll">
       <div className="ds-roadmap-track">
         {(stations as (StationDef & { dir: string })[]).map((station, i) => {
-          const data        = getTrafficData(station.name, station.dir, predictionSlot);
+          const data        = statusByExit.get(statusKey(station.name, station.dir)) ?? CLEAR;
           const isActive    = activeStation === `${station.name}-${station.dir}`;
           const nextStation = stations[i + 1] as (StationDef & { dir: string }) | undefined;
           const total       = stations.length;
@@ -291,17 +254,23 @@ export default function InteractiveRoadMap() {
                       <span className={`ds-status-badge ${data.colorClass}`}>{data.status}</span>
                     </div>
                     <div className="ds-tooltip-row px-3">
-                      <span>Avg. Speed:</span>
+                      <span>Slowest speed:</span>
                       <span>{data.speed}</span>
                     </div>
+                    {data.level != null && (
+                      <div className="ds-tooltip-row px-3">
+                        <span>Waze jam level:</span>
+                        <span>{data.level} of 5</span>
+                      </div>
+                    )}
                     <div className="ds-tooltip-row px-3">
-                      <span>Incidents:</span>
-                      <span>None</span>
+                      <span>Active jams:</span>
+                      <span>{data.jamCount === 0 ? "None reported" : data.jamCount}</span>
                     </div>
                     {nextStation && (
                       <div className="ds-tooltip-row px-3">
-                        <span>Next KM:</span>
-                        <span>5 min ({nextStation.name})</span>
+                        <span>Next exit:</span>
+                        <span>{nextStation.name}</span>
                       </div>
                     )}
                   </div>
@@ -312,8 +281,7 @@ export default function InteractiveRoadMap() {
                 <div className={`ds-roadmap-segment ${data.colorClass}`}>
                   <div className="ds-segment-fill" />
                   <span className="ds-segment-arrow">{isSB ? "<" : ">"}</span>
-                  {isSB && <span className="ds-segment-time">5 min</span>}
-                </div>
+                        </div>
               )}
             </div>
           );
@@ -323,19 +291,20 @@ export default function InteractiveRoadMap() {
     </div>
   );
 
-  /* ─── Header copy ─────────────────────────────────────────────────────────
-     This diagram is driven by the three hardcoded datasets above, not by a feed.
-     It was previously titled "Live Traffic Status" over a
-     `Last Update: ${new Date()}` clock, which rendered a fresh timestamp on every
-     paint above data that never changes — the one combination that reads as
-     authoritative while being fiction. Until it is wired to
-     /api/map-comparison/real-time the title says what it is, and the timestamp
-     claim is gone. */
-  const headerTitle = predictionSlot === 0
-    ? "Corridor Status Illustration"
-    : `Corridor Forecast Illustration — ${SLOT_LABELS[predictionSlot]}`;
+  /* ─── Header copy ─── */
+  const headerTitle = "Live Corridor Status";
 
-  const headerSub = "Sample pattern · not connected to a live feed";
+  const headerSub = feedError
+    ? "Feed unavailable — is the backend running on port 4000?"
+    : feedLoading
+      ? "Reading the Waze feed…"
+      : corridor?.feed.newestAt
+        ? `${corridor.feed.stale ? "Feed may be stale · last" : "Last"} report ${
+            corridor.feed.ageMinutes != null && corridor.feed.ageMinutes < 1
+              ? "just now"
+              : `${corridor.feed.ageMinutes} min ago`
+          } · ${corridor.windowMinutes}-min window`
+        : "No jam reports on the corridor right now";
 
   /* ─── Render ─── */
   return (
@@ -344,9 +313,11 @@ export default function InteractiveRoadMap() {
         <div className="ds-roadmap-header">
           <h2>
             {headerTitle}
-            <span className="ds-demo-badge" title="Driven by built-in sample data, not a live traffic feed">
-              Demo data
-            </span>
+            {corridor?.feed.stale && (
+              <span className="ds-demo-badge" title="The Waze ingester has not written a row recently">
+                Stale feed
+              </span>
+            )}
           </h2>
           <p className="ds-roadmap-subtitle">NLEX EXPRESSWAY • METRO MANILA → CENTRAL LUZON</p>
         </div>
@@ -365,38 +336,6 @@ export default function InteractiveRoadMap() {
         {renderTrack("Southbound (SB)", stationsSB, true)}
       </div>
 
-      <div className="ds-roadmap-controls">
-        <div className="ds-control-left">
-          <span className="ds-control-label">PREDICTION TIME:</span>
-
-          {SLOT_LABELS.map((label, idx) => (
-            <span
-              key={label}
-              className={`ds-control-val${predictionSlot === idx ? " active" : ""}`}
-              onClick={() => setPredictionSlot(idx as 0 | 1 | 2)}
-              style={{ cursor: "pointer" }}
-            >
-              {idx > 0 && "| "}{label}
-            </span>
-          ))}
-
-          <div className="ds-slider-track">
-            <div
-              className="ds-slider-thumb"
-              style={{
-                left: SLOT_THUMB_LEFT[predictionSlot],
-                transform: `translateX(${predictionSlot === 0 ? "0" : predictionSlot === 1 ? "-50%" : "-100%"}) translateY(-50%)`,
-                transition: "left 0.3s ease",
-              }}
-            />
-          </div>
-        </div>
-
-        <div className="ds-control-right">
-          <button className="ds-toggle-btn active">NB <span className="ds-dot green" /></button>
-          <button className="ds-toggle-btn">SB <span className="ds-dot red" /></button>
-        </div>
-      </div>
     </section>
   );
 }

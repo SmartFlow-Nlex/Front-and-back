@@ -224,13 +224,13 @@ export default function PredictiveCongestionChart() {
         const low = d.conf < LOW_CONF;
         return `
           <div style="padding:2px 4px; min-width:215px;">
-            <b style="font-size:1.05em; color:#0f172a;">${segments[y]}</b>
-            <span style="color:#94a3b8; font-size:0.85em;"> · km ${KM_POST[segments[y]] ?? "—"}</span>
+            <b style="font-size:1.05em; color:var(--text-primary);">${segments[y]}</b>
+            <span style="color:var(--text-muted); font-size:0.85em;"> · km ${KM_POST[segments[y]] ?? "—"}</span>
             <div style="margin-top:8px; display:grid; grid-template-columns:112px 1fr; gap:5px 8px; font-size:0.9em;">
-              <span style="color:#64748b;">Horizon</span><span style="font-weight:600;">${hourLabels[x]}</span>
-              <span style="color:#64748b;">Predicted state</span><span style="color:${d.state === "Low" ? "#166534" : d.state === "Med" ? "#b45309" : "#dc2626"}; font-weight:700;">${meta.label}</span>
-              <span style="color:#64748b;">Speed band</span><span style="font-weight:500;">${meta.speed}</span>
-              <span style="color:#64748b;">Model confidence</span><span style="font-weight:600; color:${low ? "#b45309" : "#334155"};">${(d.conf * 100).toFixed(1)}%${low ? " · lower" : ""}</span>
+              <span style="color:var(--text-muted);">Horizon</span><span style="font-weight:600;">${hourLabels[x]}</span>
+              <span style="color:var(--text-muted);">Predicted state</span><span style="color:${d.state === "Low" ? "#166534" : d.state === "Med" ? "#b45309" : "#dc2626"}; font-weight:700;">${meta.label}</span>
+              <span style="color:var(--text-muted);">Speed band</span><span style="font-weight:500;">${meta.speed}</span>
+              <span style="color:var(--text-muted);">Model confidence</span><span style="font-weight:600; color:${low ? "#b45309" : "#334155"};">${(d.conf * 100).toFixed(1)}%${low ? " · lower" : ""}</span>
             </div>
           </div>`;
       },

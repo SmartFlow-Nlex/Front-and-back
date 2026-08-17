@@ -20,6 +20,11 @@
   --bg-topbar: #ffffff;
   --bg-login: #d8e1ef;
 
+  /* Borders were hardcoded (#e7ebf4 / #d4dbea) throughout, so card edges could
+     not follow the theme. Tokenised here and overridden in both dark blocks. */
+  --border-default: #e7ebf4;
+  --border-strong: #d4dbea;
+
   /* Text */
   --text-primary: #071a44;
   --text-secondary: #4b5e7d;
@@ -128,6 +133,9 @@
     --color-purple: #a371f7;
     --color-purple-bg: rgba(163, 113, 247, 0.14);
 
+    --border-default: #262c36;
+    --border-strong: #363d49;
+
     /* Dark surfaces read depth from borders, not drop shadows. */
     --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.4);
     --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.45);
@@ -152,6 +160,9 @@
   --bg-sidebar-hover: rgba(255, 255, 255, 0.06);
   --bg-topbar: #161b22;
   --bg-login: #0d1117;
+
+  --border-default: #262c36;
+  --border-strong: #363d49;
 
   --text-primary: #e6edf3;
   --text-secondary: #9aa8bd;
@@ -965,7 +976,7 @@ body {
 .ds-topbar {
   height: 64px;
   background: var(--bg-topbar);
-  border-bottom: 1px solid #e7ebf4;
+  border-bottom: 1px solid var(--border-default);
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -1049,7 +1060,7 @@ body {
 
 .ds-user-chip,
 .ds-date-filter {
-  border: 1px solid #d4dbea;
+  border: 1px solid var(--border-strong);
   border-radius: var(--radius-sm);
   height: 36px;
   padding: 0 12px;
@@ -1148,7 +1159,7 @@ body {
   justify-content: space-between;
   align-items: center;
   padding: 16px 20px;
-  border-bottom: 1px solid #e7ebf4;
+  border-bottom: 1px solid var(--border-default);
   background: #fafbfd;
 }
 
@@ -1192,7 +1203,7 @@ body {
 }
 
 .df-cal-panel + .df-cal-panel {
-  border-left: 1px solid #e7ebf4;
+  border-left: 1px solid var(--border-default);
   padding-left: 20px;
 }
 
@@ -1229,7 +1240,7 @@ body {
 }
 
 .df-cal-select {
-  border: 1px solid #d4dbea;
+  border: 1px solid var(--border-strong);
   border-radius: var(--radius-sm);
   padding: 4px 8px;
   font-size: 0.82rem;
@@ -1308,7 +1319,7 @@ body {
   justify-content: flex-end;
   gap: 10px;
   padding: 14px 20px;
-  border-top: 1px solid #e7ebf4;
+  border-top: 1px solid var(--border-default);
 }
 
 .df-cal-btn {
@@ -1324,7 +1335,7 @@ body {
 .df-cal-btn-cancel {
   background: #fff;
   color: var(--text-secondary);
-  border: 1px solid #d4dbea;
+  border: 1px solid var(--border-strong);
 }
 
 .df-cal-btn-cancel:hover {
@@ -1353,7 +1364,7 @@ body {
 
   .df-cal-panel + .df-cal-panel {
     border-left: 0;
-    border-top: 1px solid #e7ebf4;
+    border-top: 1px solid var(--border-default);
     padding-left: 8px;
     padding-top: 16px;
     margin-top: 12px;
@@ -1532,7 +1543,7 @@ body {
 .ds-feature-card {
   margin-top: 18px;
   background: var(--bg-surface);
-  border: 1px solid #e7ebf4;
+  border: 1px solid var(--border-default);
   border-radius: var(--radius-lg);
   padding: 20px;
   box-shadow: var(--shadow-card);
@@ -1763,7 +1774,7 @@ body {
 
 .tab-stat-card {
   background: var(--bg-surface);
-  border: 1px solid #e7ebf4;
+  border: 1px solid var(--border-default);
   border-radius: var(--radius-lg);
   padding: 16px;
   box-shadow: var(--shadow-card);
@@ -1932,7 +1943,7 @@ body {
 .panel {
   margin-top: 18px;
   background: var(--bg-surface);
-  border: 1px solid #e7ebf4;
+  border: 1px solid var(--border-default);
   border-radius: var(--radius-lg);
   padding: 18px 20px;
   box-shadow: var(--shadow-card);
@@ -2048,7 +2059,7 @@ body {
 
 .chart-card {
   background: var(--bg-surface);
-  border: 1px solid #e7ebf4;
+  border: 1px solid var(--border-default);
   border-radius: var(--radius-lg);
   padding: 16px;
   min-height: 280px;
@@ -2063,7 +2074,7 @@ body {
 /* ---------- Scenario Slider ---------- */
 .scenario-container {
   margin-top: 10px;
-  border-top: 1px solid #e7ebf4;
+  border-top: 1px solid var(--border-default);
   padding-top: 16px;
 }
 
@@ -2080,7 +2091,7 @@ body {
   width: 100%;
   -webkit-appearance: none;
   height: 6px;
-  background: #e7ebf4;
+  background: var(--border-default);
   border-radius: 4px;
   outline: none;
 }
@@ -2182,7 +2193,7 @@ body {
 
 .map-card {
   background: var(--bg-surface);
-  border: 1px solid #e7ebf4;
+  border: 1px solid var(--border-default);
   border-radius: var(--radius-lg);
   overflow: hidden;
   box-shadow: var(--shadow-card);
@@ -2237,12 +2248,12 @@ body {
   display: grid;
   grid-template-columns: repeat(3, 1fr);
   padding: 12px 0;
-  border-top: 1px solid #e7ebf4;
+  border-top: 1px solid var(--border-default);
 }
 
 .map-stats-card {
   background: var(--bg-surface);
-  border: 1px solid #e7ebf4;
+  border: 1px solid var(--border-default);
   border-radius: var(--radius-lg);
   overflow: hidden;
 }
@@ -2281,7 +2292,7 @@ body {
 
 .mini-stat {
   background: var(--bg-surface);
-  border: 1px solid #e7ebf4;
+  border: 1px solid var(--border-default);
   border-radius: var(--radius-lg);
   padding: 16px;
   box-shadow: var(--shadow-card);
@@ -2382,7 +2393,7 @@ body {
 .sandbox-main,
 .sandbox-side {
   background: var(--bg-surface);
-  border: 1px solid #e7ebf4;
+  border: 1px solid var(--border-default);
   border-radius: var(--radius-lg);
   padding: 18px;
   box-shadow: var(--shadow-card);
@@ -2476,7 +2487,7 @@ body {
 }
 .sandbox-metric {
   background: var(--bg-surface);
-  border: 1px solid #e7ebf4;
+  border: 1px solid var(--border-default);
   border-radius: var(--radius-md);
   padding: 12px 14px;
   box-shadow: var(--shadow-card);
@@ -2637,7 +2648,7 @@ body {
 
 /* ---------- AI Command Prompt (preview) ---------- */
 .ai-command {
-  border: 1px solid #e7ebf4;
+  border: 1px solid var(--border-default);
   border-radius: var(--radius-lg);
   padding: 16px;
   background: linear-gradient(180deg, #faf8ff, var(--bg-surface));
@@ -2937,7 +2948,7 @@ body {
 .table-card {
   margin-top: 14px;
   background: var(--bg-surface);
-  border: 1px solid #e7ebf4;
+  border: 1px solid var(--border-default);
   border-radius: var(--radius-lg);
   padding: 0;
   overflow: hidden;
@@ -2949,7 +2960,7 @@ body {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
-  border-bottom: 1px solid #e7ebf4;
+  border-bottom: 1px solid var(--border-default);
   align-items: center;
 }
 
@@ -3694,7 +3705,7 @@ body {
   left: 50%;
   transform: translateX(-50%);
   background: #ffffff;
-  border: 1px solid #e7ebf4;
+  border: 1px solid var(--border-default);
   color: var(--text-primary);
   border-radius: 12px;
   padding: 14px 18px;
@@ -3752,7 +3763,7 @@ body {
   gap: 14px;
   font-size: 0.75rem;
   padding: 4px 6px;
-  border-bottom: 1px solid #e7ebf4;
+  border-bottom: 1px solid var(--border-default);
   line-height: 1.35;
 }
 
@@ -3803,7 +3814,7 @@ body {
 .ds-roadmap-controls {
   margin: 24px auto 0;
   background: var(--bg-surface);
-  border: 1px solid #e7ebf4;
+  border: 1px solid var(--border-default);
   border-radius: 99px;
   padding: 10px 24px;
   display: flex;
@@ -4808,10 +4819,10 @@ body {
   align-items: flex-start;
   gap: 10px;
   padding: 12px 12px 12px 14px;
-  border: 1px solid var(--border-default, #dbe3f0);
+  border: 1px solid var(--border-default);
   border-left-width: 3px;
   border-radius: 10px;
-  background: var(--surface-card, #fff);
+  background: var(--bg-surface);
   box-shadow: var(--shadow-lg, 0 10px 24px rgba(15, 23, 42, 0.10));
   animation: ds-toast-in 180ms ease-out;
 }
@@ -4873,7 +4884,7 @@ body {
   cursor: pointer;
   transition: background 120ms ease, color 120ms ease;
 }
-.ds-toast-close:hover { background: var(--surface-hover, rgba(0, 0, 0, 0.05)); color: var(--text-primary); }
+.ds-toast-close:hover { background: var(--bg-surface-hover); color: var(--text-primary); }
 .ds-toast-close:focus-visible { outline: 2px solid var(--brand-primary); outline-offset: 1px; }
 
 @media (max-width: 560px) {

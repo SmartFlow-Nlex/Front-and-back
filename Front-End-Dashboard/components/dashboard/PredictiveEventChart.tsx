@@ -118,12 +118,12 @@ export default function PredictiveEventChart() {
         const r = rows[(params as { dataIndex: number }).dataIndex];
         return `
           <div style="padding:2px 4px; min-width:225px;">
-            <b style="font-size:1.05em; color:#0f172a;">${r.exit}</b>
+            <b style="font-size:1.05em; color:var(--text-primary);">${r.exit}</b>
             <div style="margin-top:8px; display:grid; grid-template-columns:120px 1fr; gap:5px 8px; font-size:0.9em;">
-              <span style="color:#64748b;">Added by event</span><span style="font-weight:700; color:${SURGE_COLOR};">+${fmtVeh(r.added)} (+${r.pct.toFixed(0)}%)</span>
-              <span style="color:#64748b;">Normal day</span><span style="font-weight:600;">${fmtVeh(r.baseline)}</span>
-              <span style="color:#64748b;">With event</span><span style="font-weight:600; color:${SURGE_COLOR};">${fmtVeh(r.surge)}</span>
-              <span style="color:#64748b;">Share of surge</span><span style="font-weight:500;">${r.shareOfSurge.toFixed(0)}%</span>
+              <span style="color:var(--text-muted);">Added by event</span><span style="font-weight:700; color:${SURGE_COLOR};">+${fmtVeh(r.added)} (+${r.pct.toFixed(0)}%)</span>
+              <span style="color:var(--text-muted);">Normal day</span><span style="font-weight:600;">${fmtVeh(r.baseline)}</span>
+              <span style="color:var(--text-muted);">With event</span><span style="font-weight:600; color:${SURGE_COLOR};">${fmtVeh(r.surge)}</span>
+              <span style="color:var(--text-muted);">Share of surge</span><span style="font-weight:500;">${r.shareOfSurge.toFixed(0)}%</span>
             </div>
           </div>`;
       },

@@ -175,11 +175,11 @@ export default function MapComparisonPage() {
                           }}
                         >
                           <span style={{
-                            fontSize: "0.7rem", color: "#94a3b8", minWidth: "1.4rem",
+                            fontSize: "0.7rem", color: "var(--text-muted)", minWidth: "1.4rem",
                             fontVariantNumeric: "tabular-nums",
                           }}>{x.exit_id}</span>
                           {x.exit_name}
-                          <span style={{ marginLeft: "auto", fontSize: "0.72rem", color: "#94a3b8" }}>
+                          <span style={{ marginLeft: "auto", fontSize: "0.72rem", color: "var(--text-muted)" }}>
                             Km {x.km}
                           </span>
                         </button>

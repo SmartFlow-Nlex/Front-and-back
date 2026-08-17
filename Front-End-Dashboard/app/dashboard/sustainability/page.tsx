@@ -464,13 +464,14 @@ export default function SustainabilityPage() {
             silent: true,
             symbol: "none",
             lineStyle: { color: "#9aa4b8", type: "dashed", width: 1 },
-            label: { fontSize: 9, color: "#8a93a6", formatter: `avg ${avg.toFixed(1)}%`, position: "insideEndTop" },
+            label: { fontSize: 9, color: chartTheme.text, formatter: `avg ${avg.toFixed(1)}%`, position: "insideEndTop" },
             data: [{ yAxis: Number(avg.toFixed(1)) }],
           },
         },
       ],
     };
-  }, [heavyShareRows, trendRows, grain]);
+    // chartTheme colours the average markLine's label.
+  }, [heavyShareRows, trendRows, grain, chartTheme]);
 
   // ---------- Measured air quality ----------
   const aqiOption = useMemo<EChartsOption | null>(() => {

@@ -397,7 +397,7 @@ export default function PredictiveVolumeChart({ months = "all", from, to, weathe
         items.forEach((p) => {
           if (p.value != null) tip += `${p.marker} ${p.seriesName}: <b>${fmtVeh(Number(p.value))}</b><br/>`;
         });
-        return `${tip}<span style="color:#94a3b8;font-size:11px">Click to view hourly</span>`;
+        return `${tip}<span style="color:var(--text-muted);font-size:11px">Click to view hourly</span>`;
       },
     },
     legend: {

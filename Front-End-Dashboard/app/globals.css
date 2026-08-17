@@ -26,17 +26,20 @@
   --border-strong: #d4dbea;
 
   /* Text */
+  /* Muted text and the success/warning hues were below WCAG AA 4.5 on both the
+     card and the page background (3.2-4.3). Darkened just enough to clear it —
+     the dark palette already passes, so only the light values moved. */
   --text-primary: #071a44;
   --text-secondary: #4b5e7d;
-  --text-muted: #6b7b94;
+  --text-muted: #627188;
   --text-on-dark: #ffffff;
   --text-on-dark-muted: rgba(255, 255, 255, 0.7);
 
   /* Semantic */
-  --color-success: #0f9e3c;
+  --color-success: #0c8231;
   --color-success-bg: #e8f8ec;
   --color-success-border: #b9e9c5;
-  --color-warning: #ea580c;
+  --color-warning: #c2490a;
   --color-warning-bg: #fff5dc;
   --color-warning-border: #edd28a;
   --color-danger: #dc2626;

@@ -323,21 +323,31 @@ export default function InteractiveRoadMap() {
     </div>
   );
 
-  /* ─── Header copy ─── */
+  /* ─── Header copy ─────────────────────────────────────────────────────────
+     This diagram is driven by the three hardcoded datasets above, not by a feed.
+     It was previously titled "Live Traffic Status" over a
+     `Last Update: ${new Date()}` clock, which rendered a fresh timestamp on every
+     paint above data that never changes — the one combination that reads as
+     authoritative while being fiction. Until it is wired to
+     /api/map-comparison/real-time the title says what it is, and the timestamp
+     claim is gone. */
   const headerTitle = predictionSlot === 0
-    ? "Live Traffic Status"
-    : `Predicted Traffic — ${SLOT_LABELS[predictionSlot]}`;
+    ? "Corridor Status Illustration"
+    : `Corridor Forecast Illustration — ${SLOT_LABELS[predictionSlot]}`;
 
-  const headerSub = predictionSlot === 0
-    ? `Last Update: ${new Date().toLocaleTimeString()}`
-    : `Forecast generated: ${new Date().toLocaleTimeString()}`;
+  const headerSub = "Sample pattern · not connected to a live feed";
 
   /* ─── Render ─── */
   return (
     <section id="nlex-roadmap" className="ds-roadmap-section dual-track">
       <div className="ds-roadmap-header-row">
         <div className="ds-roadmap-header">
-          <h2>{headerTitle}</h2>
+          <h2>
+            {headerTitle}
+            <span className="ds-demo-badge" title="Driven by built-in sample data, not a live traffic feed">
+              Demo data
+            </span>
+          </h2>
           <p className="ds-roadmap-subtitle">NLEX EXPRESSWAY • METRO MANILA → CENTRAL LUZON</p>
         </div>
         <div className="ds-header-right">

@@ -4783,3 +4783,131 @@ body {
     padding: 6px 8px;
   }
 }
+
+/* ---------------------------------------------------------------------------
+   Toasts
+   Colours come from the semantic tokens, which are already redefined in both
+   dark blocks, so these follow the theme without a dark rule of their own.
+   --------------------------------------------------------------------------- */
+.ds-toast-viewport {
+  position: fixed;
+  bottom: 20px;
+  right: 20px;
+  z-index: 1200; /* above the modals these actions are fired from */
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  width: min(380px, calc(100vw - 40px));
+  /* The container spans the stack but must not swallow clicks around them. */
+  pointer-events: none;
+}
+
+.ds-toast {
+  pointer-events: auto;
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 12px 12px 12px 14px;
+  border: 1px solid var(--border-default, #dbe3f0);
+  border-left-width: 3px;
+  border-radius: 10px;
+  background: var(--surface-card, #fff);
+  box-shadow: var(--shadow-lg, 0 10px 24px rgba(15, 23, 42, 0.10));
+  animation: ds-toast-in 180ms ease-out;
+}
+
+@keyframes ds-toast-in {
+  from { opacity: 0; transform: translateY(8px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+.ds-toast-success { border-left-color: var(--color-success); }
+.ds-toast-error   { border-left-color: var(--color-danger); }
+.ds-toast-info    { border-left-color: var(--color-info); }
+
+.ds-toast-icon {
+  flex: none;
+  width: 20px;
+  height: 20px;
+  margin-top: 1px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  font-size: 0.72rem;
+  font-weight: 700;
+  line-height: 1;
+}
+.ds-toast-success .ds-toast-icon { background: var(--color-success-bg); color: var(--color-success); }
+.ds-toast-error   .ds-toast-icon { background: var(--color-danger-bg);  color: var(--color-danger); }
+.ds-toast-info    .ds-toast-icon { background: var(--color-info-bg);    color: var(--color-info); }
+
+.ds-toast-body { flex: 1; min-width: 0; }
+
+.ds-toast-message {
+  margin: 0;
+  font-size: 0.82rem;
+  font-weight: 600;
+  line-height: 1.35;
+  color: var(--text-primary);
+}
+
+.ds-toast-detail {
+  margin: 3px 0 0;
+  font-size: 0.75rem;
+  line-height: 1.4;
+  color: var(--text-secondary, #4b5e7d);
+  /* Server messages can be long; wrap rather than clip so they stay readable. */
+  overflow-wrap: anywhere;
+}
+
+.ds-toast-close {
+  flex: none;
+  width: 22px;
+  height: 22px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-muted, #8a93a6);
+  font-size: 1.05rem;
+  line-height: 1;
+  cursor: pointer;
+  transition: background 120ms ease, color 120ms ease;
+}
+.ds-toast-close:hover { background: var(--surface-hover, rgba(0, 0, 0, 0.05)); color: var(--text-primary); }
+.ds-toast-close:focus-visible { outline: 2px solid var(--brand-primary); outline-offset: 1px; }
+
+@media (max-width: 560px) {
+  .ds-toast-viewport { left: 20px; right: 20px; width: auto; }
+}
+
+/* Sortable table headers (see lib/table-sort). The button fills the cell so the
+   whole header area is the target, not just the few pixels of the label. */
+.ds-th-sort {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  padding: 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  letter-spacing: inherit;
+  text-transform: inherit;
+  color: inherit;
+  text-align: inherit;
+  cursor: pointer;
+}
+.ds-th-sort:hover { color: var(--brand-primary); }
+.ds-th-sort:focus-visible { outline: 2px solid var(--brand-primary); outline-offset: 2px; border-radius: 4px; }
+.ds-th-sort.active { color: var(--brand-primary); }
+
+.ds-th-arrow {
+  flex: none;
+  font-size: 0.62em;
+  /* Dim until the column is the active sort, so the header row does not read as
+     a row of arrows competing with the labels. */
+  opacity: 0.35;
+  transition: opacity 120ms ease;
+}
+.ds-th-sort:hover .ds-th-arrow,
+.ds-th-sort.active .ds-th-arrow { opacity: 1; }

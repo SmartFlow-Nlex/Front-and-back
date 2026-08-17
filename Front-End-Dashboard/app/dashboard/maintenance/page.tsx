@@ -6,6 +6,8 @@ import PageHeader from "../../../components/dashboard/PageHeader";
 import styles from "../traffic/traffic.module.css";
 import { supabase } from "../../../lib/supabase";
 
+import { useToast } from "../../../lib/toast";
+import { SortableTh, useTableSort } from "../../../lib/table-sort";
 import { useNlexExits, exitNearestKm, CORRIDOR_KM, type NlexExit } from "../../../lib/nlex-exits";
 
 const BACKEND = process.env.NEXT_PUBLIC_BACKEND_URL ?? "http://localhost:4000";
@@ -236,6 +238,7 @@ const emptyForm = {
 export default function MaintenancePage() {
   // Same corridor list as the map and the AI sandbox. See lib/nlex-exits.
   const { exits: NLEX_EXITS } = useNlexExits();
+  const toast = useToast();
   const [schedules, setSchedules] = useState<Schedule[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -302,7 +305,7 @@ export default function MaintenancePage() {
     [schedules]
   );
 
-  const visible = useMemo(() => {
+  const filteredVisible = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();
     return schedules.filter((s) => {
       if (statusFilter !== "all" && s.status !== statusFilter) return false;
@@ -315,6 +318,23 @@ export default function MaintenancePage() {
       );
     });
   }, [schedules, statusFilter, searchQuery]);
+
+  // Status sorts along the lifecycle, not the alphabet: scheduled work is what
+  // an operator acts on, cancelled work is what they ignore. A-Z would open with
+  // "cancelled" and bury "scheduled" in the middle.
+  const STATUS_RANK: Record<Status, number> = { scheduled: 0, in_progress: 1, completed: 2, cancelled: 3 };
+  const { sorted: visible, sort, toggle } = useTableSort(
+    filteredVisible,
+    {
+      status: (s) => STATUS_RANK[s.status],
+      title: (s) => s.title,
+      location: (s) => s.start_km,
+      window: (s) => new Date(s.starts_at),
+    },
+    // Soonest first by default: the next window to happen is the useful default,
+    // and it is what someone scanning this page is looking for.
+    { key: "window", dir: "asc" },
+  );
 
   // ---------- Mutations ----------
   const changeStatus = async (s: Schedule, to: Status, reason?: string) => {
@@ -333,11 +353,14 @@ export default function MaintenancePage() {
       setDetail(null);
       setCancelTarget(null);
       setCancelReason("");
+      toast.success(`"${s.title}" is now ${STATUS_META[to].label.toLowerCase()}.`);
     } catch (e) {
       // Re-sync with the database so a stale row never sits next to the error
       await refresh();
-      setActionError(e instanceof Error ? e.message : "Update failed");
+      const msg = e instanceof Error ? e.message : "Update failed";
+      setActionError(msg);
       setTimeout(() => setActionError(null), 5000);
+      toast.error(`Could not update "${s.title}".`, msg);
     } finally {
       setMutating(false);
     }
@@ -399,12 +422,21 @@ export default function MaintenancePage() {
       });
       const json = await r.json();
       if (!json.success) throw new Error(json.message ?? "Save failed");
+      const wasEdit = editId !== null;
       await refresh();
       setFormOpen(false);
       setForm(emptyForm);
       setEditId(null);
+      toast.success(
+        wasEdit ? `Updated "${form.title.trim()}".` : `Scheduled "${form.title.trim()}".`,
+        `${form.direction} · Km ${startKm}–${endKm} · ${form.laneClosure}`,
+      );
     } catch (e) {
-      setFormError(e instanceof Error ? e.message : "Save failed — is the backend running?");
+      // Kept inline as well as in the toast: the form stays open on failure, so
+      // the message belongs next to the fields that need fixing.
+      const msg = e instanceof Error ? e.message : "Save failed — is the backend running?";
+      setFormError(msg);
+      toast.error(editId ? "Could not save your changes." : "Could not schedule the work.", msg);
     } finally {
       setSaving(false);
     }
@@ -501,7 +533,12 @@ export default function MaintenancePage() {
           <div className={styles.plazaTableWrap} style={{ maxHeight: "none", overflow: "visible" }}>
             <table className={styles.plazaTable}>
               <thead>
-                <tr><th>Status</th><th>Work</th><th>Location</th><th>Window</th></tr>
+                <tr>
+                  <SortableTh label="Status" sortKey="status" sort={sort} onToggle={toggle} />
+                  <SortableTh label="Work" sortKey="title" sort={sort} onToggle={toggle} />
+                  <SortableTh label="Location" sortKey="location" sort={sort} onToggle={toggle} />
+                  <SortableTh label="Window" sortKey="window" sort={sort} onToggle={toggle} />
+                </tr>
               </thead>
               <tbody>
                 {visible.map((s) => (

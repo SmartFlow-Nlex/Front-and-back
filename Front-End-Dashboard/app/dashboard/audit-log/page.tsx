@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { Activity, Shield, AlertCircle, ClipboardList, Filter } from "lucide-react";
 import PageHeader from "../../../components/dashboard/PageHeader";
+import { SortableTh, useTableSort } from "../../../lib/table-sort";
 
 const BACKEND = process.env.NEXT_PUBLIC_BACKEND_URL ?? "http://localhost:4000";
 
@@ -104,8 +105,22 @@ export default function AuditLogPage() {
     return matchesSearch && matchesCategory && matchesSeverity && matchesDateRange;
   });
 
+  // Severity sorts by rank, not alphabetically — "Critical" before "Info"
+  // matters, and A-Z would put Critical, Info, Warning in a meaningless order.
+  const SEVERITY_RANK: Record<string, number> = { Critical: 0, Warning: 1, Info: 2 };
+  const { sorted: visibleLogs, sort, toggle } = useTableSort(filteredLogs, {
+    id: (l) => l.id,
+    timestamp: (l) => new Date(l.timestamp),
+    user: (l) => l.user,
+    category: (l) => l.category,
+    action: (l) => l.action,
+    details: (l) => l.details,
+    severity: (l) => SEVERITY_RANK[l.severity] ?? 99,
+  });
+
   const exportJSON = () => {
-    const dataStr = JSON.stringify(filteredLogs, null, 2);
+    // Exports what is on screen, in the order it is on screen.
+    const dataStr = JSON.stringify(visibleLogs, null, 2);
     const blob = new Blob([dataStr], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
@@ -192,13 +207,13 @@ export default function AuditLogPage() {
           <table>
             <thead>
               <tr>
-                  <th>ID</th>
-                  <th>TIMESTAMP</th>
-                  <th>USER</th>
-                  <th>CATEGORY</th>
-                  <th>ACTION</th>
-                  <th>DETAILS</th>
-                  <th>SEVERITY</th>
+                  <SortableTh label="ID" sortKey="id" sort={sort} onToggle={toggle} />
+                  <SortableTh label="TIMESTAMP" sortKey="timestamp" sort={sort} onToggle={toggle} />
+                  <SortableTh label="USER" sortKey="user" sort={sort} onToggle={toggle} />
+                  <SortableTh label="CATEGORY" sortKey="category" sort={sort} onToggle={toggle} />
+                  <SortableTh label="ACTION" sortKey="action" sort={sort} onToggle={toggle} />
+                  <SortableTh label="DETAILS" sortKey="details" sort={sort} onToggle={toggle} />
+                  <SortableTh label="SEVERITY" sortKey="severity" sort={sort} onToggle={toggle} />
                 </tr>
             </thead>
             <tbody>
@@ -208,10 +223,10 @@ export default function AuditLogPage() {
               {error && !loading && (
                 <tr><td colSpan={7} style={{ textAlign: "center", color: "var(--text-muted)", padding: 24 }}>Live data unavailable — is the backend running on port 4000?</td></tr>
               )}
-              {!loading && !error && filteredLogs.length === 0 && (
+              {!loading && !error && visibleLogs.length === 0 && (
                 <tr><td colSpan={7} style={{ textAlign: "center", color: "var(--text-muted)", padding: 24 }}>No audit events yet — actions like scheduling maintenance will appear here.</td></tr>
               )}
-              {filteredLogs.map((log) => (
+              {visibleLogs.map((log) => (
                 <tr key={log.id}>
                   <td className="font-mono text-xs text-gray-500">{`#${String(log.id).padStart(3, '0')}`}</td>
                   <td>{new Date(log.timestamp).toLocaleString("en-US", { dateStyle: "medium", timeStyle: "medium" })}</td>
@@ -219,16 +234,18 @@ export default function AuditLogPage() {
                   <td>
                     <span
                       className="badge"
+                      // Token pairs rather than fixed hex: the light fills these
+                      // used to carry are unreadable on the dark palette.
                       style={
                         log.category === "Authentication"
-                          ? { background: "#d9e7ff", color: "var(--color-info)" }
+                          ? { background: "var(--color-info-bg)", color: "var(--color-info)" }
                           : log.category === "Navigation"
                             ? { background: "var(--color-purple-bg)", color: "var(--color-purple)" }
                             : log.category === "Data Operations"
-                              ? { background: "#d8f2dd", color: "#15803d" }
+                              ? { background: "var(--color-success-bg)", color: "var(--color-success)" }
                               : log.category === "System"
-                                ? { background: "#f8ebc6", color: "#b45309" }
-                                : { background: "#ffe0e0", color: "var(--color-danger)" }
+                                ? { background: "var(--color-warning-bg)", color: "var(--color-warning)" }
+                                : { background: "var(--color-danger-bg)", color: "var(--color-danger)" }
                       }
                     >
                       {log.category.toLowerCase()}

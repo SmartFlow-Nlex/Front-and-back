@@ -3247,631 +3247,391 @@ body {
    INTERACTIVE NLEX ROADMAP
    ============================================================ */
 /* ─── Section wrapper ─── */
-.ds-roadmap-section {
-  background: #e5ecf6;
-  border-radius: var(--radius-lg);
-  padding: 32px 32px 32px;
-  box-shadow: 0 14px 40px rgba(15, 23, 42, 0.12);
-  border: 1px solid #cdd6e8;
-  color: var(--text-primary);
-  position: relative;
-}
+/* ===========================================================================
+   LIVE CORRIDOR STATUS
 
-.ds-roadmap-header-row {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  margin-bottom: 30px;
-}
+   Replaces the two horizontally-scrolling tracks. The panel also used to be a
+   hardcoded #e5ecf6 slab with #cdd6e8 borders, so it stayed pale blue in dark
+   mode regardless of theme; everything structural here is now a token.
 
-.ds-roadmap-header {
-  text-align: center;
-  margin-bottom: 12px;
-}
+   Traffic-state hues stay fixed: red/amber/green mean the same thing in both
+   themes and are the one thing on the panel that must not shift.
+   =========================================================================== */
 
-.ds-roadmap-header h2 {
-  font-size: 1.4rem;
-  font-weight: 800;
-  color: var(--brand-primary);
-  margin: 0 0 6px;
-}
-
-.ds-roadmap-subtitle {
-  font-size: 0.75rem;
-  font-weight: 600;
-  letter-spacing: 0.12em;
-  color: #94a3b8;
-  text-transform: uppercase;
-  margin: 0;
-}
-
-.ds-header-right {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 8px;
-}
-
-.ds-last-update {
-  font-size: 0.7rem;
-  color: #64748b;
-  font-family: monospace;
-}
-
-/* ─── Legend ─── */
-.ds-roadmap-legend {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 18px;
-  flex-wrap: wrap;
-}
-
-.ds-legend-item {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  font-size: 0.82rem;
-  font-weight: 500;
-  color: var(--text-secondary);
-}
-
-.ds-legend-dot {
-  width: 12px;
-  height: 12px;
-  border-radius: 50%;
-}
-
-.ds-legend-dot.seg-red {
-  background: #e74c3c;
-}
-
-.ds-legend-dot.seg-orange {
-  background: #e67e22;
-}
-
-.ds-legend-dot.seg-green {
-  background: #27ae60;
-}
-
-.ds-legend-drag-hint {
-  font-size: 0.75rem;
-  color: var(--text-tertiary);
-  font-style: italic;
-  margin-left: 8px;
-}
-
-/* ─── Scrollable container ─── */
-.ds-roadmap-container {
-  width: 100%;
-  display: flex;
-  flex-direction: column;
-  gap: 60px;
-}
-
-/* ─── Track Row ─── */
-.ds-track-row {
-  display: flex;
-  flex-direction: column;
-}
-
-.ds-track-title {
-  font-size: 1.1rem;
-  font-weight: 700;
-  color: var(--brand-primary);
-  margin: 0 0 40px 10px;
-  letter-spacing: 0.02em;
-}
-
-/* ─── Track ─── */
-/* The corridor now renders all 20 exits from the shared list, and several names
-   are long ("Paso De Blas Valenzuela", "Sta. Rita Guiguinto"). Squeezing 20
-   stops into 100% width collided the 45-degree labels, so the track keeps a
-   minimum spacing per stop and the row scrolls horizontally instead. */
-.ds-roadmap-track {
-  display: flex;
-  align-items: center;
-  justify-content: flex-start;
-  min-width: max-content;
-  padding-right: 30px;
-}
-
-.ds-track-scroll {
-  width: 100%;
-  overflow-x: auto;
-  overflow-y: visible;
-  padding-bottom: 8px;
-  scrollbar-width: thin;
-}
-
-/* Give every stop room for its rotated label rather than dividing the width. */
-.ds-roadmap-stop {
-  min-width: 104px;
-}
-
-/* ─── Each stop (node + segment) ─── */
-.ds-roadmap-stop {
-  display: flex;
-  align-items: center;
-  flex: 0 0 auto;
-  opacity: 0;
-  transform: translateY(18px);
-  transition: opacity 0.5s ease, transform 0.5s ease;
-  transition-delay: var(--delay, 0s);
-}
-
-.ds-roadmap-stop:last-child {
-  flex: 0;
-}
-
-.ds-roadmap-container.is-visible .ds-roadmap-stop {
-  opacity: 1;
-  transform: translateY(0);
-}
-
-/* ─── Node ─── */
-.ds-roadmap-node {
-  position: relative;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  cursor: pointer;
-  z-index: 2;
-  height: 60px;
-}
-
-.ds-node-km {
-  position: absolute;
-  top: -24px;
-  font-size: 0.65rem;
-  font-weight: 700;
-  color: #64748b;
-  letter-spacing: 0.04em;
-  white-space: nowrap;
-}
-
-.ds-node-name {
-  position: absolute;
-  top: 35px;
-  left: 50%;
-  transform: translateX(-50%) rotate(45deg);
-  transform-origin: top center;
-  font-size: 0.65rem;
-  font-weight: 700;
-  color: var(--text-primary);
-  white-space: nowrap;
-  letter-spacing: 0.02em;
-}
-
-/* Hexagon dot */
-.ds-node-dot.hex {
-  position: relative;
-  width: 32px;
-  height: 32px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  border-radius: 0;
-  border: none;
-  background: transparent;
-  box-shadow: none;
-  clip-path: polygon(25% 0%, 75% 0%, 100% 50%, 75% 100%, 25% 100%, 0% 50%);
-  background-color: #e5ecf6;
-  transition: transform 0.25s ease, filter 0.25s ease;
-}
-
-.ds-node-dot.hex svg {
-  color: currentColor;
-  transform: scale(0.85);
-}
-
-.ds-roadmap-node.seg-red .ds-node-dot.hex {
-  color: #e74c3c;
-  filter: drop-shadow(0 0 8px rgba(231, 76, 60, 0.6));
-}
-
-.ds-roadmap-node.seg-orange .ds-node-dot.hex {
-  color: #e67e22;
-  filter: drop-shadow(0 0 8px rgba(230, 126, 34, 0.6));
-}
-
-.ds-roadmap-node.seg-green .ds-node-dot.hex {
-  color: #27ae60;
-  filter: drop-shadow(0 0 8px rgba(39, 174, 96, 0.6));
-}
-
-.ds-roadmap-node:hover .ds-node-dot.hex,
-.ds-roadmap-node.is-active .ds-node-dot.hex {
-  transform: scale(1.3);
-  filter: drop-shadow(0 0 16px currentColor);
-}
-
-/* Pulse ring */
-.ds-node-pulse {
-  position: absolute;
-  inset: -6px;
-  border-radius: 50%;
-  opacity: 0;
-  pointer-events: none;
-}
-
-.ds-roadmap-node.seg-red .ds-node-pulse {
-  border: 2px solid rgba(231, 76, 60, 0.4);
-}
-
-.ds-roadmap-node.seg-orange .ds-node-pulse {
-  border: 2px solid rgba(230, 126, 34, 0.4);
-}
-
-.ds-roadmap-node.seg-green .ds-node-pulse {
-  border: 2px solid rgba(39, 174, 96, 0.4);
-}
-
-.ds-roadmap-container.is-visible .ds-node-pulse {
-  animation: nodePulse 2.2s ease-out infinite;
-  animation-delay: var(--delay, 0s);
-}
-
-@keyframes nodePulse {
-  0% {
-    transform: scale(0.8);
-    opacity: 0.8;
-  }
-
-  70% {
-    transform: scale(2.2);
-    opacity: 0;
-  }
-
-  100% {
-    transform: scale(2.2);
-    opacity: 0;
-  }
-}
-
-/* ─── Segment connector ─── */
-.ds-roadmap-segment {
-  position: relative;
-  flex: 1;
-  height: 8px;
-  background: #cdd6e8;
-  overflow: hidden;
-  margin: 0 -2px;
-  align-self: center;
-}
-
-.ds-segment-fill {
-  position: absolute;
-  inset: 0;
-  border-radius: 99px;
-  transform: scaleX(0);
-  transform-origin: left;
-  transition: transform 0.6s ease;
-  transition-delay: var(--delay, 0s);
-}
-
-.ds-roadmap-segment.seg-red .ds-segment-fill {
-  background: linear-gradient(90deg, #c0392b, #e74c3c, #c0392b);
-  box-shadow: 0 0 10px rgba(231, 76, 60, 0.5);
-}
-
-.ds-roadmap-segment.seg-orange .ds-segment-fill {
-  background: linear-gradient(90deg, #d35400, #e67e22, #d35400);
-  box-shadow: 0 0 10px rgba(230, 126, 34, 0.5);
-}
-
-.ds-roadmap-segment.seg-green .ds-segment-fill {
-  background: linear-gradient(90deg, #1e8449, #27ae60, #1e8449);
-  box-shadow: 0 0 10px rgba(39, 174, 96, 0.5);
-}
-
-.ds-roadmap-container.is-visible .ds-segment-fill {
-  transform: scaleX(1);
-}
-
-.ds-segment-arrow {
-  position: absolute;
-  top: 50%;
-  left: 50%;
-  transform: translate(-50%, -50%);
-  font-size: 10px;
-  font-weight: bold;
-  color: rgba(255, 255, 255, 0.6);
-  z-index: 1;
-}
-
-.ds-segment-time {
-  position: absolute;
-  top: -20px;
-  left: 50%;
-  transform: translateX(-50%);
-  font-size: 0.6rem;
-  color: #94a3b8;
-  white-space: nowrap;
-}
-
-/* ─── Animated car ─── */
-.ds-segment-car {
-  position: absolute;
-  top: 50%;
-  left: -10px;
-  transform: translateY(-50%);
-  font-size: 10px;
-  opacity: 0;
-  pointer-events: none;
-}
-
-.ds-roadmap-container.is-visible .ds-segment-car {
-  animation: carDrive 3s ease-in-out infinite;
-  animation-delay: calc(var(--delay, 0s) + 0.8s);
-}
-
-@keyframes carDrive {
-  0% {
-    left: -10px;
-    opacity: 0;
-  }
-
-  15% {
-    opacity: 1;
-  }
-
-  85% {
-    opacity: 1;
-  }
-
-  100% {
-    left: calc(100% + 10px);
-    opacity: 0;
-  }
-}
-
-/* ─── Tooltip ─── */
-.ds-roadmap-tooltip {
-  position: absolute;
-  bottom: calc(100% + 18px);
-  left: 50%;
-  transform: translateX(-50%);
-  background: #ffffff;
-  border: 1px solid var(--border-default);
-  color: var(--text-primary);
-  border-radius: 12px;
-  padding: 14px 18px;
-  min-width: 200px;
-  z-index: 50;
-  box-shadow: var(--shadow-xl);
-  pointer-events: none;
-  animation: tooltipFade 0.25s ease;
-}
-
-.ds-roadmap-tooltip::after {
-  content: "";
-  position: absolute;
-  top: 100%;
-  left: 50%;
-  transform: translateX(-50%);
-  border-width: 8px;
-  border-style: solid;
-  border-color: var(--bg-surface) transparent transparent transparent;
-}
-
-/* Left-edge nodes: pin tooltip to the left of the node, caret follows */
-.ds-roadmap-tooltip.tip-left {
-  left: 0;
-  transform: none;
-}
-.ds-roadmap-tooltip.tip-left::after {
-  left: 20px;
-  transform: none;
-}
-
-/* Right-edge nodes: pin tooltip to the right of the node, caret follows */
-.ds-roadmap-tooltip.tip-right {
-  left: auto;
-  right: 0;
-  transform: none;
-}
-.ds-roadmap-tooltip.tip-right::after {
-  left: auto;
-  right: 20px;
-  transform: none;
-}
-
-.ds-roadmap-tooltip strong {
-  font-size: 0.82rem;
-  display: block;
-  margin-bottom: 8px;
-  color: var(--brand-primary);
-  letter-spacing: 0.02em;
-}
-
-.ds-tooltip-row {
-  display: flex;
-  justify-content: space-between;
-  gap: 14px;
-  font-size: 0.75rem;
-  padding: 4px 6px;
-  border-bottom: 1px solid var(--border-default);
-  line-height: 1.35;
-}
-
-.ds-tooltip-row:last-child {
-  border-bottom: none;
-}
-
-.ds-status-badge {
-  font-weight: 700;
-  font-size: 0.72rem;
-  padding: 2px 10px;
-  border-radius: 99px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  text-align: center;
-  white-space: nowrap;
-}
-
-.ds-status-badge.seg-red {
-  background: rgba(231, 76, 60, 0.2);
-  color: #e74c3c;
-}
-
-.ds-status-badge.seg-orange {
-  background: rgba(230, 126, 34, 0.2);
-  color: #e67e22;
-}
-
-.ds-status-badge.seg-green {
-  background: rgba(39, 174, 96, 0.2);
-  color: #27ae60;
-}
-
-@keyframes tooltipFade {
-  from {
-    opacity: 0;
-    transform: translateX(-50%) translateY(8px);
-  }
-
-  to {
-    opacity: 1;
-    transform: translateX(-50%) translateY(0);
-  }
-}
-
-/* ─── Control Panel ─── */
-.ds-roadmap-controls {
-  margin: 24px auto 0;
+.ds-cx {
   background: var(--bg-surface);
   border: 1px solid var(--border-default);
-  border-radius: 99px;
-  padding: 10px 24px;
-  display: flex;
-  align-items: center;
-  gap: 40px;
-  box-shadow: var(--shadow-md);
-  z-index: 10;
-  width: max-content;
-}
-
-.ds-control-left {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-}
-
-.ds-control-label {
-  font-size: 0.7rem;
-  font-weight: 700;
-  color: var(--text-secondary);
-  letter-spacing: 0.05em;
-}
-
-.ds-control-val {
-  font-size: 0.7rem;
-  font-weight: 600;
-  color: var(--text-muted);
-  cursor: pointer;
-  transition: color 0.2s;
-}
-
-.ds-control-val.active {
-  color: var(--brand-primary);
-  font-weight: 700;
-}
-
-.ds-control-val:hover {
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-card);
   color: var(--text-primary);
+  overflow: hidden;
 }
 
-.ds-slider-track {
-  width: 100px;
-  height: 4px;
-  background: #e2e8f0;
-  border-radius: 99px;
-  position: relative;
-  margin-left: 10px;
+/* --- Header --------------------------------------------------------------- */
+
+.ds-cx-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 18px 22px 16px;
+  border-bottom: 1px solid var(--border-default);
 }
 
-.ds-slider-thumb {
-  width: 14px;
-  height: 14px;
-  background: var(--brand-primary);
-  border-radius: 50%;
-  position: absolute;
-  top: 50%;
-  left: 0;
-  transform: translateY(-50%);
-  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.3);
-  cursor: pointer;
-}
-
-.ds-control-right {
+.ds-cx-titles h2 {
   display: flex;
   align-items: center;
   gap: 10px;
+  margin: 0;
+  font-size: 1.05rem;
+  font-weight: 700;
+  letter-spacing: -0.01em;
 }
 
-.ds-toggle-btn {
+.ds-cx-titles p {
+  margin: 3px 0 0;
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.ds-cx-stale {
+  padding: 3px 9px;
+  border: 1px solid var(--color-warning-border);
+  border-radius: var(--radius-full);
+  background: var(--color-warning-bg);
+  color: var(--color-warning);
+  font-size: 0.58rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.ds-cx-meta {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 6px;
+  margin-left: auto;
+}
+
+/* The one-line answer to "is anything wrong", so the 40 cells below are a
+   follow-up rather than the only way to find out. */
+.ds-cx-tally {
+  display: flex;
+  gap: 7px;
+  flex-wrap: wrap;
+}
+
+.ds-cx-tally span {
+  padding: 3px 10px;
+  border-radius: var(--radius-full);
+  font-size: 0.7rem;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  border: 1px solid transparent;
+}
+
+.ds-cx-tally .seg-red    { background: var(--color-danger-bg);  color: var(--color-danger);  border-color: var(--color-danger-border); }
+.ds-cx-tally .seg-orange { background: var(--color-warning-bg); color: var(--color-warning); border-color: var(--color-warning-border); }
+.ds-cx-tally .seg-green  { background: var(--color-success-bg); color: var(--color-success); border-color: var(--color-success-border); }
+
+.ds-cx-updated {
+  font-size: 0.72rem;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+/* --- Column headings ------------------------------------------------------ */
+
+.ds-cx-colhead,
+.ds-cx-row {
+  display: grid;
+  /* Directions get equal flexible width; the middle column is sized to the
+     longest exit name so the spine stays put down the whole list. */
+  grid-template-columns: minmax(0, 1fr) 232px minmax(0, 1fr);
+  align-items: center;
+}
+
+.ds-cx-colhead {
+  padding: 10px 22px;
+  background: var(--bg-surface-hover);
+  border-bottom: 1px solid var(--border-default);
+  font-size: 0.64rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--text-muted);
+}
+
+.ds-cx-colhead > span:first-child { text-align: right; padding-right: 14px; }
+.ds-cx-colhead > span:last-child  { text-align: left;  padding-left: 14px; }
+.ds-cx-colhead .mid               { text-align: center; }
+
+/* --- Rows ----------------------------------------------------------------- */
+
+.ds-cx-body { padding: 4px 0 6px; }
+
+.ds-cx-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.ds-cx-row {
+  padding: 0 22px;
+  min-height: 38px;
+  opacity: 0;
+  transform: translateY(6px);
+  transition: opacity 0.4s ease, transform 0.4s ease, background 140ms ease;
+  transition-delay: var(--delay, 0s);
+}
+
+.ds-cx-body.is-visible .ds-cx-row { opacity: 1; transform: translateY(0); }
+
+.ds-cx-row:hover { background: var(--bg-surface-hover); }
+
+/* Toll barriers are a different kind of node, so they get a rule rather than a
+   colour - colour is reserved for traffic state on this panel. */
+.ds-cx-row.is-barrier .ds-cx-name::after {
+  content: "toll";
+  margin-left: 7px;
+  padding: 1px 6px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-full);
+  font-size: 0.55rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  vertical-align: middle;
+}
+
+/* --- Middle spine --------------------------------------------------------- */
+
+.ds-cx-mid {
   display: flex;
   align-items: center;
-  gap: 6px;
-  background: transparent;
-  border: 1px solid #cbd5e1;
-  padding: 4px 12px;
-  border-radius: 99px;
-  color: var(--text-secondary);
-  font-size: 0.7rem;
+  gap: 9px;
+  padding: 0 12px;
+  min-width: 0;
+}
+
+.ds-cx-km {
+  flex: none;
+  width: 38px;
+  text-align: right;
+  font-size: 0.68rem;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-muted);
+}
+
+.ds-cx-node {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  color: var(--text-muted);
+}
+
+.ds-cx-node .ds-hex-svg { width: 20px; height: 20px; }
+
+.ds-cx-name {
+  font-size: 0.8rem;
   font-weight: 600;
+  color: var(--text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* --- Direction cells ------------------------------------------------------ */
+
+.ds-cx-cell {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 7px 14px;
+  border-radius: var(--radius-sm);
   cursor: pointer;
-  transition: all 0.2s;
+  min-width: 0;
 }
 
-.ds-toggle-btn.active {
-  border-color: var(--brand-primary);
-  background: var(--brand-primary);
-  color: #fff;
+/* Northbound reads right-to-left into the spine, southbound left-to-right out
+   of it, so each side points the way its traffic travels. */
+.ds-cx-cell.nb { flex-direction: row; justify-content: flex-end; }
+.ds-cx-cell.sb { flex-direction: row-reverse; justify-content: flex-end; }
+
+.ds-cx-cell:focus-visible { outline: 2px solid var(--brand-primary); outline-offset: -2px; }
+
+.ds-cx-bar {
+  flex: 1 1 auto;
+  min-width: 24px;
+  height: 7px;
+  border-radius: var(--radius-full);
+  background: var(--seg, var(--border-strong));
+  transition: filter 140ms ease;
 }
 
-.ds-toggle-btn .ds-dot {
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
+.ds-cx-cell:hover .ds-cx-bar { filter: brightness(1.12); }
+
+.ds-cx-state {
+  flex: none;
+  width: 74px;
+  font-size: 0.63rem;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  color: var(--seg-text, var(--text-muted));
+}
+.ds-cx-cell.nb .ds-cx-state { text-align: left; }
+.ds-cx-cell.sb .ds-cx-state { text-align: right; }
+
+/* Traffic-state hues. Fixed by design - these must read identically in both
+   themes. The text tone is the token so it stays legible on either ground. */
+.ds-cx-cell.seg-red    { --seg: #e04434; --seg-text: var(--color-danger); }
+.ds-cx-cell.seg-orange { --seg: #e08a2e; --seg-text: var(--color-warning); }
+.ds-cx-cell.seg-green  { --seg: #23a55a; --seg-text: var(--color-success); }
+
+/* A ramp that does not exist in this direction: a dashed rule, not a green bar,
+   which would otherwise claim free-flowing traffic on a road that is not there. */
+.ds-cx-cell.none {
+  cursor: default;
+}
+.ds-cx-cell.none .ds-cx-bar {
+  height: 0;
+  border-top: 2px dashed var(--border-strong);
+  border-radius: 0;
+  background: none;
 }
 
-.ds-toggle-btn .ds-dot.green {
-  background: #27ae60;
-  box-shadow: 0 0 6px #27ae60;
+/* --- Tooltip -------------------------------------------------------------- */
+
+.ds-cx-tip {
+  position: absolute;
+  top: calc(100% + 7px);
+  z-index: 40;
+  width: 234px;
+  padding: 11px 13px;
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-md);
+  background: var(--bg-surface);
+  box-shadow: var(--shadow-lg);
+  animation: cxTip 140ms ease-out;
+  cursor: default;
 }
 
-.ds-toggle-btn .ds-dot.red {
-  background: #e74c3c;
-  box-shadow: 0 0 6px #e74c3c;
+.ds-cx-tip.tip-nb { left: 14px; }
+.ds-cx-tip.tip-sb { right: 14px; }
+
+@keyframes cxTip {
+  from { opacity: 0; transform: translateY(-4px); }
+  to   { opacity: 1; transform: translateY(0); }
 }
 
-/* ─── Responsive ─── */
-@media (max-width: 1024px) {
-  .ds-roadmap-container {
-    overflow-x: auto;
-  }
+.ds-cx-tip strong {
+  display: block;
+  margin-bottom: 7px;
+  padding-bottom: 7px;
+  border-bottom: 1px solid var(--border-default);
+  font-size: 0.78rem;
+  color: var(--text-primary);
+}
 
-  .ds-roadmap-track {
-    min-width: max-content;
-    padding: 0 30px;
-  }
+.ds-cx-tip .ds-tooltip-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 3px 0;
+  font-size: 0.73rem;
+  color: var(--text-muted);
+}
 
-  .ds-roadmap-segment {
-    width: 40px;
-  }
+.ds-cx-tip .ds-tooltip-row > span:last-child {
+  font-weight: 600;
+  color: var(--text-primary);
+  text-align: right;
+}
 
-  .ds-roadmap-controls {
-    flex-direction: column;
-    gap: 14px;
-    border-radius: 16px;
-    padding: 16px;
-    width: auto;
-    margin: 20px 16px 0;
-  }
+.ds-cx-tip .ds-tooltip-row .warn { color: var(--color-warning); }
+
+.ds-status-badge {
+  padding: 2px 8px;
+  border-radius: var(--radius-full);
+  font-size: 0.62rem;
+  font-weight: 800;
+  letter-spacing: 0.05em;
+}
+.ds-status-badge.seg-red    { background: var(--color-danger-bg);  color: var(--color-danger); }
+.ds-status-badge.seg-orange { background: var(--color-warning-bg); color: var(--color-warning); }
+.ds-status-badge.seg-green  { background: var(--color-success-bg); color: var(--color-success); }
+
+/* --- Footer --------------------------------------------------------------- */
+
+.ds-cx-foot {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 12px 22px 14px;
+  border-top: 1px solid var(--border-default);
+  background: var(--bg-surface-hover);
+}
+
+.ds-cx-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 14px;
+  font-size: 0.72rem;
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
+.ds-cx-legend span { display: inline-flex; align-items: center; gap: 6px; }
+
+.ds-cx-legend i {
+  width: 15px;
+  height: 6px;
+  border-radius: var(--radius-full);
+}
+.ds-cx-legend i.seg-red    { background: #e04434; }
+.ds-cx-legend i.seg-orange { background: #e08a2e; }
+.ds-cx-legend i.seg-green  { background: #23a55a; }
+.ds-cx-legend i.none       { height: 0; border-top: 2px dashed var(--border-strong); border-radius: 0; }
+
+.ds-cx-foot p {
+  margin: 0;
+  font-size: 0.71rem;
+  color: var(--text-muted);
+  max-width: 60ch;
+}
+
+/* --- Responsive ----------------------------------------------------------- */
+
+@media (max-width: 900px) {
+  .ds-cx-colhead,
+  .ds-cx-row { grid-template-columns: minmax(0, 1fr) 150px minmax(0, 1fr); }
+  .ds-cx-state { display: none; }   /* the bar colour still carries the state */
+  .ds-cx-km { display: none; }
+  .ds-cx-tip { width: 200px; }
+}
+
+@media (max-width: 620px) {
+  .ds-cx-head, .ds-cx-foot { padding-left: 14px; padding-right: 14px; }
+  .ds-cx-colhead, .ds-cx-row { padding-left: 14px; padding-right: 14px; }
+  .ds-cx-meta { align-items: flex-start; margin-left: 0; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ds-cx-row { opacity: 1; transform: none; transition: background 140ms ease; }
+  .ds-cx-tip { animation: none; }
 }
 
 /* ============================================================

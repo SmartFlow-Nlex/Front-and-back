@@ -100,6 +100,8 @@ export default function IncidentPage() {
   const [weather, setWeather] = useState<WeatherFilter>("all");
 
   // Chart-local interactivity
+  const [hotspotSort, setHotspotSort] = useState<"desc" | "asc">("desc");
+  const [causeSort, setCauseSort] = useState<"desc" | "asc">("desc");
   const [grain, setGrain] = useState<Granularity>("monthly");
   const [timeView, setTimeView] = useState<"hour" | "dow">("hour");
   const [causeMode, setCauseMode] = useState<"Causes" | "Types">("Causes");
@@ -198,7 +200,7 @@ export default function IncidentPage() {
       xAxis: { type: "category", data: labels, axisLabel: { interval: labelInterval, fontSize: 10, hideOverlap: true }, axisTick: { show: false } },
       yAxis: { type: "value", splitNumber: 3, axisLabel: { fontSize: 10 } },
       tooltip: { trigger: "axis", valueFormatter: (v) => (v == null ? "—" : fmtInt(Number(v))) },
-      legend: { show: true, top: 0, right: 8, itemWidth: 14, textStyle: { fontSize: 11 } },
+      legend: { show: true, top: 0, left: "center", itemWidth: 14, itemHeight: 8, itemGap: 16, padding: 0, textStyle: { fontSize: 11 } },
       series,
     };
   }, [trendRows, grain]);
@@ -253,7 +255,7 @@ export default function IncidentPage() {
         xAxis: { type: "category", boundaryGap: false, data: Array.from({ length: 24 }, (_, h) => fmtHour(h)), axisLabel: { interval: 3, fontSize: 10 }, axisTick: { show: false } },
         yAxis: { type: "value", name: "avg incidents / day", nameGap: 10, nameTextStyle: { fontSize: 9, align: "left" }, splitNumber: 3, axisLabel: { fontSize: 10 } },
         tooltip: { trigger: "axis", valueFormatter: (v) => (v == null ? "—" : `${fmt1(Number(v))} / day`) },
-        legend: { show: true, top: 0, right: 8, itemWidth: 14, textStyle: { fontSize: 11 } },
+        legend: { show: true, top: 0, left: "center", itemWidth: 14, itemHeight: 8, itemGap: 16, padding: 0, textStyle: { fontSize: 11 } },
         series: [
           {
             name: "Weekdays",
@@ -312,12 +314,12 @@ export default function IncidentPage() {
   const hotspotChart = useMemo<{ option: EChartsOption; rows: Analytics["hotspots"] } | null>(() => {
     if (!data || data.hotspots.length === 0) return null;
     const top = data.hotspots.slice(0, 10);
-    const display = [...top].reverse();
+    const display = hotspotSort === "desc" ? [...top].reverse() : [...top];
     const maxV = top[0]?.total ?? 1;
     return {
       rows: display,
       option: {
-        grid: { left: 84, right: 46, top: 2, bottom: 20 },
+        grid: { left: 84, right: 46, top: 30, bottom: 20 },
         xAxis: { type: "value", splitNumber: 3, axisLabel: { fontSize: 10 } },
         yAxis: { type: "category", data: display.map((r) => kmLabel(r.km_bin)), axisLabel: { interval: 0, fontSize: 10 }, axisTick: { show: false } },
         tooltip: {
@@ -327,7 +329,7 @@ export default function IncidentPage() {
             return `<b>${kmLabel(r.km_bin)}</b><br/>${fmtInt(r.total)} incidents · ${fmtInt(r.injuries)} injured · ${fmtInt(r.fatalities)} fatalities`;
           },
         },
-        legend: { show: true, top: 0, right: 8, itemWidth: 14, itemHeight: 8, textStyle: { fontSize: 11 } },
+        legend: { show: true, top: 0, left: "center", itemWidth: 14, itemHeight: 8, itemGap: 16, padding: 0, textStyle: { fontSize: 11 } },
         series: [
           {
             name: "Incidents by segment",
@@ -349,11 +351,11 @@ export default function IncidentPage() {
     const src = causeMode === "Causes" ? data.causes : data.types;
     if (src.length === 0) return null;
     const top = src.slice(0, 9);
-    const display = [...top].reverse();
+    const display = causeSort === "desc" ? [...top].reverse() : [...top];
     return {
       rows: display,
       option: {
-        grid: { left: 150, right: 42, top: 2, bottom: 20 },
+        grid: { left: 150, right: 42, top: 30, bottom: 20 },
         xAxis: { type: "value", splitNumber: 3, axisLabel: { fontSize: 10 } },
         yAxis: { type: "category", data: display.map((r) => (r.label.length > 24 ? `${r.label.slice(0, 24)}…` : r.label)), axisLabel: { interval: 0, fontSize: 10 }, axisTick: { show: false } },
         tooltip: {
@@ -363,7 +365,7 @@ export default function IncidentPage() {
             return `<b>${r.label}</b><br/>${fmtInt(r.total)} incidents · ${fmtInt(r.injuries)} injured · ${fmtInt(r.fatalities)} fatalities`;
           },
         },
-        legend: { show: true, top: 0, right: 8, itemWidth: 14, itemHeight: 8, textStyle: { fontSize: 11 } },
+        legend: { show: true, top: 0, left: "center", itemWidth: 14, itemHeight: 8, itemGap: 16, padding: 0, textStyle: { fontSize: 11 } },
         series: [
           {
             name: "Incidents",
@@ -375,7 +377,7 @@ export default function IncidentPage() {
         ],
       },
     };
-  }, [data, causeMode]);
+  }, [data, causeMode, causeSort]);
 
   const weatherChart = useMemo<EChartsOption | null>(() => {
     if (!data || !derived) return null;
@@ -399,7 +401,7 @@ export default function IncidentPage() {
           return `<b>${cats[i]}</b><br/>Dry weather: ${items.find((x) => x.seriesName === "Dry weather")?.value} per day — ${fmtInt(w.incidents.dry[k])} incidents over ${fmtInt(w.dryHours)} dry hrs<br/>Wet weather: ${items.find((x) => x.seriesName === "Wet weather")?.value} per day — ${fmtInt(w.incidents.wet[k])} incidents over ${fmtInt(w.wetHours)} wet hrs`;
         },
       },
-      legend: { show: true, top: 0, right: 8, itemWidth: 14, textStyle: { fontSize: 11 } },
+      legend: { show: true, top: 0, left: "center", itemWidth: 14, itemHeight: 8, itemGap: 16, padding: 0, textStyle: { fontSize: 11 } },
       series: [
         { name: "Dry weather", type: "bar", data: keys.map((k) => rate(w.incidents.dry[k], w.dryHours)), itemStyle: { color: RAMP[2], borderRadius: [3, 3, 0, 0] }, barMaxWidth: 26 },
         { name: "Wet weather", type: "bar", data: keys.map((k) => rate(w.incidents.wet[k], w.wetHours)), itemStyle: { color: RAMP[0], borderRadius: [3, 3, 0, 0] }, barMaxWidth: 26 },
@@ -763,6 +765,19 @@ export default function IncidentPage() {
           <div className={styles.headText}>
             <h3>Hotspots by Km Segment</h3>
           </div>
+          <div className={styles.segmentedSmall} role="radiogroup" aria-label="Sort order">
+            {([["desc", "High → low"], ["asc", "Low → high"]] as const).map(([v, label]) => (
+              <button
+                key={v}
+                role="radio"
+                aria-checked={hotspotSort === v}
+                className={hotspotSort === v ? "active" : ""}
+                onClick={() => setHotspotSort(v)}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
           <button className={styles.secondaryButton} onClick={() => setAllHotspotsOpen(true)}>
             View all
             <svg width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M6 12l4-4-4-4" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" /></svg>
@@ -776,6 +791,19 @@ export default function IncidentPage() {
         <div className={styles.chartHead}>
           <div className={styles.headText}>
             <h3>{causeMode === "Causes" ? "Top Incident Causes" : "Top Accident Types"}</h3>
+          </div>
+          <div className={styles.segmentedSmall} role="radiogroup" aria-label="Sort order">
+            {([["desc", "High → low"], ["asc", "Low → high"]] as const).map(([v, label]) => (
+              <button
+                key={v}
+                role="radio"
+                aria-checked={causeSort === v}
+                className={causeSort === v ? "active" : ""}
+                onClick={() => setCauseSort(v)}
+              >
+                {label}
+              </button>
+            ))}
           </div>
           <div className={styles.segmentedSmall}>
             {(["Causes", "Types"] as const).map((m) => (

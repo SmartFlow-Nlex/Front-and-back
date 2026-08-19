@@ -196,7 +196,7 @@ export default function SustainabilityPage() {
           return `<b>${r.label}</b><br/>${rows}<br/>Total: <b>${fmtInt(r.total)} t</b>`;
         },
       },
-      legend: { show: true, top: 0, right: 8, itemWidth: 14, textStyle: { fontSize: 11 } },
+      legend: { show: true, top: 0, left: "center", itemWidth: 14, itemHeight: 8, itemGap: 16, padding: 0, textStyle: { fontSize: 11 } },
       series: [mk(CLASS_SHORT[0], "c1", RAMP[0]), mk(CLASS_SHORT[1], "c2", RAMP[1]), mk(CLASS_SHORT[2], "c3", RAMP[2])],
     };
   }, [trendRows, grain]);
@@ -249,7 +249,7 @@ export default function SustainabilityPage() {
         xAxis: { type: "category", boundaryGap: false, data: Array.from({ length: 24 }, (_, h) => fmtHour(h)), axisLabel: { interval: 3, fontSize: 10 }, axisTick: { show: false } },
         yAxis: { type: "value", name: "avg t CO₂ / day", nameGap: 10, nameTextStyle: { fontSize: 9, align: "left" }, splitNumber: 3, axisLabel: { fontSize: 10 } },
         tooltip: { trigger: "axis", valueFormatter: (v) => (v == null ? "—" : `${fmt1(Number(v))} t`) },
-        legend: { show: true, top: 0, right: 8, itemWidth: 14, textStyle: { fontSize: 11 } },
+        legend: { show: true, top: 0, left: "center", itemWidth: 14, itemHeight: 8, itemGap: 16, padding: 0, textStyle: { fontSize: 11 } },
         series: [
           {
             name: "Weekdays",
@@ -347,7 +347,7 @@ export default function SustainabilityPage() {
           return `<b>${r.label}</b><br/>${lines}`;
         },
       },
-      legend: { show: true, top: 0, right: 8, itemWidth: 14, textStyle: { fontSize: 11 } },
+      legend: { show: true, top: 0, left: "center", itemWidth: 14, itemHeight: 8, itemGap: 16, padding: 0, textStyle: { fontSize: 11 } },
       series: fleetRows.cls.map((c, ci) => ({
         name: CLASS_SHORT[ci],
         type: "bar" as const,
@@ -400,7 +400,7 @@ export default function SustainabilityPage() {
           return `<b>${r.label}</b><br/>Heavy-vehicle share: <b>${items[0].value}%</b><br/>${fmtInt(r.c2 + r.c3)} t of ${fmtInt(r.total)} t CO₂`;
         },
       },
-      legend: { show: true, top: 0, right: 8, itemWidth: 14, itemHeight: 8, textStyle: { fontSize: 11 } },
+      legend: { show: true, top: 0, left: "center", itemWidth: 14, itemHeight: 8, itemGap: 16, padding: 0, textStyle: { fontSize: 11 } },
       series: [
         {
           name: "Heavy-vehicle share of CO₂",
@@ -447,7 +447,7 @@ export default function SustainabilityPage() {
           return `<b>${labels[i]}</b><br/>${lines}<br/>Avg PM2.5: ${r.pm25 != null ? `${fmt1(r.pm25)} µg/m³` : "—"}`;
         },
       },
-      legend: { show: true, top: 0, right: 8, itemWidth: 14, textStyle: { fontSize: 11 } },
+      legend: { show: true, top: 0, left: "center", itemWidth: 14, itemHeight: 8, itemGap: 16, padding: 0, textStyle: { fontSize: 11 } },
       series: keys.map((k, ki) => ({
         name: AQI_BANDS[ki],
         type: "bar" as const,

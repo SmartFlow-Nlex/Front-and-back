@@ -267,7 +267,6 @@ export default function InteractiveRoadMap() {
               </span>
             )}
           </h2>
-          <p>NLEX Expressway · Metro Manila → Central Luzon</p>
         </div>
 
         <div className="ds-rd-meta">
@@ -305,7 +304,7 @@ export default function InteractiveRoadMap() {
         <div className="ds-rd-scroll">
           <div className="ds-rd-track" style={{ "--lanes": rows.length } as React.CSSProperties}>
             <p className="ds-rd-caption top">
-              <span aria-hidden="true">→</span> Northbound · to Central Luzon
+              <span aria-hidden="true">→</span> Northbound (NB) · to Central Luzon
             </p>
             {carriageway("NB", (r) => ({ data: r.nb, access: r.nbAccess }))}
 
@@ -342,7 +341,7 @@ export default function InteractiveRoadMap() {
 
             {carriageway("SB", (r) => ({ data: r.sb, access: r.sbAccess }))}
             <p className="ds-rd-caption bottom">
-              <span aria-hidden="true">←</span> Southbound · to Metro Manila
+              <span aria-hidden="true">←</span> Southbound (SB) · to Metro Manila
             </p>
 
             {/* Names sit under the whole diagram, shared by both carriageways. */}

@@ -3334,15 +3334,6 @@ body {
   letter-spacing: -0.01em;
 }
 
-.ds-rd-titles p {
-  margin: 3px 0 0;
-  font-size: 0.72rem;
-  font-weight: 600;
-  letter-spacing: 0.07em;
-  text-transform: uppercase;
-  color: var(--text-muted);
-}
-
 .ds-rd-stale {
   padding: 3px 9px;
   border: 1px solid var(--color-warning-border);
@@ -3488,17 +3479,24 @@ body {
 .ds-rd-caption {
   display: flex;
   align-items: center;
-  gap: 7px;
+  gap: 8px;
   margin: 0;
-  font-size: 0.63rem;
-  font-weight: 800;
-  letter-spacing: 0.12em;
-  text-transform: uppercase;
-  color: var(--text-muted);
+  font-size: 0.82rem;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  color: var(--text-secondary);
 }
-.ds-rd-caption.top    { margin-bottom: 5px; }
-.ds-rd-caption.bottom { margin-top: 5px; justify-content: flex-end; }
-.ds-rd-caption span   { font-size: 1.1em; color: var(--brand-primary); }
+.ds-rd-caption.top    { margin-bottom: 7px; }
+.ds-rd-caption.bottom { margin-top: 7px; justify-content: flex-end; }
+
+/* The arrow is the quickest read of which way the carriageway runs, so it is
+   sized up and given the brand colour rather than sharing the label's weight. */
+.ds-rd-caption span {
+  font-size: 1.25em;
+  line-height: 1;
+  font-weight: 800;
+  color: var(--brand-primary);
+}
 
 /* --- Carriageways ---------------------------------------------------------- */
 

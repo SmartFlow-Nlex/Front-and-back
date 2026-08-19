@@ -4640,13 +4640,18 @@ body {
 
 .ds-hero-card {
   position: relative;
-  /* The artwork's own proportion, so the banner is shown as designed instead of
-     being cropped to an arbitrary height. The cap keeps it from becoming a
-     650px wall on a wide monitor; when the cap bites, `cover` trims evenly from
-     top and bottom, and the artwork's content sits in the middle 40% so nothing
-     meaningful is lost. */
-  aspect-ratio: 3840 / 1772;
-  max-height: 430px;
+  /* Width first, height second — the reverse of what was here before.
+     `aspect-ratio` plus `max-height` looks like "keep the shape, cap the height",
+     but once max-height makes the height definite the ratio derives the WIDTH
+     from it, so the card collapsed to about 930px inside a 1480px column instead
+     of filling it. Setting the width explicitly and giving the height its own
+     clamp keeps the card full-bleed at every size.
+
+     The banner is 2.17:1 and the card is wider than that, so `cover` trims top
+     and bottom evenly. The artwork's content sits in the middle 40%, which
+     leaves comfortable margin at this height. */
+  width: 100%;
+  height: clamp(260px, 26vw, 460px);
   border-radius: var(--radius-lg);
   overflow: hidden;
   border: 1px solid var(--border-default);
@@ -4769,7 +4774,7 @@ body {
   /* The banner is left-weighted, so on a narrow screen holding its full width
      would shrink the wordmark to nothing. Cropping to a squarer card and biasing
      left keeps the logo and wordmark at a readable size. */
-  .ds-hero-card { aspect-ratio: 16 / 9; max-height: 240px; }
+  .ds-hero-card { height: clamp(170px, 34vw, 240px); }
   .ds-hero-image { object-position: 28% center; }
   .ds-scroll-down { font-size: 0.74rem; padding: 7px 14px; bottom: 12px; }
 }

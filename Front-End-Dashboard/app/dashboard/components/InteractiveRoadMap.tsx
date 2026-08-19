@@ -8,7 +8,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
    "toll-barrier" nodes (Bocaue Barrier) are flagged separately from ramp nodes.
 ══════════════════════════════════════════════════════════════════════════════ */
 
-import { useNlexExits, accessLabel, type NlexExit } from "../../../lib/nlex-exits";
+import { useNlexExits, accessLabel, displayExitName, type NlexExit } from "../../../lib/nlex-exits";
 
 
 
@@ -284,7 +284,7 @@ export default function InteractiveRoadMap() {
         {focused ? (
           <>
             <span className="ds-rd-rail-name">
-              {focused.exit.exit_name}
+              {displayExitName(focused.exit.exit_name)}
               <em>km {focused.exit.km.toFixed(1)}</em>
               {focused.exit.node_type === "toll-barrier" && <span className="ds-rd-toll">toll plaza</span>}
             </span>
@@ -327,7 +327,7 @@ export default function InteractiveRoadMap() {
                       onMouseLeave={() => setActiveStation(null)}
                       onFocus={() => setActiveStation(r.exit.exit_name)}
                       onBlur={() => setActiveStation(null)}
-                      aria-label={`${r.exit.exit_name}, km ${r.exit.km.toFixed(1)}. Northbound ${
+                      aria-label={`${displayExitName(r.exit.exit_name)}, km ${r.exit.km.toFixed(1)}. Northbound ${
                         r.nbAccess === "No Access" ? "no ramp" : r.nb.status.toLowerCase()
                       }. Southbound ${r.sbAccess === "No Access" ? "no ramp" : r.sb.status.toLowerCase()}.`}
                     >
@@ -358,7 +358,7 @@ export default function InteractiveRoadMap() {
                     tabIndex={-1}
                     aria-hidden="true"
                   >
-                    {r.exit.exit_name}
+                    {displayExitName(r.exit.exit_name)}
                   </button>
                 </li>
               ))}

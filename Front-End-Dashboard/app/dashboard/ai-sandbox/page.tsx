@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { useNlexExits } from "../../../lib/nlex-exits";
+import { displayExitName, useNlexExits } from "../../../lib/nlex-exits";
 import { Car } from "lucide-react";
 import PageHeader from "../../../components/dashboard/PageHeader";
 import { TrafficSim, CLASS_META, mixHex, type Metrics, type Interventions } from "./simulation";
@@ -225,7 +225,7 @@ export default function AiSandboxPage() {
       <PageHeader
         icon={Car}
         title="AI Traffic Sandbox"
-        subtitle={`Agent-based what-if simulation · ${originExit?.exit_name} → ${destExit?.exit_name} corridor`}
+        subtitle={`Agent-based what-if simulation · ${originExit ? displayExitName(originExit.exit_name) : ""} → ${destExit ? displayExitName(destExit.exit_name) : ""} corridor`}
       />
 
       {/* Live metric tiles */}
@@ -329,7 +329,7 @@ export default function AiSandboxPage() {
             <select value={origin} onChange={(e) => setOrigin(Number(e.target.value))}>
               {EXITS.map((ex, i) => (
                 <option key={ex.exit_id} value={i} disabled={i >= destination}>
-                  {ex.exit_name} (Km {ex.km})
+                  {displayExitName(ex.exit_name)} (Km {ex.km})
                 </option>
               ))}
             </select>
@@ -339,7 +339,7 @@ export default function AiSandboxPage() {
             <select value={destination} onChange={(e) => setDestination(Number(e.target.value))}>
               {EXITS.map((ex, i) => (
                 <option key={ex.exit_id} value={i} disabled={i <= origin}>
-                  {ex.exit_name} (Km {ex.km})
+                  {displayExitName(ex.exit_name)} (Km {ex.km})
                 </option>
               ))}
             </select>

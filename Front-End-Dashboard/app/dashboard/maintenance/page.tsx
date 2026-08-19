@@ -8,7 +8,7 @@ import { supabase } from "../../../lib/supabase";
 
 import { useToast } from "../../../lib/toast";
 import { SortableTh, useTableSort } from "../../../lib/table-sort";
-import { useNlexExits, exitNearestKm, CORRIDOR_KM, type NlexExit } from "../../../lib/nlex-exits";
+import { useNlexExits, exitNearestKm, displayExitName, CORRIDOR_KM, type NlexExit } from "../../../lib/nlex-exits";
 
 const BACKEND = process.env.NEXT_PUBLIC_BACKEND_URL ?? "http://localhost:4000";
 
@@ -63,8 +63,10 @@ const kmRange = (s: Schedule) =>
   `Km ${s.start_km}${s.end_km !== s.start_km ? `–${s.end_km}` : ""}`;
 
 // Nearest exit to a km-post, against the shared corridor list.
-const nearestExitName = (exits: NlexExit[], km: number) =>
-  exitNearestKm(exits, km)?.exit_name ?? "-";
+const nearestExitName = (exits: NlexExit[], km: number) => {
+  const x = exitNearestKm(exits, km);
+  return x ? displayExitName(x.exit_name) : "-";
+};
 
 // Modern dropdown — same look and behavior as the Traffic tab's custom select
 function Select({
@@ -716,7 +718,7 @@ export default function MaintenancePage() {
                   <Select
                     value={form.startKm}
                     placeholder="Pick an exit…"
-                    options={NLEX_EXITS.map((x) => ({ label: `${x.exit_name} (Km ${x.km})`, value: String(x.km) }))}
+                    options={NLEX_EXITS.map((x) => ({ label: `${displayExitName(x.exit_name)} (Km ${x.km})`, value: String(x.km) }))}
                     onChange={(v) => set("startKm", v)}
                   />
                 </div>
@@ -729,7 +731,7 @@ export default function MaintenancePage() {
                   <Select
                     value={form.endKm}
                     placeholder="Pick an exit…"
-                    options={NLEX_EXITS.map((x) => ({ label: `${x.exit_name} (Km ${x.km})`, value: String(x.km) }))}
+                    options={NLEX_EXITS.map((x) => ({ label: `${displayExitName(x.exit_name)} (Km ${x.km})`, value: String(x.km) }))}
                     onChange={(v) => set("endKm", v)}
                   />
                 </div>

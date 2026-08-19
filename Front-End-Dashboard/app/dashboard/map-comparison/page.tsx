@@ -12,7 +12,7 @@ import PageHeader from "../../../components/dashboard/PageHeader";
 
 const BACKEND = process.env.NEXT_PUBLIC_BACKEND_URL ?? "http://localhost:4000";
 
-import { useNlexExits, type NlexExit } from "../../../lib/nlex-exits";
+import { displayExitName, useNlexExits, type NlexExit } from "../../../lib/nlex-exits";
 
 type ExitHit = NlexExit;
 
@@ -178,7 +178,7 @@ export default function MapComparisonPage() {
                             fontSize: "0.7rem", color: "var(--text-muted)", minWidth: "1.4rem",
                             fontVariantNumeric: "tabular-nums",
                           }}>{x.exit_id}</span>
-                          {x.exit_name}
+                          {displayExitName(x.exit_name)}
                           <span style={{ marginLeft: "auto", fontSize: "0.72rem", color: "var(--text-muted)" }}>
                             Km {x.km}
                           </span>

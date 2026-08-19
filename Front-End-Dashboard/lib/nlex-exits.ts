@@ -115,6 +115,29 @@ export function useNlexExits(): { exits: NlexExit[]; loading: boolean } {
   return { exits, loading };
 }
 
+/**
+ * Exit name as it should be shown, with acronyms restored.
+ *
+ * The stored names are title-cased, which mangles the initialisms: "Cdv/Ph
+ * Arena" and "Sctex" should read CDV/PH and SCTEX. Fixed here at the point of
+ * display rather than in the database, because exit_name is a match key as well
+ * as a label — the ETL cleaner keeps a canonical plaza list keyed on these exact
+ * strings, volume rows carry the same spelling in toll_plaza, and the corridor
+ * status endpoint joins the live feed to the frontend list by name. Renaming the
+ * column would silently break all three to fix a caption.
+ *
+ * Keyed on the lower-cased whole name, so it can only rewrite the entries it
+ * knows and cannot mangle an unrelated exit that happens to contain the letters.
+ */
+const DISPLAY_NAMES: Record<string, string> = {
+  "cdv/ph arena": "CDV/PH Arena",
+  "sctex": "SCTEX",
+};
+
+export function displayExitName(name: string): string {
+  return DISPLAY_NAMES[name.toLowerCase().trim()] ?? name;
+}
+
 /** Nearest exit to a km-post — used to label a position on the corridor. */
 export function exitNearestKm(exits: NlexExit[], km: number): NlexExit | null {
   if (exits.length === 0) return null;

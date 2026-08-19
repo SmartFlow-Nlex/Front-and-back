@@ -5,3 +5,6 @@ build/
 .env
 .env.local
 *.log
+
+# Local DB backups taken before a retrain — not part of the project.
+.merge-backup/

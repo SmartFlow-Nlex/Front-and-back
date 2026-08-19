@@ -57,6 +57,22 @@ const zoneLabel = (text: string, show: boolean) => ({
 // still renders legibly, but a custom range can squeeze it much narrower.
 const MIN_ZONE_LABEL_FRACTION = 0.06;
 
+// How far into the Future band to draw, mirroring the Future control on the
+// traffic chart. `d` counts days from the first forecast row, and the control
+// only ever trims what is already on the response — it cannot ask the API for
+// a longer horizon, because the horizon is whatever the training run wrote
+// into ml_predictive_incidents.
+//
+// That pipeline currently writes 7 forecast days, so the wider presets render
+// disabled rather than hidden: a greyed "1 mo" states the ceiling, where an
+// absent button would read as a missing feature. They enable themselves once
+// the table holds that many days, with no change needed here.
+const FUTURE_PRESETS = [
+  { label: "1 wk", d: 7 },
+  { label: "2 wk", d: 14 },
+  { label: "1 mo", d: 28 },
+] as const;
+
 // No defaults: with nothing passed the component sends no query params, so the
 // API returns the same fixed-window payload it always did and the chart keeps
 // its original shape.
@@ -74,6 +90,11 @@ export default function PredictiveIncidentChart({
   // Several models can be on screen at once; the list never empties so the
   // chart always has something to compare the ground truth against.
   const [selected, setSelected] = useState<ModelKey[]>([]);
+  // null = "show the whole horizon the pipeline wrote", which is what the chart
+  // did before this control existed. Kept as null rather than seeded to a
+  // preset so a Range change never silently hides forecast days the previous
+  // selection happened to be narrower than.
+  const [futureDays, setFutureDays] = useState<number | null>(null);
   // Guards the one-time "open on the champion" default against filter refetches.
   const seededRef = useRef(false);
   const router = useRouter();
@@ -161,7 +182,20 @@ export default function PredictiveIncidentChart({
     );
   }
 
-  const { daily, modelMetrics, modelInfo } = data;
+  const { daily: fullDaily, modelMetrics, modelInfo } = data;
+
+  // Trim the tail of the forecast horizon to the selected width. Past and
+  // Present sit entirely before the first future row, so cutting rows off the
+  // end leaves every earlier index untouched — which is why the zone
+  // boundaries below need none of the index rebasing PredictiveVolumeChart
+  // does, since that chart trims its head as well.
+  const rawFullFutureStart = fullDaily.findIndex((d) => d.predictionType === "future");
+  const fullFutureStart = rawFullFutureStart === -1 ? fullDaily.length : rawFullFutureStart;
+  const futureAvailable = fullDaily.length - fullFutureStart;
+  // Clamped, so a selection made while a wide Range was loaded cannot outrun a
+  // narrower window's shorter horizon and slice past the end of the array.
+  const effectiveFutureDays = Math.min(futureDays ?? futureAvailable, futureAvailable);
+  const daily = fullDaily.slice(0, fullFutureStart + effectiveFutureDays);
   const dates = daily.map((d) => fmtDate(d.date));
 
   // Drill-down: any point on any series maps back to its day by dataIndex, since
@@ -632,6 +666,48 @@ export default function PredictiveIncidentChart({
         </div>
         {modelToolbar}
       </div>
+
+      {/* Forecast-horizon control. Hidden outright when the visible window has
+          no Future band at all (a custom range ending before the horizon
+          starts), since there would be nothing for it to trim. */}
+      {futureAvailable > 0 && (
+        <div style={{ display: "flex", alignItems: "center", gap: "8px", flexWrap: "wrap", fontSize: "0.75rem", color: "#4b5e7d" }}>
+          <span style={{ width: 10, height: 10, borderRadius: 2, background: "rgba(22,163,74,0.3)" }} />
+          <b style={{ color: "#0f172a" }}>Future</b>
+          {FUTURE_PRESETS.map((item) => {
+            const unavailable = item.d > futureAvailable;
+            const active = effectiveFutureDays === item.d;
+            return (
+              <button
+                key={item.label}
+                onClick={() => setFutureDays(item.d)}
+                disabled={unavailable}
+                title={
+                  unavailable
+                    ? `The forecast only runs ${futureAvailable} day${futureAvailable === 1 ? "" : "s"} ahead — retrain the incident pipeline with a longer horizon to use this`
+                    : `Show ${item.d} days of forecast`
+                }
+                style={{
+                  padding: "3px 10px",
+                  borderRadius: "999px",
+                  cursor: unavailable ? "not-allowed" : "pointer",
+                  border: active ? "1px solid #16a34a" : "1px solid #dce2ef",
+                  background: active ? "#16a34a" : "#fff",
+                  color: active ? "#fff" : "#4b5e7d",
+                  fontWeight: 600,
+                  fontSize: "0.72rem",
+                  opacity: unavailable ? 0.4 : 1,
+                }}
+              >
+                {item.label}
+              </button>
+            );
+          })}
+          <span style={{ color: "#64748b" }}>
+            · {futureAvailable}d forecast written by the last training run
+          </span>
+        </div>
+      )}
 
       <div style={{ height: "450px", width: "100%", cursor: "pointer" }}>
         <DashboardChart option={option} height={450} onEvents={{ click: onChartClick as (p: never) => void }} />

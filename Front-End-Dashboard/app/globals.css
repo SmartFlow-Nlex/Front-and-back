@@ -731,7 +731,7 @@ body {
 .ds-sidebar {
   background: var(--bg-sidebar);
   color: var(--text-on-dark);
-  padding: 18px 14px;
+  padding: 25px 14px 18px;
   display: flex;
   flex-direction: column;
   overflow: hidden;
@@ -751,7 +751,7 @@ body {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  margin-bottom: 16px;
+  margin-bottom: 0;
   padding-right: 4px;
   flex-shrink: 0;
 }
@@ -1047,6 +1047,50 @@ body {
   height: 40px;
   object-fit: contain;
 }
+
+/* --- Brand mark, light and dark cuts --------------------------------------
+   Same three-state guard as the hero and the palette: a bare default, an OS
+   preference that an explicit Light choice still overrides, and an explicit Dark
+   choice that beats a light OS.
+
+   `display` rather than `opacity`, because these are in normal flow — a
+   transparent-but-present image would still occupy its 40px and push the
+   wordmark across.
+   ------------------------------------------------------------------------- */
+
+.ds-brand-logo.is-dark  { display: none; }
+.ds-brand-logo.is-light { display: block; }
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .ds-brand-logo.is-dark  { display: block; }
+  :root:not([data-theme="light"]) .ds-brand-logo.is-light { display: none; }
+}
+
+:root[data-theme="dark"] .ds-brand-logo.is-dark  { display: block; }
+:root[data-theme="dark"] .ds-brand-logo.is-light { display: none; }
+
+/* The dark cut is an opaque navy tile rather than a transparent mark, so it
+   would otherwise sit on the topbar as a hard square. Rounding it and trimming
+   the bleed makes it read as a deliberate badge. */
+.ds-brand-logo.is-dark {
+  border-radius: 9px;
+  object-fit: cover;
+}
+
+/* Same swap for the login screen's larger mark. Its own .brand-logo rule sets
+   the size, so this only decides which of the two is shown. */
+.ds-brand-swap.is-dark  { display: none; }
+.ds-brand-swap.is-light { display: block; }
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .ds-brand-swap.is-dark  { display: block; }
+  :root:not([data-theme="light"]) .ds-brand-swap.is-light { display: none; }
+}
+
+:root[data-theme="dark"] .ds-brand-swap.is-dark  { display: block; }
+:root[data-theme="dark"] .ds-brand-swap.is-light { display: none; }
+
+.ds-brand-swap.is-dark { border-radius: 18px; }
 
 .ds-datetime-block {
   text-align: right;

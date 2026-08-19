@@ -119,14 +119,29 @@ export default function Home() {
     <main className="login-shell">
       <section className="login-brand" aria-label="SmartFlow branding">
         <div className="brand-stack">
+          {/* Was pointing at /SMARTFLOW_LOGO.png, which no longer exists in
+              public/ and was 404-ing — a broken image on the first screen anyone
+              sees. Swapped for the two cuts that do exist, with the same
+              three-state theme guard used in the topbar; the login shell takes
+              --bg-login, which flips to near-black in dark mode, so a single
+              light-background mark would have been wrong half the time. */}
           <Image
-            src="/SMARTFLOW_LOGO.png"
-            alt="SmartFlow logo"
-            width={700}
-            height={500}
+            src="/SMARTFLOW_LOGO_WHITE.png"
+            alt="SmartFlow NLEX"
+            width={512}
+            height={512}
             priority
             unoptimized
-            className="brand-logo"
+            className="brand-logo ds-brand-swap is-light"
+          />
+          <Image
+            src="/logo-dark-bg.png"
+            alt=""
+            width={512}
+            height={512}
+            priority
+            unoptimized
+            className="brand-logo ds-brand-swap is-dark"
           />
 
           <div className="brand-copy">

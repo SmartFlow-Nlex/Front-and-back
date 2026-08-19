@@ -205,22 +205,6 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
       )}
 
       <aside className="ds-sidebar">
-        <div className="ds-sidebar-brand">
-          <div className="ds-sidebar-logo-container">
-            <div className="ds-sidebar-brand-text">
-              <span className="ds-sidebar-title"><span className="ds-brand-highlight">SmartFlow</span> NLEX</span>
-              <span className="ds-sidebar-subtitle">Where Traffic Meets Intelligence</span>
-            </div>
-          </div>
-          <button
-            type="button"
-            className="ds-sidebar-close"
-            aria-label="Close sidebar"
-            onClick={closeSidebar}
-          >
-            <X size={20} strokeWidth={2.5} />
-          </button>
-        </div>
 
         <nav className="ds-sidebar-nav">
           {NAV_GROUPS.map((group) => {
@@ -276,12 +260,26 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
               <span />
             </button>
             <div className="ds-top-brand">
+              {/* Two cuts of the mark, swapped in CSS for the same reason as the
+                  hero: an explicit theme choice has to beat the OS setting in
+                  both directions, and a JS swap would flash the wrong one on
+                  load. Hidden with `display`, not `opacity` — unlike the hero
+                  these sit in normal flow, so a transparent one would still take
+                  up space and shove the wordmark sideways. */}
               <Image
                 src="/SMARTFLOW_LOGO_WHITE.png"
-                alt="SmartFlow Logo"
-                width={224}
-                height={64}
-                className="w-auto max-h-12 object-contain"
+                alt="SmartFlow NLEX"
+                width={256}
+                height={256}
+                className="ds-brand-logo is-light"
+                priority
+              />
+              <Image
+                src="/logo-dark-bg.png"
+                alt=""
+                width={256}
+                height={256}
+                className="ds-brand-logo is-dark"
                 priority
               />
               SmartFlow NLEX

@@ -359,7 +359,6 @@ export default function InteractiveRoadMap() {
                     aria-hidden="true"
                   >
                     {r.exit.exit_name}
-                    {r.exit.node_type === "toll-barrier" && <i className="ds-rd-tollmark" />}
                   </button>
                 </li>
               ))}
@@ -373,8 +372,6 @@ export default function InteractiveRoadMap() {
           <span><i className="seg-red" /> Congested</span>
           <span><i className="seg-orange" /> Slow</span>
           <span><i className="seg-green" /> Clear</span>
-          <span><i className="none" /> No ramp</span>
-          <span><i className="toll" /> Toll plaza</span>
         </div>
         <p>
           Waze jam reports matched to the nearest exit; direction from jam bearing.

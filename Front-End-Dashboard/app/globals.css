@@ -3701,18 +3701,6 @@ body {
 .ds-rd-label:hover,
 .ds-rd-label.is-active { color: var(--brand-primary); }
 
-/* Toll plazas get a mark rather than a word — there is no room for "toll" in a
-   116px column that already holds the name. */
-.ds-rd-tollmark {
-  display: block;
-  width: 6px;
-  height: 6px;
-  margin: 6px auto 0;
-  border: 1.5px solid var(--text-muted);
-  background: none;
-  transform: rotate(45deg);
-}
-
 /* --- Footer ---------------------------------------------------------------- */
 
 .ds-rd-foot {
@@ -3741,16 +3729,6 @@ body {
 .ds-rd-legend i.seg-red    { background: #e04434; }
 .ds-rd-legend i.seg-orange { background: #e08a2e; }
 .ds-rd-legend i.seg-green  { background: #23a55a; }
-.ds-rd-legend i.none       { height: 0; border-top: 2px dotted var(--border-strong); border-radius: 0; }
-/* Matches the mark under a toll plaza name: a shape, not a colour, so it stays
-   clear of the three traffic states above it. */
-.ds-rd-legend i.toll {
-  width: 7px;
-  height: 7px;
-  border: 1.5px solid var(--text-muted);
-  border-radius: 0;
-  transform: rotate(45deg);
-}
 
 .ds-rd-foot p {
   margin: 0;

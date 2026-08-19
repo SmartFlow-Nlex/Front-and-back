@@ -383,40 +383,88 @@
 .kpiRow {
   grid-column: 1 / -1;
   display: grid;
-  grid-template-columns: repeat(5, minmax(0, 1fr));
-  gap: 20px;
+  /* auto-fit so five tiles wrap to 3+2 rather than being squeezed to unreadable
+     widths on a narrower window. */
+  grid-template-columns: repeat(auto-fit, minmax(196px, 1fr));
+  gap: 14px;
   min-height: 0;
 }
 
-/* KPIs: the quiet top layer — flat, low-contrast, no shadow competition */
+/* KPI tiles.
+   A colour bar down the leading edge, a quiet uppercase label, the number as the
+   loudest thing on the card, and a small qualifying line under it.
+
+   The accent identifies the tile, so it is set per position rather than by value:
+   colour here must not move when the numbers do, or the row starts looking like a
+   status board it is not. Each page sets --kpi-accent per tile via nth-child
+   below; the hues are the page's own ramp plus the reserved status colours. */
 .kpiTile {
+  position: relative;
+  overflow: hidden;
   background: var(--bg-surface, #fff);
   border: 1px solid var(--border-default);
   border-radius: var(--radius-lg, 14px);
-  padding: 14px 18px 12px;
+  padding: 15px 18px 14px 20px;
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: 3px;
   min-width: 0;
+  transition: border-color 160ms ease, box-shadow 160ms ease, transform 160ms ease;
+}
+
+/* The leading bar. An inset pseudo-element rather than a border-left so the
+   card's rounded corner stays intact. */
+.kpiTile::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 4px;
+  background: var(--kpi-accent, var(--brand-primary));
+}
+
+.kpiTile:hover {
+  border-color: var(--border-strong);
+  box-shadow: var(--shadow-md);
+  transform: translateY(-1px);
 }
 
 .kpiTile h3 {
   margin: 0;
-  font-size: 0.68rem;
+  padding-right: 30px;   /* clear of the icon */
+  font-size: 0.65rem;
   font-weight: 700;
   text-transform: uppercase;
-  letter-spacing: 0.04em;
-  color: var(--text-secondary, #5b6474);
+  letter-spacing: 0.08em;
+  color: var(--text-muted);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 
+/* Tinted square holding the tile's icon, top right. */
+.kpiIcon {
+  position: absolute;
+  top: 13px;
+  right: 14px;
+  display: grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--kpi-accent, var(--brand-primary)) 14%, transparent);
+  color: var(--kpi-accent, var(--brand-primary));
+}
+
 .kpiValue {
-  font-size: 1.3rem;
+  font-size: 1.6rem;
   font-weight: 800;
+  letter-spacing: -0.02em;
   color: var(--text-primary, #1c2434);
-  line-height: 1.15;
+  line-height: 1.1;
+  /* Tabular so the row does not jitter horizontally as values update. */
+  font-variant-numeric: tabular-nums;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -424,12 +472,20 @@
 
 .kpiHint {
   margin: 0;
-  font-size: 0.72rem;
-  color: var(--text-muted, #8a93a6);
+  font-size: 0.71rem;
+  color: var(--kpi-accent, var(--text-muted));
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
+
+/* Per-tile accents. Five slots; the first three come from the page ramp and the
+   last two from the reserved status colours, so a tile's identity is stable. */
+.kpiRow > .kpiTile:nth-child(1) { --kpi-accent: var(--kpi-1); }
+.kpiRow > .kpiTile:nth-child(2) { --kpi-accent: var(--kpi-2); }
+.kpiRow > .kpiTile:nth-child(3) { --kpi-accent: var(--kpi-3); }
+.kpiRow > .kpiTile:nth-child(4) { --kpi-accent: var(--kpi-4); }
+.kpiRow > .kpiTile:nth-child(5) { --kpi-accent: var(--kpi-5); }
 
 .deltaUp { color: #1d9d61; font-weight: 700; }
 .deltaDown { color: #d0483e; font-weight: 700; }

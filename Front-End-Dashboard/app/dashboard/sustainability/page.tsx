@@ -2,10 +2,10 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { attachCategoryClick } from "../../../lib/chart-click";
-import { useChartTheme, applyChartTheme } from "../../../lib/chart-theme";
+import { useChartTheme, applyChartTheme, seriesRamp, seriesPair } from "../../../lib/chart-theme";
 import ReactECharts from "echarts-for-react";
 import type { EChartsOption } from "echarts";
-import { Leaf } from "lucide-react";
+import { CalendarClock, Clock, Leaf, Truck, Wind } from "lucide-react";
 import DashboardChart from "../../../components/dashboard/DashboardChart";
 import ChartSkeleton, { KpiSkeleton } from "../../../components/dashboard/ChartSkeleton";
 import PageHeader from "../../../components/dashboard/PageHeader";
@@ -15,16 +15,7 @@ import styles from "../traffic/traffic.module.css";
 
 const BACKEND = process.env.NEXT_PUBLIC_BACKEND_URL ?? "http://localhost:4000";
 
-// Vehicle classes are ordered light → heavy, so they wear an ordinal single-hue
-// ramp (validated): darker = heavier fleet.
-const CLASS_RAMP = ["#8fa8ee", "#3e67ef", "#1d3aa8"];
 const CLASS_SHORT = ["Class 1 · Light", "Class 2 · Medium", "Class 3 · Heavy"];
-// Categorical pair for weekday/weekend and NB/SB comparisons (validated)
-const BLUE = "#3e67ef";
-const ORANGE = "#e06b47";
-// Measured air quality bands, ordered good → poor (validated ordinal warm ramp):
-// darker = more polluted.
-const AQI_RAMP = ["#e3a06b", "#c96a33", "#8d4118"];
 const AQI_BANDS = ["Good (AQI 1–2)", "Moderate (AQI 3)", "Poor (AQI 4–5)"] as const;
 
 const DOW_LABELS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
@@ -78,6 +69,14 @@ const prescriptiveEmissionReduction: EChartsOption = {
 export default function SustainabilityPage() {
   // Chart furniture follows the active theme; series hues stay fixed.
   const chartTheme = useChartTheme();
+
+  /* This tab's colour family. The ramp is ordinal — lightest to darkest — and
+     both modes are selected steps validated against their own surface, not an
+     automatic flip. A pair of nominal series takes the outer two steps, which is
+     where the separation margin lives. See lib/chart-theme. */
+  const RAMP = seriesRamp("emissions", chartTheme);
+  const [PAIR_A, PAIR_B] = seriesPair("emissions", chartTheme);
+  const SEQ = [chartTheme.seqLightest, ...RAMP];
   const [activeTab, setActiveTab] = useState<"Descriptive" | "Predictive" | "Prescriptive">("Descriptive");
 
   // Global filters
@@ -138,59 +137,7 @@ export default function SustainabilityPage() {
     return { deltaPct, heavyVolPct, heavyCo2Pct, avgDailyT, totVol, totCo2 };
   }, [data]);
 
-  /**
-   * One-sentence takeaway per chart, computed from the loaded rows so they track
-   * the active range instead of going stale as fixed copy would.
-   *
-   * "Heavy" follows this page's own definition (Class 2 and above, set in
-   * `derived`) so the sentences agree with the KPI card rather than quietly
-   * using a different cut of the fleet.
-   */
-  const takeaways = useMemo(() => {
-    if (!data || !derived) return null;
-    const { kpis, heatmap, aqiMonthly } = data;
-
-    const d = derived.deltaPct;
-    const trend =
-      Math.abs(d) < 0.5
-        ? `${fmtInt(kpis.totalCo2T)} tonnes of CO₂ modelled, effectively flat against the previous period.`
-        : `${fmtInt(kpis.totalCo2T)} tonnes of CO₂ modelled — ${d > 0 ? "up" : "down"} ${Math.abs(d).toFixed(1)}% on the previous period.`;
-
-    // Two charts, two different points. The share chart states the disproportion;
-    // the fleet-mix chart states the per-km intensity that causes it.
-    const ratio = derived.heavyVolPct > 0 ? derived.heavyCo2Pct / derived.heavyVolPct : null;
-    const heavyShare =
-      ratio != null
-        ? `Heavy vehicles are ${fmt1(derived.heavyVolPct)}% of traffic but ${fmt1(derived.heavyCo2Pct)}% of CO₂ — ${fmt1(ratio)}× their share of the road.`
-        : null;
-
-    const lightest = data.classes.reduce((a, b) => (b.co2_g_per_km < a.co2_g_per_km ? b : a));
-    const dirtiest = data.classes.reduce((a, b) => (b.co2_g_per_km > a.co2_g_per_km ? b : a));
-    const fleet =
-      lightest.co2_g_per_km > 0
-        ? `The gap is per-kilometre intensity: ${dirtiest.label} emit ${fmtInt(dirtiest.co2_g_per_km)} g/km against ${fmtInt(lightest.co2_g_per_km)} g/km for ${lightest.label} — ${(dirtiest.co2_g_per_km / lightest.co2_g_per_km).toFixed(1)}× per vehicle-kilometre.`
-        : null;
-
-    let peak: { dow: number; hour: number; v: number } | null = null;
-    for (const r of heatmap) if (!peak || r.v > peak.v) peak = r;
-    const timing = peak
-      ? `Emissions peak ${DOW_LABELS[(peak.dow + 6) % 7]} at ${fmtHour(peak.hour)}, averaging ${fmtInt(peak.v)} kg of CO₂.`
-      : null;
-
-    // Dry season hazes over, the monsoon washes it out — worth stating plainly.
-    // Months with no PM2.5 reading would otherwise win "cleanest" at zero.
-    const pm = aqiMonthly.filter((r): r is typeof r & { pm25: number } => r.pm25 != null);
-    let aqi: string | null = null;
-    if (pm.length > 1) {
-      const worst = pm.reduce((a, b) => (b.pm25 > a.pm25 ? b : a));
-      const best = pm.reduce((a, b) => (b.pm25 < a.pm25 ? b : a));
-      aqi = `PM2.5 runs highest in ${monthLabel(worst.m)} at ${fmt1(worst.pm25)} µg/m³ and cleanest in ${monthLabel(best.m)} at ${fmt1(best.pm25)} — a ${(worst.pm25 / Math.max(best.pm25, 0.1)).toFixed(1)}× seasonal swing.`;
-    }
-
-    return { trend, fleet, heavyShare, timing, aqi };
-  }, [data, derived]);
-
-  // ---------- Hero: CO2 trend by class ----------
+    // ---------- Hero: CO2 trend by class ----------
   type TrendRow = { label: string; c1: number; c2: number; c3: number; nb: number; sb: number; total: number };
   const trendRows = useMemo<TrendRow[]>(() => {
     if (!data) return [];
@@ -250,7 +197,7 @@ export default function SustainabilityPage() {
         },
       },
       legend: { show: true, top: 0, right: 8, itemWidth: 14, textStyle: { fontSize: 11 } },
-      series: [mk(CLASS_SHORT[0], "c1", CLASS_RAMP[0]), mk(CLASS_SHORT[1], "c2", CLASS_RAMP[1]), mk(CLASS_SHORT[2], "c3", CLASS_RAMP[2])],
+      series: [mk(CLASS_SHORT[0], "c1", RAMP[0]), mk(CLASS_SHORT[1], "c2", RAMP[1]), mk(CLASS_SHORT[2], "c3", RAMP[2])],
     };
   }, [trendRows, grain]);
 
@@ -310,12 +257,12 @@ export default function SustainabilityPage() {
             data: timeProfile.weekday.map((v) => Number(v.toFixed(2))),
             symbol: "none",
             smooth: true,
-            itemStyle: { color: BLUE },
-            lineStyle: { width: 2.5, color: BLUE },
+            itemStyle: { color: PAIR_A },
+            lineStyle: { width: 2.5, color: PAIR_A },
             markPoint: {
               symbol: "circle",
               symbolSize: 8,
-              itemStyle: { color: BLUE, borderColor: "#fff", borderWidth: 2 },
+              itemStyle: { color: PAIR_A, borderColor: "#fff", borderWidth: 2 },
               label: { show: true, position: "top", fontSize: 10, color: "#475069", formatter: `Peak · ${fmtHour(peakIdx)}` },
               data: [{ name: "Peak", coord: [peakIdx, Number(timeProfile.weekday[peakIdx].toFixed(2))] }],
             },
@@ -326,8 +273,8 @@ export default function SustainabilityPage() {
             data: timeProfile.weekend.map((v) => Number(v.toFixed(2))),
             symbol: "none",
             smooth: true,
-            itemStyle: { color: ORANGE },
-            lineStyle: { width: 2.5, color: ORANGE },
+            itemStyle: { color: PAIR_B },
+            lineStyle: { width: 2.5, color: PAIR_B },
           },
         ],
       };
@@ -349,7 +296,7 @@ export default function SustainabilityPage() {
           type: "bar",
           data: timeProfile.dowAvg.map((v, i) => ({
             value: Number(v.toFixed(1)),
-            itemStyle: { color: i === maxIdx ? BLUE : "#8fa8ee", borderRadius: [4, 4, 0, 0] },
+            itemStyle: { color: i === maxIdx ? PAIR_A : RAMP[0], borderRadius: [4, 4, 0, 0] },
             label: i === maxIdx ? { show: true, position: "top", fontSize: 10, color: "#475069", formatter: () => fmt1(v) } : undefined,
           })),
           barMaxWidth: 26,
@@ -406,7 +353,7 @@ export default function SustainabilityPage() {
         type: "bar" as const,
         stack: "share",
         data: rows.map((r) => Number(r.shares[ci].toFixed(1))),
-        itemStyle: { color: CLASS_RAMP[ci], borderColor: chartTheme.tooltipBg, borderWidth: 1 },
+        itemStyle: { color: RAMP[ci], borderColor: chartTheme.tooltipBg, borderWidth: 1 },
         barMaxWidth: 18,
       })),
     };
@@ -459,8 +406,8 @@ export default function SustainabilityPage() {
           data: heavyShareRows.map((r) => Number(r.share.toFixed(1))),
           symbol: "none",
           smooth: true,
-          itemStyle: { color: BLUE },
-          lineStyle: { width: 2.5, color: BLUE },
+          itemStyle: { color: PAIR_A },
+          lineStyle: { width: 2.5, color: PAIR_A },
           markLine: {
             silent: true,
             symbol: "none",
@@ -504,7 +451,7 @@ export default function SustainabilityPage() {
         type: "bar" as const,
         stack: "aqi",
         data: rows.map((r, i) => share(r[k], i)),
-        itemStyle: { color: AQI_RAMP[ki], borderColor: "#fff", borderWidth: 1 },
+        itemStyle: { color: RAMP[ki], borderColor: "#fff", borderWidth: 1 },
         barMaxWidth: 22,
       })),
     };
@@ -523,7 +470,7 @@ export default function SustainabilityPage() {
       grid: { left: 0, right: 0, top: 2, bottom: 2 },
       xAxis: { type: "category", show: false, data: vals.map((_, i) => i) },
       yAxis: { type: "value", show: false, min: "dataMin" },
-      series: [{ type: "line", data: vals, symbol: "none", smooth: true, lineStyle: { width: 1.5, color: BLUE } }],
+      series: [{ type: "line", data: vals, symbol: "none", smooth: true, lineStyle: { width: 1.5, color: PAIR_A } }],
     };
   }, [data]);
 
@@ -673,7 +620,7 @@ export default function SustainabilityPage() {
   // ---------- Predictive / Prescriptive share the same shell ----------
   if (activeTab !== "Descriptive") {
     return (
-      <section className={styles.page}>
+      <section className={`${styles.page} viz-emissions`}>
         <PageHeader icon={Leaf} title="Emissions Overview" subtitle="Vehicle emissions and air quality trends across NLEX" />
         <div className={styles.filterRow}>
           {activeTab === "Prescriptive" && <span className={styles.filterLabel}>Projected emission reduction by strategy</span>}
@@ -706,7 +653,7 @@ export default function SustainabilityPage() {
   }
 
   return (
-    <section className={styles.page}>
+    <section className={`${styles.page} viz-emissions`}>
       <PageHeader icon={Leaf} title="Emissions Overview" subtitle="Vehicle emissions and air quality trends across NLEX" />
 
       {/* Row A — global filters */}
@@ -750,6 +697,7 @@ export default function SustainabilityPage() {
       {/* Row B — KPI tiles */}
       <div className={styles.kpiRow}>
         <article className={styles.kpiTile}>
+          <span className={styles.kpiIcon} aria-hidden="true"><Leaf size={15} /></span>
           <h3>Total CO₂ (Modeled)</h3>
           <div className={styles.kpiValue} title={data ? `${fmtInt(data.kpis.totalCo2T)} tonnes` : undefined}>
             {kpiValue(data ? `${fmtCompact(data.kpis.totalCo2T)} t` : null)}
@@ -762,6 +710,7 @@ export default function SustainabilityPage() {
           </p>
         </article>
         <article className={styles.kpiTile}>
+          <span className={styles.kpiIcon} aria-hidden="true"><CalendarClock size={15} /></span>
           <h3>Avg Daily CO₂</h3>
           <div className={styles.kpiValue}>{kpiValue(derived ? `${fmtInt(derived.avgDailyT)} t` : null)}</div>
           <div className={styles.sparkBox}>
@@ -769,6 +718,7 @@ export default function SustainabilityPage() {
           </div>
         </article>
         <article className={styles.kpiTile}>
+          <span className={styles.kpiIcon} aria-hidden="true"><Truck size={15} /></span>
           <h3>Heavy-Vehicle Impact</h3>
           <div className={styles.kpiValue}>{kpiValue(derived ? `${derived.heavyCo2Pct.toFixed(1)}%` : null)}</div>
           <p className={styles.kpiHint}>
@@ -776,6 +726,7 @@ export default function SustainabilityPage() {
           </p>
         </article>
         <article className={styles.kpiTile}>
+          <span className={styles.kpiIcon} aria-hidden="true"><Clock size={15} /></span>
           <h3>Peak Emission Hour</h3>
           <div className={styles.kpiValue}>{kpiValue(timeProfile ? fmtHour(timeProfile.peakHour) : null)}</div>
           <p className={styles.kpiHint}>
@@ -783,6 +734,7 @@ export default function SustainabilityPage() {
           </p>
         </article>
         <article className={styles.kpiTile}>
+          <span className={styles.kpiIcon} aria-hidden="true"><Wind size={15} /></span>
           <h3>Measured Air Quality</h3>
           <div className={styles.kpiValue}>
             {kpiValue(data?.kpis.avgAqi != null ? `${data.kpis.avgAqi.toFixed(1)} / 5` : null)}
@@ -800,7 +752,6 @@ export default function SustainabilityPage() {
         <div className={styles.chartHead}>
           <div className={styles.headText}>
             <h3>CO₂ Emissions Trend by Vehicle Class</h3>
-            {takeaways?.trend && <p className={styles.takeaway}>{takeaways?.trend}</p>}
           </div>
         </div>
         <div className={styles.heroFilters}>
@@ -824,7 +775,6 @@ export default function SustainabilityPage() {
         <div className={styles.chartHead}>
           <div className={styles.headText}>
             <h3>When Emissions Happen</h3>
-            {takeaways?.timing && <p className={styles.takeaway}>{takeaways?.timing}</p>}
             {timeTakeaway && <p className={styles.subtitle}>{timeTakeaway}</p>}
           </div>
           <div className={styles.segmentedSmall}>
@@ -843,7 +793,6 @@ export default function SustainabilityPage() {
         <div className={styles.chartHead}>
           <div className={styles.headText}>
             <h3>Fleet Mix vs Pollution Load</h3>
-            {takeaways?.fleet && <p className={styles.takeaway}>{takeaways?.fleet}</p>}
             {fleetTakeaway && <p className={styles.subtitle}>{fleetTakeaway}</p>}
           </div>
         </div>
@@ -855,7 +804,6 @@ export default function SustainabilityPage() {
         <div className={styles.chartHead}>
           <div className={styles.headText}>
             <h3>Heavy-Vehicle Share of CO₂</h3>
-            {takeaways?.heavyShare && <p className={styles.takeaway}>{takeaways?.heavyShare}</p>}
             {heavyShareTakeaway && <p className={styles.subtitle}>{heavyShareTakeaway}</p>}
           </div>
         </div>
@@ -866,7 +814,6 @@ export default function SustainabilityPage() {
         <div className={styles.chartHead}>
           <div className={styles.headText}>
             <h3>Measured Air Quality by Month</h3>
-            {takeaways?.aqi && <p className={styles.takeaway}>{takeaways?.aqi}</p>}
           </div>
         </div>
         <div className={styles.chartBody}>{chartFrame(aqiOption, "No station readings in the selected range", onAqiClick)}</div>

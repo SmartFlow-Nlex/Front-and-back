@@ -5065,3 +5065,24 @@ body {
   .ds-scroll-down svg { animation: none; }
   .ds-scroll-down:hover { transform: translateX(-50%); }
 }
+
+/* ---------------------------------------------------------------------------
+   Per-tab KPI accents
+
+   Each analytics page carries its own colour family, so its KPI row takes the
+   same three ramp steps plus two reserved status colours. Set on the page shell
+   so the tiles inherit without every tile knowing which tab it is on.
+   --------------------------------------------------------------------------- */
+.viz-traffic   { --kpi-1: #3f7ad9; --kpi-2: #1d3f8f; --kpi-3: #8ab6f5; --kpi-4: var(--color-info);    --kpi-5: var(--color-success); }
+.viz-incident  { --kpi-1: #b8760a; --kpi-2: #7d4606; --kpi-3: #e0b01f; --kpi-4: var(--color-danger);  --kpi-5: var(--color-warning); }
+.viz-emissions { --kpi-1: #118f46; --kpi-2: #08582b; --kpi-3: #4cbd79; --kpi-4: var(--color-success); --kpi-5: var(--color-info); }
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .viz-traffic   { --kpi-1: #5b8fe6; --kpi-2: #a8c8f8; --kpi-3: #2f5fba; }
+  :root:not([data-theme="light"]) .viz-incident  { --kpi-1: #d18f18; --kpi-2: #f2c94c; --kpi-3: #9d5d0d; }
+  :root:not([data-theme="light"]) .viz-emissions { --kpi-1: #23a55a; --kpi-2: #6ed99a; --kpi-3: #12703a; }
+}
+
+:root[data-theme="dark"] .viz-traffic   { --kpi-1: #5b8fe6; --kpi-2: #a8c8f8; --kpi-3: #2f5fba; }
+:root[data-theme="dark"] .viz-incident  { --kpi-1: #d18f18; --kpi-2: #f2c94c; --kpi-3: #9d5d0d; }
+:root[data-theme="dark"] .viz-emissions { --kpi-1: #23a55a; --kpi-2: #6ed99a; --kpi-3: #12703a; }

@@ -2,10 +2,10 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { attachCategoryClick } from "../../../lib/chart-click";
-import { useChartTheme, applyChartTheme } from "../../../lib/chart-theme";
+import { useChartTheme, applyChartTheme, seriesRamp, seriesPair } from "../../../lib/chart-theme";
 import ReactECharts from "echarts-for-react";
 import type { EChartsOption } from "echarts";
-import { TrendingUp } from "lucide-react";
+import { Activity, Building2, CalendarClock, Clock, Gauge, TrendingUp } from "lucide-react";
 import DashboardChart from "../../../components/dashboard/DashboardChart";
 import ChartSkeleton, { KpiSkeleton } from "../../../components/dashboard/ChartSkeleton";
 import PageHeader from "../../../components/dashboard/PageHeader";
@@ -17,14 +17,6 @@ import DateRangePicker from "./components/DateRangePicker";
 
 const BACKEND = process.env.NEXT_PUBLIC_BACKEND_URL ?? "http://localhost:4000";
 
-// Categorical hues (NB/SB and event emphasis)
-const BLUE = "#3e67ef";
-const ORANGE = "#e06b47";
-// Sequential ramp (magnitude: heatmap, plaza bar)
-const SEQ = ["#eef2fb", "#8fa8ee", "#3e67ef", "#1d3aa8"];
-// Severity ramp for speed (low speed = severe)
-const SEVERITY = ["#d0483e", "#e8a13a", "#1d9d61"];
-const GRAY = "#9aa4b8";
 
 const DOW_LABELS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 const DOW_ORDER = [1, 2, 3, 4, 5, 6, 0]; // Postgres dow (0=Sun) -> Mon-first
@@ -174,6 +166,17 @@ function CustomSelect({ value, options, onChange }: { value: string; options: { 
 export default function TrafficPage() {
   // Chart furniture follows the active theme; series hues stay fixed.
   const chartTheme = useChartTheme();
+
+  /* This tab's colour family. The ramp is ordinal — lightest to darkest — and
+     both modes are selected steps validated against their own surface, not an
+     automatic flip. A pair of nominal series takes the outer two steps, which is
+     where the separation margin lives. See lib/chart-theme. */
+  const RAMP = seriesRamp("traffic", chartTheme);
+  const [PAIR_A, PAIR_B] = seriesPair("traffic", chartTheme);
+  const SEQ = [chartTheme.seqLightest, ...RAMP];
+  // Speed is a status reading, not a series, so it keeps the reserved
+  // good/warning/critical colours rather than the tab hue.
+  const SEVERITY = ["#d0483e", "#e8a13a", "#1d9d61"];
   const [activeTab, setActiveTab] = useState<"Descriptive" | "Predictive" | "Prescriptive">("Descriptive");
 
   // Global filters (Row A)
@@ -272,63 +275,7 @@ export default function TrafficPage() {
     return { curAdt, volumeDeltaPct, peakHour, peakHourVolume, busiest, plazaTotal, congestionDelta, sparkline };
   }, [data]);
 
-  /**
-   * One-sentence takeaway per chart.
-   *
-   * A title like "Volume by Plaza" names the axes but leaves the reader to find
-   * the finding themselves. These state it outright. They are computed from the
-   * loaded rows rather than written as copy, so they stay true when the range,
-   * direction or class filter changes — a hardcoded sentence would quietly start
-   * lying the moment someone moved a filter.
-   */
-  const takeaways = useMemo(() => {
-    if (!data || !derived) return null;
-    const { hourDow, byPlaza, speedByHour } = data;
-
-    // Trend: where the corridor sits now versus the comparable previous window.
-    const d = derived.volumeDeltaPct;
-    const trend =
-      derived.curAdt > 0
-        ? Math.abs(d) < 0.5
-          ? `Holding flat at ${fmtInt(derived.curAdt)} vehicles per day versus the previous period.`
-          : `Averaging ${fmtInt(derived.curAdt)} vehicles per day — ${d > 0 ? "up" : "down"} ${Math.abs(d).toFixed(1)}% on the previous period.`
-        : null;
-
-    // Heatmap: the single busiest hour-of-week cell.
-    let peak: { dow: number; hour: number; v: number } | null = null;
-    for (const r of hourDow) if (!peak || r.v > peak.v) peak = r;
-    const heatmap = peak
-      ? `Busiest window is ${DOW_LABELS[(peak.dow + 6) % 7]} at ${fmtHour(peak.hour)}, averaging ${fmtInt(peak.v)} vehicles.`
-      : null;
-
-    // Plaza: concentration of the corridor at its single busiest plaza.
-    const plaza =
-      derived.busiest && derived.plazaTotal > 0
-        ? `${derived.busiest.plaza} carries ${((derived.busiest.v / derived.plazaTotal) * 100).toFixed(1)}% of corridor volume, the heaviest of ${byPlaza.length} plazas.`
-        : null;
-
-    // Speed: only name a worst hour if the hours actually separate.
-    //
-    // On the live corridor this series is nearly flat (roughly 7-11 km/h at every
-    // hour), so picking the single minimum would crown whichever hour won by a
-    // decimal — and there are ties. When the spread is small relative to the
-    // level, the honest finding is the flatness itself, not an argmin.
-    const speeds = speedByHour.filter((r) => r.speed > 0);
-    let speed: string | null = null;
-    if (speeds.length > 0) {
-      const lo = speeds.reduce((a, b) => (b.speed < a.speed ? b : a));
-      const hi = speeds.reduce((a, b) => (b.speed > a.speed ? b : a));
-      const mean = speeds.reduce((s, r) => s + r.speed, 0) / speeds.length;
-      const separates = mean > 0 && (hi.speed - lo.speed) / mean >= 0.5;
-      speed = separates
-        ? `Jams are slowest at ${fmtHour(lo.hour)}, averaging ${lo.speed.toFixed(0)} km/h against ${hi.speed.toFixed(0)} km/h at best.`
-        : `Once a jam forms it crawls at much the same pace all day — ${lo.speed.toFixed(0)}–${hi.speed.toFixed(0)} km/h, easing slightly around ${fmtHour(hi.hour)}.`;
-    }
-
-    return { trend, heatmap, plaza, speed };
-  }, [data, derived]);
-
-  // ---------- Chart options ----------
+    // ---------- Chart options ----------
   const trendRows = useMemo(() => (data ? buildTrend(data, grain) : []), [data, grain]);
 
   const trendOption = useMemo<EChartsOption | null>(() => {
@@ -351,18 +298,20 @@ export default function TrafficPage() {
           ? (v: string) => v
           : (v: string) => v.slice(0, 7);
 
-    const FAINT = "#c6d2ef";
+    // The raw series behind a moving average is context, not a second identity,
+    // so it takes the ramp's lightest step rather than a hue of its own.
+    const FAINT = RAMP[0];
     const series: EChartsOption["series"] = splitDirection
       ? [
-        { name: "Northbound", type: "line", data: rows.map((r) => r.nb), symbol: "none", itemStyle: { color: BLUE }, lineStyle: { width: 2.5, color: BLUE }, endLabel: { show: true, formatter: "NB", color: BLUE, fontWeight: 700 } },
-        { name: "Southbound", type: "line", data: rows.map((r) => r.sb), symbol: "none", itemStyle: { color: ORANGE }, lineStyle: { width: 2.5, color: ORANGE }, endLabel: { show: true, formatter: "SB", color: ORANGE, fontWeight: 700 } },
+        { name: "Northbound", type: "line", data: rows.map((r) => r.nb), symbol: "none", itemStyle: { color: PAIR_A }, lineStyle: { width: 2.5, color: PAIR_A }, endLabel: { show: true, formatter: "NB", color: PAIR_A, fontWeight: 700 } },
+        { name: "Southbound", type: "line", data: rows.map((r) => r.sb), symbol: "none", itemStyle: { color: PAIR_B }, lineStyle: { width: 2.5, color: PAIR_B }, endLabel: { show: true, formatter: "SB", color: PAIR_B, fontWeight: 700 } },
       ]
       : window > 0
         ? [
           { name: grain === "hourly" ? "Hourly volume" : "Daily volume", type: "line", data: rows.map((r) => r.total), symbol: "none", itemStyle: { color: FAINT }, lineStyle: { width: 1, color: FAINT } },
-          { name: `${window === 24 ? "24-hour" : "7-day"} average`, type: "line", data: movingAverage(rows.map((r) => r.total), window), symbol: "none", itemStyle: { color: BLUE }, lineStyle: { width: 3, color: BLUE } },
+          { name: `${window === 24 ? "24-hour" : "7-day"} average`, type: "line", data: movingAverage(rows.map((r) => r.total), window), symbol: "none", itemStyle: { color: PAIR_A }, lineStyle: { width: 3, color: PAIR_A } },
         ]
-        : [{ name: "Volume", type: "line", data: rows.map((r) => r.total), symbol: rows.length <= 24 ? "circle" : "none", symbolSize: 7, itemStyle: { color: BLUE }, lineStyle: { width: 3, color: BLUE } }];
+        : [{ name: "Volume", type: "line", data: rows.map((r) => r.total), symbol: rows.length <= 24 ? "circle" : "none", symbolSize: 7, itemStyle: { color: PAIR_A }, lineStyle: { width: 3, color: PAIR_A } }];
 
     return {
       grid: { left: 52, right: splitDirection ? 44 : 16, top: 44, bottom: 22 },
@@ -375,7 +324,10 @@ export default function TrafficPage() {
       // scale:true so the weekly rhythm is visible instead of a flat line on a zero base
       yAxis: { type: "value", scale: true, splitNumber: 3, axisLabel: { formatter: (v: number) => fmtCompact(v), fontSize: 10 } },
       tooltip: { trigger: "axis", valueFormatter: (v) => (v == null ? "—" : fmtInt(Number(v))) },
-      legend: { show: !splitDirection && window > 0, top: 12, right: 8, itemWidth: 14, textStyle: { fontSize: 11 } },
+      // A legend whenever there is more than one line. The old condition hid it
+      // precisely when the chart split into northbound and southbound — the case
+      // that needs it most, since two lines with no key are unreadable.
+      legend: { show: splitDirection || window > 0, top: 12, right: 8, itemWidth: 14, itemHeight: 8, textStyle: { fontSize: 11 } },
       series,
     };
   }, [data, grain, splitDirection, trendRows]);
@@ -413,7 +365,7 @@ export default function TrafficPage() {
         textStyle: { fontSize: 10 },
         formatter: (v) => fmtCompact(Number(v)),
       },
-      series: [{ type: "heatmap", data: heatData, emphasis: { itemStyle: { borderColor: "#1d3aa8", borderWidth: 1 } } }],
+      series: [{ type: "heatmap", data: heatData, emphasis: { itemStyle: { borderColor: RAMP[2], borderWidth: 1 } } }],
     };
     // chartTheme is a dependency because the ramp's lightest step comes from it.
   }, [data, chartTheme]);
@@ -483,8 +435,8 @@ export default function TrafficPage() {
           markLine: {
             symbol: "none",
             silent: true,
-            lineStyle: { color: GRAY, width: 1, type: "dashed" },
-            label: { formatter: "20 km/h — congestion threshold", position: "insideEndTop", fontSize: 9, color: GRAY },
+            lineStyle: { color: chartTheme.axis, width: 1, type: "dashed" },
+            label: { formatter: "20 km/h — congestion threshold", position: "insideEndTop", fontSize: 9, color: chartTheme.axis },
             data: [{ yAxis: CONGESTION_THRESHOLD }],
           },
         },
@@ -541,10 +493,10 @@ export default function TrafficPage() {
             type: "bar",
             data: display.map((r) => ({
               value: r.pct,
-              itemStyle: { color: r.pct >= 0 ? ORANGE : BLUE, borderRadius: r.pct >= 0 ? [0, 4, 4, 0] : [4, 0, 0, 4] },
+              itemStyle: { color: r.pct >= 0 ? PAIR_B : PAIR_A, borderRadius: r.pct >= 0 ? [0, 4, 4, 0] : [4, 0, 0, 4] },
             })),
             barMaxWidth: 12,
-            markLine: { symbol: "none", silent: true, lineStyle: { color: GRAY, width: 1 }, data: [{ xAxis: 0 }], label: { show: false } },
+            markLine: { symbol: "none", silent: true, lineStyle: { color: chartTheme.axis, width: 1 }, data: [{ xAxis: 0 }], label: { show: false } },
           },
         ],
       },
@@ -552,27 +504,13 @@ export default function TrafficPage() {
   }, [data, impactMode]);
 
   // Separate from `takeaways` because it depends on the Events/Holidays toggle.
-  const impactTakeaway = useMemo(() => {
-    if (!data) return null;
-    if (impactMode === "Events") {
-      const rows = data.eventImpact.filter((e) => e.deviationPct != null);
-      if (rows.length === 0) return null;
-      const top = rows.reduce((a, b) => (Math.abs(b.deviationPct as number) > Math.abs(a.deviationPct as number) ? b : a));
-      const pct = top.deviationPct as number;
-      return `Largest swing: ${top.label} on ${top.date}, ${pct >= 0 ? "lifting" : "cutting"} venue-exit entries ${Math.abs(pct).toFixed(0)}% ${pct >= 0 ? "above" : "below"} its local baseline.`;
-    }
-    if (data.holidayImpact.length === 0) return null;
-    const top = data.holidayImpact.reduce((a, b) => (Math.abs(b.deviationPct) > Math.abs(a.deviationPct) ? b : a));
-    return `Largest swing: ${top.label}, ${top.deviationPct >= 0 ? "adding" : "removing"} ${Math.abs(top.deviationPct).toFixed(0)}% versus normal days across ${top.occurrences} occurrence${top.occurrences === 1 ? "" : "s"}.`;
-  }, [data, impactMode]);
-
-  const sparkOption = useMemo<EChartsOption | null>(() => {
+    const sparkOption = useMemo<EChartsOption | null>(() => {
     if (!derived || derived.sparkline.length === 0) return null;
     return {
       grid: { left: 0, right: 0, top: 2, bottom: 2 },
       xAxis: { type: "category", show: false, data: derived.sparkline.map((_, i) => i) },
       yAxis: { type: "value", show: false, min: "dataMin" },
-      series: [{ type: "line", data: derived.sparkline, symbol: "none", lineStyle: { width: 1.5, color: BLUE }, areaStyle: { color: "rgba(62,103,239,.12)" } }],
+      series: [{ type: "line", data: derived.sparkline, symbol: "none", lineStyle: { width: 1.5, color: PAIR_A }, areaStyle: { color: "rgba(62,103,239,.12)" } }],
     };
   }, [derived]);
 
@@ -765,7 +703,7 @@ export default function TrafficPage() {
   // ---------- Predictive / Prescriptive share the same shell ----------
   if (activeTab !== "Descriptive") {
     return (
-      <section className={styles.page}>
+      <section className={`${styles.page} viz-traffic`}>
         <PageHeader icon={TrendingUp} title="Traffic Overview" subtitle="Volume, congestion, and speed patterns across NLEX" />
         <div className={styles.filterRow} style={{ flexWrap: "wrap", rowGap: 8 }}>
           {/* Predictive carries the same Range/Weather controls as Descriptive */}
@@ -849,7 +787,7 @@ export default function TrafficPage() {
   }
 
   return (
-    <section className={styles.page}>
+    <section className={`${styles.page} viz-traffic`}>
       <PageHeader icon={TrendingUp} title="Traffic Overview" subtitle="Volume, congestion, and speed patterns across NLEX" />
 
       {/* Row A — global filters */}
@@ -906,6 +844,7 @@ export default function TrafficPage() {
       {/* Row B — KPI tiles */}
       <div className={styles.kpiRow}>
         <article className={styles.kpiTile}>
+          <span className={styles.kpiIcon} aria-hidden="true"><Activity size={15} /></span>
           <h3>Total Volume</h3>
           <div className={styles.kpiValue} title={data ? `${fmtInt(data.kpis.totalVolume)} vehicles` : undefined}>
             {kpiValue(data ? fmtCompact(data.kpis.totalVolume) : null)}
@@ -918,6 +857,7 @@ export default function TrafficPage() {
           </p>
         </article>
         <article className={styles.kpiTile}>
+          <span className={styles.kpiIcon} aria-hidden="true"><CalendarClock size={15} /></span>
           <h3>Avg Daily Volume</h3>
           <div className={styles.kpiValue}>{kpiValue(derived ? fmtInt(derived.curAdt) : null)}</div>
           <div className={styles.sparkBox}>
@@ -925,11 +865,13 @@ export default function TrafficPage() {
           </div>
         </article>
         <article className={styles.kpiTile}>
+          <span className={styles.kpiIcon} aria-hidden="true"><Clock size={15} /></span>
           <h3>Peak Hour (Weekdays)</h3>
           <div className={styles.kpiValue}>{kpiValue(derived ? fmtHour(derived.peakHour) : null)}</div>
           <p className={styles.kpiHint}>{derived ? `${fmtInt(derived.peakHourVolume)} vehicles/hr avg` : "—"}</p>
         </article>
         <article className={styles.kpiTile}>
+          <span className={styles.kpiIcon} aria-hidden="true"><Building2 size={15} /></span>
           <h3>Busiest Plaza</h3>
           <div className={styles.kpiValue}>{kpiValue(derived?.busiest ? derived.busiest.plaza : null)}</div>
           <p className={styles.kpiHint}>
@@ -937,6 +879,7 @@ export default function TrafficPage() {
           </p>
         </article>
         <article className={styles.kpiTile}>
+          <span className={styles.kpiIcon} aria-hidden="true"><Gauge size={15} /></span>
           <h3>Congestion Index</h3>
           <div className={styles.kpiValue}>{kpiValue(data?.kpis.congestionIndex != null ? `${data.kpis.congestionIndex.toFixed(2)} / 5` : null)}</div>
           <p className={styles.kpiHint}>
@@ -957,7 +900,6 @@ export default function TrafficPage() {
         <div className={styles.chartHead}>
           <div className={styles.headText}>
             <h3>Volume Trend</h3>
-            {takeaways?.trend && <p className={styles.takeaway}>{takeaways?.trend}</p>}
           </div>
         </div>
         <div className={styles.heroFilters}>
@@ -1020,7 +962,6 @@ export default function TrafficPage() {
         <div className={styles.chartHead}>
           <div className={styles.headText}>
             <h3>Average Volume by Hour × Day of Week</h3>
-            {takeaways?.heatmap && <p className={styles.takeaway}>{takeaways?.heatmap}</p>}
           </div>
         </div>
         <div className={styles.chartBody}>{chartFrame(heatmapOption, "No data for the selected filters", onHeatmapClick, false)}</div>
@@ -1030,7 +971,6 @@ export default function TrafficPage() {
         <div className={styles.chartHead}>
           <div className={styles.headText}>
             <h3>Volume by Plaza</h3>
-            {takeaways?.plaza && <p className={styles.takeaway}>{takeaways?.plaza}</p>}
           </div>
           <button className={styles.secondaryButton} onClick={() => setAllPlazasOpen(true)}>
             View all plazas
@@ -1045,7 +985,6 @@ export default function TrafficPage() {
         <div className={styles.chartHead}>
           <div className={styles.headText}>
             <h3>Average Speed in Jams by Hour</h3>
-            {takeaways?.speed && <p className={styles.takeaway}>{takeaways?.speed}</p>}
           </div>
         </div>
         <div className={styles.chartBody}>{chartFrame(speedOption, "No congestion data in the selected range", onSpeedClick)}</div>
@@ -1055,7 +994,6 @@ export default function TrafficPage() {
         <div className={styles.chartHead}>
           <div className={styles.headText}>
             <h3>{impactMode === "Events" ? "Arena Event Impact (venue exit entries)" : "Holiday Impact vs Normal Days"}</h3>
-            {impactTakeaway && <p className={styles.takeaway}>{impactTakeaway}</p>}
           </div>
           <button className={styles.secondaryButton} onClick={() => setImpactListOpen(true)}>
             View all

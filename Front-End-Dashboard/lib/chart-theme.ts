@@ -143,3 +143,53 @@ export function applyChartTheme<T extends Record<string, any>>(option: T, t: Cha
 
   return out as T;
 }
+
+/* ---------------------------------------------------------------------------
+   Per-tab series palettes
+
+   One colour family per analytics tab: blue for Traffic, amber for Incidents,
+   green for Emissions. Both modes are selected steps, not an automatic flip.
+
+   Every set below was produced by search and checked with the dataviz
+   validator rather than picked by eye, because the constraints conflict and
+   eyeballing cannot resolve them. Two findings from that:
+
+   - Three series in ONE hue cannot satisfy the categorical gates. 3:1 contrast
+     on white caps the lightest step near OKLCH L 0.68 and the band floors at
+     0.43, so three steps land ~0.12 of L apart — against a hard normal-vision
+     floor of 15 (roughly 0.15 of L). A search over lightness AND hue found no
+     solution for any of the three families.
+
+   - Most of these series are ordinal, not nominal: Class 1/2/3 runs light to
+     heavy, air quality runs good to poor. Ordinal takes a one-hue ramp under
+     its own rules — monotone lightness, visible step gaps, light end >= 2:1 on
+     the surface — and all six ramps pass those cleanly.
+
+   So the ramps below are ordinal by construction. Where a chart has two genuinely
+   nominal series (northbound vs southbound, dry vs wet) it takes the OUTER two
+   steps, which validate as categorical with a large margin: worst-pair dE 31-38
+   against a floor of 15.
+   --------------------------------------------------------------------------- */
+
+export type VizTab = "traffic" | "incident" | "emissions";
+
+const SERIES_RAMPS: Record<VizTab, { light: [string, string, string]; dark: [string, string, string] }> = {
+  // light-end contrast 2.02–2.37:1, adjacent ΔL ≥ 0.06, single hue
+  traffic:   { light: ["#8ab6f5", "#3f7ad9", "#1d3f8f"], dark: ["#a8c8f8", "#5b8fe6", "#2f5fba"] },
+  incident:  { light: ["#e0b01f", "#b8760a", "#7d4606"], dark: ["#f2c94c", "#d18f18", "#9d5d0d"] },
+  emissions: { light: ["#4cbd79", "#118f46", "#08582b"], dark: ["#6ed99a", "#23a55a", "#12703a"] },
+};
+
+/** The tab's three ordinal steps, lightest first, for the active theme. */
+export function seriesRamp(tab: VizTab, t: ChartTheme): [string, string, string] {
+  return t.isDark ? SERIES_RAMPS[tab].dark : SERIES_RAMPS[tab].light;
+}
+
+/**
+ * The two steps to use for a pair of nominal series. Deliberately the outer two
+ * rather than adjacent ones — that is what carries the ΔE margin.
+ */
+export function seriesPair(tab: VizTab, t: ChartTheme): [string, string] {
+  const r = seriesRamp(tab, t);
+  return [r[2], r[0]];
+}

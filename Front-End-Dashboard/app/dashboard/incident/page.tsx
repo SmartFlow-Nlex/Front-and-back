@@ -2,10 +2,10 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { attachCategoryClick } from "../../../lib/chart-click";
-import { useChartTheme, applyChartTheme } from "../../../lib/chart-theme";
+import { useChartTheme, applyChartTheme, seriesRamp, seriesPair } from "../../../lib/chart-theme";
 import ReactECharts from "echarts-for-react";
 import type { EChartsOption } from "echarts";
-import { AlertTriangle } from "lucide-react";
+import { AlertTriangle, CloudRain, HeartPulse, MapPin, Timer } from "lucide-react";
 import DashboardChart from "../../../components/dashboard/DashboardChart";
 import ChartSkeleton, { KpiSkeleton } from "../../../components/dashboard/ChartSkeleton";
 import PageHeader from "../../../components/dashboard/PageHeader";
@@ -15,12 +15,6 @@ import styles from "../traffic/traffic.module.css";
 
 const BACKEND = process.env.NEXT_PUBLIC_BACKEND_URL ?? "http://localhost:4000";
 
-// Categorical hues — one per incident source, fixed assignment
-const BLUE = "#3e67ef"; // road crashes
-const PURPLE = "#7c3aed"; // motorcycle crashes
-const ORANGE = "#e06b47"; // stalled vehicles
-// Sequential ramp (magnitude: heatmap, hotspot bar)
-const SEQ = ["#eef2fb", "#8fa8ee", "#3e67ef", "#1d3aa8"];
 
 const DOW_LABELS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 const DOW_ORDER = [1, 2, 3, 4, 5, 6, 0];
@@ -89,6 +83,14 @@ const prescriptiveResourceOption: EChartsOption = {
 export default function IncidentPage() {
   // Chart furniture follows the active theme; series hues stay fixed.
   const chartTheme = useChartTheme();
+
+  /* This tab's colour family. The ramp is ordinal — lightest to darkest — and
+     both modes are selected steps validated against their own surface, not an
+     automatic flip. A pair of nominal series takes the outer two steps, which is
+     where the separation margin lives. See lib/chart-theme. */
+  const RAMP = seriesRamp("incident", chartTheme);
+  const [PAIR_A, PAIR_B] = seriesPair("incident", chartTheme);
+  const SEQ = [chartTheme.seqLightest, ...RAMP];
   const [activeTab, setActiveTab] = useState<"Descriptive" | "Predictive" | "Prescriptive">("Descriptive");
 
   // Global filters
@@ -157,56 +159,7 @@ export default function IncidentPage() {
     return { deltaPct, topHotspot, hotspotTotal, wetRate, dryRate, rainMultiplier };
   }, [data]);
 
-  /**
-   * One-sentence takeaway per chart, computed from the loaded rows so they follow
-   * the range and weather filters instead of going stale as fixed copy would.
-   *
-   * The hour-of-week chart deliberately gets a limitation instead of a finding:
-   * the operations log has no reported time on any row, so its hour column is
-   * derived rather than observed. Naming a "peak hour" from it would dress a
-   * modelling artefact up as evidence.
-   */
-  const takeaways = useMemo(() => {
-    if (!data || !derived) return null;
-    const { kpis, causes, types } = data;
-
-    const d = derived.deltaPct;
-    const trend =
-      Math.abs(d) < 0.5
-        ? `${fmtInt(kpis.totalIncidents)} incidents logged, essentially level with the previous period.`
-        : `${fmtInt(kpis.totalIncidents)} incidents logged — ${d > 0 ? "up" : "down"} ${Math.abs(d).toFixed(1)}% on the previous period.`;
-
-    const t = derived.topHotspot;
-    const hotspot =
-      t && derived.hotspotTotal > 0
-        ? `${kmLabel(t.km_bin)} is the worst stretch: ${fmtInt(t.total)} incidents, ${((t.total / derived.hotspotTotal) * 100).toFixed(1)}% of all located cases.`
-        : null;
-
-    const rows = causeMode === "Causes" ? causes : types;
-    const catTotal = rows.reduce((s, r) => s + r.total, 0);
-    const cause =
-      rows.length > 0 && catTotal > 0
-        ? `${rows[0].label} leads with ${fmtInt(rows[0].total)} cases, ${((rows[0].total / catTotal) * 100).toFixed(0)}% of those charted${rows[0].injuries > 0 ? `, and ${fmtInt(rows[0].injuries)} injuries` : ""}.`
-        : null;
-
-    // Rain raising crashes is the intuitive result, not the observed one here.
-    const m = derived.rainMultiplier;
-    const weatherLine =
-      m == null
-        ? null
-        : m >= 1.05
-          ? `Rain raises the crash rate ${m.toFixed(2)}× — ${fmt1(derived.wetRate)} crashes per day in wet hours against ${fmt1(derived.dryRate)} in dry.`
-          : m <= 0.95
-            ? `Rain does not raise crashes on this corridor — ${fmt1(derived.wetRate)} per day in wet hours against ${fmt1(derived.dryRate)} in dry, once the rarity of wet hours is accounted for.`
-            : `Wet and dry hours crash at much the same rate — ${fmt1(derived.wetRate)} versus ${fmt1(derived.dryRate)} per day.`;
-
-    const timing =
-      "Timing is modelled, not reported: no row in the operations log carries a reported time, so read this as a shape rather than evidence.";
-
-    return { trend, hotspot, cause, weather: weatherLine, timing };
-  }, [data, derived, causeMode]);
-
-  // ---------- Trend ----------
+    // ---------- Trend ----------
   type TrendRow = { label: string; road: number; moto: number; stalled: number; total: number };
   const trendRows = useMemo<TrendRow[]>(() => {
     if (!data) return [];
@@ -238,7 +191,7 @@ export default function IncidentPage() {
       lineStyle: { width: 2.5, color },
     });
 
-    const series = [mk("Road crashes", "road", BLUE), mk("Motorcycle crashes", "moto", PURPLE), mk("Stalled vehicles", "stalled", ORANGE)];
+    const series = [mk("Road crashes", "road", RAMP[2]), mk("Motorcycle crashes", "moto", RAMP[1]), mk("Stalled vehicles", "stalled", RAMP[0])];
 
     return {
       grid: { left: 52, right: 16, top: 30, bottom: 22 },
@@ -308,12 +261,12 @@ export default function IncidentPage() {
             data: timeProfile.weekday.map((v) => Number(v.toFixed(2))),
             symbol: "none",
             smooth: true,
-            itemStyle: { color: BLUE },
-            lineStyle: { width: 2.5, color: BLUE },
+            itemStyle: { color: RAMP[2] },
+            lineStyle: { width: 2.5, color: RAMP[2] },
             markPoint: {
               symbol: "circle",
               symbolSize: 8,
-              itemStyle: { color: BLUE, borderColor: "#fff", borderWidth: 2 },
+              itemStyle: { color: RAMP[2], borderColor: "#fff", borderWidth: 2 },
               label: { show: true, position: "top", fontSize: 10, color: "#475069", formatter: `Peak · ${fmtHour(peakIdx)}` },
               data: [{ name: "Peak", coord: [peakIdx, Number(timeProfile.weekday[peakIdx].toFixed(2))] }],
             },
@@ -324,8 +277,8 @@ export default function IncidentPage() {
             data: timeProfile.weekend.map((v) => Number(v.toFixed(2))),
             symbol: "none",
             smooth: true,
-            itemStyle: { color: ORANGE },
-            lineStyle: { width: 2.5, color: ORANGE },
+            itemStyle: { color: RAMP[0] },
+            lineStyle: { width: 2.5, color: RAMP[0] },
           },
         ],
       };
@@ -347,7 +300,7 @@ export default function IncidentPage() {
           type: "bar",
           data: timeProfile.dowAvg.map((v, i) => ({
             value: Number(v.toFixed(2)),
-            itemStyle: { color: i === maxIdx ? BLUE : "#8fa8ee", borderRadius: [4, 4, 0, 0] },
+            itemStyle: { color: i === maxIdx ? RAMP[2] : RAMP[0], borderRadius: [4, 4, 0, 0] },
             label: i === maxIdx ? { show: true, position: "top", fontSize: 10, color: "#475069", formatter: () => fmt1(v) } : undefined,
           })),
           barMaxWidth: 26,
@@ -411,7 +364,7 @@ export default function IncidentPage() {
         series: [
           {
             type: "bar",
-            data: display.map((r) => ({ value: r.total, itemStyle: { color: "#8fa8ee", borderRadius: [0, 3, 3, 0] } })),
+            data: display.map((r) => ({ value: r.total, itemStyle: { color: RAMP[0], borderRadius: [0, 3, 3, 0] } })),
             barMaxWidth: 12,
             barCategoryGap: "25%",
           },
@@ -444,8 +397,8 @@ export default function IncidentPage() {
       },
       legend: { show: true, top: 0, right: 8, itemWidth: 14, textStyle: { fontSize: 11 } },
       series: [
-        { name: "Dry weather", type: "bar", data: keys.map((k) => rate(w.incidents.dry[k], w.dryHours)), itemStyle: { color: BLUE, borderRadius: [3, 3, 0, 0] }, barMaxWidth: 26 },
-        { name: "Wet weather", type: "bar", data: keys.map((k) => rate(w.incidents.wet[k], w.wetHours)), itemStyle: { color: ORANGE, borderRadius: [3, 3, 0, 0] }, barMaxWidth: 26 },
+        { name: "Dry weather", type: "bar", data: keys.map((k) => rate(w.incidents.dry[k], w.dryHours)), itemStyle: { color: RAMP[2], borderRadius: [3, 3, 0, 0] }, barMaxWidth: 26 },
+        { name: "Wet weather", type: "bar", data: keys.map((k) => rate(w.incidents.wet[k], w.wetHours)), itemStyle: { color: RAMP[0], borderRadius: [3, 3, 0, 0] }, barMaxWidth: 26 },
       ],
     };
   }, [data, derived]);
@@ -649,7 +602,7 @@ export default function IncidentPage() {
   // ---------- Predictive / Prescriptive share the same shell ----------
   if (activeTab !== "Descriptive") {
     return (
-      <section className={styles.page}>
+      <section className={`${styles.page} viz-incident`}>
         <PageHeader icon={AlertTriangle} title="Incident Overview" subtitle="Road crashes, hazards, and response patterns across NLEX" />
         <div className={styles.filterRow}>
           {activeTab === "Predictive" && (
@@ -693,7 +646,7 @@ export default function IncidentPage() {
   }
 
   return (
-    <section className={styles.page}>
+    <section className={`${styles.page} viz-incident`}>
       <PageHeader icon={AlertTriangle} title="Incident Overview" subtitle="Road crashes, hazards, and response patterns across NLEX" />
 
       {/* Row A — global filters */}
@@ -717,6 +670,7 @@ export default function IncidentPage() {
       {/* Row B — KPI tiles */}
       <div className={styles.kpiRow}>
         <article className={styles.kpiTile}>
+          <span className={styles.kpiIcon} aria-hidden="true"><AlertTriangle size={15} /></span>
           <h3>Total Incidents</h3>
           <div className={styles.kpiValue}>{kpiValue(data ? fmtInt(data.kpis.totalIncidents) : null)}</div>
           <p className={styles.kpiHint}>
@@ -727,16 +681,19 @@ export default function IncidentPage() {
           </p>
         </article>
         <article className={styles.kpiTile}>
+          <span className={styles.kpiIcon} aria-hidden="true"><HeartPulse size={15} /></span>
           <h3>Injuries</h3>
           <div className={styles.kpiValue}>{kpiValue(data ? fmtInt(data.kpis.injuries) : null)}</div>
           <p className={styles.kpiHint}>{data ? `${fmtInt(data.kpis.fatalities)} fatalities in range` : "—"}</p>
         </article>
         <article className={styles.kpiTile}>
+          <span className={styles.kpiIcon} aria-hidden="true"><Timer size={15} /></span>
           <h3>Avg Response Time</h3>
           <div className={styles.kpiValue}>{kpiValue(data?.kpis.avgResponseMin != null ? `${data.kpis.avgResponseMin} min` : null)}</div>
           <p className={styles.kpiHint}>reported → responder on scene</p>
         </article>
         <article className={styles.kpiTile}>
+          <span className={styles.kpiIcon} aria-hidden="true"><MapPin size={15} /></span>
           <h3>Top Hotspot</h3>
           <div className={styles.kpiValue}>{kpiValue(derived?.topHotspot ? kmLabel(derived.topHotspot.km_bin) : null)}</div>
           <p className={styles.kpiHint}>
@@ -746,6 +703,7 @@ export default function IncidentPage() {
           </p>
         </article>
         <article className={styles.kpiTile}>
+          <span className={styles.kpiIcon} aria-hidden="true"><CloudRain size={15} /></span>
           <h3>Crash Rate in Rain</h3>
           <div className={styles.kpiValue}>{kpiValue(derived?.rainMultiplier != null ? `${derived.rainMultiplier.toFixed(2)}×` : null)}</div>
           <p className={styles.kpiHint}>
@@ -759,7 +717,6 @@ export default function IncidentPage() {
         <div className={styles.chartHead}>
           <div className={styles.headText}>
             <h3>Incident Trend</h3>
-            {takeaways?.trend && <p className={styles.takeaway}>{takeaways?.trend}</p>}
           </div>
         </div>
         <div className={styles.heroFilters}>
@@ -783,7 +740,6 @@ export default function IncidentPage() {
         <div className={styles.chartHead}>
           <div className={styles.headText}>
             <h3>When Incidents Happen</h3>
-            {takeaways?.timing && <p className={styles.takeaway}>{takeaways?.timing}</p>}
             {timeTakeaway && <p className={styles.subtitle}>{timeTakeaway}</p>}
           </div>
           <div className={styles.segmentedSmall}>
@@ -802,7 +758,6 @@ export default function IncidentPage() {
         <div className={styles.chartHead}>
           <div className={styles.headText}>
             <h3>Hotspots by Km Segment</h3>
-            {takeaways?.hotspot && <p className={styles.takeaway}>{takeaways?.hotspot}</p>}
           </div>
           <button className={styles.secondaryButton} onClick={() => setAllHotspotsOpen(true)}>
             View all
@@ -817,7 +772,6 @@ export default function IncidentPage() {
         <div className={styles.chartHead}>
           <div className={styles.headText}>
             <h3>{causeMode === "Causes" ? "Top Incident Causes" : "Top Accident Types"}</h3>
-            {takeaways?.cause && <p className={styles.takeaway}>{takeaways?.cause}</p>}
           </div>
           <div className={styles.segmentedSmall}>
             {(["Causes", "Types"] as const).map((m) => (
@@ -835,7 +789,6 @@ export default function IncidentPage() {
         <div className={styles.chartHead}>
           <div className={styles.headText}>
             <h3>Incidents per Day: Dry vs Wet Weather</h3>
-            {takeaways?.weather && <p className={styles.takeaway}>{takeaways?.weather}</p>}
           </div>
         </div>
         <div className={styles.chartBody}>{chartFrame(weatherChart, "No weather data in range", onWeatherClick)}</div>

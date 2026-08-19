@@ -3840,18 +3840,11 @@ body {
 .ds-rd-scale-head button:hover { background: var(--bg-surface-hover); color: var(--text-primary); }
 .ds-rd-scale-head button:focus-visible { outline: 2px solid var(--brand-primary); outline-offset: 1px; }
 
-.ds-rd-scale-intro,
-.ds-rd-scale-note {
+.ds-rd-scale-intro {
   margin: 0;
   font-size: 0.76rem;
   line-height: 1.45;
   color: var(--text-muted);
-}
-
-.ds-rd-scale-note {
-  margin-top: 14px;
-  padding-top: 12px;
-  border-top: 1px solid var(--border-default);
 }
 
 .ds-rd-scale-list {

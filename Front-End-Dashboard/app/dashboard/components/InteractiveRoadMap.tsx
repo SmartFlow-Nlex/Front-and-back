@@ -450,13 +450,6 @@ export default function InteractiveRoadMap() {
                 </li>
               ))}
             </ul>
-
-            <p className="ds-rd-scale-note">
-              This panel paints level 3 and above red, since below roughly half of
-              free-flow speed traffic is no longer moving usefully; 1 and 2 are
-              amber. An exit with no jam record at all is clear — Waze reports a
-              jam only where there is one.
-            </p>
           </div>
         </div>
       )}

@@ -267,6 +267,7 @@ export default function InteractiveRoadMap() {
               </span>
             )}
           </h2>
+          <p className="ds-rd-updated">{headerSub}</p>
         </div>
 
         <div className="ds-rd-meta">
@@ -275,7 +276,6 @@ export default function InteractiveRoadMap() {
             <span className="seg-orange">{tally.slow} slow</span>
             <span className="seg-green">{tally.clear} clear</span>
           </div>
-          <span className="ds-rd-updated">{headerSub}</span>
         </div>
       </header>
 
@@ -374,6 +374,7 @@ export default function InteractiveRoadMap() {
           <span><i className="seg-orange" /> Slow</span>
           <span><i className="seg-green" /> Clear</span>
           <span><i className="none" /> No ramp</span>
+          <span><i className="toll" /> Toll plaza</span>
         </div>
         <p>
           Waze jam reports matched to the nearest exit; direction from jam bearing.

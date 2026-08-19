@@ -3371,8 +3371,7 @@ body {
 .ds-rd-tally .seg-green  { background: var(--color-success-bg); color: var(--color-success); border-color: var(--color-success-border); }
 
 .ds-rd-updated {
-  width: 100%;
-  text-align: right;
+  margin: 4px 0 0;
   font-size: 0.72rem;
   color: var(--text-muted);
   font-variant-numeric: tabular-nums;
@@ -3706,11 +3705,12 @@ body {
    116px column that already holds the name. */
 .ds-rd-tollmark {
   display: block;
-  width: 5px;
-  height: 5px;
-  margin: 5px auto 0;
-  border-radius: 50%;
-  background: var(--color-warning);
+  width: 6px;
+  height: 6px;
+  margin: 6px auto 0;
+  border: 1.5px solid var(--text-muted);
+  background: none;
+  transform: rotate(45deg);
 }
 
 /* --- Footer ---------------------------------------------------------------- */
@@ -3742,6 +3742,15 @@ body {
 .ds-rd-legend i.seg-orange { background: #e08a2e; }
 .ds-rd-legend i.seg-green  { background: #23a55a; }
 .ds-rd-legend i.none       { height: 0; border-top: 2px dotted var(--border-strong); border-radius: 0; }
+/* Matches the mark under a toll plaza name: a shape, not a colour, so it stays
+   clear of the three traffic states above it. */
+.ds-rd-legend i.toll {
+  width: 7px;
+  height: 7px;
+  border: 1.5px solid var(--text-muted);
+  border-radius: 0;
+  transform: rotate(45deg);
+}
 
 .ds-rd-foot p {
   margin: 0;

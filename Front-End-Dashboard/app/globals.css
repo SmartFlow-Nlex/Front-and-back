@@ -3292,11 +3292,11 @@ body {
    ============================================================ */
 /* ─── Section wrapper ─── */
 /* ===========================================================================
-   LIVE CORRIDOR STATUS — the carriageway, along its length
+   LIVE CORRIDOR STATUS — a divided highway
 
-   Drawn horizontally. Vertically the road could only be a narrow strip with the
-   status text stranded at the far right; on its side it gets the panel's full
-   width, which is also the axis the corridor actually has.
+   Northbound on top, southbound below, exits in the median. One shared km axis
+   left to right, so an exit sits at the same point on both carriageways and the
+   two directions can be read straight down the column.
 
    The asphalt and its markings are fixed colours, not tokens: a road is dark and
    its lines are white in both themes, and tinting the tarmac with the page would
@@ -3360,47 +3360,9 @@ body {
   flex-wrap: wrap;
   align-items: center;
   justify-content: flex-end;
-  gap: 10px;
+  gap: 8px;
   margin-left: auto;
 }
-
-/* --- Direction toggle ----------------------------------------------------- */
-
-.ds-rd-dirs {
-  display: inline-flex;
-  padding: 3px;
-  border: 1px solid var(--border-default);
-  border-radius: var(--radius-full);
-  background: var(--bg-surface-hover);
-}
-
-.ds-rd-dir {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 6px 15px;
-  border: 0;
-  border-radius: var(--radius-full);
-  background: none;
-  color: var(--text-muted);
-  font: inherit;
-  font-size: 0.76rem;
-  font-weight: 700;
-  cursor: pointer;
-  transition: background 150ms ease, color 150ms ease, box-shadow 150ms ease;
-}
-
-.ds-rd-dir:hover { color: var(--text-primary); }
-
-.ds-rd-dir.active {
-  background: var(--bg-surface);
-  color: var(--brand-primary);
-  box-shadow: var(--shadow-sm);
-}
-
-.ds-rd-dir:focus-visible { outline: 2px solid var(--brand-primary); outline-offset: 1px; }
-
-.ds-rd-caret { font-size: 0.95em; line-height: 1; }
 
 .ds-rd-tally { display: flex; gap: 7px; flex-wrap: wrap; }
 
@@ -3427,16 +3389,16 @@ body {
 
 /* --- Detail rail -----------------------------------------------------------
    Replaces the floating tooltip, which had to be positioned somewhere and
-   covered the row it was describing wherever it went. A reserved strip cannot
-   collide with anything, and it holds a steady height so the road below does not
-   jump as the pointer moves.
+   covered whatever it described. A reserved strip cannot collide, holds a steady
+   height so the road does not jump, and with both carriageways on screen it
+   reports one exit in both directions from a single hover.
    -------------------------------------------------------------------------- */
 
 .ds-rd-rail {
   display: flex;
   flex-wrap: wrap;
   align-items: baseline;
-  gap: 8px 18px;
+  gap: 8px 20px;
   min-height: 46px;
   padding: 12px 22px;
   background: var(--bg-surface-hover);
@@ -3464,16 +3426,32 @@ body {
   display: inline-flex;
   flex-wrap: wrap;
   align-items: baseline;
-  gap: 6px 16px;
+  gap: 8px 22px;
+}
+
+.ds-rd-rail-dir {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 8px;
   font-size: 0.75rem;
   color: var(--text-muted);
 }
 
-.ds-rd-rail-facts b { font-weight: 800; letter-spacing: 0.05em; }
-.ds-rd-rail-facts b.seg-red    { color: var(--color-danger); }
-.ds-rd-rail-facts b.seg-orange { color: var(--color-warning); }
-.ds-rd-rail-facts b.seg-green  { color: var(--color-success); }
-.ds-rd-rail-facts b.muted      { color: var(--text-muted); font-style: italic; }
+.ds-rd-rail-dirname {
+  padding: 2px 7px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-full);
+  font-size: 0.6rem;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  color: var(--text-secondary);
+}
+
+.ds-rd-rail-dir b { font-weight: 800; letter-spacing: 0.05em; }
+.ds-rd-rail-dir b.seg-red    { color: var(--color-danger); }
+.ds-rd-rail-dir b.seg-orange { color: var(--color-warning); }
+.ds-rd-rail-dir b.seg-green  { color: var(--color-success); }
+.ds-rd-rail-dir b.muted      { color: var(--text-muted); font-style: italic; }
 
 .ds-rd-rail-hint {
   font-size: 0.75rem;
@@ -3494,10 +3472,10 @@ body {
 
 /* --- Track ----------------------------------------------------------------- */
 
-.ds-rd-body { padding: 22px 22px 14px; }
+.ds-rd-body { padding: 16px 22px 14px; }
 
-/* 20 exits need room for a readable label each; below that the track scrolls
-   rather than crushing the names into columns too narrow to read. */
+/* Twenty exits need room for a readable name each; below that the track scrolls
+   rather than crushing the columns. */
 .ds-rd-scroll {
   overflow-x: auto;
   overflow-y: hidden;
@@ -3505,20 +3483,37 @@ body {
   scrollbar-width: thin;
 }
 
-.ds-rd-track {
-  min-width: 940px;
-}
+.ds-rd-track { min-width: 940px; }
 
-/* --- The carriageway ------------------------------------------------------- */
+.ds-rd-caption {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin: 0;
+  font-size: 0.63rem;
+  font-weight: 800;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+.ds-rd-caption.top    { margin-bottom: 5px; }
+.ds-rd-caption.bottom { margin-top: 5px; justify-content: flex-end; }
+.ds-rd-caption span   { font-size: 1.1em; color: var(--brand-primary); }
+
+/* --- Carriageways ---------------------------------------------------------- */
 
 .ds-rd-way {
   position: relative;
-  height: 62px;
-  border-radius: 8px;
+  height: 46px;
   overflow: hidden;
   /* Asphalt. Fixed in both themes — a road is dark. */
   background: #2c313a;
 }
+
+/* Outer shoulder rounded, inner edge square: the two carriageways meet at the
+   median, so rounding both would read as two separate strips. */
+.ds-rd-way.dir-nb { border-radius: 8px 8px 0 0; }
+.ds-rd-way.dir-sb { border-radius: 0 0 8px 8px; }
 
 /* Shoulder lines along both edges. */
 .ds-rd-way::before,
@@ -3529,22 +3524,23 @@ body {
   right: 0;
   height: 2px;
   background: rgba(255, 255, 255, 0.5);
-  z-index: 2;
+  z-index: 3;
 }
-.ds-rd-way::before { top: 6px; }
-.ds-rd-way::after  { bottom: 6px; }
+.ds-rd-way::before { top: 5px; }
+.ds-rd-way::after  { bottom: 5px; }
 
 /* Traffic sits on the tarmac rather than replacing it, so the lane markings
    still read through — the way a congestion overlay sits on a map. */
 .ds-rd-segs {
   position: absolute;
-  inset: 8px 0;
+  inset: 7px 0;
   display: flex;
 }
 
 .ds-rd-seg {
   flex: 1 1 0;
   opacity: 0.85;
+  transition: opacity 140ms ease, filter 140ms ease;
 }
 
 .ds-rd-seg.seg-red    { background: #e04434; }
@@ -3553,13 +3549,14 @@ body {
 /* No ramp this way: bare tarmac, no traffic claim. */
 .ds-rd-seg.no-ramp    { background: none; }
 
+.ds-rd-seg.is-active { filter: brightness(1.22); }
+
 /* Two dashed dividers giving three lanes. Drawn once across the whole track
-   rather than per exit, so there is no seam to align at every marker — the
-   problem the vertical layout had to solve with an exact dash period. */
+   rather than once per exit, so there is no seam to align at every marker. */
 .ds-rd-lanes {
   position: absolute;
-  inset: 8px 0;
-  z-index: 2;
+  inset: 7px 0;
+  z-index: 3;
   pointer-events: none;
 }
 
@@ -3579,13 +3576,14 @@ body {
 .ds-rd-lanes::before { top: 33%; }
 .ds-rd-lanes::after  { top: 66%; }
 
-/* Direction of travel: a soft highlight drifting along the carriageway, running
-   right for northbound and left for southbound, so the toggle changes what the
-   road does rather than only relabelling it. */
+/* Direction of travel. Both carriageways get the same drifting highlight, at the
+   same speed and weight; only the heading differs, because they carry traffic
+   the opposite way. Matching everything except the heading is what makes the two
+   read as one divided road rather than two unrelated strips. */
 .ds-rd-flow {
   position: absolute;
-  inset: 8px 0;
-  z-index: 1;
+  inset: 7px 0;
+  z-index: 2;
   pointer-events: none;
   background: linear-gradient(
     to right,
@@ -3600,28 +3598,31 @@ body {
   animation: rdFlowRight 3.2s linear infinite;
 }
 
-.dir-sb .ds-rd-flow { animation-name: rdFlowLeft; }
+.ds-rd-way.dir-sb .ds-rd-flow { animation-name: rdFlowLeft; }
 
 @keyframes rdFlowRight { to { background-position:  220px 0; } }
 @keyframes rdFlowLeft  { to { background-position: -220px 0; } }
 
-/* --- Stops ----------------------------------------------------------------- */
+/* --- Median: markers serving both carriageways ----------------------------- */
 
 .ds-rd-stops {
   display: grid;
-  /* Same column count as the segments above, so markers line up with the piece
-     of road they belong to. */
+  /* Same column count as the segments, so a marker sits under the piece of road
+     it belongs to on both carriageways. */
   grid-template-columns: repeat(var(--lanes, 20), minmax(0, 1fr));
   list-style: none;
   margin: 0;
   padding: 0;
+  background: var(--bg-surface-hover);
+  border-left: 1px solid var(--border-default);
+  border-right: 1px solid var(--border-default);
 }
 
 .ds-rd-stop {
   display: flex;
   justify-content: center;
   opacity: 0;
-  transform: translateY(5px);
+  transform: translateY(4px);
   transition: opacity 0.35s ease, transform 0.35s ease;
 }
 
@@ -3631,69 +3632,88 @@ body {
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 2px;
+  gap: 1px;
   width: 100%;
-  padding: 0 0 6px;
+  padding: 5px 0 6px;
   border: 0;
   background: none;
   font: inherit;
   cursor: pointer;
+  transition: background 140ms ease;
 }
 
-.ds-rd-hit:focus-visible { outline: 2px solid var(--brand-primary); outline-offset: 2px; border-radius: 6px; }
-
-/* Slip road from the carriageway down to the marker. */
-.ds-rd-ramp {
-  width: 2px;
-  height: 12px;
-  background: var(--border-strong);
-}
-.ds-rd-stop.no-ramp .ds-rd-ramp { background: none; border-left: 2px dotted var(--border-strong); }
+.ds-rd-hit:hover { background: var(--bg-surface); }
+.ds-rd-hit:focus-visible { outline: 2px solid var(--brand-primary); outline-offset: -2px; }
 
 .ds-rd-node {
   display: grid;
   place-items: center;
-  width: 26px;
-  height: 26px;
+  width: 24px;
+  height: 24px;
   color: var(--text-muted);
   transition: color 150ms ease, transform 150ms ease;
 }
 
-.ds-rd-node .ds-hex-svg { width: 22px; height: 22px; }
+.ds-rd-node .ds-hex-svg { width: 21px; height: 21px; }
 
-.ds-rd-stop.seg-red    .ds-rd-node { color: #c9372a; }
-.ds-rd-stop.seg-orange .ds-rd-node { color: #b8701f; }
-.ds-rd-stop.seg-green  .ds-rd-node { color: #1c8b4b; }
+.ds-rd-stop.is-active .ds-rd-node,
+.ds-rd-hit:hover .ds-rd-node { color: var(--brand-primary); transform: scale(1.16); }
 
-.ds-rd-hit:hover .ds-rd-node,
-.ds-rd-stop.is-active .ds-rd-node { transform: scale(1.16); }
+.ds-rd-stop.no-ramp .ds-rd-node { opacity: 0.4; }
 
 .ds-rd-km {
-  font-size: 0.63rem;
+  font-size: 0.62rem;
   font-weight: 700;
   font-variant-numeric: tabular-nums;
   color: var(--text-muted);
 }
 
-/* Names run bottom-to-top rather than at an angle. Rotated labels were what
-   collided in the original layout; upright ones take no horizontal room at all,
-   so twenty of them fit however long the names are. */
-.ds-rd-name {
+/* --- Names ----------------------------------------------------------------- */
+
+.ds-rd-labels {
+  display: grid;
+  grid-template-columns: repeat(var(--lanes, 20), minmax(0, 1fr));
+  list-style: none;
+  margin: 8px 0 0;
+  padding: 0;
+}
+
+.ds-rd-labels > li { display: flex; justify-content: center; min-width: 0; }
+
+/* Names run bottom-to-top rather than at an angle. Angled labels were what
+   collided in the first layout; upright ones take no horizontal room at all, so
+   twenty fit however long the names are. */
+.ds-rd-label {
   writing-mode: vertical-rl;
   transform: rotate(180deg);
-  margin-top: 4px;
-  height: 118px;
+  height: 116px;
+  padding: 0;
+  border: 0;
+  background: none;
+  font: inherit;
   font-size: 0.72rem;
   font-weight: 600;
   color: var(--text-secondary);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  cursor: pointer;
   transition: color 140ms ease;
 }
 
-.ds-rd-hit:hover .ds-rd-name,
-.ds-rd-stop.is-active .ds-rd-name { color: var(--brand-primary); }
+.ds-rd-label:hover,
+.ds-rd-label.is-active { color: var(--brand-primary); }
+
+/* Toll plazas get a mark rather than a word — there is no room for "toll" in a
+   116px column that already holds the name. */
+.ds-rd-tollmark {
+  display: block;
+  width: 5px;
+  height: 5px;
+  margin: 5px auto 0;
+  border-radius: 50%;
+  background: var(--color-warning);
+}
 
 /* --- Footer ---------------------------------------------------------------- */
 
@@ -3735,7 +3755,7 @@ body {
 /* --- Responsive ------------------------------------------------------------ */
 
 @media (max-width: 700px) {
-  .ds-rd-body { padding: 16px 12px 12px; }
+  .ds-rd-body { padding: 14px 12px 12px; }
   .ds-rd-head, .ds-rd-foot, .ds-rd-rail { padding-left: 14px; padding-right: 14px; }
   .ds-rd-meta { justify-content: flex-start; margin-left: 0; }
   .ds-rd-updated { text-align: left; }

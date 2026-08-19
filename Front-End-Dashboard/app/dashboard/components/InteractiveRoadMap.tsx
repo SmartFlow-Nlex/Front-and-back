@@ -152,51 +152,52 @@ export default function InteractiveRoadMap() {
     return () => obs.disconnect();
   }, []);
 
-  /* ─── The corridor, drawn along its length ────────────────────────────────
-     Vertically the road could only ever be a narrow strip: 20 rows of fixed
-     height left the carriageway about 130px wide with the status text stranded
-     at the far right and a corridor of dead space between them. Turned on its
-     side the road gets the full width of the panel, which is also the axis it
-     actually has — the corridor runs 0 to 76.25 km, not top to bottom.
+  /* ─── The corridor, both carriageways ─────────────────────────────────────
+     Drawn as a divided highway: northbound on top, southbound below, exits in
+     the median between them. One shared km axis running left to right, so a
+     given exit sits at the same point on both roads and the two directions can
+     be compared by looking straight down the column.
 
      Exits are spaced evenly rather than by true km. Several sit within a
      kilometre of each other (15.2 / 15.8 / 16.8, and 20.7 / 21.1), so a
-     to-scale axis would pile their labels on top of one another at the metro
-     end and leave the far end empty. */
+     to-scale axis would pile their labels up at the metro end and leave the far
+     end empty. */
 
-  const [dir, setDir] = useState<"NB" | "SB">("NB");
+  const rows = useMemo(
+    () =>
+      exits.map((x) => ({
+        exit: x,
+        nb: statusByExit.get(statusKey(x.exit_name, "NB")) ?? CLEAR,
+        sb: statusByExit.get(statusKey(x.exit_name, "SB")) ?? CLEAR,
+        nbAccess: accessLabel(x, "NB"),
+        sbAccess: accessLabel(x, "SB"),
+      })),
+    [exits, statusByExit],
+  );
 
-  const rows = useMemo(() => {
-    const ordered = dir === "NB" ? exits : [...exits].reverse();
-    return ordered.map((x) => ({
-      exit: x,
-      data: statusByExit.get(statusKey(x.exit_name, dir)) ?? CLEAR,
-      access: accessLabel(x, dir),
-    }));
-  }, [exits, statusByExit, dir]);
-
-  /** Counts for the direction on screen. Exits with no ramp are skipped rather
-      than counted clear — they draw as bare tarmac, and a tally that disagreed
-      with the drawing would be worse than none. */
+  /** Counts across both carriageways. Exits with no ramp in a direction are
+      skipped rather than counted clear — they draw as bare tarmac, and a tally
+      that disagreed with the drawing would be worse than none. */
   const tally = useMemo(() => {
     const t = { congested: 0, slow: 0, clear: 0 };
     for (const r of rows) {
-      if (r.access === "No Access") continue;
-      if (r.data.colorClass === "seg-red") t.congested++;
-      else if (r.data.colorClass === "seg-orange") t.slow++;
-      else t.clear++;
+      for (const [access, d] of [[r.nbAccess, r.nb], [r.sbAccess, r.sb]] as const) {
+        if (access === "No Access") continue;
+        if (d.colorClass === "seg-red") t.congested++;
+        else if (d.colorClass === "seg-orange") t.slow++;
+        else t.clear++;
+      }
     }
     return t;
   }, [rows]);
 
-  /* The hovered exit is shown in a reserved rail above the road rather than a
-     floating tooltip. The tooltip had to be positioned somewhere, and wherever
-     it went it covered the row it was describing; a rail that is always present
-     cannot collide with anything, and the space costs nothing because it sits in
-     the margin the road needs anyway. */
+  /* The hovered exit fills a reserved rail above the road rather than a floating
+     tooltip, which had to be positioned somewhere and covered the row it was
+     describing wherever it went. With both carriageways on screen the rail earns
+     its place twice over: one hover reports the exit in both directions. */
   const focused = useMemo(
-    () => rows.find((r) => `${r.exit.exit_name}-${dir}` === activeStation) ?? null,
-    [rows, dir, activeStation],
+    () => rows.find((r) => r.exit.exit_name === activeStation) ?? null,
+    [rows, activeStation],
   );
 
   /* ─── Header copy ─── */
@@ -211,6 +212,47 @@ export default function InteractiveRoadMap() {
               : `${corridor.feed.ageMinutes} min ago`
           } · ${corridor.windowMinutes}-minute window`
         : "No jam reports on the corridor right now";
+
+  const railFacts = (label: string, data: TrafficRecord, access: string | null) => (
+    <span className="ds-rd-rail-dir">
+      <span className="ds-rd-rail-dirname">{label}</span>
+      {access === "No Access" ? (
+        <b className="muted">No ramp</b>
+      ) : (
+        <>
+          <b className={data.colorClass}>{data.status}</b>
+          <span>{data.speed}</span>
+          {data.level != null && <span>lvl {data.level}/5</span>}
+          <span>{data.jamCount === 0 ? "no jams" : `${data.jamCount} jam${data.jamCount === 1 ? "" : "s"}`}</span>
+        </>
+      )}
+    </span>
+  );
+
+  /** One carriageway. Both are built from the same markup so they read as one
+      road split down the middle rather than two unrelated strips. */
+  const carriageway = (
+    dir: "NB" | "SB",
+    pick: (r: (typeof rows)[number]) => { data: TrafficRecord; access: string | null },
+  ) => (
+    <div className={`ds-rd-way dir-${dir.toLowerCase()}`}>
+      <div className="ds-rd-segs">
+        {rows.map((r) => {
+          const { data, access } = pick(r);
+          return (
+            <span
+              key={`${dir}-${r.exit.exit_name}`}
+              className={`ds-rd-seg ${access === "No Access" ? "no-ramp" : data.colorClass} ${
+                activeStation === r.exit.exit_name ? "is-active" : ""
+              }`}
+            />
+          );
+        })}
+      </div>
+      <div className="ds-rd-lanes" />
+      <div className="ds-rd-flow" />
+    </div>
+  );
 
   /* ─── Render ─── */
   return (
@@ -229,23 +271,7 @@ export default function InteractiveRoadMap() {
         </div>
 
         <div className="ds-rd-meta">
-          <div className="ds-rd-dirs" role="radiogroup" aria-label="Carriageway">
-            {(["NB", "SB"] as const).map((d) => (
-              <button
-                key={d}
-                type="button"
-                role="radio"
-                aria-checked={dir === d}
-                className={`ds-rd-dir ${dir === d ? "active" : ""}`}
-                onClick={() => setDir(d)}
-              >
-                <span className="ds-rd-caret" aria-hidden="true">{d === "NB" ? "↑" : "↓"}</span>
-                {d === "NB" ? "Northbound" : "Southbound"}
-              </button>
-            ))}
-          </div>
-
-          <div className="ds-rd-tally" aria-label="Corridor summary">
+          <div className="ds-rd-tally" aria-label="Corridor summary, both directions">
             <span className="seg-red">{tally.congested} congested</span>
             <span className="seg-orange">{tally.slow} slow</span>
             <span className="seg-green">{tally.clear} clear</span>
@@ -264,72 +290,80 @@ export default function InteractiveRoadMap() {
               {focused.exit.node_type === "toll-barrier" && <span className="ds-rd-toll">toll plaza</span>}
             </span>
             <span className="ds-rd-rail-facts">
-              {focused.access === "No Access" ? (
-                <b className="muted">No ramp {dir === "NB" ? "northbound" : "southbound"}</b>
-              ) : (
-                <>
-                  <b className={focused.data.colorClass}>{focused.data.status}</b>
-                  <span>Slowest {focused.data.speed}</span>
-                  {focused.data.level != null && <span>Jam level {focused.data.level}/5</span>}
-                  <span>{focused.data.jamCount === 0 ? "No active jams" : `${focused.data.jamCount} active jam${focused.data.jamCount === 1 ? "" : "s"}`}</span>
-                  <span>{focused.exit.node_type === "toll-barrier"
-                    ? (dir === "NB" ? "On (mainline entry)" : "Off (pay & exit)")
-                    : focused.access}</span>
-                </>
-              )}
+              {railFacts("NB", focused.nb, focused.nbAccess)}
+              {railFacts("SB", focused.sb, focused.sbAccess)}
             </span>
           </>
         ) : (
           <span className="ds-rd-rail-hint">
-            Hover or focus an exit for its access, speed and jam detail.
+            Hover or focus an exit for its access, speed and jam detail in both directions.
           </span>
         )}
       </div>
 
-      <div ref={containerRef} className={`ds-rd-body ${isVisible ? "is-visible" : ""} dir-${dir.toLowerCase()}`}>
+      <div ref={containerRef} className={`ds-rd-body ${isVisible ? "is-visible" : ""}`}>
         <div className="ds-rd-scroll">
           <div className="ds-rd-track" style={{ "--lanes": rows.length } as React.CSSProperties}>
-            {/* The carriageway is one continuous element, not one per exit, so
-                the lane dashes and flow arrows run the length of the corridor
-                without a seam at every marker. */}
-            <div className="ds-rd-way" aria-hidden="true">
-              <div className="ds-rd-segs">
-                {rows.map(({ exit, data, access }) => (
-                  <span
-                    key={`seg-${exit.exit_name}`}
-                    className={`ds-rd-seg ${access === "No Access" ? "no-ramp" : data.colorClass}`}
-                  />
-                ))}
-              </div>
-              <div className="ds-rd-lanes" />
-              <div className="ds-rd-flow" />
-            </div>
+            <p className="ds-rd-caption top">
+              <span aria-hidden="true">→</span> Northbound · to Central Luzon
+            </p>
+            {carriageway("NB", (r) => ({ data: r.nb, access: r.nbAccess }))}
 
-            {/* Markers and labels share the track's column count, so they stay
-                aligned with the segments above them. */}
+            {/* Median: one set of markers serving both carriageways, so an exit
+                is a single target rather than two that have to be kept in step. */}
             <ol className="ds-rd-stops">
-              {rows.map(({ exit, data, access }) => {
-                const key = `${exit.exit_name}-${dir}`;
-                const noAccess = access === "No Access";
+              {rows.map((r) => {
+                const bothClosed = r.nbAccess === "No Access" && r.sbAccess === "No Access";
                 return (
-                  <li key={key} className={`ds-rd-stop ${noAccess ? "no-ramp" : data.colorClass} ${activeStation === key ? "is-active" : ""}`}>
+                  <li
+                    key={r.exit.exit_name}
+                    className={`ds-rd-stop ${bothClosed ? "no-ramp" : ""} ${
+                      activeStation === r.exit.exit_name ? "is-active" : ""
+                    }`}
+                  >
                     <button
                       type="button"
                       className="ds-rd-hit"
-                      onMouseEnter={() => setActiveStation(key)}
+                      onMouseEnter={() => setActiveStation(r.exit.exit_name)}
                       onMouseLeave={() => setActiveStation(null)}
-                      onFocus={() => setActiveStation(key)}
+                      onFocus={() => setActiveStation(r.exit.exit_name)}
                       onBlur={() => setActiveStation(null)}
-                      aria-label={`${exit.exit_name}, km ${exit.km.toFixed(1)}, ${dir}: ${noAccess ? "no ramp" : `${data.status.toLowerCase()}, ${data.speed}`}`}
+                      aria-label={`${r.exit.exit_name}, km ${r.exit.km.toFixed(1)}. Northbound ${
+                        r.nbAccess === "No Access" ? "no ramp" : r.nb.status.toLowerCase()
+                      }. Southbound ${r.sbAccess === "No Access" ? "no ramp" : r.sb.status.toLowerCase()}.`}
                     >
-                      <span className="ds-rd-ramp" aria-hidden="true" />
                       <span className="ds-rd-node" aria-hidden="true"><HexagonRoad /></span>
-                      <span className="ds-rd-km">{exit.km.toFixed(1)}</span>
-                      <span className="ds-rd-name">{exit.exit_name}</span>
+                      <span className="ds-rd-km">{r.exit.km.toFixed(1)}</span>
                     </button>
                   </li>
                 );
               })}
+            </ol>
+
+            {carriageway("SB", (r) => ({ data: r.sb, access: r.sbAccess }))}
+            <p className="ds-rd-caption bottom">
+              <span aria-hidden="true">←</span> Southbound · to Metro Manila
+            </p>
+
+            {/* Names sit under the whole diagram, shared by both carriageways. */}
+            <ol className="ds-rd-labels">
+              {rows.map((r) => (
+                <li key={`lbl-${r.exit.exit_name}`}>
+                  <button
+                    type="button"
+                    className={`ds-rd-label ${activeStation === r.exit.exit_name ? "is-active" : ""}`}
+                    onMouseEnter={() => setActiveStation(r.exit.exit_name)}
+                    onMouseLeave={() => setActiveStation(null)}
+                    onFocus={() => setActiveStation(r.exit.exit_name)}
+                    onBlur={() => setActiveStation(null)}
+                    tabIndex={-1}
+                    aria-hidden="true"
+                  >
+                    {r.exit.exit_name}
+                    {r.exit.node_type === "toll-barrier" && <i className="ds-rd-tollmark" />}
+                  </button>
+                </li>
+              ))}
             </ol>
           </div>
         </div>

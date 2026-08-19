@@ -362,7 +362,8 @@ export default function TrafficPage() {
         // The lightest step is the theme's 'empty' tone: near-white on light,
         // near-black on dark, so low values recede in both instead of glowing.
         inRange: { color: [chartTheme.seqLightest, ...SEQ.slice(1)] },
-        textStyle: { fontSize: 10 },
+        text: ["Busier", "Quieter"],
+        textStyle: { fontSize: 10, color: chartTheme.text },
         formatter: (v) => fmtCompact(Number(v)),
       },
       series: [{ type: "heatmap", data: heatData, emphasis: { itemStyle: { borderColor: RAMP[2], borderWidth: 1 } } }],
@@ -391,8 +392,10 @@ export default function TrafficPage() {
         // interval:0 — every plaza name must be readable, that IS the chart
         yAxis: { type: "category", data: display.map((r) => r.plaza), axisLabel: { interval: 0, fontSize: 10 }, axisTick: { show: false } },
         tooltip: { trigger: "axis", valueFormatter: (v) => `${fmtInt(Number(v))} vehicles` },
+        legend: { show: true, top: 0, right: 8, itemWidth: 14, itemHeight: 8, textStyle: { fontSize: 11 } },
         series: [
           {
+            name: "Volume by plaza",
             type: "bar",
             data: display.map((r) => ({
               value: r.v,
@@ -424,7 +427,12 @@ export default function TrafficPage() {
           return `${fmtHour(r.hour)}<br/>Avg speed in jams: <b>${r.speed} km/h</b><br/>Avg jam level: ${r.jam_level} / 5`;
         },
       },
-      visualMap: { show: false, type: "continuous", seriesIndex: 0, min: Math.min(...speeds), max: Math.max(...speeds), inRange: { color: SEVERITY } },
+      visualMap: {
+        show: true, type: "continuous", seriesIndex: 0, orient: "horizontal",
+        top: 0, right: 8, itemWidth: 10, itemHeight: 60, calculable: false,
+        min: Math.min(...speeds), max: Math.max(...speeds), inRange: { color: SEVERITY },
+        text: ["Faster", "Slower"], textStyle: { fontSize: 10, color: chartTheme.text },
+      },
       series: [
         {
           type: "line",
@@ -488,8 +496,14 @@ export default function TrafficPage() {
             return tip;
           },
         },
+        legend: { show: true, top: 0, right: 8, itemWidth: 14, itemHeight: 8, textStyle: { fontSize: 11 } },
         series: [
+          // Two zero-width entries purely so the legend can name what the two bar
+          // colours mean; the real bars are the third series below.
+          { name: "Above baseline", type: "bar", data: [], itemStyle: { color: PAIR_B } },
+          { name: "Below baseline", type: "bar", data: [], itemStyle: { color: PAIR_A } },
           {
+            name: "Deviation",
             type: "bar",
             data: display.map((r) => ({
               value: r.pct,
@@ -510,7 +524,7 @@ export default function TrafficPage() {
       grid: { left: 0, right: 0, top: 2, bottom: 2 },
       xAxis: { type: "category", show: false, data: derived.sparkline.map((_, i) => i) },
       yAxis: { type: "value", show: false, min: "dataMin" },
-      series: [{ type: "line", data: derived.sparkline, symbol: "none", lineStyle: { width: 1.5, color: PAIR_A }, areaStyle: { color: "rgba(62,103,239,.12)" } }],
+      series: [{ type: "line", data: derived.sparkline, symbol: "none", lineStyle: { width: 1.5, color: PAIR_A }, areaStyle: { color: RAMP[0], opacity: 0.18 } }],
     };
   }, [derived]);
 

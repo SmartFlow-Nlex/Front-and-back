@@ -400,8 +400,10 @@ export default function SustainabilityPage() {
           return `<b>${r.label}</b><br/>Heavy-vehicle share: <b>${items[0].value}%</b><br/>${fmtInt(r.c2 + r.c3)} t of ${fmtInt(r.total)} t CO₂`;
         },
       },
+      legend: { show: true, top: 0, right: 8, itemWidth: 14, itemHeight: 8, textStyle: { fontSize: 11 } },
       series: [
         {
+          name: "Heavy-vehicle share of CO₂",
           type: "line",
           data: heavyShareRows.map((r) => Number(r.share.toFixed(1))),
           symbol: "none",

@@ -327,8 +327,10 @@ export default function IncidentPage() {
             return `<b>${kmLabel(r.km_bin)}</b><br/>${fmtInt(r.total)} incidents · ${fmtInt(r.injuries)} injured · ${fmtInt(r.fatalities)} fatalities`;
           },
         },
+        legend: { show: true, top: 0, right: 8, itemWidth: 14, itemHeight: 8, textStyle: { fontSize: 11 } },
         series: [
           {
+            name: "Incidents by segment",
             type: "bar",
             data: display.map((r) => ({
               value: r.total,
@@ -361,8 +363,10 @@ export default function IncidentPage() {
             return `<b>${r.label}</b><br/>${fmtInt(r.total)} incidents · ${fmtInt(r.injuries)} injured · ${fmtInt(r.fatalities)} fatalities`;
           },
         },
+        legend: { show: true, top: 0, right: 8, itemWidth: 14, itemHeight: 8, textStyle: { fontSize: 11 } },
         series: [
           {
+            name: "Incidents",
             type: "bar",
             data: display.map((r) => ({ value: r.total, itemStyle: { color: RAMP[0], borderRadius: [0, 3, 3, 0] } })),
             barMaxWidth: 12,

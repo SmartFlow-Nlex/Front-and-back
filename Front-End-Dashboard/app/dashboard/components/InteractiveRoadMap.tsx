@@ -152,100 +152,39 @@ export default function InteractiveRoadMap() {
     return () => obs.disconnect();
   }, []);
 
-  /* ─── Corridor rows ───────────────────────────────────────────────────────
-     Rebuilt from two horizontally-scrolling tracks into one vertical list.
+  /* ─── One direction at a time, drawn as a road ────────────────────────────
+     Showing both carriageways side by side meant each got a thin bar and neither
+     could look like anything. Picking a direction frees the width to draw an
+     actual carriageway — asphalt, lane markings, traffic colour laid over it —
+     and the corridor reads top to bottom the way you would drive it.
 
-     The old layout gave each of 20 exits a 104px column, so each direction was
-     ~2,100px wide behind its own scrollbar. You could never see the corridor at
-     once, the two scrollbars did not move together, and exit names had to be
-     rotated 45 degrees to fit — which is why they collided in the screenshots.
+     Northbound runs up the km posts, southbound back down them, so the list
+     order flips with the toggle rather than the labels merely being swapped. */
 
-     One row per exit, with northbound on the left and southbound on the right,
-     fixes all three: names read horizontally, nothing scrolls sideways, and the
-     two directions for a given exit finally sit next to each other, which is the
-     comparison this panel exists to support. */
+  const [dir, setDir] = useState<"NB" | "SB">("NB");
 
   const rows = useMemo(() => {
-    return exits.map((x) => {
-      const nb = statusByExit.get(statusKey(x.exit_name, "NB")) ?? CLEAR;
-      const sb = statusByExit.get(statusKey(x.exit_name, "SB")) ?? CLEAR;
-      return { exit: x, nb, sb };
-    });
-  }, [exits, statusByExit]);
+    const ordered = dir === "NB" ? exits : [...exits].reverse();
+    return ordered.map((x) => ({
+      exit: x,
+      data: statusByExit.get(statusKey(x.exit_name, dir)) ?? CLEAR,
+      access: accessLabel(x, dir),
+    }));
+  }, [exits, statusByExit, dir]);
 
-  /** Counts for the header, so the state of the corridor is legible without
-      reading 40 cells.
-
-      Cells with no ramp in that direction are skipped rather than counted clear:
-      they render as a dash, and a tally that disagreed with what is drawn would
-      be worse than no tally. */
+  /** Counts for the direction on screen. Cells with no ramp are skipped rather
+      than counted clear — they draw as a break in the road, and a tally that
+      disagreed with the drawing would be worse than none. */
   const tally = useMemo(() => {
     const t = { congested: 0, slow: 0, clear: 0 };
     for (const r of rows) {
-      for (const [dir, d] of [["NB", r.nb], ["SB", r.sb]] as const) {
-        if (accessLabel(r.exit, dir) === "No Access") continue;
-        if (d.colorClass === "seg-red") t.congested++;
-        else if (d.colorClass === "seg-orange") t.slow++;
-        else t.clear++;
-      }
+      if (r.access === "No Access") continue;
+      if (r.data.colorClass === "seg-red") t.congested++;
+      else if (r.data.colorClass === "seg-orange") t.slow++;
+      else t.clear++;
     }
     return t;
   }, [rows]);
-
-  const renderCell = (
-    exit: NlexExit,
-    dir: "NB" | "SB",
-    data: TrafficRecord,
-  ) => {
-    const key = `${exit.exit_name}-${dir}`;
-    const isActive = activeStation === key;
-    const access = accessLabel(exit, dir);
-    // "No Access" is a fact about the ramp, not a traffic state, so it reads as
-    // a dash rather than a green bar implying free-flowing traffic.
-    const noAccess = access === "No Access";
-
-    return (
-      <div
-        className={`ds-cx-cell ${dir === "NB" ? "nb" : "sb"} ${noAccess ? "none" : data.colorClass} ${isActive ? "is-active" : ""}`}
-        onMouseEnter={() => setActiveStation(key)}
-        onMouseLeave={() => setActiveStation(null)}
-        onFocus={() => setActiveStation(key)}
-        onBlur={() => setActiveStation(null)}
-        tabIndex={0}
-        role="button"
-        aria-label={`${exit.exit_name} ${dir}: ${noAccess ? "no access" : data.status.toLowerCase()}`}
-      >
-        <span className="ds-cx-bar" />
-        <span className="ds-cx-state">{noAccess ? "—" : data.status}</span>
-
-        {isActive && !noAccess && (
-          <div className={`ds-cx-tip ${dir === "NB" ? "tip-nb" : "tip-sb"}`} role="tooltip">
-            <strong>{exit.exit_name} · {dir}</strong>
-            {exit.node_type === "toll-barrier" ? (
-              <>
-                <div className="ds-tooltip-row"><span>Type</span><span className="warn">Mainline toll plaza</span></div>
-                <div className="ds-tooltip-row">
-                  <span>Operation</span><span>{dir === "NB" ? "On (mainline entry)" : "Off (pay & exit)"}</span>
-                </div>
-              </>
-            ) : (
-              <div className="ds-tooltip-row"><span>Access</span><span>{access}</span></div>
-            )}
-            <div className="ds-tooltip-row">
-              <span>Status</span><span className={`ds-status-badge ${data.colorClass}`}>{data.status}</span>
-            </div>
-            <div className="ds-tooltip-row"><span>Slowest speed</span><span>{data.speed}</span></div>
-            {data.level != null && (
-              <div className="ds-tooltip-row"><span>Waze jam level</span><span>{data.level} of 5</span></div>
-            )}
-            <div className="ds-tooltip-row">
-              <span>Active jams</span><span>{data.jamCount === 0 ? "None reported" : data.jamCount}</span>
-            </div>
-          </div>
-        )}
-      </div>
-    );
-  };
 
   /* ─── Header copy ─── */
   const headerSub = feedError
@@ -262,13 +201,13 @@ export default function InteractiveRoadMap() {
 
   /* ─── Render ─── */
   return (
-    <section id="nlex-roadmap" className="ds-cx">
-      <header className="ds-cx-head">
-        <div className="ds-cx-titles">
+    <section id="nlex-roadmap" className="ds-rd">
+      <header className="ds-rd-head">
+        <div className="ds-rd-titles">
           <h2>
             Live Corridor Status
             {corridor?.feed.stale && (
-              <span className="ds-cx-stale" title="The Waze ingester has not written a row recently">
+              <span className="ds-rd-stale" title="The Waze ingester has not written a row recently">
                 Stale feed
               </span>
             )}
@@ -276,49 +215,116 @@ export default function InteractiveRoadMap() {
           <p>NLEX Expressway · Metro Manila → Central Luzon</p>
         </div>
 
-        <div className="ds-cx-meta">
-          {/* The tally answers "is anything wrong" before any cell is read. */}
-          <div className="ds-cx-tally" aria-label="Corridor summary">
+        <div className="ds-rd-meta">
+          <div className="ds-rd-dirs" role="radiogroup" aria-label="Carriageway">
+            {(["NB", "SB"] as const).map((d) => (
+              <button
+                key={d}
+                type="button"
+                role="radio"
+                aria-checked={dir === d}
+                className={`ds-rd-dir ${dir === d ? "active" : ""}`}
+                onClick={() => setDir(d)}
+              >
+                <span className="ds-rd-caret" aria-hidden="true">{d === "NB" ? "▲" : "▼"}</span>
+                {d === "NB" ? "Northbound" : "Southbound"}
+              </button>
+            ))}
+          </div>
+
+          <div className="ds-rd-tally" aria-label="Corridor summary">
             <span className="seg-red">{tally.congested} congested</span>
             <span className="seg-orange">{tally.slow} slow</span>
             <span className="seg-green">{tally.clear} clear</span>
           </div>
-          <span className="ds-cx-updated">{headerSub}</span>
+          <span className="ds-rd-updated">{headerSub}</span>
         </div>
       </header>
 
-      <div ref={containerRef} className={`ds-cx-body ${isVisible ? "is-visible" : ""}`}>
-        <div className="ds-cx-colhead" aria-hidden="true">
-          <span>Northbound</span>
-          <span className="mid">Exit</span>
-          <span>Southbound</span>
-        </div>
+      <div ref={containerRef} className={`ds-rd-body ${isVisible ? "is-visible" : ""} dir-${dir.toLowerCase()}`}>
+        <ol className="ds-rd-list">
+          {rows.map(({ exit, data, access }, i) => {
+            const noAccess = access === "No Access";
+            const key = `${exit.exit_name}-${dir}`;
+            const isActive = activeStation === key;
 
-        <ol className="ds-cx-list">
-          {rows.map(({ exit, nb, sb }, i) => (
-            <li
-              key={exit.exit_name}
-              className={`ds-cx-row ${exit.node_type === "toll-barrier" ? "is-barrier" : ""}`}
-              style={{ "--delay": `${Math.min(i, 12) * 0.03}s` } as React.CSSProperties}
-            >
-              {renderCell(exit, "NB", nb)}
+            return (
+              <li
+                key={key}
+                className={`ds-rd-row ${noAccess ? "no-ramp" : data.colorClass} ${isActive ? "is-active" : ""}`}
+                style={{ "--delay": `${Math.min(i, 14) * 0.025}s` } as React.CSSProperties}
+                onMouseEnter={() => setActiveStation(key)}
+                onMouseLeave={() => setActiveStation(null)}
+              >
+                <span className="ds-rd-km">{exit.km.toFixed(1)}</span>
 
-              <div className="ds-cx-mid">
-                <span className="ds-cx-km">{exit.km.toFixed(1)}</span>
-                <span className="ds-cx-node" aria-hidden="true">
-                  <HexagonRoad />
+                {/* The carriageway. Asphalt, lane markings and flow arrows are
+                    all drawn in CSS on this element, and every row's is the same
+                    height with no gap, so the road runs continuously down the
+                    list instead of reading as twenty separate tiles. */}
+                <span className="ds-rd-way" aria-hidden="true">
+                  <span className="ds-rd-traffic" />
+                  <span className="ds-rd-lanes" />
+                  <span className="ds-rd-flow" />
                 </span>
-                <span className="ds-cx-name">{exit.exit_name}</span>
-              </div>
 
-              {renderCell(exit, "SB", sb)}
-            </li>
-          ))}
+                {/* Slip road out to the exit marker. */}
+                <span className="ds-rd-ramp" aria-hidden="true" />
+                <span className="ds-rd-node" aria-hidden="true"><HexagonRoad /></span>
+
+                <button
+                  type="button"
+                  className="ds-rd-info"
+                  onFocus={() => setActiveStation(key)}
+                  onBlur={() => setActiveStation(null)}
+                  aria-label={`${exit.exit_name}, km ${exit.km.toFixed(1)}, ${dir}: ${noAccess ? "no ramp" : data.status.toLowerCase()}`}
+                >
+                  <span className="ds-rd-name">
+                    {exit.exit_name}
+                    {exit.node_type === "toll-barrier" && <em className="ds-rd-toll">toll</em>}
+                  </span>
+                  <span className="ds-rd-state">
+                    {noAccess ? (
+                      <span className="ds-rd-noramp">No ramp this way</span>
+                    ) : (
+                      <>
+                        <span className="ds-rd-badge">{data.status}</span>
+                        <span className="ds-rd-speed">{data.speed}</span>
+                      </>
+                    )}
+                  </span>
+                </button>
+
+                {isActive && !noAccess && (
+                  <div className="ds-rd-tip" role="tooltip">
+                    <strong>{exit.exit_name} · {dir}</strong>
+                    {exit.node_type === "toll-barrier" ? (
+                      <>
+                        <div className="ds-tooltip-row"><span>Type</span><span className="warn">Mainline toll plaza</span></div>
+                        <div className="ds-tooltip-row">
+                          <span>Operation</span><span>{dir === "NB" ? "On (mainline entry)" : "Off (pay & exit)"}</span>
+                        </div>
+                      </>
+                    ) : (
+                      <div className="ds-tooltip-row"><span>Access</span><span>{access}</span></div>
+                    )}
+                    <div className="ds-tooltip-row"><span>Slowest speed</span><span>{data.speed}</span></div>
+                    {data.level != null && (
+                      <div className="ds-tooltip-row"><span>Waze jam level</span><span>{data.level} of 5</span></div>
+                    )}
+                    <div className="ds-tooltip-row">
+                      <span>Active jams</span><span>{data.jamCount === 0 ? "None reported" : data.jamCount}</span>
+                    </div>
+                  </div>
+                )}
+              </li>
+            );
+          })}
         </ol>
       </div>
 
-      <footer className="ds-cx-foot">
-        <div className="ds-cx-legend">
+      <footer className="ds-rd-foot">
+        <div className="ds-rd-legend">
           <span><i className="seg-red" /> Congested</span>
           <span><i className="seg-orange" /> Slow</span>
           <span><i className="seg-green" /> Clear</span>

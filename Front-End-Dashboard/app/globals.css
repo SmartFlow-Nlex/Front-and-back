@@ -4633,21 +4633,22 @@ body {
 /* ===========================================================================
    HOME TAB — hero
 
-   The artwork carries the wordmark, tagline and brand graphic itself, so nothing
-   is drawn over it. These rules only frame it.
+   A purpose-made banner in two cuts, light and dark. It carries the logo,
+   wordmark and tagline itself, so nothing is drawn over it — these rules only
+   frame it and swap the cut with the theme.
    =========================================================================== */
 
 .ds-hero-card {
   position: relative;
-  /* Was a flat 500px, which overwhelmed a laptop screen and pushed the corridor
-     panel out of sight. Scaling with the viewport keeps it generous on a large
-     display and sensible on a small one. */
-  height: clamp(300px, 42vw, 500px);
+  /* The artwork's own proportion, so the banner is shown as designed instead of
+     being cropped to an arbitrary height. The cap keeps it from becoming a
+     650px wall on a wide monitor; when the cap bites, `cover` trims evenly from
+     top and bottom, and the artwork's content sits in the middle 40% so nothing
+     meaningful is lost. */
+  aspect-ratio: 3840 / 1772;
+  max-height: 430px;
   border-radius: var(--radius-lg);
   overflow: hidden;
-  /* Border and shadow from tokens so the frame follows the theme; the original
-     had a bare shadow-sm and no edge, which left the panel floating against the
-     page in dark mode. */
   border: 1px solid var(--border-default);
   box-shadow: var(--shadow-md);
   margin-bottom: 22px;
@@ -4662,26 +4663,45 @@ body {
 
 .ds-hero-image {
   object-fit: cover;
-  /* Biased slightly above centre: the logo sits in the upper-middle of the
-     artwork, so this keeps it framed when the card is short and wide. */
-  object-position: center 45%;
+  object-position: center;
 }
 
-/* Only the bottom eighth, and only enough to seat the cue. Kept off the logo
-   entirely so the artwork reads as the designer drew it. */
-.ds-hero-fade {
-  position: absolute;
-  inset: auto 0 0 0;
-  height: 84px;
-  background: linear-gradient(to top, rgba(255, 255, 255, 0.92) 0%, rgba(255, 255, 255, 0.55) 45%, rgba(255, 255, 255, 0) 100%);
-  pointer-events: none;
-  z-index: 1;
+/* --- Theme swap ------------------------------------------------------------
+   Three states, matching the rest of the palette: a bare :root default, an OS
+   preference that an explicit Light choice must still override, and an explicit
+   Dark choice that must beat a light OS. Getting this wrong in either direction
+   shows the wrong artwork, which is more obvious than a wrong token.
+   -------------------------------------------------------------------------- */
+
+/* Default: light artwork. */
+.ds-hero-image.is-dark { opacity: 0; }
+.ds-hero-image.is-light { opacity: 1; }
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .ds-hero-image.is-dark  { opacity: 1; }
+  :root:not([data-theme="light"]) .ds-hero-image.is-light { opacity: 0; }
 }
+
+:root[data-theme="dark"] .ds-hero-image.is-dark  { opacity: 1; }
+:root[data-theme="dark"] .ds-hero-image.is-light { opacity: 0; }
+
+/* Opacity rather than display, so switching themes cross-fades instead of
+   snapping. Both images are stacked, so the outgoing one fades under the
+   incoming one. */
+.ds-hero-image { transition: opacity 220ms ease; }
+
+/* --- Scroll cue ------------------------------------------------------------
+   The white scrim that used to sit here is gone. It existed to lift the cue off
+   a photograph, but this artwork keeps its lower band clear in both cuts, and on
+   the dark banner a white fade would have been a bright bar across the bottom.
+   The pill now carries its own contrast and follows the theme, because unlike
+   the previous artwork this one does change with it.
+   -------------------------------------------------------------------------- */
 
 .ds-scroll-down {
   position: absolute;
   left: 50%;
-  bottom: 14px;
+  bottom: 16px;
   transform: translateX(-50%);
   z-index: 2;
   display: inline-flex;
@@ -4689,25 +4709,48 @@ body {
   gap: 7px;
   padding: 8px 18px;
   border-radius: var(--radius-full);
-  /* A defined pill rather than text floating on the photograph. The scrim behind
-     it is light in both themes because it sits on the artwork, not the page, so
-     the ink here is deliberately fixed rather than tokenised. */
-  background: rgba(255, 255, 255, 0.86);
-  border: 1px solid rgba(9, 30, 66, 0.10);
-  box-shadow: 0 2px 10px rgba(9, 30, 66, 0.12);
+  background: rgba(255, 255, 255, 0.84);
+  border: 1px solid rgba(9, 30, 66, 0.12);
+  box-shadow: 0 2px 10px rgba(9, 30, 66, 0.14);
   backdrop-filter: blur(6px);
   color: #0b2350;
   font-size: 0.8rem;
   font-weight: 700;
   letter-spacing: 0.01em;
   text-decoration: none;
-  transition: background 160ms ease, box-shadow 160ms ease, transform 160ms ease;
+  transition: background 160ms ease, box-shadow 160ms ease, transform 160ms ease, color 160ms ease;
 }
 
 .ds-scroll-down:hover {
   background: #ffffff;
-  box-shadow: 0 4px 16px rgba(9, 30, 66, 0.18);
+  box-shadow: 0 4px 16px rgba(9, 30, 66, 0.2);
   transform: translateX(-50%) translateY(-1px);
+}
+
+/* Dark cut: a translucent dark pill so it reads as part of the banner rather
+   than a white chip punched into it. Same three-state guard as the artwork. */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .ds-scroll-down {
+    background: rgba(12, 22, 40, 0.72);
+    border-color: rgba(255, 255, 255, 0.22);
+    box-shadow: 0 2px 12px rgba(0, 0, 0, 0.45);
+    color: #eaf1ff;
+  }
+  :root:not([data-theme="light"]) .ds-scroll-down:hover {
+    background: rgba(18, 32, 56, 0.88);
+    box-shadow: 0 4px 18px rgba(0, 0, 0, 0.55);
+  }
+}
+
+:root[data-theme="dark"] .ds-scroll-down {
+  background: rgba(12, 22, 40, 0.72);
+  border-color: rgba(255, 255, 255, 0.22);
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.45);
+  color: #eaf1ff;
+}
+:root[data-theme="dark"] .ds-scroll-down:hover {
+  background: rgba(18, 32, 56, 0.88);
+  box-shadow: 0 4px 18px rgba(0, 0, 0, 0.55);
 }
 
 .ds-scroll-down:focus-visible {
@@ -4715,8 +4758,6 @@ body {
   outline-offset: 2px;
 }
 
-/* A small nudge instead of the old 8px bounce, which drew more attention than a
-   secondary cue deserves. */
 .ds-scroll-down svg { animation: heroNudge 2.4s ease-in-out infinite; }
 
 @keyframes heroNudge {
@@ -4725,13 +4766,17 @@ body {
 }
 
 @media (max-width: 720px) {
-  .ds-hero-card { height: clamp(190px, 46vw, 280px); }
-  .ds-hero-fade { height: 64px; }
-  .ds-scroll-down { font-size: 0.74rem; padding: 7px 14px; }
+  /* The banner is left-weighted, so on a narrow screen holding its full width
+     would shrink the wordmark to nothing. Cropping to a squarer card and biasing
+     left keeps the logo and wordmark at a readable size. */
+  .ds-hero-card { aspect-ratio: 16 / 9; max-height: 240px; }
+  .ds-hero-image { object-position: 28% center; }
+  .ds-scroll-down { font-size: 0.74rem; padding: 7px 14px; bottom: 12px; }
 }
 
 @media (prefers-reduced-motion: reduce) {
   .ds-hero-card { animation: none; }
+  .ds-hero-image { transition: none; }
   .ds-scroll-down svg { animation: none; }
   .ds-scroll-down:hover { transform: translateX(-50%); }
 }

@@ -6,11 +6,15 @@ import PageHeader from "../../components/dashboard/PageHeader";
 /**
  * Home tab.
  *
- * The hero is the original artwork, shown as its own composition. It already
- * carries the wordmark, the tagline and the brand graphic, so nothing is drawn
- * over it — an earlier pass set the wordmark in type as well and ended up with
- * "SmartFlow NLEX" twice on the same panel. The improvements here are all in how
- * the image is framed and how the scroll cue sits on it.
+ * The hero is a purpose-made banner that already carries the logo, wordmark and
+ * tagline, so nothing is drawn over it.
+ *
+ * There are two of them — a light and a dark cut of the same artwork — and the
+ * swap is done in CSS rather than JavaScript. Both are rendered and one is hidden,
+ * which costs a second download but is the only way to honour all three theme
+ * states: an explicit Light or Dark choice has to beat the OS setting in either
+ * direction, and a JS swap would also flash the wrong artwork on load, which is
+ * precisely what the inline theme script in the root layout exists to prevent.
  */
 export default function DashboardHomePage() {
   return (
@@ -18,13 +22,26 @@ export default function DashboardHomePage() {
       <PageHeader icon={Home} title="Home Overview" subtitle="Live NLEX network status at a glance" />
 
       <article className="ds-hero-card">
-        <Image src="/smartflow-hero.png" alt="SmartFlow NLEX" fill className="ds-hero-image" unoptimized priority />
-
-        {/* Light scrim at the foot of the image only. The artwork is pale down
-            there, so this lifts the cue off the tollbooths without touching the
-            logo above it — the previous approach was a white glow painted around
-            the letters themselves. */}
-        <div className="ds-hero-fade" />
+        <Image
+          src="/smartflow-nlex-hero-light.png"
+          alt="SmartFlow NLEX — where traffic meets intelligence"
+          fill
+          className="ds-hero-image is-light"
+          sizes="100vw"
+          unoptimized
+          priority
+        />
+        <Image
+          src="/smartflow-nlex-hero-dark.png"
+          // Empty alt: the light cut above already carries the description, so
+          // announcing the same banner twice would just be noise.
+          alt=""
+          fill
+          className="ds-hero-image is-dark"
+          sizes="100vw"
+          unoptimized
+          priority
+        />
 
         <a href="#nlex-roadmap" className="ds-scroll-down">
           <span>Live Corridor Status</span>

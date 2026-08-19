@@ -3469,17 +3469,6 @@ body {
   color: var(--text-muted);
 }
 
-.ds-rd-toll {
-  padding: 2px 7px;
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius-full);
-  font-size: 0.55rem;
-  font-weight: 700;
-  letter-spacing: 0.07em;
-  text-transform: uppercase;
-  color: var(--text-muted);
-}
-
 /* --- Track ----------------------------------------------------------------- */
 
 .ds-rd-body { padding: 16px 22px 14px; }
@@ -3755,6 +3744,166 @@ body {
   font-size: 0.71rem;
   color: var(--text-muted);
   max-width: 58ch;
+}
+
+/* --- Jam level scale ------------------------------------------------------
+   The level is the one number on this panel that cannot be guessed from the
+   drawing, so it gets an explanation on demand rather than a permanent caption.
+   -------------------------------------------------------------------------- */
+
+.ds-rd-scale-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 10px 3px 6px;
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-full);
+  background: var(--bg-surface);
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: 0.71rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: border-color 140ms ease, color 140ms ease;
+}
+
+.ds-rd-scale-btn span {
+  display: grid;
+  place-items: center;
+  width: 15px;
+  height: 15px;
+  border-radius: 50%;
+  background: var(--color-info-bg);
+  color: var(--color-info);
+  font-size: 0.62rem;
+  font-weight: 800;
+}
+
+.ds-rd-scale-btn:hover { border-color: var(--brand-primary); color: var(--brand-primary); }
+.ds-rd-scale-btn:focus-visible { outline: 2px solid var(--brand-primary); outline-offset: 2px; }
+
+.ds-rd-scale-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 1100;
+  display: grid;
+  place-items: center;
+  padding: 20px;
+  background: rgba(6, 16, 34, 0.55);
+  backdrop-filter: blur(2px);
+  animation: rdScaleIn 140ms ease-out;
+}
+
+.ds-rd-scale {
+  width: min(100%, 430px);
+  max-height: 86vh;
+  overflow-y: auto;
+  padding: 18px 20px 20px;
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-lg);
+  background: var(--bg-surface);
+  box-shadow: var(--shadow-lg);
+}
+
+@keyframes rdScaleIn {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+
+.ds-rd-scale-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 8px;
+}
+
+.ds-rd-scale-head h3 {
+  margin: 0;
+  font-size: 1rem;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+.ds-rd-scale-head button {
+  width: 26px;
+  height: 26px;
+  border: 0;
+  border-radius: 7px;
+  background: none;
+  color: var(--text-muted);
+  font-size: 1.2rem;
+  line-height: 1;
+  cursor: pointer;
+  transition: background 140ms ease, color 140ms ease;
+}
+.ds-rd-scale-head button:hover { background: var(--bg-surface-hover); color: var(--text-primary); }
+.ds-rd-scale-head button:focus-visible { outline: 2px solid var(--brand-primary); outline-offset: 1px; }
+
+.ds-rd-scale-intro,
+.ds-rd-scale-note {
+  margin: 0;
+  font-size: 0.76rem;
+  line-height: 1.45;
+  color: var(--text-muted);
+}
+
+.ds-rd-scale-note {
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border-default);
+}
+
+.ds-rd-scale-list {
+  list-style: none;
+  margin: 14px 0 0;
+  padding: 0;
+}
+
+.ds-rd-scale-list li {
+  display: grid;
+  grid-template-columns: 26px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 11px;
+  padding: 7px 0;
+  border-bottom: 1px solid var(--border-default);
+}
+.ds-rd-scale-list li:last-child { border-bottom: 0; }
+
+/* The chips carry the same three colours the road uses, so the table reads as an
+   index to the diagram rather than a separate scheme: 0-2 are the amber-and-below
+   half, 3 upward is what the panel paints red. */
+.ds-rd-scale-chip {
+  display: grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  border-radius: 8px;
+  font-size: 0.76rem;
+  font-weight: 800;
+  color: #fff;
+}
+.ds-rd-scale-chip.lv-0 { background: #23a55a; }
+.ds-rd-scale-chip.lv-1,
+.ds-rd-scale-chip.lv-2 { background: #e08a2e; }
+.ds-rd-scale-chip.lv-3,
+.ds-rd-scale-chip.lv-4,
+.ds-rd-scale-chip.lv-5 { background: #e04434; }
+
+.ds-rd-scale-band {
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.ds-rd-scale-word {
+  font-size: 0.72rem;
+  color: var(--text-muted);
+  text-transform: lowercase;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ds-rd-scale-backdrop { animation: none; }
 }
 
 /* --- Responsive ------------------------------------------------------------ */

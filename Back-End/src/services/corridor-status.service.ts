@@ -39,13 +39,22 @@ export type ExitStatus = {
 };
 
 /**
- * Waze jam levels run 1-5 and track speed cleanly on this corridor: level 1
- * averages 23 km/h, level 2 about 16, level 3 about 9, level 4 about 4, level 5
- * a standstill. Splitting at 3 puts the "barely moving" half in red and leaves
- * the merely slow in amber.
+ * Waze grades a jam 0-5 as a share of free-flow speed: 0 is 100-80% of free flow,
+ * 1 is 80-61%, 2 is 60-41%, 3 is 40-21%, 4 is 20-1%, and 5 is a blocked road.
+ *
+ * Splitting at 3 puts everything below half of free-flow speed in red and leaves
+ * the merely slow in amber. That matches what the levels carry here: on this
+ * corridor level 1 averages 23 km/h, 2 about 16, 3 about 9, 4 about 4, and 5 a
+ * standstill.
+ *
+ * Level 0 is free flow BY DEFINITION, so it returns clear rather than falling
+ * through to slow. No level-0 row has appeared in the feed — Waze only emits a
+ * jam where there is congestion — but the field is documented as 0-5 and a
+ * record that says "free flow" must not be painted amber if one ever arrives.
  */
 function classify(level: number | null, speedKmh: number | null): SegmentStatus {
   if (level == null && speedKmh == null) return "clear";
+  if (level === 0) return "clear";
   if ((level != null && level >= 3) || (speedKmh != null && speedKmh < 10)) return "congested";
   return "slow";
 }

@@ -53,18 +53,26 @@ type TrafficRecord = {
 };
 
 /**
- * Waze grades each jam 1 to 5. The numbers alone say nothing, so the rail spells
- * out what each one means; the wording follows the speeds these levels actually
- * carry on this corridor — roughly 23, 16, 9 and 4 km/h for levels 1 to 4, with
- * 5 being a standstill.
+ * Waze's documented jam scale: a level is a share of free-flow speed, not a
+ * severity word someone chose. The bands below are the published definition —
+ * which is 0-5, not 1-5, so the earlier labelling here was a level short.
+ *
+ * Level 0 has never appeared in this feed (Waze emits a jam only where there is
+ * congestion) but it is part of the field, so it is listed rather than assumed
+ * away.
  */
-const JAM_LEVEL_LABEL: Record<number, string> = {
-  1: "light",
-  2: "moderate",
-  3: "heavy",
-  4: "severe",
-  5: "at a standstill",
-};
+const JAM_SCALE: { level: number; band: string; label: string }[] = [
+  { level: 0, band: "100–80% of free-flow speed", label: "free flow" },
+  { level: 1, band: "80–61%", label: "light" },
+  { level: 2, band: "60–41%", label: "moderate" },
+  { level: 3, band: "40–21%", label: "heavy" },
+  { level: 4, band: "20–1%", label: "severe" },
+  { level: 5, band: "blocked road", label: "blocked" },
+];
+
+const JAM_LEVEL_LABEL: Record<number, string> = Object.fromEntries(
+  JAM_SCALE.map((r) => [r.level, r.label]),
+);
 
 const CLEAR: TrafficRecord = {
   colorClass: "seg-green",
@@ -177,6 +185,8 @@ export default function InteractiveRoadMap() {
      to-scale axis would pile their labels up at the metro end and leave the far
      end empty. */
 
+  const [scaleOpen, setScaleOpen] = useState(false);
+
   const rows = useMemo(
     () =>
       exits.map((x) => ({
@@ -213,6 +223,13 @@ export default function InteractiveRoadMap() {
     () => rows.find((r) => r.exit.exit_name === activeStation) ?? null,
     [rows, activeStation],
   );
+
+  useEffect(() => {
+    if (!scaleOpen) return;
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") setScaleOpen(false); };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [scaleOpen]);
 
   /* ─── Header copy ─── */
   const headerSub = feedError
@@ -310,7 +327,6 @@ export default function InteractiveRoadMap() {
             <span className="ds-rd-rail-name">
               {displayExitName(focused.exit.exit_name)}
               <em>km {focused.exit.km.toFixed(1)}</em>
-              {focused.exit.node_type === "toll-barrier" && <span className="ds-rd-toll">toll plaza</span>}
             </span>
             <span className="ds-rd-rail-facts">
               {railFacts("NB", focused.nb, focused.nbAccess)}
@@ -396,12 +412,54 @@ export default function InteractiveRoadMap() {
           <span><i className="seg-red" /> Congested</span>
           <span><i className="seg-orange" /> Slow</span>
           <span><i className="seg-green" /> Clear</span>
+          <button type="button" className="ds-rd-scale-btn" onClick={() => setScaleOpen(true)}>
+            <span aria-hidden="true">?</span> Jam levels
+          </button>
         </div>
         <p>
           Waze jam reports matched to the nearest exit; direction from jam bearing.
           An exit with no report is flowing freely.
         </p>
       </footer>
+
+      {scaleOpen && (
+        <div
+          className="ds-rd-scale-backdrop"
+          role="dialog"
+          aria-modal="true"
+          aria-label="Waze jam level scale"
+          onClick={() => setScaleOpen(false)}
+        >
+          <div className="ds-rd-scale" onClick={(e) => e.stopPropagation()}>
+            <div className="ds-rd-scale-head">
+              <h3>Waze jam levels</h3>
+              <button type="button" onClick={() => setScaleOpen(false)} aria-label="Close">×</button>
+            </div>
+
+            <p className="ds-rd-scale-intro">
+              A level is how far traffic has fallen below free-flow speed on that
+              stretch — not a count of vehicles. Waze publishes the scale as 0 to 5.
+            </p>
+
+            <ul className="ds-rd-scale-list">
+              {JAM_SCALE.map((r) => (
+                <li key={r.level}>
+                  <span className={`ds-rd-scale-chip lv-${r.level}`}>{r.level}</span>
+                  <span className="ds-rd-scale-band">{r.band}</span>
+                  <span className="ds-rd-scale-word">{r.label}</span>
+                </li>
+              ))}
+            </ul>
+
+            <p className="ds-rd-scale-note">
+              This panel paints level 3 and above red, since below roughly half of
+              free-flow speed traffic is no longer moving usefully; 1 and 2 are
+              amber. An exit with no jam record at all is clear — Waze reports a
+              jam only where there is one.
+            </p>
+          </div>
+        </div>
+      )}
     </section>
   );
 }

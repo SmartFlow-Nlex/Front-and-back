@@ -52,6 +52,20 @@ type TrafficRecord = {
   jamCount: number;
 };
 
+/**
+ * Waze grades each jam 1 to 5. The numbers alone say nothing, so the rail spells
+ * out what each one means; the wording follows the speeds these levels actually
+ * carry on this corridor — roughly 23, 16, 9 and 4 km/h for levels 1 to 4, with
+ * 5 being a standstill.
+ */
+const JAM_LEVEL_LABEL: Record<number, string> = {
+  1: "light",
+  2: "moderate",
+  3: "heavy",
+  4: "severe",
+  5: "at a standstill",
+};
+
 const CLEAR: TrafficRecord = {
   colorClass: "seg-green",
   status: "CLEAR",
@@ -216,16 +230,26 @@ export default function InteractiveRoadMap() {
   const railFacts = (label: string, data: TrafficRecord, access: string | null) => (
     <span className="ds-rd-rail-dir">
       <span className="ds-rd-rail-dirname">{label}</span>
-      {access === "No Access" ? (
-        <b className="muted">No ramp</b>
-      ) : (
-        <>
-          <b className={data.colorClass}>{data.status}</b>
-          <span>{data.speed}</span>
-          {data.level != null && <span>lvl {data.level}/5</span>}
-          <span>{data.jamCount === 0 ? "no jams" : `${data.jamCount} jam${data.jamCount === 1 ? "" : "s"}`}</span>
-        </>
-      )}
+      <span className="ds-rd-facts">
+        {access === "No Access" ? (
+          <b className="muted">No ramp in this direction</b>
+        ) : (
+          <>
+            <b className={data.colorClass}>{data.status}</b>
+            <span>{data.speed}</span>
+            {data.level != null && (
+              <span title="Waze grades every jam 1 to 5 by how badly traffic is moving">
+                Jam level {data.level} of 5 · {JAM_LEVEL_LABEL[data.level] ?? "unknown"}
+              </span>
+            )}
+            <span>
+              {data.jamCount === 0
+                ? "No active jams"
+                : `${data.jamCount} active jam${data.jamCount === 1 ? "" : "s"}`}
+            </span>
+          </>
+        )}
+      </span>
     </span>
   );
 

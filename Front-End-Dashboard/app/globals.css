@@ -3422,9 +3422,29 @@ body {
 .ds-rd-rail-dir {
   display: inline-flex;
   align-items: baseline;
-  gap: 8px;
+  gap: 10px;
   font-size: 0.75rem;
   color: var(--text-muted);
+}
+
+/* Facts read as one sentence otherwise — "CLEAR Free flowing No active jams"
+   runs together. A hairline between them separates the readings without adding
+   punctuation that competes with the middot already used in the names. */
+.ds-rd-facts {
+  display: inline-flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 0;
+}
+
+.ds-rd-facts > * + *::before {
+  content: "";
+  display: inline-block;
+  width: 1px;
+  height: 0.9em;
+  margin: 0 10px;
+  background: var(--border-strong);
+  vertical-align: -0.08em;
 }
 
 .ds-rd-rail-dirname {

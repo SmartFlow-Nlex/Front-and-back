@@ -360,9 +360,11 @@ export default function TrafficPage() {
         // The lightest step is the theme's 'empty' tone: near-white on light,
         // near-black on dark, so low values recede in both instead of glowing.
         inRange: { color: [chartTheme.seqLightest, ...SEQ.slice(1)] },
-        // Where scrubbed-out cells land. Faint rather than hidden, so the shape
-        // of the week stays legible while the matching band stands out.
-        outOfRange: { color: chartTheme.split },
+        // Scrubbed-out cells keep their own colour and lose only opacity, so the
+        // week's pattern stays visible underneath and the matched band reads as
+        // lifted out of it. Overriding the colour instead flattened everything
+        // outside the band to one tone, which looked like the data had gone.
+        outOfRange: { color: [chartTheme.seqLightest, ...SEQ.slice(1)], opacity: 0.16 },
         formatter: (v) => fmtCompact(Number(v)),
       },
       series: [{ type: "heatmap", data: heatData, emphasis: { itemStyle: { borderColor: RAMP[2], borderWidth: 1 } } }],
@@ -431,7 +433,7 @@ export default function TrafficPage() {
       visualMap: {
         show: false, type: "continuous", seriesIndex: 0, calculable: false,
         min: Math.min(...speeds), max: Math.max(...speeds), inRange: { color: SEVERITY },
-        outOfRange: { color: chartTheme.split },
+        outOfRange: { color: SEVERITY, opacity: 0.18 },
       },
       series: [
         {
@@ -718,8 +720,8 @@ export default function TrafficPage() {
 
      The visualMaps are still there, just not drawn — so selectDataRange, the
      action the visible control used to fire, still works. Narrowing the range
-     leaves matching cells in colour and drops the rest to outOfRange, which is
-     the highlight the old visualMap gave and the static strip had lost. */
+     leaves matching cells at full strength and fades the rest, which is the
+     highlight the old visualMap gave and the static strip had lost. */
   const heatChart = useRef<unknown>(null);
   const speedChart = useRef<unknown>(null);
 

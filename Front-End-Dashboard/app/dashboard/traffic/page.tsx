@@ -433,6 +433,9 @@ export default function TrafficPage() {
       visualMap: {
         show: false, type: "continuous", seriesIndex: 0, calculable: false,
         min: Math.min(...speeds), max: Math.max(...speeds), inRange: { color: SEVERITY },
+        // Scrubbing the key fades the rest of the line rather than recolouring
+        // it, so the whole curve stays readable behind the highlighted stretch.
+        outOfRange: { color: SEVERITY, opacity: 0.18 },
       },
       series: [
         {
@@ -727,6 +730,7 @@ export default function TrafficPage() {
      leaves matching cells at full strength and fades the rest, which is the
      highlight the old visualMap gave and the static strip had lost. */
   const heatChart = useRef<unknown>(null);
+  const speedChart = useRef<unknown>(null);
 
   const scrub = (
     ref: React.MutableRefObject<unknown>,
@@ -1070,7 +1074,7 @@ export default function TrafficPage() {
             <h3>Average Speed in Jams by Hour</h3>
           </div>
         </div>
-        <div className={styles.chartBody}>{chartFrame(speedOption, "No congestion data in the selected range", onSpeedClick)}</div>
+        <div className={styles.chartBody}>{chartFrame(speedOption, "No congestion data in the selected range", onSpeedClick, true, (c) => { speedChart.current = c; })}</div>
         <RampKey
           colors={SEVERITY}
           min={speedRange[0]}
@@ -1078,6 +1082,7 @@ export default function TrafficPage() {
           format={(v) => `${v.toFixed(0)} km/h`}
           lowLabel="Slower"
           highLabel="Faster"
+          onScrub={scrub(speedChart, speedRange[0], speedRange[1])}
         />
       </article>
 

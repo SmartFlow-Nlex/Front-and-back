@@ -15,6 +15,31 @@ import styles from "../../app/dashboard/traffic/traffic.module.css";
  * so a cell in the heatmap can be matched to a number by eye. Keyboard users get
  * the same readout from the endpoints, which are always visible.
  */
+/**
+ * The colour at a point along the ramp.
+ *
+ * The strip is a CSS gradient, so the browser knows this colour but will not
+ * tell us — and reading it back off a canvas would mean rasterising the strip.
+ * Interpolating the stops in sRGB reproduces what the gradient draws, which is
+ * what matters: the swatch has to be the shade the reader is pointing at, or it
+ * cannot be matched against a cell in the heatmap.
+ */
+function colourAt(colors: string[], t: number): string {
+  if (colors.length === 0) return "transparent";
+  if (colors.length === 1) return colors[0];
+  const pos = Math.min(1, Math.max(0, t)) * (colors.length - 1);
+  const i = Math.min(colors.length - 2, Math.floor(pos));
+  const f = pos - i;
+  const rgb = (hex: string) => {
+    const h = hex.replace("#", "");
+    const full = h.length === 3 ? h.split("").map((c) => c + c).join("") : h;
+    return [0, 2, 4].map((k) => parseInt(full.slice(k, k + 2), 16));
+  };
+  const [a, b] = [rgb(colors[i]), rgb(colors[i + 1])];
+  const mix = a.map((v, k) => Math.round(v + (b[k] - v) * f));
+  return `rgb(${mix.join(", ")})`;
+}
+
 export default function RampKey({
   colors,
   min,
@@ -45,6 +70,7 @@ export default function RampKey({
   };
 
   const value = at == null ? null : min + at * (max - min);
+  const hovered = at == null ? null : colourAt(colors, at);
 
   return (
     <div className={styles.rampKey}>
@@ -63,6 +89,7 @@ export default function RampKey({
           <>
             <span className={styles.rampKeyMarker} style={{ left: `${at * 100}%` }} />
             <span className={styles.rampKeyReadout} style={{ left: `${at * 100}%` }}>
+              <i style={{ background: hovered ?? "transparent" }} />
               {value != null ? format(value) : ""}
             </span>
           </>

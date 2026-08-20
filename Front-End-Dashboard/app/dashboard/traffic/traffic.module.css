@@ -1103,3 +1103,16 @@
   white-space: nowrap;
   pointer-events: none;
 }
+
+/* Swatch inside the key's readout — the exact shade under the cursor, so the
+   number and the colour are read together and either can be matched back to a
+   cell in the chart. */
+.rampKeyReadout i {
+  display: inline-block;
+  width: 9px;
+  height: 9px;
+  margin-right: 6px;
+  border-radius: 3px;
+  vertical-align: -1px;
+  box-shadow: 0 0 0 1px rgba(9, 30, 66, 0.25);
+}

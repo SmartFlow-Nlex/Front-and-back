@@ -89,9 +89,9 @@
 }
 
 .segmented button.active {
-  background: var(--brand-primary, #3e67ef);
+  background: var(--kpi-1, var(--brand-primary));
   color: #fff;
-  box-shadow: 0 1px 4px rgba(54, 96, 255, 0.25);
+  box-shadow: var(--shadow-sm);
 }
 
 /* Date range inputs */
@@ -158,7 +158,7 @@
 .modeTabActive {
   background: var(--brand-primary, #3e67ef);
   color: #fff;
-  box-shadow: 0 1px 4px rgba(54, 96, 255, 0.25);
+  box-shadow: var(--shadow-sm);
 }
 
 .updating {
@@ -214,10 +214,11 @@
 .segmentedSmall {
   display: inline-flex;
   gap: 1px;
-  background: #fff;
-  border: 1px solid var(--border-strong);
+  background: var(--bg-surface);
+  border: 1px solid var(--border-default);
   border-radius: 8px;
   padding: 2px;
+  flex: none;
 }
 
 .segmentedSmall button {
@@ -234,7 +235,13 @@
 }
 
 .segmentedSmall button:hover:not(:disabled):not(.active) {
-  background: #edf1f8;
+  background: var(--bg-surface-hover);
+  color: var(--text-primary);
+}
+
+.segmentedSmall button:focus-visible {
+  outline: 2px solid var(--brand-primary);
+  outline-offset: -1px;
 }
 
 .segmentedSmall button:disabled {
@@ -243,9 +250,9 @@
 }
 
 .segmentedSmall button.active {
-  background: var(--brand-primary, #3e67ef);
+  background: var(--kpi-1, var(--brand-primary));
   color: #fff;
-  box-shadow: 0 1px 3px rgba(54, 96, 255, 0.2);
+  box-shadow: var(--shadow-sm);
 }
 
 /* Custom Dropdown (replaces native select) */
@@ -258,7 +265,7 @@
   display: flex;
   align-items: center;
   gap: 8px;
-  background: #fff;
+  background: var(--bg-surface);
   border: 1px solid var(--border-strong);
   border-radius: 8px;
   padding: 5px 10px;
@@ -290,7 +297,7 @@
   left: 0;
   z-index: 50;
   min-width: 140px;
-  background: #fff;
+  background: var(--bg-surface);
   border: 1px solid var(--border-strong);
   border-radius: 8px;
   box-shadow: 0 10px 30px rgba(16, 24, 40, 0.12);
@@ -370,6 +377,8 @@
   width: 12px;
   height: 12px;
   border-radius: 50%;
+  /* The knob rides on a coloured track, not on the page, so it stays white in
+     both themes — surface-coloured would make it vanish into a light track. */
   background: #fff;
   box-shadow: 0 1px 3px rgba(0,0,0,0.15);
   transition: transform var(--transition-fast);
@@ -509,9 +518,12 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 8px;
-  margin-bottom: 8px;
-  flex-wrap: nowrap;
+  gap: 8px 10px;
+  margin-bottom: 10px;
+  /* Wraps now. With a title, a sort toggle and a "View all" button competing on
+     one line, nowrap meant the title was ellipsised away to nothing on the
+     narrower cards. */
+  flex-wrap: wrap;
 }
 
 /* One title style for every chart (sentence case) */
@@ -591,11 +603,13 @@
 }
 
 .chartBody {
-  height: 280px;
+  /* Was 280. The legend sits under the plot now, so the card grows by that band
+     rather than the plot losing it. */
+  height: 326px;
   position: relative;
 }
 
-.hero .chartBody { height: 340px; }
+.hero .chartBody { height: 384px; }
 
 .placeholder {
   height: 100%;

@@ -316,7 +316,7 @@ export default function TrafficPage() {
         : [{ name: "Volume", type: "line", data: rows.map((r) => r.total), symbol: rows.length <= 24 ? "circle" : "none", symbolSize: 7, itemStyle: { color: PAIR_A }, lineStyle: { width: 3, color: PAIR_A } }];
 
     return {
-      grid: { left: 52, right: splitDirection ? 44 : 16, top: 44, bottom: 22 },
+      grid: { left: 52, right: splitDirection ? 44 : 16, top: 14, bottom: 52 },
       xAxis: {
         type: "category",
         data: labels,
@@ -329,7 +329,7 @@ export default function TrafficPage() {
       // A legend whenever there is more than one line. The old condition hid it
       // precisely when the chart split into northbound and southbound — the case
       // that needs it most, since two lines with no key are unreadable.
-      legend: { show: splitDirection || window > 0, top: 0, left: "center", itemWidth: 14, itemHeight: 8, itemGap: 16, padding: 0, textStyle: { fontSize: 11 } },
+      legend: { show: splitDirection || window > 0, bottom: 0, left: "center", itemWidth: 14, itemHeight: 8, itemGap: 18, padding: 0, textStyle: { fontSize: 11 } },
       series,
     };
   }, [data, grain, splitDirection, trendRows]);
@@ -391,12 +391,12 @@ export default function TrafficPage() {
       rows: display,
       others,
       option: {
-        grid: { left: 120, right: 46, top: 30, bottom: 20 },
+        grid: { left: 120, right: 46, top: 8, bottom: 46 },
         xAxis: { type: "value", splitNumber: 3, axisLabel: { formatter: (v: number) => fmtCompact(v), fontSize: 10 } },
         // interval:0 — every plaza name must be readable, that IS the chart
         yAxis: { type: "category", data: display.map((r) => r.plaza), axisLabel: { interval: 0, fontSize: 10 }, axisTick: { show: false } },
         tooltip: { trigger: "axis", valueFormatter: (v) => `${fmtInt(Number(v))} vehicles` },
-        legend: { show: true, top: 0, left: "center", itemWidth: 14, itemHeight: 8, itemGap: 16, padding: 0, textStyle: { fontSize: 11 } },
+        legend: { show: true, bottom: 0, left: "center", itemWidth: 14, itemHeight: 8, itemGap: 18, padding: 0, textStyle: { fontSize: 11 } },
         series: [
           {
             name: "Volume by plaza",
@@ -420,7 +420,7 @@ export default function TrafficPage() {
     const CONGESTION_THRESHOLD = 20; // km/h — below this counts as heavy congestion
     const yMax = Math.max(CONGESTION_THRESHOLD + 5, Math.ceil(Math.max(...speeds) / 5) * 5);
     return {
-      grid: { left: 36, right: 14, top: 34, bottom: 20 },
+      grid: { left: 36, right: 14, top: 10, bottom: 52 },
       xAxis: { type: "category", data: data.speedByHour.map((r) => fmtHour(r.hour)), axisLabel: { interval: 3, fontSize: 10 }, axisTick: { show: false } },
       yAxis: { type: "value", min: 0, max: yMax, splitNumber: 3, axisLabel: { formatter: "{value}", fontSize: 10 }, name: "km/h", nameGap: 6, nameTextStyle: { fontSize: 10 } },
       tooltip: {
@@ -433,7 +433,7 @@ export default function TrafficPage() {
       },
       visualMap: {
         show: true, type: "continuous", seriesIndex: 0, orient: "horizontal",
-        top: 0, left: "center", itemWidth: 70, itemHeight: 9, calculable: false,
+        bottom: 0, left: "center", itemWidth: 70, itemHeight: 9, calculable: false,
         min: Math.min(...speeds), max: Math.max(...speeds), inRange: { color: SEVERITY },
         text: ["Faster", "Slower"], textStyle: { fontSize: 10, color: chartTheme.text },
       },
@@ -483,7 +483,7 @@ export default function TrafficPage() {
     return {
       rows: display,
       option: {
-        grid: { left: 128, right: 42, top: 30, bottom: 20 },
+        grid: { left: 128, right: 42, top: 8, bottom: 46 },
         xAxis: { type: "value", splitNumber: 3, axisLabel: { formatter: (v: number) => `${v}%`, fontSize: 10 } },
         yAxis: { type: "category", data: display.map((r) => r.label), axisLabel: { interval: 0, fontSize: 10 }, axisTick: { show: false } },
         tooltip: {
@@ -500,7 +500,7 @@ export default function TrafficPage() {
             return tip;
           },
         },
-        legend: { show: true, top: 0, left: "center", itemWidth: 14, itemHeight: 8, itemGap: 16, padding: 0, textStyle: { fontSize: 11 } },
+        legend: { show: true, bottom: 0, left: "center", itemWidth: 14, itemHeight: 8, itemGap: 18, padding: 0, textStyle: { fontSize: 11 } },
         series: [
           // Two zero-width entries purely so the legend can name what the two bar
           // colours mean; the real bars are the third series below.

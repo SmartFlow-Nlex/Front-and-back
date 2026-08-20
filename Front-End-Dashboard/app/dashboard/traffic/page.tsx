@@ -433,15 +433,19 @@ export default function TrafficPage() {
       visualMap: {
         show: false, type: "continuous", seriesIndex: 0, calculable: false,
         min: Math.min(...speeds), max: Math.max(...speeds), inRange: { color: SEVERITY },
-        outOfRange: { color: SEVERITY, opacity: 0.18 },
       },
       series: [
         {
           type: "line",
           data: speeds,
+          smooth: 0.35,
           symbol: "circle",
-          symbolSize: 5,
-          lineStyle: { width: 2.5 },
+          symbolSize: 7,
+          // A ring around each point so it stays visible where the line runs
+          // through a step of the same colour.
+          itemStyle: { borderColor: chartTheme.tooltipBg, borderWidth: 1.5 },
+          lineStyle: { width: 3.5 },
+          areaStyle: { opacity: 0.14 },
           markLine: {
             symbol: "none",
             silent: true,
@@ -452,7 +456,7 @@ export default function TrafficPage() {
         },
       ],
     };
-  }, [data]);
+  }, [data, chartTheme]);
 
   type ImpactRow = {
     label: string;
@@ -723,7 +727,6 @@ export default function TrafficPage() {
      leaves matching cells at full strength and fades the rest, which is the
      highlight the old visualMap gave and the static strip had lost. */
   const heatChart = useRef<unknown>(null);
-  const speedChart = useRef<unknown>(null);
 
   const scrub = (
     ref: React.MutableRefObject<unknown>,
@@ -1067,7 +1070,7 @@ export default function TrafficPage() {
             <h3>Average Speed in Jams by Hour</h3>
           </div>
         </div>
-        <div className={styles.chartBody}>{chartFrame(speedOption, "No congestion data in the selected range", onSpeedClick, true, (c) => { speedChart.current = c; })}</div>
+        <div className={styles.chartBody}>{chartFrame(speedOption, "No congestion data in the selected range", onSpeedClick)}</div>
         <RampKey
           colors={SEVERITY}
           min={speedRange[0]}
@@ -1075,7 +1078,6 @@ export default function TrafficPage() {
           format={(v) => `${v.toFixed(0)} km/h`}
           lowLabel="Slower"
           highLabel="Faster"
-          onScrub={scrub(speedChart, speedRange[0], speedRange[1])}
         />
       </article>
 

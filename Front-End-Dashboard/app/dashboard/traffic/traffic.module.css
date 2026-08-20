@@ -1049,18 +1049,57 @@
    vertical bar across the hour labels regardless of orient, and a div under the
    plot cannot collide with an axis. */
 .rampKey {
+  position: relative;
   display: flex;
   align-items: center;
   justify-content: center;
   gap: 9px;
-  margin-top: 6px;
+  margin-top: 8px;
   font-size: 0.68rem;
   font-weight: 600;
   color: var(--text-muted);
 }
 
-.rampKey span {
-  width: 96px;
-  height: 8px;
+.rampKeyEnd { flex: none; }
+
+/* The strip itself is the hit target, so it is a little taller than it looks —
+   an 8px bar is hard to track a cursor along. */
+.rampKeyBar {
+  position: relative;
+  width: 128px;
+  height: 10px;
   border-radius: 999px;
+  cursor: crosshair;
+}
+
+/* Where the cursor is on the scale. A white core with a dark ring so it stays
+   visible against every step of both ramps. */
+.rampKeyMarker {
+  position: absolute;
+  top: -3px;
+  width: 3px;
+  height: 16px;
+  margin-left: -1.5px;
+  border-radius: 2px;
+  background: #fff;
+  box-shadow: 0 0 0 1px rgba(9, 30, 66, 0.55);
+  pointer-events: none;
+}
+
+/* Sits above the strip rather than below, where the axis labels are. */
+.rampKeyReadout {
+  position: absolute;
+  bottom: 18px;
+  transform: translateX(-50%);
+  padding: 3px 7px;
+  border-radius: 6px;
+  background: var(--chart-tooltip-bg);
+  color: var(--chart-tooltip-text);
+  border: 1px solid var(--border-default);
+  box-shadow: var(--shadow-md);
+  font-size: 0.68rem;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  pointer-events: none;
 }

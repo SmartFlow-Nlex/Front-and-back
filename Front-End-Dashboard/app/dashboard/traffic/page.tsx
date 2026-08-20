@@ -8,6 +8,7 @@ import type { EChartsOption } from "echarts";
 import { Activity, ArrowDownWideNarrow, ArrowUpNarrowWide, Building2, CalendarClock, Clock, Gauge, TrendingUp } from "lucide-react";
 import DashboardChart from "../../../components/dashboard/DashboardChart";
 import ChartSkeleton, { KpiSkeleton } from "../../../components/dashboard/ChartSkeleton";
+import RampKey from "../../../components/dashboard/RampKey";
 import PageHeader from "../../../components/dashboard/PageHeader";
 import PredictiveVolumeChart from "../../../components/dashboard/PredictiveVolumeChart";
 import PredictiveCongestionChart from "../../../components/dashboard/PredictiveCongestionChart";
@@ -707,6 +708,17 @@ export default function TrafficPage() {
 
   // A skeleton rather than an ellipsis: the tile keeps its height, so the KPI
   // row does not resize under the cursor as the numbers arrive.
+  /* The key needs the same domain the chart coloured against, or pointing at a
+     shade would report a value the heatmap never used. */
+  const heatMaxValue = useMemo(
+    () => (data ? Math.max(0, ...data.hourDow.map((r) => r.v)) : 0),
+    [data],
+  );
+  const speedRange = useMemo<[number, number]>(() => {
+    const sp = (data?.speedByHour ?? []).map((r) => r.speed).filter((v) => v > 0);
+    return sp.length ? [Math.min(...sp), Math.max(...sp)] : [0, 0];
+  }, [data]);
+
   const kpiValue = (v: string | null) =>
     loading && !data ? <KpiSkeleton /> : (v ?? "—");
 
@@ -975,11 +987,14 @@ export default function TrafficPage() {
           </div>
         </div>
         <div className={styles.chartBody}>{chartFrame(heatmapOption, "No data for the selected filters", onHeatmapClick, false)}</div>
-        <div className={styles.rampKey}>
-          Quieter
-          <span style={{ background: `linear-gradient(to right, ${SEQ.join(", ")})` }} />
-          Busier
-        </div>
+        <RampKey
+          colors={SEQ}
+          min={0}
+          max={heatMaxValue}
+          format={(v) => `${fmtCompact(v)} vehicles`}
+          lowLabel="Quieter"
+          highLabel="Busier"
+        />
       </article>
 
       <article className={`${styles.chartCard} ${styles.chart3}`}>
@@ -1012,11 +1027,14 @@ export default function TrafficPage() {
           </div>
         </div>
         <div className={styles.chartBody}>{chartFrame(speedOption, "No congestion data in the selected range", onSpeedClick)}</div>
-        <div className={styles.rampKey}>
-          Slower
-          <span style={{ background: `linear-gradient(to right, ${SEVERITY.join(", ")})` }} />
-          Faster
-        </div>
+        <RampKey
+          colors={SEVERITY}
+          min={speedRange[0]}
+          max={speedRange[1]}
+          format={(v) => `${v.toFixed(0)} km/h`}
+          lowLabel="Slower"
+          highLabel="Faster"
+        />
       </article>
 
       <article className={`${styles.chartCard} ${styles.chart5}`}>

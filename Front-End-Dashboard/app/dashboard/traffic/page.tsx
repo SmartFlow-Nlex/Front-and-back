@@ -381,11 +381,19 @@ export default function TrafficPage() {
     const top = data.byPlaza.slice(0, 10).map((r) => ({ ...r, isOthers: false }));
     const others = data.byPlaza.slice(10);
     const othersSum = others.reduce((s, r) => s + r.v, 0);
-    const rows = othersSum > 0 ? [...top, { plaza: `Others (${others.length})`, v: othersSum, isOthers: true }] : top;
-    // reverse() puts the largest at the TOP, because a category axis draws
-    // index 0 at the bottom.
-    const display = plazaSort === "desc" ? [...rows].reverse() : [...rows];
-    const maxV = rows[0]?.v ?? 1;
+    // `top` arrives largest-first. A category axis draws index 0 at the bottom,
+    // so reversing puts the largest at the top ("highest first") and leaving it
+    // as-is puts the smallest there ("lowest first").
+    const ranked = plazaSort === "desc" ? [...top].reverse() : [...top];
+    // "Others" is a residual bucket, not a plaza, so it is pinned to the bottom
+    // rather than sorted with the rest. Ranking it alongside them sent it to the
+    // top in ascending order, where the largest bar on the chart sat in the slot
+    // that means "smallest".
+    const othersRow = { plaza: `Others (${others.length})`, v: othersSum, isOthers: true };
+    const display = othersSum > 0 ? [othersRow, ...ranked] : ranked;
+    const rows = display;
+    // Scaled against the largest real plaza, not against the Others total.
+    const maxV = top[0]?.v ?? 1;
     return {
       rows: display,
       others,
@@ -402,8 +410,15 @@ export default function TrafficPage() {
             type: "bar",
             data: display.map((r) => ({
               value: r.v,
-              // sequential single hue: darker = larger
-              itemStyle: { color: SEQ[Math.min(3, 1 + Math.floor((r.v / maxV) * 2.99))], borderRadius: [0, 3, 3, 0] },
+              itemStyle: {
+                // The residual bucket is neutral. On the ramp it came out darkest
+                // of all — the shade this chart uses for the busiest plaza — which
+                // is the wrong signal for a row that is not a plaza at all.
+                color: r.isOthers
+                  ? chartTheme.axis
+                  : SEQ[Math.min(3, 1 + Math.floor((r.v / maxV) * 2.99))],
+                borderRadius: [0, 3, 3, 0],
+              },
             })),
             barMaxWidth: 12,
             barCategoryGap: "25%",
@@ -411,7 +426,7 @@ export default function TrafficPage() {
         ],
       },
     };
-  }, [data, plazaSort]);
+  }, [data, plazaSort, chartTheme]);
 
   const speedOption = useMemo<EChartsOption | null>(() => {
     if (!data || data.speedByHour.length === 0) return null;

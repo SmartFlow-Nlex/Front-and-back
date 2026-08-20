@@ -360,11 +360,12 @@ export default function TrafficPage() {
         // The lightest step is the theme's 'empty' tone: near-white on light,
         // near-black on dark, so low values recede in both instead of glowing.
         inRange: { color: [chartTheme.seqLightest, ...SEQ.slice(1)] },
-        // Scrubbed-out cells keep their own colour and lose only opacity, so the
-        // week's pattern stays visible underneath and the matched band reads as
-        // lifted out of it. Overriding the colour instead flattened everything
-        // outside the band to one tone, which looked like the data had gone.
-        outOfRange: { color: [chartTheme.seqLightest, ...SEQ.slice(1)], opacity: 0.16 },
+        // The same neutral the speed chart uses when scrubbed. Keeping the ramp
+        // at low opacity left every cell a slightly different washed-out blue,
+        // which on the dark surface turned the grid into grey-blue mud and made
+        // the highlighted cells harder to pick out, not easier. One flat grey
+        // gives the lit band something uniform to stand against.
+        outOfRange: { color: chartTheme.axis },
         formatter: (v) => fmtCompact(Number(v)),
       },
       series: [{ type: "heatmap", data: heatData, emphasis: { itemStyle: { borderColor: RAMP[2], borderWidth: 1 } } }],

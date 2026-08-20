@@ -1,8 +1,10 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import type { EChartsOption } from "echarts";
 import DashboardChart from "./DashboardChart";
+import ModelNarrative, { type MetricRow } from "./ModelNarrative";
+import { aggregateSeries } from "./aggregateSeries";
 
 type ModelType = "LSTM" | "Prophet" | "HoltWinters" | "SARIMAX" | "HoltsLinear";
 
@@ -48,6 +50,9 @@ const MODELS: ModelMeta[] = [
 const META = Object.fromEntries(MODELS.map((m) => [m.key, m])) as Record<ModelType, ModelMeta>;
 const ACTUAL_COLOR = "#2563eb";
 const VALIDATED_HORIZON = 14; // must match retrain_honest.py HORIZON
+// Show every stored training day. The blue line is meant to BE the trained
+// dataset, and only at full width do the 80/20 proportions read correctly.
+const ALL_PAST = 100000;
 
 // The API hands back a DATE column that pg has already localised, so read the
 // calendar parts back out in local time to recover the original YYYY-MM-DD.
@@ -117,6 +122,111 @@ const extremeLabel = (hours: HourlyPoint[], pick: "max" | "min") => {
   return p ? `${fmtHour(p.hour)} · ${fmtVeh(p.v)}` : "—";
 };
 
+function buildSecondaryXAxis(dates: string[], granularity: string) {
+  if (granularity === "Daily" || granularity === "Hourly" || dates.length === 0) {
+    return null;
+  }
+
+  if (granularity === "Weekly") {
+    const secondaryData: string[] = [];
+    let weekNum = 1;
+
+    for (let i = 0; i < dates.length; i++) {
+      if (i % 7 === 0) {
+        const endIdx = Math.min(i + 6, dates.length - 1);
+        const startStr = dates[i];
+        const endStr = dates[endIdx];
+        secondaryData.push(`[ Week ${weekNum}: ${startStr} – ${endStr} ]`);
+        weekNum++;
+      } else {
+        secondaryData.push("");
+      }
+    }
+
+    return {
+      type: "category" as const,
+      data: secondaryData,
+      position: "bottom" as const,
+      offset: 24,
+      axisPointer: { show: false },
+      axisLine: { show: true, lineStyle: { color: "#2563eb", width: 1.5, type: "dashed" as const } },
+      axisTick: {
+        show: true,
+        interval: (index: number) => index % 7 === 0,
+        length: 8,
+        lineStyle: { color: "#2563eb", width: 2 },
+      },
+      axisLabel: {
+        show: true,
+        interval: 0,
+        color: "#1d4ed8",
+        fontWeight: "bold" as const,
+        fontSize: 10,
+        align: "left" as const,
+      },
+    };
+  }
+
+  if (granularity === "Monthly") {
+    const secondaryData: string[] = [];
+    let currentMonth = "";
+    let monthNum = 1;
+    let monthStartIdx = 0;
+
+    for (let i = 0; i < dates.length; i++) {
+      const d = dates[i] || "";
+      const monthName = d.split(" ")[0] || d;
+
+      if (i === 0) currentMonth = monthName;
+
+      const monthChanged = monthName !== currentMonth;
+      if (monthChanged) {
+        const endIdx = i - 1;
+        const startStr = dates[monthStartIdx];
+        const endStr = dates[endIdx];
+        secondaryData[monthStartIdx] = `[ Month ${monthNum}: ${currentMonth} (${startStr} – ${endStr}) ]`;
+        currentMonth = monthName;
+        monthStartIdx = i;
+        monthNum++;
+        secondaryData.push("");
+      } else {
+        secondaryData.push("");
+      }
+
+      if (i === dates.length - 1) {
+        const startStr = dates[monthStartIdx];
+        const endStr = dates[i];
+        secondaryData[monthStartIdx] = `[ Month ${monthNum}: ${currentMonth} (${startStr} – ${endStr}) ]`;
+      }
+    }
+
+    return {
+      type: "category" as const,
+      data: secondaryData,
+      position: "bottom" as const,
+      offset: 24,
+      axisPointer: { show: false },
+      axisLine: { show: true, lineStyle: { color: "#2563eb", width: 1.5, type: "dashed" as const } },
+      axisTick: {
+        show: true,
+        interval: (index: number) => secondaryData[index] !== "",
+        length: 10,
+        lineStyle: { color: "#2563eb", width: 2 },
+      },
+      axisLabel: {
+        show: true,
+        interval: 0,
+        color: "#1d4ed8",
+        fontWeight: "bold" as const,
+        fontSize: 10,
+        align: "left" as const,
+      },
+    };
+  }
+
+  return null;
+}
+
 type Props = {
   months?: "3" | "12" | "all";
   from?: string;
@@ -129,7 +239,9 @@ export default function PredictiveVolumeChart({ months = "all", from, to, weathe
   // chart always has something to compare the ground truth against.
   const [selected, setSelected] = useState<ModelType[]>(["LSTM"]);
   const [chartData, setChartData] = useState<ChartData | null>(null);
-  const [metricsMeta, setMetricsMeta] = useState<Record<ModelType, ModelMeta>>(META);
+  // Raw metric rows, kept unmodified so the narrative can read fields the
+  // metrics TABLE does not display (rejected_reason, aic/bic, the _nw twins).
+  const [rawMetrics, setRawMetrics] = useState<MetricRow[]>([]);
   const [showAllMetrics, setShowAllMetrics] = useState(false);
   const [showWeather, setShowWeather] = useState(true);
 
@@ -137,18 +249,59 @@ export default function PredictiveVolumeChart({ months = "all", from, to, weathe
   // scored window and the forecast horizon are fixed by the model run, so
   // narrowing PAST here can never change a metric.
   //
-  // Defaults: short Past (7d — just enough to see the training → scoring
-  // transition) and full Future (28d). This keeps all three zones visible while
-  // giving the forecast enough visual space to read individual days.
-  //   7 past + 84 present + 28 future = 119 days → future ≈ 24% of chart.
-  const [pastDays, setPastDays] = useState<number>(7);
-  const [futureDays, setFutureDays] = useState<number>(28);
+  // Granularity & zone window controls
+  const [granularity, setGranularity] = useState<"Hourly" | "Daily" | "Weekly" | "Monthly" | "Yearly">("Daily");
+  const [pastDays, setPastDays] = useState<number>(ALL_PAST);
+  const [futureDays, setFutureDays] = useState<number>(14);
 
   // Drill-down: which day is expanded to its 24-hour breakdown
   const [drillDate, setDrillDate] = useState<string | null>(null);
   const [hourlyByModel, setHourlyByModel] = useState<Partial<Record<ModelType, HourlyForecast>>>({});
   const [hourlyLoading, setHourlyLoading] = useState(false);
   const [hourlyError, setHourlyError] = useState<string | null>(null);
+
+  // Derived, not stored. Keeping this as state meant the table kept showing the
+  // weather-driven numbers after the chart had switched to the weather-free lines,
+  // so the table and the plot above it described different forecasts.
+  const metricsMeta = useMemo<Record<ModelType, ModelMeta>>(() => {
+    const next: Record<ModelType, ModelMeta> = { ...META };
+    if (!rawMetrics.length) return next;
+
+    const byName = new Map(rawMetrics.map((m) => [m.model_name, m]));
+    const DB_NAME: Record<ModelType, string> = {
+      LSTM: "LSTM", Prophet: "Prophet", HoltWinters: "HoltWinters",
+      SARIMAX: "SARIMAX", HoltsLinear: "Holts_Linear",
+    };
+    const TWIN: Partial<Record<ModelType, string>> = {
+      Prophet: "Prophet_nw", SARIMAX: "SARIMAX_nw", LSTM: "LSTM_nw",
+    };
+    // Rank is assigned across the FULL candidate set, so a subset shows gaps.
+    // Printing the denominator turns a confusing "Rank #2" with no #1 in sight
+    // into an honest "#2 of 8".
+    const total = rawMetrics.length;
+    const num = (v: unknown) => (typeof v === "number" && isFinite(v) ? v : null);
+
+    (Object.keys(next) as ModelType[]).forEach((k) => {
+      const twin = TWIN[k];
+      const row = (!showWeather && twin ? byName.get(twin) : undefined) ?? byName.get(DB_NAME[k]);
+      if (!row) return;
+      const r = row as unknown as Record<string, unknown>;
+      const f = (key: string, d = 4) => { const v = num(r[key]); return v == null ? "—" : v.toFixed(d); };
+      const pct = (key: string) => { const v = num(r[key]); return v == null ? "—" : v.toFixed(2) + "%"; };
+      const int = (key: string) => { const v = num(r[key]); return v == null ? "—" : Math.round(v).toLocaleString("en-US"); };
+      next[k] = {
+        ...next[k],
+        rmse: int("rmse"), mae: int("mae"), wmape: pct("wmape"), r2: f("r2"),
+        mape: pct("mape"), smape: pct("smape"), mase: f("mase", 3), rmsse: f("rmsse"),
+        adjusted_r2: f("adjusted_r2"), mse: int("mse"),
+        train_r2: f("train_r2"), val_r2: f("val_r2"), gap: f("gap"),
+        diagnosis: (r["diagnosis"] as string) || "—",
+        note: row.accepted ? `Rank #${row.rank} of ${total}` : "Rejected",
+        accepted: !!row.accepted,
+      };
+    });
+    return next;
+  }, [rawMetrics, showWeather]);
 
   const toggleModel = useCallback((key: ModelType) => {
     setSelected((prev) => {
@@ -210,41 +363,17 @@ export default function PredictiveVolumeChart({ months = "all", from, to, weathe
         const holdoutStart = rows.findIndex((v) => v.is_holdout);
         const futureStart = rows.findIndex((v) => v.is_future);
 
-        if (json.data.metrics) {
-          setMetricsMeta(prev => {
-            const next = { ...prev };
-            json.data.metrics.forEach((dbM: any) => {
-              const key = dbM.model_name === 'Holt-Winters' ? 'HoltWinters' :
-                          dbM.model_name === 'Holts_Linear' ? 'HoltsLinear' :
-                          dbM.model_name;
-              if (next[key as ModelType]) {
-                next[key as ModelType] = {
-                  ...next[key as ModelType],
-                  rmse: Math.round(dbM.rmse).toLocaleString("en-US"),
-                  mae: Math.round(dbM.mae).toLocaleString("en-US"),
-                  wmape: dbM.wmape.toFixed(2) + "%",
-                  r2: dbM.r2.toFixed(4),
-                  mape: dbM.mape != null ? dbM.mape.toFixed(2) + "%" : "—",
-                  smape: dbM.smape != null ? dbM.smape.toFixed(2) + "%" : "—",
-                  mase: dbM.mase != null ? dbM.mase.toFixed(4) : "—",
-                  rmsse: dbM.rmsse != null ? dbM.rmsse.toFixed(4) : "—",
-                  adjusted_r2: dbM.adjusted_r2 != null ? dbM.adjusted_r2 : "—",
-                  mse: dbM.mse != null ? Math.round(dbM.mse).toLocaleString("en-US") : "—",
-                  train_r2: dbM.train_r2 != null ? dbM.train_r2.toFixed(4) : "—",
-                  val_r2: dbM.val_r2 != null ? dbM.val_r2.toFixed(4) : "—",
-                  gap: dbM.r2_gap != null ? dbM.r2_gap.toFixed(4) : "—",
-                  diagnosis: dbM.diagnosis || "—",
-                  note: dbM.accepted ? `Rank #${dbM.rank}` : "Rejected",
-                  accepted: dbM.accepted
-                };
-              }
-            });
-            return next;
-          });
-        }
+        if (json.data.metrics) setRawMetrics(json.data.metrics as MetricRow[]);
 
         setChartData({
-          dates: rows.map((v) => new Date(v.date).toLocaleDateString("en-US", { month: "short", day: "numeric" })),
+          // The year MUST be part of the category value, not just its label. Zone
+          // bands and divider lines are anchored by category NAME, so once the
+          // window spans more than a year "Aug 9" existed three times over and
+          // ECharts pinned Past/Present/Future to the wrong occurrence — the
+          // shading landed months away from the data it was meant to describe.
+          // Same defect silently sent click-to-drill to the wrong day.
+          dates: rows.map((v) =>
+            new Date(v.date).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })),
           isoDates: rows.map((v) => toIsoDate(v.date)),
           baseActual: rows.map((v) => v.actual_volume),
           models,
@@ -366,7 +495,7 @@ export default function PredictiveVolumeChart({ months = "all", from, to, weathe
         </button>
       </div>
       <div style={{ overflowX: "auto" }}>
-        <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "0.85rem", minWidth: showAllMetrics ? "1000px" : "520px" }}>
+        <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "0.85rem", minWidth: showAllMetrics ? "1000px" : "600px" }}>
           <thead>
             <tr style={{ textAlign: "left", color: "#64748b", fontSize: "0.72rem", textTransform: "uppercase", letterSpacing: "0.05em" }}>
               <th style={{ padding: "6px 10px", fontWeight: 600 }}>Model</th>
@@ -374,11 +503,11 @@ export default function PredictiveVolumeChart({ months = "all", from, to, weathe
               <th style={{ padding: "6px 10px", fontWeight: 600, textAlign: "right" }}>MAE (veh)</th>
               <th style={{ padding: "6px 10px", fontWeight: 600, textAlign: "right" }}>WMAPE</th>
               <th style={{ padding: "6px 10px", fontWeight: 600, textAlign: "right" }}>R² Score</th>
+              <th style={{ padding: "6px 10px", fontWeight: 600, textAlign: "right" }} title="Error relative to a seasonal-naive forecast. Below 1.0 beats it; above 1.0 does not.">MASE</th>
               {showAllMetrics && (
                 <>
                   <th style={{ padding: "6px 10px", fontWeight: 600, textAlign: "right" }}>MAPE</th>
                   <th style={{ padding: "6px 10px", fontWeight: 600, textAlign: "right" }}>sMAPE</th>
-                  <th style={{ padding: "6px 10px", fontWeight: 600, textAlign: "right" }}>MASE</th>
                   <th style={{ padding: "6px 10px", fontWeight: 600, textAlign: "right" }}>RMSSE</th>
                                     <th style={{ padding: "6px 10px", fontWeight: 600, textAlign: "right" }}>Adj R²</th>
                                   </>
@@ -399,11 +528,14 @@ export default function PredictiveVolumeChart({ months = "all", from, to, weathe
                 <td style={{ padding: "10px", textAlign: "right", color: "#0f172a" }}>{m.mae}</td>
                 <td style={{ padding: "10px", textAlign: "right", fontWeight: 700, color: m.color }}>{m.wmape}</td>
                 <td style={{ padding: "10px", textAlign: "right", fontWeight: 700, color: m.color }}>{m.r2}</td>
+                <td style={{ padding: "10px", textAlign: "right", fontWeight: 700,
+                  color: m.mase && m.mase !== "—" ? (parseFloat(m.mase) < 1 ? "#15803d" : "#b91c1c") : "#475569" }}>
+                  {m.mase ?? "—"}
+                </td>
                 {showAllMetrics && (
                   <>
                     <td style={{ padding: "10px", textAlign: "right", color: "#475569" }}>{m.mape ?? "—"}</td>
                     <td style={{ padding: "10px", textAlign: "right", color: "#475569" }}>{m.smape ?? "—"}</td>
-                    <td style={{ padding: "10px", textAlign: "right", color: "#475569" }}>{m.mase ?? "—"}</td>
                     <td style={{ padding: "10px", textAlign: "right", color: "#475569" }}>{m.rmsse ?? "—"}</td>
                                         <td style={{ padding: "10px", textAlign: "right", color: "#475569" }}>{m.adjusted_r2 ?? "—"}</td>
                                       </>
@@ -435,20 +567,44 @@ export default function PredictiveVolumeChart({ months = "all", from, to, weathe
   const hi = Math.min(chartData.dates.length, chartData.futureStart + futureDays);
   const cut = <T,>(a: T[]) => a.slice(lo, hi);
 
-  const dates = cut(chartData.dates);
-  const isoDates = cut(chartData.isoDates);
-  const baseActual = cut(chartData.baseActual);
-  const rainfall = cut(chartData.rainfall);
-  const holdoutStart = chartData.holdoutStart - lo;
-  const futureStart = chartData.futureStart - lo;
-  const models = Object.fromEntries(
+  const dailyDates = cut(chartData.dates);
+  const dailyIso = cut(chartData.isoDates);
+  const dailyActual = cut(chartData.baseActual);
+  const dailyRain = cut(chartData.rainfall);
+  const dailyHoldoutStart = chartData.holdoutStart - lo;
+  const dailyFutureStart = chartData.futureStart - lo;
+  const dailyModels = Object.fromEntries(
     (Object.keys(rawModels) as ModelType[]).map((k) => [k, cut(rawModels[k])])
   ) as Record<ModelType, (number | null)[]>;
+
+  // Coarser views genuinely aggregate now. Previously Monthly and Yearly plotted
+  // the identical daily series and differed only by decorative dividers, which
+  // made the control a claim the chart could not back up — and at ~2,400 points
+  // in ~1,400px the line was an unreadable band either way.
+  const agg = aggregateSeries<ModelType>({
+    granularity,
+    isoDates: dailyIso,
+    baseActual: dailyActual,
+    models: dailyModels,
+    rainfall: dailyRain,
+    holdoutStart: dailyHoldoutStart,
+    futureStart: dailyFutureStart,
+  });
+
+  const dates = agg ? agg.dates : dailyDates;
+  const isoDates = agg ? agg.isoDates : dailyIso;
+  const baseActual = agg ? agg.baseActual : dailyActual;
+  const rainfall = agg ? agg.rainfall : dailyRain;
+  const models = agg ? agg.models : dailyModels;
+  const holdoutStart = agg ? agg.holdoutStart : dailyHoldoutStart;
+  const futureStart = agg ? agg.futureStart : dailyFutureStart;
+  const isAggregated = agg != null;
   const drillIndex = drillDate ? isoDates.indexOf(drillDate) : -1;
   const drillLabel = drillIndex >= 0 ? dates[drillIndex] : drillDate ?? "";
 
   // Clicking a point (or its x-axis label) opens that day's hourly breakdown
   const openDay = (index: number) => {
+    if (isAggregated) return; // a point is a period here, not a single day
     if (index >= 0 && index < isoDates.length) setDrillDate(isoDates[index]);
   };
   const onChartClick = (params: { componentType?: string; dataIndex?: number; value?: string }) => {
@@ -464,6 +620,84 @@ export default function PredictiveVolumeChart({ months = "all", from, to, weathe
     fontWeight: 600 as const,
     formatter: text,
   });
+
+  const weeklyPeriods: { weekNum: number; start: string; end: string }[] = [];
+  let weekNum = 1;
+  for (let i = 0; i < dates.length; i += 7) {
+    const endIdx = Math.min(i + 6, dates.length - 1);
+    if (dates[i] && dates[endIdx]) {
+      weeklyPeriods.push({ weekNum, start: dates[i], end: dates[endIdx] });
+      weekNum++;
+    }
+  }
+
+  const monthlyPeriods: { monthNum: number; name: string; start: string; end: string }[] = [];
+  let currentMonth = "";
+  let monthStartIdx = 0;
+  let monthNum = 1;
+
+  for (let i = 0; i < dates.length; i++) {
+    const d = dates[i] || "";
+    const monthName = d.split(" ")[0] || d;
+
+    if (i === 0) currentMonth = monthName;
+
+    const monthChanged = monthName !== currentMonth;
+    if (monthChanged) {
+      const endIdx = i - 1;
+      monthlyPeriods.push({
+        monthNum,
+        name: currentMonth,
+        start: dates[monthStartIdx],
+        end: dates[endIdx],
+      });
+      currentMonth = monthName;
+      monthStartIdx = i;
+      monthNum++;
+    }
+
+    if (i === dates.length - 1) {
+      monthlyPeriods.push({
+        monthNum,
+        name: currentMonth,
+        start: dates[monthStartIdx],
+        end: dates[i],
+      });
+    }
+  }
+
+  const yearlyPeriods: { yearNum: number; name: string; start: string; end: string }[] = [];
+  let currentYear = "";
+  let yearStartIdx = 0;
+  let yearNum = 1;
+
+  for (let i = 0; i < dates.length; i++) {
+    const yearName = isoDates[i] ? isoDates[i].split("-")[0] : "2026";
+    if (i === 0) currentYear = yearName;
+
+    const yearChanged = yearName !== currentYear;
+    if (yearChanged) {
+      const endIdx = i - 1;
+      yearlyPeriods.push({
+        yearNum,
+        name: currentYear,
+        start: dates[yearStartIdx],
+        end: dates[endIdx],
+      });
+      currentYear = yearName;
+      yearStartIdx = i;
+      yearNum++;
+    }
+
+    if (i === dates.length - 1) {
+      yearlyPeriods.push({
+        yearNum,
+        name: currentYear,
+        start: dates[yearStartIdx],
+        end: dates[i],
+      });
+    }
+  }
 
   // Weather overlay (only when toggled on). Temperature was dropped: it carries
   // almost no signal here (Pearson r = -0.06 against volume) and a second axis
@@ -494,18 +728,50 @@ export default function PredictiveVolumeChart({ months = "all", from, to, weathe
     },
   ] : [];
 
+  const secondaryAxis = buildSecondaryXAxis(dates, granularity);
+
+  // Only worth spending a second label line on the year when the window actually
+  // crosses one — at the 80/20 split it usually does, at "3 mo" it usually doesn't.
+  // Which indices get a date label. A plain fixed stride left the Future block
+  // undated: at 594 points the stride is 50, so the last tick landed on index 550
+  // while the forecast began at 566 — the entire projection had no date under it.
+  // The first forecast day and the final day are therefore always labelled, and any
+  // stride tick that would collide with them is dropped instead of overlapping.
+  const labelIndices = (() => {
+    const n = dates.length;
+    const keep = new Set<number>();
+    if (n === 0) return keep;
+    const stride = Math.max(1, Math.ceil(n / 12));
+    for (let i = 0; i < n; i += stride) keep.add(i);
+    const mustLabel = [futureStart, n - 1].filter((i) => i >= 0 && i < n);
+    const mustSet = new Set(mustLabel);
+    const minGap = Math.max(2, Math.floor(stride * 0.6));
+    for (const m of mustLabel) {
+      // Only thin the regular stride ticks. Guarding mustSet matters because the
+      // start and end of the forecast sit close together, and without it the
+      // second forced label silently deleted the first.
+      for (const k of Array.from(keep)) {
+        if (!mustSet.has(k) && Math.abs(k - m) < minGap) keep.delete(k);
+      }
+      keep.add(m);
+    }
+    return keep;
+  })();
+
+  const spansMultipleYears =
+    isoDates.length > 0 && isoDates[0]?.slice(0, 4) !== isoDates[isoDates.length - 1]?.slice(0, 4);
+
   const dailyOption: EChartsOption = {
-    grid: { left: 80, right: showWeather ? 80 : 24, top: 28, bottom: 76 },
+    grid: { left: 80, right: showWeather ? 80 : 24, top: 28, bottom: 104 },
     tooltip: {
       trigger: "axis",
       formatter: (params: unknown) => {
         const items = params as { name: string; marker: string; seriesName: string; value: number | null }[];
-        let tip = `<b>${items[0].name}</b><br/>`;
+        if (!items || items.length === 0) return "";
+        let tip = `<b>${items[0].name}</b>${isAggregated ? " · period average" : ""}<br/>`;
         items.forEach((p) => {
           if (p.value != null) {
             if (p.seriesName === "Rainfall (mm)") {
-              // Name the band as well as the number \u2014 "12.4 mm" means nothing to a
-              // reader who doesn't already know what counts as heavy rain here.
               const mm = Number(p.value);
               tip += `${p.marker} Rainfall: <b>${mm.toFixed(1)} mm</b> \u00B7 ${rainBand(mm).label}<br/>`;
             } else {
@@ -513,7 +779,9 @@ export default function PredictiveVolumeChart({ months = "all", from, to, weathe
             }
           }
         });
-        return `${tip}<span style="color:#94a3b8;font-size:11px">Click to view hourly</span>`;
+        return `${tip}<span style="color:#94a3b8;font-size:11px">${
+          isAggregated ? "Switch to Daily to open a day" : "Click to view hourly"
+        }</span>`;
       },
     },
     legend: {
@@ -527,17 +795,40 @@ export default function PredictiveVolumeChart({ months = "all", from, to, weathe
       itemGap: 16,
       textStyle: { fontSize: 12 },
     },
+    dataZoom: [
+      { type: "slider", start: 0, end: 100, height: 18, bottom: 44,
+        borderColor: "#e2e8f0", fillerColor: "rgba(37,99,235,0.08)",
+        handleStyle: { color: "#2563eb" }, textStyle: { color: "#94a3b8", fontSize: 10 } },
+    ],
     xAxis: {
       type: "category",
       data: dates,
       triggerEvent: true,
-      axisLabel: { color: "#64748b" },
       axisLine: { lineStyle: { color: "#cbd5e1" } },
+      axisLabel: {
+        color: "#64748b",
+        // Space labels by how many points there actually are, not a fixed modulo.
+        // The 80/20 split pushed the series to ~744 days; `index % 5` then asked
+        // for 149 labels in ~1,300px and they collapsed into an unreadable smear.
+        // Targeting a fixed COUNT keeps it legible at every range and granularity.
+        interval: (index: number) => labelIndices.has(index),
+        // Label shapes differ by granularity: "Mar 7, 2025" when daily or weekly,
+        // but "Apr 2024" once aggregated by month. Blind destructuring on ", "
+        // printed an undefined second line under every monthly tick.
+        formatter: (value: string) => {
+          const split = value.lastIndexOf(", ");
+          if (split === -1) return value;            // label already carries its year
+          return spansMultipleYears
+            ? value.slice(0, split) + "\n" + value.slice(split + 2)
+            : value.slice(0, split);
+        },
+        lineHeight: 14,
+      },
     },
     yAxis: [
       {
         type: "value",
-        name: "Total Vehicle Volume",
+        name: isAggregated ? "Avg Daily Volume (per period)" : "Total Vehicle Volume",
         nameLocation: "middle",
         nameGap: 60,
         axisLabel: { color: "#64748b", formatter: (val: number) => `${(val / 1000).toFixed(0)}k` },
@@ -555,8 +846,6 @@ export default function PredictiveVolumeChart({ months = "all", from, to, weathe
         axisLine: { show: showWeather, lineStyle: { color: "#0284c7" } },
         splitLine: { show: false },
         min: 0,
-        // Add a small margin above the tallest bar so it doesn't touch the top,
-        // but keep the scale truthful — no 2.5× inflation.
         max: (value: { max: number }) => Math.ceil(value.max * 1.2) || 10,
       },
     ],
@@ -569,17 +858,13 @@ export default function PredictiveVolumeChart({ months = "all", from, to, weathe
         smooth: true,
         connectNulls: true,
         symbol: "circle",
-        symbolSize: 5,
+        symbolSize: dates.length > 400 ? 0 : 5,
         z: 3,
-        lineStyle: { width: 2.5, color: ACTUAL_COLOR },
+        lineStyle: { width: dates.length > 400 ? 1 : 2.5, color: ACTUAL_COLOR },
         itemStyle: { color: ACTUAL_COLOR },
         emphasis: { scale: 2.2 },
         markArea: {
           silent: true,
-          // A zone is only drawn when the data actually contains it. A run where
-          // every row is scored has no Future block; emitting one anyway leaves an
-          // undefined bound, and ECharts responds by dropping the whole series —
-          // the chart goes blank rather than losing just the shading.
           data: [
             { name: "Past", from: 0, to: holdoutStart - 1, color: "rgba(37, 99, 235, 0.05)" },
             { name: "Present", from: holdoutStart, to: futureStart - 1, color: "rgba(249, 115, 22, 0.08)" },
@@ -599,9 +884,39 @@ export default function PredictiveVolumeChart({ months = "all", from, to, weathe
             ...[holdoutStart, futureStart]
               .filter((i) => dates[i] != null)
               .map((i) => ({ xAxis: dates[i], label: { show: false } })),
-            // Where the validated horizon ends. Past this point the projection is
-            // extrapolation beyond anything that was measured, and saying so on the
-            // chart is more honest than a footnote nobody reads.
+            // Period dividers for Weekly/Monthly granularity. These are thinned to
+            // at most ~12 across the window: at the full 744-day range Monthly drew
+            // 24 unlabelled green lines over the data, which read as noise rather
+            // than as month boundaries. Any divider that survives the thinning is
+            // labelled, so a line on the chart always says what it marks.
+            ...(() => {
+              const periods =
+                granularity === "Weekly" ? weeklyPeriods.map((w) => ({ at: w.start, tag: `W${w.weekNum}` }))
+                : granularity === "Monthly" ? monthlyPeriods.map((m) => ({ at: m.start, tag: `M${m.monthNum}` }))
+                : [];
+              if (periods.length === 0) return [];
+              const stride = Math.max(1, Math.ceil(periods.length / 12));
+              const tint = granularity === "Weekly" ? "#3b82f6" : "#16a34a";
+              const ink = granularity === "Weekly" ? "#1d4ed8" : "#15803d";
+              const wash = granularity === "Weekly" ? "rgba(239,246,255,0.92)" : "rgba(240,253,244,0.92)";
+              return periods
+                .filter((_, i) => i % stride === 0)
+                .map((p) => ({
+                  xAxis: p.at,
+                  lineStyle: { type: "dashed" as const, color: tint, width: 1, opacity: 0.45 },
+                  label: {
+                    show: true,
+                    position: "insideEndTop" as const,
+                    formatter: p.tag,
+                    color: ink,
+                    fontSize: 9,
+                    fontWeight: 700 as const,
+                    backgroundColor: wash,
+                    padding: [1, 3],
+                    borderRadius: 2,
+                  },
+                }));
+            })(),
             ...(dates[futureStart + VALIDATED_HORIZON] != null
               ? [{
                   xAxis: dates[futureStart + VALIDATED_HORIZON],
@@ -624,7 +939,7 @@ export default function PredictiveVolumeChart({ months = "all", from, to, weathe
         connectNulls: true,
         symbol: "circle",
         symbolSize: 5,
-        lineStyle: { width: 2.2, color: metricsMeta[key].color },
+        lineStyle: { width: dates.length > 400 ? 1.2 : 2.2, color: metricsMeta[key].color },
         itemStyle: { color: metricsMeta[key].color },
         emphasis: { scale: 2.2 },
       })),
@@ -637,7 +952,7 @@ export default function PredictiveVolumeChart({ months = "all", from, to, weathe
   const hourLabels = Array.from({ length: 24 }, (_, h) => fmtHour(h));
   const hasActualHours = Boolean(anyHourly?.hours.some((h) => h.actual != null));
 
-  const hourlyWeatherSeries: any[] = (showWeather && anyHourly) ? [
+  const hourlyWeatherSeries: Record<string, unknown>[] = (showWeather && anyHourly) ? [
     {
       name: "Rainfall (mm)",
       type: "bar",
@@ -918,48 +1233,91 @@ export default function PredictiveVolumeChart({ months = "all", from, to, weathe
         </div>
       </div>
 
-      {/* Zone window controls. These change what is DRAWN, never what was scored —
-          the PRESENT band is fixed by the evaluation run, so it has no control. */}
+      {/* Zone window & Granularity controls */}
       <div style={{
         display: "flex", alignItems: "center", gap: "20px", flexWrap: "wrap",
         padding: "10px 14px", borderRadius: "10px", background: "#f8fafc",
         border: "1px solid #e8edf5", fontSize: "0.76rem",
       }}>
+        {/* GRANULARITY control pill */}
+        <span style={{ display: "inline-flex", alignItems: "center", gap: "8px" }}>
+          <b style={{ color: "#3b82f6", letterSpacing: "0.04em", fontSize: "0.75rem", textTransform: "uppercase" }}>
+            GRANULARITY
+          </b>
+          <div style={{
+            display: "inline-flex", alignItems: "center", padding: "2px",
+            borderRadius: "999px", background: "#fff", border: "1px solid #dce2ef",
+          }}>
+            {/* Hourly (grayed out) */}
+            <span
+              title="Click any daily point on the chart to view 24-hour hourly breakdown"
+              style={{
+                padding: "3px 10px", borderRadius: "999px", color: "#94a3b8",
+                fontWeight: 600, fontSize: "0.72rem", cursor: "not-allowed", opacity: 0.5,
+              }}
+            >
+              Hourly
+            </span>
+            {(["Daily", "Weekly", "Monthly"] as const).map((g) => (
+              <button
+                key={g}
+                onClick={() => {
+                  setGranularity(g);
+                  // Daily stays zoomed because 2,400 raw points is unreadable;
+                  // the aggregated views bucket the data so they can show it all.
+                  setPastDays(g === "Daily" ? 90 : ALL_PAST);
+                }}
+                title={
+                  g === "Daily"
+                    ? "One point per day — the resolution the models actually forecast"
+                    : `Averaged per ${g.replace("ly", "").toLowerCase()} — a viewing aid, not a separate forecast`
+                }
+                style={{
+                  padding: "3px 10px", borderRadius: "999px", cursor: "pointer", border: "none",
+                  background: "transparent",
+                  color: granularity === g ? "#2563eb" : "#4b5e7d",
+                  fontWeight: granularity === g ? 700 : 600, fontSize: "0.72rem",
+                }}
+              >
+                {granularity === g ? `✓ ${g}` : g}
+              </button>
+            ))}
+          </div>
+        </span>
+
+        {/* Past */}
         <span style={{ display: "inline-flex", alignItems: "center", gap: "8px" }}>
           <span style={{ width: 10, height: 10, borderRadius: 2, background: "rgba(37,99,235,0.25)" }} />
           <b style={{ color: "#0f172a" }}>Past</b>
-          {[14, 28, 90, 180, 365].map((d) => (
-            <button key={d} onClick={() => setPastDays(d)} style={{
-              padding: "3px 10px", borderRadius: "999px", cursor: "pointer",
-              border: pastDays === d ? "1px solid #2563eb" : "1px solid #dce2ef",
-              background: pastDays === d ? "#2563eb" : "#fff",
-              color: pastDays === d ? "#fff" : "#4b5e7d", fontWeight: 600, fontSize: "0.72rem",
-            }}>{d >= 365 ? "1 yr" : d >= 90 ? `${d / 30} mo` : `${d / 7} wk`}</button>
-          ))}
         </span>
 
+        {/* Present */}
         <span style={{ display: "inline-flex", alignItems: "center", gap: "8px" }}>
           <span style={{ width: 10, height: 10, borderRadius: 2, background: "rgba(249,115,22,0.35)" }} />
           <b style={{ color: "#0f172a" }}>Present</b>
           <span style={{ color: "#64748b" }}>
-            {chartData.futureStart - chartData.holdoutStart}d scored · fixed by the evaluation
+            {chartData.futureStart - chartData.holdoutStart}d scored · fixed by evaluation
           </span>
         </span>
 
+        {/* Future */}
         <span style={{ display: "inline-flex", alignItems: "center", gap: "8px" }}>
           <span style={{ width: 10, height: 10, borderRadius: 2, background: "rgba(22,163,74,0.3)" }} />
           <b style={{ color: "#0f172a" }}>Future</b>
-          {[14, 28].map((d) => (
-            <button key={d} onClick={() => setFutureDays(d)}
-              disabled={d > chartData.dates.length - chartData.futureStart}
+          {[
+            { label: "2 wk", d: 14 },
+            { label: "1 mo", d: 28 },
+          ].map((item) => (
+            <button key={item.label} onClick={() => setFutureDays(item.d)}
+              disabled={item.d > chartData.dates.length - chartData.futureStart}
               style={{
                 padding: "3px 10px", borderRadius: "999px",
-                cursor: d > chartData.dates.length - chartData.futureStart ? "not-allowed" : "pointer",
-                border: futureDays === d ? "1px solid #16a34a" : "1px solid #dce2ef",
-                background: futureDays === d ? "#16a34a" : "#fff",
-                color: futureDays === d ? "#fff" : "#4b5e7d", fontWeight: 600, fontSize: "0.72rem",
-                opacity: d > chartData.dates.length - chartData.futureStart ? 0.4 : 1,
-              }}>{d / 7} wk</button>
+                cursor: item.d > chartData.dates.length - chartData.futureStart ? "not-allowed" : "pointer",
+                border: futureDays === item.d ? "1px solid #16a34a" : "1px solid #dce2ef",
+                background: futureDays === item.d ? "#16a34a" : "#fff",
+                color: futureDays === item.d ? "#fff" : "#4b5e7d", fontWeight: 600, fontSize: "0.72rem",
+                opacity: item.d > chartData.dates.length - chartData.futureStart ? 0.4 : 1,
+              }}>{item.label}</button>
           ))}
           <span style={{ color: "#64748b" }}>· validated at 14d</span>
         </span>
@@ -999,6 +1357,19 @@ export default function PredictiveVolumeChart({ months = "all", from, to, weathe
       )}
 
       {metricsTable}
+
+      {/* Narrative is composed from the same rows that feed the table above, so the
+          prose can never drift away from the numbers beside it. Window bounds come
+          from the scored rows themselves rather than from a constant. */}
+      <ModelNarrative
+        selected={selected}
+        metrics={rawMetrics}
+        showWeather={showWeather}
+        scoredDays={chartData ? chartData.futureStart - chartData.holdoutStart : null}
+        windowStart={chartData ? chartData.isoDates[chartData.holdoutStart] ?? null : null}
+        windowEnd={chartData ? chartData.isoDates[chartData.futureStart - 1] ?? null : null}
+        horizonDays={VALIDATED_HORIZON}
+      />
     </article>
   );
 }

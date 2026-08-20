@@ -299,9 +299,9 @@ export async function getMLModelMetrics(target?: string) {
   if (!db) return null;
   try {
     const query = target
-      ? `SELECT model_name, target, rmse, mae, wmape, r2, mase, mape, smape, rmsse, me, mpe, adjusted_r2, theils_u, mse, train_r2, val_r2, gap, diagnosis, rank, accepted, rejected_reason, updated_at
+      ? `SELECT model_name, target, rmse, mae, wmape, r2, mase, mape, smape, rmsse, me, mpe, adjusted_r2, theils_u, mse, train_r2, val_r2, gap, diagnosis, rank, accepted, rejected_reason, uses_weather, aic, bic, updated_at
          FROM gold.ml_model_metrics WHERE target = $1 ORDER BY rank ASC`
-      : `SELECT model_name, target, rmse, mae, wmape, r2, mase, mape, smape, rmsse, me, mpe, adjusted_r2, theils_u, mse, train_r2, val_r2, gap, diagnosis, rank, accepted, rejected_reason, updated_at
+      : `SELECT model_name, target, rmse, mae, wmape, r2, mase, mape, smape, rmsse, me, mpe, adjusted_r2, theils_u, mse, train_r2, val_r2, gap, diagnosis, rank, accepted, rejected_reason, uses_weather, aic, bic, updated_at
          FROM gold.ml_model_metrics ORDER BY target, rank ASC`;
     const { rows } = target ? await db.query(query, [target]) : await db.query(query);
     return rows;
@@ -334,16 +334,23 @@ export async function getMLPredictiveVolume(window: ForecastWindow = {}) {
     }
 
     if (window.months && window.months !== "all") {
-      // Anchor the window on the last OBSERVED day, not MAX(forecast_date) — the
-      // table now runs past the present into the projected FUTURE block, so
-      // anchoring on the max silently ate months of history off the left edge.
-      // Future rows sit beyond the anchor and are always kept, so "3 mo" reads as
-      // three months of history plus the projection rather than clipping it.
+      // The range control trims HISTORY ONLY. It must never cut into the holdout
+      // or the forecast: the scored window is fixed by the evaluation run, and
+      // clipping it would put a partial validation period on screen underneath a
+      // metrics table computed over the whole thing — the chart and the numbers
+      // would disagree, which is the exact defect this dashboard already had once.
+      //
+      // The 80/20 split makes the holdout ~16 months long, so anchoring on the
+      // last observed day (as this did before) truncated it for every preset
+      // shorter than that: "12 mo" showed 366 of 476 scored days and zero history.
+      // Anchoring on the holdout START keeps it whole and lets `months` mean what
+      // a reader expects — how much run-up to show before validation begins.
       const { rows } = await db.query(
         `SELECT ${cols} FROM gold.ml_predictive_volume
-         WHERE forecast_date >= (
-                 SELECT MAX(forecast_date) FROM gold.ml_predictive_volume
-                 WHERE actual_volume IS NOT NULL
+         WHERE is_holdout OR is_future
+            OR forecast_date >= (
+                 SELECT MIN(forecast_date) FROM gold.ml_predictive_volume
+                 WHERE is_holdout
                ) - ($1::int * interval '1 month')
          ORDER BY forecast_date ASC`,
         [Number(window.months)]

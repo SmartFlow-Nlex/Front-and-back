@@ -55,7 +55,12 @@ POSTGRES_URL = os.environ.get(
 # error breakdown in STEP 3 meaningful.
 HORIZON   = 14   # days forecast per origin = what the dashboard's FUTURE shows
 STEP      = 14   # non-overlapping blocks
-N_ORIGINS = 6    # 6 * 14 = 84 evaluation days
+# 34 * 14 = 476 scored days ≈ 19.9% of the 2,398-day series — a genuine 80/20,
+# built as 34 non-overlapping rolling blocks rather than one static split. Six
+# origins left the top three models within 0.6 WMAPE points of each other, which
+# is inside the noise; this gives the ranking enough independent cycles to mean
+# something.
+N_ORIGINS = 34
 SEASON    = 7    # weekly seasonality
 # Project 28 days even though only 14 are validated. Days 1-14 carry the measured
 # h=14 accuracy; days 15-28 are extrapolation beyond it and the chart marks them
@@ -66,7 +71,14 @@ FUTURE_DAYS = 28
 # only — none of it is scored — but it sets how much of the chart PRESENT
 # occupies. At CTX=40 the scored band swallowed half the plot and read as if
 # most of the chart were holdout; 240 puts it back to a ~24% validation strip.
-CTX = 240
+# 0 = write the ENTIRE pre-holdout region as chart context. At CTX=240 the chart
+# showed 240 history days against a 476-day holdout, so the scored band swallowed
+# ~65% of the plot and read as if most of the project were validation. Writing all
+# 1,922 training days restores the true 80/20 proportions on screen AND satisfies
+# the requirement that the blue historical line actually BE the trained dataset,
+# rather than an arbitrary slice of it. Context rows are never scored, so this
+# changes only what is drawn — no metric moves.
+CTX = 0
 LSTM_SEQ  = 30
 LSTM_EPOCHS = 40
 
@@ -377,13 +389,51 @@ preds = {name: {} for name in MODELS}   # name -> {date: prediction}
 steps_ahead = {}                        # date -> 1..HORIZON, how far out it was
 failures = {name: [] for name in MODELS}
 
+# Checkpointing. A 34-origin run takes hours and two earlier runs were killed
+# partway, losing everything. State is flushed after every origin and reloaded on
+# restart, but only when the config fingerprint matches — otherwise results from
+# a different split would be silently mixed into a new one.
+import pickle
+
+CKPT = "retrain_checkpoint.pkl"
+FINGERPRINT = (HORIZON, STEP, N_ORIGINS, len(df), sorted(MODELS))
+done_origins: set[int] = set()
+
+if os.path.exists(CKPT):
+    try:
+        with open(CKPT, "rb") as fh:
+            saved = pickle.load(fh)
+        if saved.get("fingerprint") == FINGERPRINT:
+            preds = saved["preds"]
+            steps_ahead = saved["steps_ahead"]
+            failures = saved["failures"]
+            done_origins = saved["done_origins"]
+            print(f"  [resume] checkpoint found — {len(done_origins)}/{N_ORIGINS} origins already done")
+        else:
+            print("  [resume] checkpoint ignored — config changed since it was written")
+    except Exception as exc:
+        print(f"  [resume] checkpoint unreadable ({str(exc)[:50]}), starting clean")
+
+
+def _save_ckpt():
+    tmp = CKPT + ".tmp"
+    with open(tmp, "wb") as fh:
+        pickle.dump({
+            "fingerprint": FINGERPRINT, "preds": preds, "steps_ahead": steps_ahead,
+            "failures": failures, "done_origins": done_origins,
+        }, fh)
+    os.replace(tmp, CKPT)   # atomic — a kill mid-write can't corrupt the file
+
 for oi, cut in enumerate(origins, 1):
     train = df.iloc[:cut]
     future = df.iloc[cut:cut + HORIZON]
     if len(future) < HORIZON:
         break
+    if cut in done_origins:
+        print(f"  Origin {oi}/{N_ORIGINS}  [cached]")
+        continue
     print(f"  Origin {oi}/{N_ORIGINS}  train={len(train)}d  "
-          f"predict {future.ds.iloc[0].date()} -> {future.ds.iloc[-1].date()}")
+          f"predict {future.ds.iloc[0].date()} -> {future.ds.iloc[-1].date()}", flush=True)
 
     for k, d in enumerate(future.ds.values, start=1):
         steps_ahead[pd.Timestamp(d)] = k
@@ -400,6 +450,9 @@ for oi, cut in enumerate(origins, 1):
             failures[name].append((str(df.ds.iloc[cut].date()), str(exc)[:90]))
             for d in future.ds.values:
                 preds[name][pd.Timestamp(d)] = np.nan
+
+    done_origins.add(cut)
+    _save_ckpt()
 
 eval_start = origins[0]
 eval_df = df.iloc[eval_start:eval_start + (N_ORIGINS * STEP)].reset_index(drop=True)
@@ -509,6 +562,54 @@ print("  rather than reacting to conditions.")
 
 
 # ─────────────────────────────────────────────────────
+# 4c. AIC / BIC — structure comparison within the likelihood-based family
+# ─────────────────────────────────────────────────────
+banner("STEP 4c: AIC / BIC (ARIMA-family structure comparison)")
+
+# AIC and BIC compare model STRUCTURE fitted to the SAME data, so they are taken
+# from a single fit on the full history — not averaged over rolling origins, where
+# every origin sees a different number of observations and the values would not be
+# comparable. Only likelihood-based models expose them: Prophet, the LSTM and the
+# naive baselines have no likelihood to score, and are reported as n/a rather than
+# given a placeholder that invites a meaningless cross-family comparison.
+INFO_CRIT: dict[str, tuple[float, float]] = {}
+
+from statsmodels.tsa.holtwinters import ExponentialSmoothing as _ES, Holt as _Holt
+from statsmodels.tsa.statespace.sarimax import SARIMAX as _SX
+
+_IC_FITS = {
+    "HoltWinters":  lambda: _ES(df["y"].values, trend="add", seasonal="add",
+                                seasonal_periods=SEASON,
+                                initialization_method="estimated").fit(),
+    "Holts_Linear": lambda: _Holt(df["y"].values,
+                                  initialization_method="estimated").fit(optimized=True),
+    "SARIMAX":      lambda: _SX(df["y"].values, exog=df[WEATHER_COLS].values,
+                                order=(1, 1, 1), seasonal_order=(1, 1, 1, SEASON),
+                                enforce_stationarity=False,
+                                enforce_invertibility=False).fit(disp=False),
+    "SARIMAX_nw":   lambda: _SX(df["y"].values, order=(1, 1, 1),
+                                seasonal_order=(1, 1, 1, SEASON),
+                                enforce_stationarity=False,
+                                enforce_invertibility=False).fit(disp=False),
+}
+
+for _name, _mk in _IC_FITS.items():
+    try:
+        _f = _mk()
+        INFO_CRIT[_name] = (float(_f.aic), float(_f.bic))
+        print(f"  {_name:<14} AIC {INFO_CRIT[_name][0]:>14,.1f}   BIC {INFO_CRIT[_name][1]:>14,.1f}")
+    except Exception as exc:
+        print(f"  {_name:<14} could not compute: {str(exc)[:60]}")
+
+for _name in MODELS:
+    if _name not in INFO_CRIT and _name not in BASELINES:
+        print(f"  {_name:<14} n/a — not a likelihood-based model")
+
+print("\n  Lower is better, and ONLY comparable within this family. AIC/BIC cannot")
+print("  rank SARIMAX against Prophet or the LSTM — different likelihoods, or none.")
+
+
+# ─────────────────────────────────────────────────────
 # 5. FUTURE — refit on everything, project past the last actual
 # ─────────────────────────────────────────────────────
 banner(f"STEP 5: FUTURE forecast ({FUTURE_DAYS} days past the last actual)")
@@ -540,7 +641,7 @@ for name, fn in MODELS.items():
 # ─────────────────────────────────────────────────────
 banner("STEP 6: Writing to AWS")
 
-ctx_df = df.iloc[max(0, eval_start - CTX):eval_start]
+ctx_df = df.iloc[0:eval_start] if CTX <= 0 else df.iloc[max(0, eval_start - CTX):eval_start]
 
 # The original connection has been idle through many minutes of model fitting and
 # RDS will have dropped it. Open a fresh one for the write.
@@ -590,15 +691,26 @@ cur.execute("DELETE FROM gold.ml_model_metrics WHERE target = 'Total Traffic'")
 for name, r in learned.iterrows():
     if not np.isfinite(r.wmape):
         continue
+    _aic, _bic = INFO_CRIT.get(name, (None, None))
+    # State the criterion that ACTUALLY failed. Acceptance needs both
+    # (WMAPE < baseline) and (MASE < 1.0), so a single canned message about the
+    # baseline is wrong whenever a model clears the baseline but fails MASE —
+    # Holt-Winters did exactly that and was given a reason contradicted by its
+    # own numbers sitting in the next column.
+    _fails = []
+    if not (r.wmape < base):
+        _fails.append(f"WMAPE {r.wmape:.2f}% does not beat baseline {base:.2f}%")
+    if not (r.mase < 1.0):
+        _fails.append(f"MASE {r.mase:.3f} >= 1.0 (no better than seasonal naive)")
+    _reason = None if r.accepted else "; ".join(_fails)
     cur.execute(
         """INSERT INTO gold.ml_model_metrics
            (model_name, target, rmse, mae, mse, wmape, r2, mase, mape, smape, rmsse,
-            rank, accepted, rejected_reason, uses_weather, updated_at)
-           VALUES (%s,'Total Traffic',%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,NOW())""",
+            rank, accepted, rejected_reason, uses_weather, aic, bic, updated_at)
+           VALUES (%s,'Total Traffic',%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,NOW())""",
         (name, r.rmse, r.mae, r.mse, r.wmape, r.r2, r.mase, r.mape, r.smape, r.rmsse,
-         int(r["rank"]), bool(r.accepted),
-         None if r.accepted else f"WMAPE {r.wmape:.2f}% does not beat baseline {base:.2f}%",
-         not name.endswith("_nw")),
+         int(r["rank"]), bool(r.accepted), _reason,
+         not name.endswith("_nw"), _aic, _bic),
     )
 conn.commit()
 cur.close()

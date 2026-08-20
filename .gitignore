@@ -14,5 +14,8 @@ yarn-debug.log*
 yarn-error.log*
 pnpm-debug.log*
 *.tsbuildinfo
+*.log
+*.log*
+*.pkl
 .env
 .env.*

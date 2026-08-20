@@ -1013,3 +1013,54 @@
   }
   .chartCard:hover { transform: none; }
 }
+
+/* Sort control.
+   Was two labelled buttons ("High → low" / "Low → high") which ate most of a card
+   header next to a title and a View-all button. One icon that flips does the same
+   work: the arrow shows the order you are in, and the tooltip and accessible name
+   say what pressing it does. */
+.sortBtn {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  border: 1px solid var(--border-default);
+  border-radius: 8px;
+  background: var(--bg-surface);
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: color 140ms ease, border-color 140ms ease, background 140ms ease;
+}
+
+.sortBtn:hover {
+  color: var(--kpi-1, var(--brand-primary));
+  border-color: var(--kpi-1, var(--brand-primary));
+  background: var(--bg-surface-hover);
+}
+
+.sortBtn:focus-visible {
+  outline: 2px solid var(--brand-primary);
+  outline-offset: 1px;
+}
+
+/* Colour key for the two charts that encode magnitude rather than identity.
+   Drawn here rather than as an ECharts visualMap: that kept rendering as a
+   vertical bar across the hour labels regardless of orient, and a div under the
+   plot cannot collide with an axis. */
+.rampKey {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 9px;
+  margin-top: 6px;
+  font-size: 0.68rem;
+  font-weight: 600;
+  color: var(--text-muted);
+}
+
+.rampKey span {
+  width: 96px;
+  height: 8px;
+  border-radius: 999px;
+}

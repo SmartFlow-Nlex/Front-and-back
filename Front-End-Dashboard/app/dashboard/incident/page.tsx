@@ -5,7 +5,7 @@ import { attachCategoryClick } from "../../../lib/chart-click";
 import { useChartTheme, applyChartTheme, seriesRamp, seriesPair } from "../../../lib/chart-theme";
 import ReactECharts from "echarts-for-react";
 import type { EChartsOption } from "echarts";
-import { AlertTriangle, CloudRain, HeartPulse, MapPin, Timer } from "lucide-react";
+import { AlertTriangle, ArrowDownWideNarrow, ArrowUpNarrowWide, CloudRain, HeartPulse, MapPin, Timer } from "lucide-react";
 import DashboardChart from "../../../components/dashboard/DashboardChart";
 import ChartSkeleton, { KpiSkeleton } from "../../../components/dashboard/ChartSkeleton";
 import PageHeader from "../../../components/dashboard/PageHeader";
@@ -765,19 +765,15 @@ export default function IncidentPage() {
           <div className={styles.headText}>
             <h3>Hotspots by Km Segment</h3>
           </div>
-          <div className={styles.segmentedSmall} role="radiogroup" aria-label="Sort order">
-            {([["desc", "High → low"], ["asc", "Low → high"]] as const).map(([v, label]) => (
-              <button
-                key={v}
-                role="radio"
-                aria-checked={hotspotSort === v}
-                className={hotspotSort === v ? "active" : ""}
-                onClick={() => setHotspotSort(v)}
-              >
-                {label}
-              </button>
-            ))}
-          </div>
+          <button
+            type="button"
+            className={styles.sortBtn}
+            onClick={() => setHotspotSort(hotspotSort === "desc" ? "asc" : "desc")}
+            title={hotspotSort === "desc" ? "Sorted highest first — click for lowest first" : "Sorted lowest first — click for highest first"}
+            aria-label={`Sort order: ${hotspotSort === "desc" ? "highest first" : "lowest first"}. Activate to reverse.`}
+          >
+            {hotspotSort === "desc" ? <ArrowDownWideNarrow size={15} /> : <ArrowUpNarrowWide size={15} />}
+          </button>
           <button className={styles.secondaryButton} onClick={() => setAllHotspotsOpen(true)}>
             View all
             <svg width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M6 12l4-4-4-4" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" /></svg>
@@ -792,19 +788,15 @@ export default function IncidentPage() {
           <div className={styles.headText}>
             <h3>{causeMode === "Causes" ? "Top Incident Causes" : "Top Accident Types"}</h3>
           </div>
-          <div className={styles.segmentedSmall} role="radiogroup" aria-label="Sort order">
-            {([["desc", "High → low"], ["asc", "Low → high"]] as const).map(([v, label]) => (
-              <button
-                key={v}
-                role="radio"
-                aria-checked={causeSort === v}
-                className={causeSort === v ? "active" : ""}
-                onClick={() => setCauseSort(v)}
-              >
-                {label}
-              </button>
-            ))}
-          </div>
+          <button
+            type="button"
+            className={styles.sortBtn}
+            onClick={() => setCauseSort(causeSort === "desc" ? "asc" : "desc")}
+            title={causeSort === "desc" ? "Sorted highest first — click for lowest first" : "Sorted lowest first — click for highest first"}
+            aria-label={`Sort order: ${causeSort === "desc" ? "highest first" : "lowest first"}. Activate to reverse.`}
+          >
+            {causeSort === "desc" ? <ArrowDownWideNarrow size={15} /> : <ArrowUpNarrowWide size={15} />}
+          </button>
           <div className={styles.segmentedSmall}>
             {(["Causes", "Types"] as const).map((m) => (
               <button key={m} className={causeMode === m ? "active" : ""} onClick={() => setCauseMode(m)}>

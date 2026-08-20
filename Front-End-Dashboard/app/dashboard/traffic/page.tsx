@@ -5,7 +5,7 @@ import { attachCategoryClick } from "../../../lib/chart-click";
 import { useChartTheme, applyChartTheme, seriesRamp, seriesPair } from "../../../lib/chart-theme";
 import ReactECharts from "echarts-for-react";
 import type { EChartsOption } from "echarts";
-import { Activity, Building2, CalendarClock, Clock, Gauge, TrendingUp } from "lucide-react";
+import { Activity, ArrowDownWideNarrow, ArrowUpNarrowWide, Building2, CalendarClock, Clock, Gauge, TrendingUp } from "lucide-react";
 import DashboardChart from "../../../components/dashboard/DashboardChart";
 import ChartSkeleton, { KpiSkeleton } from "../../../components/dashboard/ChartSkeleton";
 import PageHeader from "../../../components/dashboard/PageHeader";
@@ -340,7 +340,7 @@ export default function TrafficPage() {
     const heatMax = Math.max(...data.hourDow.map((r) => r.v));
     return {
       // Legend lives in a slim strip below the plot, never on it
-      grid: { left: 40, right: 10, top: 6, bottom: 44 },
+      grid: { left: 40, right: 10, top: 6, bottom: 26 },
       xAxis: { type: "category", data: Array.from({ length: 24 }, (_, h) => fmtHour(h)), splitArea: { show: true }, axisLabel: { interval: 3, fontSize: 10 }, axisTick: { show: false } },
       // inverse:true puts Mon at the top, Sun at the bottom
       yAxis: { type: "category", data: DOW_LABELS, inverse: true, splitArea: { show: true }, axisLabel: { interval: 0, fontSize: 10 }, axisTick: { show: false } },
@@ -351,21 +351,14 @@ export default function TrafficPage() {
         },
       },
       visualMap: {
+        show: false,
         type: "continuous",
         min: 0,
         max: heatMax,
         calculable: false,
-        orient: "horizontal",
-        left: "center",
-        bottom: 0,
-        itemWidth: 110,
-        itemHeight: 9,
-        padding: 0,
         // The lightest step is the theme's 'empty' tone: near-white on light,
         // near-black on dark, so low values recede in both instead of glowing.
         inRange: { color: [chartTheme.seqLightest, ...SEQ.slice(1)] },
-        text: ["Busier", "Quieter"],
-        textStyle: { fontSize: 10, color: chartTheme.text },
         formatter: (v) => fmtCompact(Number(v)),
       },
       series: [{ type: "heatmap", data: heatData, emphasis: { itemStyle: { borderColor: RAMP[2], borderWidth: 1 } } }],
@@ -420,7 +413,7 @@ export default function TrafficPage() {
     const CONGESTION_THRESHOLD = 20; // km/h — below this counts as heavy congestion
     const yMax = Math.max(CONGESTION_THRESHOLD + 5, Math.ceil(Math.max(...speeds) / 5) * 5);
     return {
-      grid: { left: 36, right: 14, top: 10, bottom: 52 },
+      grid: { left: 36, right: 14, top: 10, bottom: 26 },
       xAxis: { type: "category", data: data.speedByHour.map((r) => fmtHour(r.hour)), axisLabel: { interval: 3, fontSize: 10 }, axisTick: { show: false } },
       yAxis: { type: "value", min: 0, max: yMax, splitNumber: 3, axisLabel: { formatter: "{value}", fontSize: 10 }, name: "km/h", nameGap: 6, nameTextStyle: { fontSize: 10 } },
       tooltip: {
@@ -432,10 +425,8 @@ export default function TrafficPage() {
         },
       },
       visualMap: {
-        show: true, type: "continuous", seriesIndex: 0, orient: "horizontal",
-        bottom: 0, left: "center", itemWidth: 70, itemHeight: 9, calculable: false,
+        show: false, type: "continuous", seriesIndex: 0, calculable: false,
         min: Math.min(...speeds), max: Math.max(...speeds), inRange: { color: SEVERITY },
-        text: ["Faster", "Slower"], textStyle: { fontSize: 10, color: chartTheme.text },
       },
       series: [
         {
@@ -983,6 +974,11 @@ export default function TrafficPage() {
           </div>
         </div>
         <div className={styles.chartBody}>{chartFrame(heatmapOption, "No data for the selected filters", onHeatmapClick, false)}</div>
+        <div className={styles.rampKey}>
+          Quieter
+          <span style={{ background: `linear-gradient(to right, ${SEQ.join(", ")})` }} />
+          Busier
+        </div>
       </article>
 
       <article className={`${styles.chartCard} ${styles.chart3}`}>
@@ -990,19 +986,15 @@ export default function TrafficPage() {
           <div className={styles.headText}>
             <h3>Volume by Plaza</h3>
           </div>
-          <div className={styles.segmentedSmall} role="radiogroup" aria-label="Sort order">
-            {([["desc", "High → low"], ["asc", "Low → high"]] as const).map(([v, label]) => (
-              <button
-                key={v}
-                role="radio"
-                aria-checked={plazaSort === v}
-                className={plazaSort === v ? "active" : ""}
-                onClick={() => setPlazaSort(v)}
-              >
-                {label}
-              </button>
-            ))}
-          </div>
+          <button
+            type="button"
+            className={styles.sortBtn}
+            onClick={() => setPlazaSort(plazaSort === "desc" ? "asc" : "desc")}
+            title={plazaSort === "desc" ? "Sorted highest first — click for lowest first" : "Sorted lowest first — click for highest first"}
+            aria-label={`Sort order: ${plazaSort === "desc" ? "highest first" : "lowest first"}. Activate to reverse.`}
+          >
+            {plazaSort === "desc" ? <ArrowDownWideNarrow size={15} /> : <ArrowUpNarrowWide size={15} />}
+          </button>
           <button className={styles.secondaryButton} onClick={() => setAllPlazasOpen(true)}>
             View all plazas
             <svg width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M6 12l4-4-4-4" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" /></svg>
@@ -1019,6 +1011,11 @@ export default function TrafficPage() {
           </div>
         </div>
         <div className={styles.chartBody}>{chartFrame(speedOption, "No congestion data in the selected range", onSpeedClick)}</div>
+        <div className={styles.rampKey}>
+          Slower
+          <span style={{ background: `linear-gradient(to right, ${SEVERITY.join(", ")})` }} />
+          Faster
+        </div>
       </article>
 
       <article className={`${styles.chartCard} ${styles.chart5}`}>
@@ -1026,19 +1023,15 @@ export default function TrafficPage() {
           <div className={styles.headText}>
             <h3>{impactMode === "Events" ? "Arena Event Impact (venue exit entries)" : "Holiday Impact vs Normal Days"}</h3>
           </div>
-          <div className={styles.segmentedSmall} role="radiogroup" aria-label="Sort order">
-            {([["desc", "High → low"], ["asc", "Low → high"]] as const).map(([v, label]) => (
-              <button
-                key={v}
-                role="radio"
-                aria-checked={impactSort === v}
-                className={impactSort === v ? "active" : ""}
-                onClick={() => setImpactSort(v)}
-              >
-                {label}
-              </button>
-            ))}
-          </div>
+          <button
+            type="button"
+            className={styles.sortBtn}
+            onClick={() => setImpactSort(impactSort === "desc" ? "asc" : "desc")}
+            title={impactSort === "desc" ? "Sorted highest first — click for lowest first" : "Sorted lowest first — click for highest first"}
+            aria-label={`Sort order: ${impactSort === "desc" ? "highest first" : "lowest first"}. Activate to reverse.`}
+          >
+            {impactSort === "desc" ? <ArrowDownWideNarrow size={15} /> : <ArrowUpNarrowWide size={15} />}
+          </button>
           <button className={styles.secondaryButton} onClick={() => setImpactListOpen(true)}>
             View all
             <svg width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M6 12l4-4-4-4" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" /></svg>

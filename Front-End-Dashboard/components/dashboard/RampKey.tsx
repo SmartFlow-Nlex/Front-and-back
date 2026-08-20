@@ -47,6 +47,7 @@ export default function RampKey({
   format,
   lowLabel,
   highLabel,
+  onScrub,
 }: {
   colors: string[];
   min: number;
@@ -55,6 +56,8 @@ export default function RampKey({
   format: (v: number) => string;
   lowLabel: string;
   highLabel: string;
+  /** Fraction along the ramp under the cursor, or null when it leaves. */
+  onScrub?: (t: number | null) => void;
 }) {
   const barRef = useRef<HTMLSpanElement>(null);
   const [at, setAt] = useState<number | null>(null);
@@ -66,7 +69,9 @@ export default function RampKey({
     if (r.width === 0) return;
     // Clamped, so a cursor that slips past the rounded end still reads the end
     // value rather than something off-scale.
-    setAt(Math.min(1, Math.max(0, (clientX - r.left) / r.width)));
+    const t = Math.min(1, Math.max(0, (clientX - r.left) / r.width));
+    setAt(t);
+    onScrub?.(t);
   };
 
   const value = at == null ? null : min + at * (max - min);
@@ -81,7 +86,7 @@ export default function RampKey({
         className={styles.rampKeyBar}
         style={{ background: `linear-gradient(to right, ${colors.join(", ")})` }}
         onMouseMove={(e) => track(e.clientX)}
-        onMouseLeave={() => setAt(null)}
+        onMouseLeave={() => { setAt(null); onScrub?.(null); }}
         role="img"
         aria-label={`Colour scale from ${format(min)} to ${format(max)}`}
       >

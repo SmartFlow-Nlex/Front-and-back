@@ -360,6 +360,9 @@ export default function TrafficPage() {
         // The lightest step is the theme's 'empty' tone: near-white on light,
         // near-black on dark, so low values recede in both instead of glowing.
         inRange: { color: [chartTheme.seqLightest, ...SEQ.slice(1)] },
+        // Where scrubbed-out cells land. Faint rather than hidden, so the shape
+        // of the week stays legible while the matching band stands out.
+        outOfRange: { color: chartTheme.split },
         formatter: (v) => fmtCompact(Number(v)),
       },
       series: [{ type: "heatmap", data: heatData, emphasis: { itemStyle: { borderColor: RAMP[2], borderWidth: 1 } } }],
@@ -428,6 +431,7 @@ export default function TrafficPage() {
       visualMap: {
         show: false, type: "continuous", seriesIndex: 0, calculable: false,
         min: Math.min(...speeds), max: Math.max(...speeds), inRange: { color: SEVERITY },
+        outOfRange: { color: chartTheme.split },
       },
       series: [
         {
@@ -682,6 +686,9 @@ export default function TrafficPage() {
     emptyNote: string,
     onClick?: (p: never) => void,
     categoryFallback = true,
+    // Lets a caller keep the instance so it can drive the chart from outside —
+    // the colour keys use it to highlight a band.
+    onReady?: (chart: unknown) => void,
   ) => {
     if (loading && !data) return <ChartSkeleton />;
     if (error) return <div className={styles.placeholder}>Live data unavailable — is the backend running on port 4000?</div>;
@@ -697,17 +704,48 @@ export default function TrafficPage() {
         // Lines are drawn with symbol:"none", so they have no clickable points
         // and ECharts' item click never fires with the right index. Resolve the
         // category from the cursor position instead.
-        onChartReady={
-          onClick && categoryFallback
-            ? (chart) => attachCategoryClick(chart as never, onClick as never)
-            : undefined
-        }
+        onChartReady={(chart) => {
+          if (onClick && categoryFallback) attachCategoryClick(chart as never, onClick as never);
+          onReady?.(chart);
+        }}
       />
     );
   };
 
   // A skeleton rather than an ellipsis: the tile keeps its height, so the KPI
   // row does not resize under the cursor as the numbers arrive.
+  /* Scrubbing a colour key highlights the matching part of its chart.
+
+     The visualMaps are still there, just not drawn — so selectDataRange, the
+     action the visible control used to fire, still works. Narrowing the range
+     leaves matching cells in colour and drops the rest to outOfRange, which is
+     the highlight the old visualMap gave and the static strip had lost. */
+  const heatChart = useRef<unknown>(null);
+  const speedChart = useRef<unknown>(null);
+
+  const scrub = (
+    ref: React.MutableRefObject<unknown>,
+    lo: number,
+    hi: number,
+  ) => (t: number | null) => {
+    const chart = ref.current as
+      | { dispatchAction: (a: Record<string, unknown>) => void }
+      | null;
+    if (!chart) return;
+    if (t == null) {
+      chart.dispatchAction({ type: "selectDataRange", visualMapIndex: 0, selected: [lo, hi] });
+      return;
+    }
+    // A band rather than a point: an exact value would match almost nothing.
+    const v = lo + t * (hi - lo);
+    const pad = (hi - lo) * 0.08;
+    chart.dispatchAction({
+      type: "selectDataRange",
+      visualMapIndex: 0,
+      selected: [Math.max(lo, v - pad), Math.min(hi, v + pad)],
+    });
+  };
+
   /* The key needs the same domain the chart coloured against, or pointing at a
      shade would report a value the heatmap never used. */
   const heatMaxValue = useMemo(
@@ -986,7 +1024,7 @@ export default function TrafficPage() {
             <h3>Average Volume by Hour × Day of Week</h3>
           </div>
         </div>
-        <div className={styles.chartBody}>{chartFrame(heatmapOption, "No data for the selected filters", onHeatmapClick, false)}</div>
+        <div className={styles.chartBody}>{chartFrame(heatmapOption, "No data for the selected filters", onHeatmapClick, false, (c) => { heatChart.current = c; })}</div>
         <RampKey
           colors={SEQ}
           min={0}
@@ -994,6 +1032,7 @@ export default function TrafficPage() {
           format={(v) => `${fmtCompact(v)} vehicles`}
           lowLabel="Quieter"
           highLabel="Busier"
+          onScrub={scrub(heatChart, 0, heatMaxValue)}
         />
       </article>
 
@@ -1026,7 +1065,7 @@ export default function TrafficPage() {
             <h3>Average Speed in Jams by Hour</h3>
           </div>
         </div>
-        <div className={styles.chartBody}>{chartFrame(speedOption, "No congestion data in the selected range", onSpeedClick)}</div>
+        <div className={styles.chartBody}>{chartFrame(speedOption, "No congestion data in the selected range", onSpeedClick, true, (c) => { speedChart.current = c; })}</div>
         <RampKey
           colors={SEVERITY}
           min={speedRange[0]}
@@ -1034,6 +1073,7 @@ export default function TrafficPage() {
           format={(v) => `${v.toFixed(0)} km/h`}
           lowLabel="Slower"
           highLabel="Faster"
+          onScrub={scrub(speedChart, speedRange[0], speedRange[1])}
         />
       </article>
 

@@ -3385,12 +3385,19 @@ body {
    -------------------------------------------------------------------------- */
 
 .ds-rd-rail {
+  /* A column, not a wrapping row. Side by side, the readings moved to a second
+     line only when the name happened to be long enough to push them there, so
+     the panel changed shape from one exit to the next. Stacking makes the name
+     the heading and the readings its detail, the same way every time. */
   display: flex;
-  flex-wrap: wrap;
-  align-items: baseline;
-  gap: 8px 20px;
-  min-height: 46px;
-  padding: 12px 22px;
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: center;
+  gap: 6px;
+  /* Holds two lines, so the road below does not jump as the pointer moves
+     between exits with and without a reading. */
+  min-height: 62px;
+  padding: 11px 22px;
   background: var(--bg-surface-hover);
   border-bottom: 1px solid var(--border-default);
 }

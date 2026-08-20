@@ -364,7 +364,7 @@ export default function TrafficPage() {
       series: [{ type: "heatmap", data: heatData, emphasis: { itemStyle: { borderColor: RAMP[2], borderWidth: 1 } } }],
     };
     // chartTheme is a dependency because the ramp's lightest step comes from it.
-  }, [data, chartTheme, plazaSort]);
+  }, [data, chartTheme]);
 
   const plazaChart = useMemo<{
     option: EChartsOption;
@@ -388,7 +388,7 @@ export default function TrafficPage() {
         xAxis: { type: "value", splitNumber: 3, axisLabel: { formatter: (v: number) => fmtCompact(v), fontSize: 10 } },
         // interval:0 — every plaza name must be readable, that IS the chart
         yAxis: { type: "category", data: display.map((r) => r.plaza), axisLabel: { interval: 0, fontSize: 10 }, axisTick: { show: false } },
-        tooltip: { trigger: "axis", valueFormatter: (v) => `${fmtInt(Number(v))} vehicles` },
+        tooltip: { trigger: "axis", axisPointer: { type: "shadow" }, valueFormatter: (v) => `${fmtInt(Number(v))} vehicles` },
         legend: { show: true, bottom: 0, left: "center", itemWidth: 14, itemHeight: 8, itemGap: 18, padding: 0, textStyle: { fontSize: 11 } },
         series: [
           {
@@ -405,7 +405,7 @@ export default function TrafficPage() {
         ],
       },
     };
-  }, [data]);
+  }, [data, plazaSort]);
 
   const speedOption = useMemo<EChartsOption | null>(() => {
     if (!data || data.speedByHour.length === 0) return null;
@@ -478,6 +478,7 @@ export default function TrafficPage() {
         xAxis: { type: "value", splitNumber: 3, axisLabel: { formatter: (v: number) => `${v}%`, fontSize: 10 } },
         yAxis: { type: "category", data: display.map((r) => r.label), axisLabel: { interval: 0, fontSize: 10 }, axisTick: { show: false } },
         tooltip: {
+          axisPointer: { type: "shadow" },
           formatter: (p) => {
             const i = (p as { dataIndex: number }).dataIndex;
             const r = display[i];

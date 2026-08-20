@@ -337,6 +337,7 @@ export default function SustainabilityPage() {
       xAxis: { type: "value", max: 100, interval: 25, axisLabel: { fontSize: 10, formatter: "{value}%" } },
       yAxis: { type: "category", data: rows.map((r) => r.label), axisLabel: { interval: 0, fontSize: 10 }, axisTick: { show: false } },
       tooltip: {
+          axisPointer: { type: "shadow" },
         trigger: "axis",
         formatter: (p) => {
           const items = p as { seriesIndex: number; dataIndex: number; value: number; marker: string }[];
@@ -436,6 +437,7 @@ export default function SustainabilityPage() {
       xAxis: { type: "category", data: labels, axisLabel: { fontSize: 10, hideOverlap: true }, axisTick: { show: false } },
       yAxis: { type: "value", max: 100, splitNumber: 4, axisLabel: { fontSize: 10, formatter: "{value}%" } },
       tooltip: {
+          axisPointer: { type: "shadow" },
         trigger: "axis",
         formatter: (p) => {
           const items = p as { seriesIndex: number; dataIndex: number; value: number; marker: string }[];

@@ -323,6 +323,7 @@ export default function IncidentPage() {
         xAxis: { type: "value", splitNumber: 3, axisLabel: { fontSize: 10 } },
         yAxis: { type: "category", data: display.map((r) => kmLabel(r.km_bin)), axisLabel: { interval: 0, fontSize: 10 }, axisTick: { show: false } },
         tooltip: {
+          axisPointer: { type: "shadow" },
           formatter: (p) => {
             const i = (p as { dataIndex: number }).dataIndex;
             const r = display[i];
@@ -344,7 +345,7 @@ export default function IncidentPage() {
         ],
       },
     };
-  }, [data]);
+  }, [data, hotspotSort]);
 
   const causeChart = useMemo<{ option: EChartsOption; rows: Analytics["causes"] } | null>(() => {
     if (!data) return null;
@@ -359,6 +360,7 @@ export default function IncidentPage() {
         xAxis: { type: "value", splitNumber: 3, axisLabel: { fontSize: 10 } },
         yAxis: { type: "category", data: display.map((r) => (r.label.length > 24 ? `${r.label.slice(0, 24)}…` : r.label)), axisLabel: { interval: 0, fontSize: 10 }, axisTick: { show: false } },
         tooltip: {
+          axisPointer: { type: "shadow" },
           formatter: (p) => {
             const i = (p as { dataIndex: number }).dataIndex;
             const r = display[i];

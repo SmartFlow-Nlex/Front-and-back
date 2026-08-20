@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import type { EChartsOption } from "echarts";
 import DashboardChart from "./DashboardChart";
+import IncidentNarrative, { MetricHint, metricHintFor, modelHintFor } from "./IncidentNarrative";
 import {
   ACTUAL_COLOR,
   META,
@@ -533,12 +534,12 @@ export default function PredictiveIncidentChart({
           <thead>
             <tr style={{ textAlign: "left", color: "#64748b", fontSize: "0.72rem", textTransform: "uppercase", letterSpacing: "0.05em" }}>
               <th style={{ padding: "6px 10px", fontWeight: 600 }}>Model</th>
-              <th style={th}>RMSE</th>
-              <th style={th}>MAE</th>
-              <th style={th}>WMAPE</th>
-              <th style={th}>MASE</th>
-              <th style={th}>R² Score</th>
-              <th style={th} title="Days scored">N</th>
+              <th style={th}><MetricHint hint={metricHintFor("RMSE")}>RMSE</MetricHint></th>
+              <th style={th}><MetricHint hint={metricHintFor("MAE")}>MAE</MetricHint></th>
+              <th style={th}><MetricHint hint={metricHintFor("WMAPE")}>WMAPE</MetricHint></th>
+              <th style={th}><MetricHint hint={metricHintFor("MASE")}>MASE</MetricHint></th>
+              <th style={th}><MetricHint hint={metricHintFor("R² Score")}>R² Score</MetricHint></th>
+              <th style={th}><MetricHint hint={metricHintFor("N")}>N</MetricHint></th>
             </tr>
           </thead>
           <tbody>
@@ -550,7 +551,7 @@ export default function PredictiveIncidentChart({
                   <td style={{ padding: "10px", fontWeight: 700, color: "#0f172a" }}>
                     <span style={{ display: "inline-flex", alignItems: "center", gap: "8px" }}>
                       <span style={{ width: 10, height: 10, borderRadius: "50%", background: color }} />
-                      {meta?.label ?? m.model}
+                      <MetricHint hint={modelHintFor(m.model as ModelKey)}>{meta?.label ?? m.model}</MetricHint>
                       {m.isChampion && (
                         <span
                           style={{ fontSize: "0.72rem", fontWeight: 600, color: "#15803d" }}
@@ -715,6 +716,18 @@ export default function PredictiveIncidentChart({
 
       {metricsTable}
       {weatherPanel}
+
+      {/* Narrative is composed from the same modelMetrics rows that feed the
+          table above, so the prose can never drift away from the numbers
+          beside it. scoringCaption is reused verbatim from the table so the
+          two can't disagree about which window they're describing. */}
+      <IncidentNarrative
+        selected={activeModels}
+        metrics={shownMetrics}
+        scoringCaption={scoringCaption}
+        weather={weather ?? "all"}
+        horizonDays={modelInfo.forecastHorizon}
+      />
     </article>
   );
 }

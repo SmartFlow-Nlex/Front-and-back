@@ -416,12 +416,15 @@ export default function TrafficPage() {
   const speedOption = useMemo<EChartsOption | null>(() => {
     if (!data || data.speedByHour.length === 0) return null;
     const speeds = data.speedByHour.map((r) => r.speed);
-    const CONGESTION_THRESHOLD = 20; // km/h — below this counts as heavy congestion
-    const yMax = Math.max(CONGESTION_THRESHOLD + 5, Math.ceil(Math.max(...speeds) / 5) * 5);
+    // Framed on the data rather than on zero. Every hour here sits well under the
+    // 20 km/h congestion threshold, so an axis stretched to hold that line spent
+    // most of its height on empty space the readings never reach.
+    const lo = Math.max(0, Math.floor(Math.min(...speeds)) - 1);
+    const hi = Math.ceil(Math.max(...speeds)) + 1;
     return {
       grid: { left: 36, right: 14, top: 10, bottom: 26 },
       xAxis: { type: "category", data: data.speedByHour.map((r) => fmtHour(r.hour)), axisLabel: { interval: 3, fontSize: 10 }, axisTick: { show: false } },
-      yAxis: { type: "value", min: 0, max: yMax, splitNumber: 3, axisLabel: { formatter: "{value}", fontSize: 10 }, name: "km/h", nameGap: 6, nameTextStyle: { fontSize: 10 } },
+      yAxis: { type: "value", min: lo, max: hi, splitNumber: 4, axisLabel: { formatter: "{value}", fontSize: 10 }, name: "km/h", nameGap: 6, nameTextStyle: { fontSize: 10 } },
       tooltip: {
         trigger: "axis",
         formatter: (p) => {
@@ -433,9 +436,10 @@ export default function TrafficPage() {
       visualMap: {
         show: false, type: "continuous", seriesIndex: 0, calculable: false,
         min: Math.min(...speeds), max: Math.max(...speeds), inRange: { color: SEVERITY },
-        // Scrubbing the key fades the rest of the line rather than recolouring
-        // it, so the whole curve stays readable behind the highlighted stretch.
-        outOfRange: { color: SEVERITY, opacity: 0.18 },
+        // Scrubbing greys the rest of the line out. A neutral reads more clearly
+        // as "not this" on a single line than a washed-out version of the same
+        // ramp, which just looks like a lighter reading.
+        outOfRange: { color: chartTheme.axis },
       },
       series: [
         {
@@ -448,14 +452,6 @@ export default function TrafficPage() {
           // through a step of the same colour.
           itemStyle: { borderColor: chartTheme.tooltipBg, borderWidth: 1.5 },
           lineStyle: { width: 3.5 },
-          areaStyle: { opacity: 0.14 },
-          markLine: {
-            symbol: "none",
-            silent: true,
-            lineStyle: { color: chartTheme.axis, width: 1, type: "dashed" },
-            label: { formatter: "20 km/h — congestion threshold", position: "insideEndTop", fontSize: 9, color: chartTheme.axis },
-            data: [{ yAxis: CONGESTION_THRESHOLD }],
-          },
         },
       ],
     };

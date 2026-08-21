@@ -59,9 +59,11 @@ export async function getTrafficAnalyticsFromDb(filters: AnalyticsFilters) {
             ).rows[0].hi;
     }
 
-    // Hourly detail is heavy and noisy beyond ~2 weeks; only ship it for short spans
-    const spanDays = Math.round((Date.parse(hi) - Date.parse(lo)) / 86_400_000);
-    const includeHourly = spanDays <= 14;
+    // Hourly detail ships for every span. The old 14-day cap was a payload
+    // guard, but the whole dataset is 571 days -> ~13.7k hourly rows, which
+    // measures at well under a megabyte; capping it meant the Hourly granularity
+    // silently disappeared on any longer range instead of being a choice.
+    const includeHourly = true;
 
     // Shared volume filter. 'Total' rows aggregate classes 1-3; a class filter
     // swaps to that class's rows. $1=lo $2=hi $3=class, optional $4/$5.

@@ -8,6 +8,19 @@ interface DateRangePickerProps {
   startDate: string;
   endDate: string;
   onChange: (start: string, end: string) => void;
+  /**
+   * Shortest range the caller accepts, counted inclusively — 2 means "a start
+   * and an end that are not the same day". Days that would close a shorter
+   * range are disabled rather than silently ignored, so the limit is visible
+   * while choosing instead of only after the click does nothing. Defaults to 1,
+   * which allows a single-day range and leaves existing callers unchanged.
+   */
+  minDays?: number;
+}
+
+// Inclusive day count between two YYYY-MM-DD strings, in either order.
+function spanBetween(a: string, b: string): number {
+  return Math.abs(Math.round((Date.parse(b) - Date.parse(a)) / 86_400_000)) + 1;
 }
 
 const MONTHS = [
@@ -25,7 +38,7 @@ function formatDate(d: Date): string {
   return `${y}-${m}-${dd}`;
 }
 
-export default function DateRangePicker({ startDate, endDate, onChange }: DateRangePickerProps) {
+export default function DateRangePicker({ startDate, endDate, onChange, minDays = 1 }: DateRangePickerProps) {
   const [isOpen, setIsOpen] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
 
@@ -63,6 +76,10 @@ export default function DateRangePicker({ startDate, endDate, onChange }: DateRa
       setSelStart(dayStr);
       setSelEnd(null);
     } else {
+      // Too short to close the range — the day is already disabled, so this is
+      // only reached via the keyboard. Leave the picker open on the pending
+      // start rather than committing a range the caller rejects.
+      if (spanBetween(selStart, dayStr) < minDays) return;
       // Complete selection
       if (dayStr < selStart) {
         onChange(dayStr, selStart);
@@ -174,19 +191,28 @@ export default function DateRangePicker({ startDate, endDate, onChange }: DateRa
                   inRange = true; // Preview range (backwards)
                 }
 
+                // While a start is pending, any day that would close a range
+                // shorter than minDays is not a legal end. With minDays=2 that
+                // is the start day itself — clicking it would mean a one-day
+                // range, which is exactly what the caller asked to prevent.
+                const tooShort = !!selStart && !selEnd && spanBetween(selStart, dayStr) < minDays;
+
                 let classes = styles.dayBtn;
                 if (isStart) classes += ` ${styles.rangeStart}`;
                 if (isEnd) classes += ` ${styles.rangeEnd}`;
                 if (inRange) classes += ` ${styles.inRange}`;
                 if (isSelected && !isStart && !isEnd) classes += ` ${styles.selected}`; // fallback
+                if (tooShort) classes += ` ${styles.disabled}`;
 
                 const d = new Date(dayStr);
                 return (
                   <button
                     key={dayStr}
                     className={classes}
+                    disabled={tooShort}
+                    title={tooShort ? `Pick a range of at least ${minDays} days` : undefined}
                     onClick={() => handleDayClick(dayStr)}
-                    onMouseEnter={() => setHoverDate(dayStr)}
+                    onMouseEnter={() => !tooShort && setHoverDate(dayStr)}
                     onMouseLeave={() => setHoverDate(null)}
                   >
                     {d.getDate()}

@@ -388,6 +388,18 @@
   transform: translateX(14px);
 }
 
+/* Locked while Direction filters to a single side — the split has nothing left
+   to separate. Dimmed rather than hidden so the control keeps its place in the
+   row and the reason stays discoverable through the label's tooltip. */
+.heroToggleLocked {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.heroToggleLocked .heroToggleTrack {
+  background: #d0d5de;
+}
+
 /* ---------- Row B: KPI tiles ---------- */
 .kpiRow {
   grid-column: 1 / -1;

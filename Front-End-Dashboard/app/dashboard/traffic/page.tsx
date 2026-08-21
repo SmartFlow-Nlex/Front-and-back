@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { attachCategoryClick } from "../../../lib/chart-click";
 import { useChartTheme, applyChartTheme, seriesRamp, seriesPair } from "../../../lib/chart-theme";
 import ReactECharts from "echarts-for-react";
@@ -193,11 +193,21 @@ export default function TrafficPage() {
   const [plazaSort, setPlazaSort] = useState<"desc" | "asc">("desc");
   const [impactSort, setImpactSort] = useState<"desc" | "asc">("desc");
   const [grain, setGrain] = useState<Granularity>("daily");
-  const [splitDirection, setSplitDirection] = useState(false);
+  const [splitPref, setSplitPref] = useState(false);
   const [impactMode, setImpactMode] = useState<"Events" | "Holidays">("Holidays");
   const [allPlazasOpen, setAllPlazasOpen] = useState(false);
   const [impactListOpen, setImpactListOpen] = useState(false);
   const [detail, setDetail] = useState<Detail | null>(null);
+
+  // Splitting the trend into NB and SB only says something when both are in the
+  // data. Filtering Direction to NB or SB already reduces the chart to that one
+  // line, and the request drops the other side entirely — so the split would
+  // draw its counterpart as a flat zero series. The toggle is locked there
+  // rather than left to produce a meaningless line. splitPref remembers what the
+  // user last chose, so returning to Both restores it instead of silently
+  // resetting a setting they never turned off.
+  const splitAvailable = direction === "Both";
+  const splitDirection = splitPref && splitAvailable;
 
   const [data, setData] = useState<Analytics | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -234,11 +244,74 @@ export default function TrafficPage() {
     };
   }, [rangeMode, customFrom, customTo, plazaSel, direction, vClass, weather]);
 
-  // Hourly grain exists only when the server shipped hourly rows (spans <= ~3 months)
-  const hourlyAvailable = !!data?.hourlyTrend;
+  // Inclusive length of the range the granularity rules are measured against.
+  //
+  // In custom mode this is what the user picked, NOT the range the server
+  // echoes back. The server clamps the end down to the last day it holds data,
+  // so picking a single recent day — the dataset ends well before today —
+  // returns from > to, and measuring that gives a negative span that silently
+  // switched every lock off. What the user picked is also simply the honest
+  // input to the question being asked: pick one day and the rule is about one
+  // day, whether or not the warehouse has rows for it.
+  //
+  // Presets carry no explicit dates, so there the server's resolved range is
+  // the only thing that can be measured.
+  const spanDays = useMemo(() => {
+    const [from, to] =
+      rangeMode === "custom"
+        ? customFrom && customTo
+          ? customFrom <= customTo
+            ? [customFrom, customTo]
+            : [customTo, customFrom]
+          : ["", ""]
+        : [data?.range.from ?? "", data?.range.to ?? ""];
+    if (!from || !to) return null;
+    const ms = Date.parse(`${to}T00:00:00Z`) - Date.parse(`${from}T00:00:00Z`);
+    if (Number.isNaN(ms)) return null;
+    const days = Math.floor(ms / 86_400_000) + 1;
+    return days < 1 ? null : days;
+  }, [data, rangeMode, customFrom, customTo]);
+
+  // A trend needs two points to be a trend — one bucket is a dot, and the line
+  // between nothing and nothing says less than the number already on the KPI
+  // tile. So each grain requires two of whatever unit it buckets by: 2 days for
+  // daily, 2 weeks for weekly, 2 months for monthly. Hourly is never locked: the
+  // shortest range the picker allows is a single day, and that is already 24
+  // buckets, so the rule it would be tested against can never fail.
+  const GRAIN_MIN_DAYS: Record<Granularity, number> = useMemo(
+    () => ({ hourly: 1, daily: 2, weekly: 14, monthly: 60 }),
+    []
+  );
+  const GRAIN_ORDER = useMemo(() => ["hourly", "daily", "weekly", "monthly"] as const, []);
+
+  // Returns the reason a grain is unavailable, or null when it can be picked.
+  // One function so the button's disabled state and its tooltip can never
+  // disagree about why.
+  const grainLock = useCallback(
+    (g: Granularity): string | null => {
+      if (g === "hourly") return null;
+      if (spanDays == null) return null;
+      const min = GRAIN_MIN_DAYS[g];
+      if (spanDays >= min) return null;
+      const need = g === "daily" ? "2 days" : g === "weekly" ? "2 weeks (14 days)" : "2 months (60 days)";
+      const label = g.charAt(0).toUpperCase() + g.slice(1);
+      return `${label} needs at least ${need} — this range covers ${spanDays} day${spanDays === 1 ? "" : "s"}.`;
+    },
+    [spanDays, GRAIN_MIN_DAYS]
+  );
+
+  // When the range shrinks under the active grain, step down to the coarsest
+  // grain the new span still supports, so a locked Monthly lands on Weekly
+  // rather than dropping the user all the way to Hourly.
   useEffect(() => {
-    if (grain === "hourly" && data && !data.hourlyTrend) setGrain("daily");
-  }, [data, grain]);
+    if (!grainLock(grain)) return;
+    for (let i = GRAIN_ORDER.indexOf(grain) - 1; i >= 0; i--) {
+      if (!grainLock(GRAIN_ORDER[i])) {
+        setGrain(GRAIN_ORDER[i]);
+        return;
+      }
+    }
+  }, [grain, grainLock, GRAIN_ORDER]);
 
   // ---------- Derived values ----------
   const derived = useMemo(() => {
@@ -1013,23 +1086,38 @@ export default function TrafficPage() {
           <div className={styles.heroFilterGroup}>
             <span className={styles.heroFilterLabel}>Granularity</span>
             <div className={styles.segmentedSmall}>
-              {(["hourly", "daily", "weekly", "monthly"] as const).map((g) => (
-                <button
-                  key={g}
-                  className={grain === g ? "active" : ""}
-                  disabled={g === "hourly" && !hourlyAvailable}
-                  title={g === "hourly" && !hourlyAvailable ? "Hourly detail is available for ranges up to 2 weeks" : undefined}
-                  onClick={() => setGrain(g)}
-                >
-                  {grain === g && <svg width="10" height="10" viewBox="0 0 16 16" fill="none" style={{ marginRight: 4, marginBottom: -1 }}><path d="M3.5 8.5l3 3 6-7" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" /></svg>}
-                  {g.charAt(0).toUpperCase() + g.slice(1)}
-                </button>
-              ))}
+              {GRAIN_ORDER.map((g) => {
+                const lockedWhy = grainLock(g);
+                return (
+                  <button
+                    key={g}
+                    className={grain === g ? "active" : ""}
+                    disabled={!!lockedWhy}
+                    title={lockedWhy ?? undefined}
+                    onClick={() => setGrain(g)}
+                  >
+                    {grain === g && <svg width="10" height="10" viewBox="0 0 16 16" fill="none" style={{ marginRight: 4, marginBottom: -1 }}><path d="M3.5 8.5l3 3 6-7" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" /></svg>}
+                    {g.charAt(0).toUpperCase() + g.slice(1)}
+                  </button>
+                );
+              })}
             </div>
           </div>
           <div className={styles.heroFilterGroup} style={{ marginLeft: "auto" }}>
-            <label className={styles.heroToggle}>
-              <input type="checkbox" checked={splitDirection} onChange={(e) => setSplitDirection(e.target.checked)} />
+            <label
+              className={`${styles.heroToggle}${splitAvailable ? "" : ` ${styles.heroToggleLocked}`}`}
+              title={
+                splitAvailable
+                  ? undefined
+                  : `Direction is set to ${direction}, so the trend already shows only ${direction === "NB" ? "northbound" : "southbound"}. Switch Direction to Both to split.`
+              }
+            >
+              <input
+                type="checkbox"
+                checked={splitDirection}
+                disabled={!splitAvailable}
+                onChange={(e) => setSplitPref(e.target.checked)}
+              />
               <span className={styles.heroToggleTrack}><span className={styles.heroToggleThumb} /></span>
               Split NB / SB
             </label>

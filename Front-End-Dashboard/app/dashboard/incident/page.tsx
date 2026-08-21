@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { attachCategoryClick } from "../../../lib/chart-click";
 import { useChartTheme, applyChartTheme, seriesRamp, seriesPair } from "../../../lib/chart-theme";
 import ReactECharts from "echarts-for-react";
@@ -138,6 +138,76 @@ export default function IncidentPage() {
       cancelled = true;
     };
   }, [rangeMode, customFrom, customTo, weather]);
+
+  // Inclusive length of the range the granularity rules are measured against.
+  //
+  // In custom mode this is what the user picked, NOT the range the server
+  // echoes back. The server clamps the end down to the last day it holds
+  // incidents (2026-06-30, earlier than the traffic warehouse) but leaves the
+  // start where the user put it, so any recent pick returns from > to — and
+  // measuring that gave a negative span that silently switched every lock off.
+  // What the user picked is also the honest input to the question: pick one day
+  // and the rule is about one day, whether or not there are rows for it.
+  //
+  // Presets carry no explicit dates, so there the server's resolved range is
+  // the only thing that can be measured.
+  const spanDays = useMemo(() => {
+    const [from, to] =
+      rangeMode === "custom"
+        ? customFrom && customTo
+          ? customFrom <= customTo
+            ? [customFrom, customTo]
+            : [customTo, customFrom]
+          : ["", ""]
+        : [data?.range.from ?? "", data?.range.to ?? ""];
+    if (!from || !to) return null;
+    const ms = Date.parse(`${to}T00:00:00Z`) - Date.parse(`${from}T00:00:00Z`);
+    if (Number.isNaN(ms)) return null;
+    const days = Math.floor(ms / 86_400_000) + 1;
+    return days < 1 ? null : days;
+  }, [data, rangeMode, customFrom, customTo]);
+
+  // Same rule as the traffic trend: a grain needs two of whatever unit it
+  // buckets by before the line means anything. Daily's 2-day minimum is
+  // enforced a step earlier here — the picker below takes minDays={2}, so a
+  // one-day range cannot be chosen in the first place. Daily therefore keeps a
+  // floor of 1 rather than 2: it is unreachable in practice, and leaving it as
+  // the floor means that if a one-day range ever did arrive by some other path,
+  // the chart degrades to a single point instead of locking every option and
+  // leaving the user with no selectable grain at all.
+  const GRAIN_MIN_DAYS: Record<Granularity, number> = useMemo(
+    () => ({ daily: 1, weekly: 14, monthly: 60 }),
+    []
+  );
+  const GRAIN_ORDER = useMemo(() => ["daily", "weekly", "monthly"] as const, []);
+
+  // Returns the reason a grain is unavailable, or null when it can be picked.
+  // One function so the button's disabled state and its tooltip can never
+  // disagree about why.
+  const grainLock = useCallback(
+    (g: Granularity): string | null => {
+      if (spanDays == null) return null;
+      const min = GRAIN_MIN_DAYS[g];
+      if (spanDays >= min) return null;
+      const need = g === "weekly" ? "2 weeks (14 days)" : "2 months (60 days)";
+      const label = g.charAt(0).toUpperCase() + g.slice(1);
+      return `${label} needs at least ${need} — this range covers ${spanDays} day${spanDays === 1 ? "" : "s"}.`;
+    },
+    [spanDays, GRAIN_MIN_DAYS]
+  );
+
+  // When the range shrinks under the active grain, step down to the coarsest
+  // grain the new span still supports, so a locked Monthly lands on Weekly
+  // rather than dropping the user straight to Daily.
+  useEffect(() => {
+    if (!grainLock(grain)) return;
+    for (let i = GRAIN_ORDER.indexOf(grain) - 1; i >= 0; i--) {
+      if (!grainLock(GRAIN_ORDER[i])) {
+        setGrain(GRAIN_ORDER[i]);
+        return;
+      }
+    }
+  }, [grain, grainLock, GRAIN_ORDER]);
 
   // ---------- Derived ----------
   const derived = useMemo(() => {
@@ -583,6 +653,11 @@ export default function IncidentPage() {
         <DateRangePicker
           startDate={customFrom}
           endDate={customTo}
+          // Incidents have no grain below daily, so a one-day range would leave
+          // the trend a single dot with no finer view to fall back on — unlike
+          // traffic, where Hourly still has 24 buckets to show for that day.
+          // Two days is the shortest range this chart can say anything with.
+          minDays={2}
           onChange={(start, end) => {
             setCustomFrom(start);
             setCustomTo(end);
@@ -731,12 +806,21 @@ export default function IncidentPage() {
           <div className={styles.heroFilterGroup}>
             <span className={styles.heroFilterLabel}>Granularity</span>
             <div className={styles.segmentedSmall}>
-              {(["daily", "weekly", "monthly"] as const).map((g) => (
-                <button key={g} className={grain === g ? "active" : ""} onClick={() => setGrain(g)}>
-                  {grain === g && <svg width="10" height="10" viewBox="0 0 16 16" fill="none" style={{ marginRight: 4, marginBottom: -1 }}><path d="M3.5 8.5l3 3 6-7" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" /></svg>}
-                  {g.charAt(0).toUpperCase() + g.slice(1)}
-                </button>
-              ))}
+              {GRAIN_ORDER.map((g) => {
+                const lockedWhy = grainLock(g);
+                return (
+                  <button
+                    key={g}
+                    className={grain === g ? "active" : ""}
+                    disabled={!!lockedWhy}
+                    title={lockedWhy ?? undefined}
+                    onClick={() => setGrain(g)}
+                  >
+                    {grain === g && <svg width="10" height="10" viewBox="0 0 16 16" fill="none" style={{ marginRight: 4, marginBottom: -1 }}><path d="M3.5 8.5l3 3 6-7" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" /></svg>}
+                    {g.charAt(0).toUpperCase() + g.slice(1)}
+                  </button>
+                );
+              })}
             </div>
           </div>
         </div>

@@ -4,8 +4,6 @@ import { useEffect, useMemo, useState } from "react";
 import type { EChartsOption } from "echarts";
 import DashboardChart from "./DashboardChart";
 
-const BACKEND = process.env.NEXT_PUBLIC_BACKEND_URL ?? "http://localhost:4000";
-
 type RawRow = {
   exit: string;
   event: string | null;
@@ -34,6 +32,8 @@ const fmtK = (n: number) => (n >= 1000 ? `${(n / 1000).toFixed(0)}k` : String(n)
 // mistaken for the "Bocaue Interchange" that the event actually hits.
 const NON_EXIT = /barrier|ramp|spur/i;
 
+const BACKEND = process.env.NEXT_PUBLIC_BACKEND_URL ?? "http://localhost:4000";
+
 export default function PredictiveEventChart() {
   const [raw, setRaw] = useState<RawRow[] | null>(null);
   const [showAllOthers, setShowAllOthers] = useState(false);
@@ -43,7 +43,7 @@ export default function PredictiveEventChart() {
     fetch(`${BACKEND}/api/traffic/forecast`)
       .then((r) => r.json())
       .then((json) => {
-        if (cancelled || !json.success || !json.data.events?.length) return;
+        if (cancelled || !json.success || !json.data?.events?.length) return;
         setRaw(json.data.events as RawRow[]);
       })
       .catch((err) => console.error("Failed to fetch ML event surge forecast", err));
@@ -118,12 +118,12 @@ export default function PredictiveEventChart() {
         const r = rows[(params as { dataIndex: number }).dataIndex];
         return `
           <div style="padding:2px 4px; min-width:225px;">
-            <b style="font-size:1.05em; color:var(--text-primary);">${r.exit}</b>
+            <b style="font-size:1.05em; color:#0f172a;">${r.exit}</b>
             <div style="margin-top:8px; display:grid; grid-template-columns:120px 1fr; gap:5px 8px; font-size:0.9em;">
-              <span style="color:var(--text-muted);">Added by event</span><span style="font-weight:700; color:${SURGE_COLOR};">+${fmtVeh(r.added)} (+${r.pct.toFixed(0)}%)</span>
-              <span style="color:var(--text-muted);">Normal day</span><span style="font-weight:600;">${fmtVeh(r.baseline)}</span>
-              <span style="color:var(--text-muted);">With event</span><span style="font-weight:600; color:${SURGE_COLOR};">${fmtVeh(r.surge)}</span>
-              <span style="color:var(--text-muted);">Share of surge</span><span style="font-weight:500;">${r.shareOfSurge.toFixed(0)}%</span>
+              <span style="color:#64748b;">Added by event</span><span style="font-weight:700; color:${SURGE_COLOR};">+${fmtVeh(r.added)} (+${r.pct.toFixed(0)}%)</span>
+              <span style="color:#64748b;">Normal day</span><span style="font-weight:600;">${fmtVeh(r.baseline)}</span>
+              <span style="color:#64748b;">With event</span><span style="font-weight:600; color:${SURGE_COLOR};">${fmtVeh(r.surge)}</span>
+              <span style="color:#64748b;">Share of surge</span><span style="font-weight:500;">${r.shareOfSurge.toFixed(0)}%</span>
             </div>
           </div>`;
       },

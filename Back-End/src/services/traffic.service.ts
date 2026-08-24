@@ -575,7 +575,9 @@ export type ForecastWindow = { months?: "3" | "12" | "all"; from?: string; to?: 
 
 export async function getMLPredictiveVolume(window: ForecastWindow = {}) {
   if (!db) return null;
-  const cols = `forecast_date as "date", actual_volume, pred_lstm, pred_prophet, pred_xgboost, pred_holtwinters, pred_sarimax, pred_holts_linear, is_holdout, is_future`;
+  // weather_* drive the rainfall bars; the _nw columns are the weather-free twins
+  // the Weather toggle switches to. Without them the toggle changes nothing.
+  const cols = `forecast_date as "date", actual_volume, pred_lstm, pred_prophet, pred_xgboost, pred_holtwinters, pred_sarimax, pred_holts_linear, is_holdout, is_future, weather_rainfall, weather_temp, pred_prophet_nw, pred_sarimax_nw, pred_lstm_nw`;
   try {
     // An explicit from/to wins; otherwise months trims back from the newest
     // forecast date the table holds.
@@ -590,9 +592,20 @@ export async function getMLPredictiveVolume(window: ForecastWindow = {}) {
     }
 
     if (window.months && window.months !== "all") {
+      // The range control trims HISTORY ONLY. The scored window is fixed by the
+      // evaluation run, so clipping it would put a partial validation period on
+      // screen beneath a metrics table computed over all of it.
+      //
+      // Anchoring on MAX(forecast_date) truncates badly here: that row sits in the
+      // projected FUTURE, and the 80/20 split makes the holdout ~16 months long, so
+      // every preset shorter than that ate the entire history — "12 mo" returned
+      // 0 past rows. Anchoring on the holdout START keeps it whole.
       const { rows } = await db.query(
         `SELECT ${cols} FROM gold.ml_predictive_volume
-         WHERE forecast_date >= (SELECT MAX(forecast_date) FROM gold.ml_predictive_volume) - ($1::int * interval '1 month')
+         WHERE is_holdout OR is_future
+            OR forecast_date >= (
+                 SELECT MIN(forecast_date) FROM gold.ml_predictive_volume WHERE is_holdout
+               ) - ($1::int * interval '1 month')
          ORDER BY forecast_date ASC`,
         [Number(window.months)]
       );
@@ -833,14 +846,28 @@ export async function getMLPredictiveVolumeHourly(
  */
 export type MLModelMetric = {
   model: string;
+  model_name: string;
   rank: number | null;
   accepted: boolean;
   rmse: number | null;
   mae: number | null;
+  mse: number | null;
   wmape: number | null;
   r2: number | null;
+  mase: number | null;
+  mape: number | null;
+  smape: number | null;
+  rmsse: number | null;
+  adjusted_r2: number | null;
+  train_r2: number | null;
+  val_r2: number | null;
+  gap: number | null;
+  uses_weather: boolean | null;
+  aic: number | null;
+  bic: number | null;
   diagnosis: string | null;
   rejectedReason: string | null;
+  rejected_reason: string | null;
   updatedAt: string | null;
 };
 
@@ -848,25 +875,134 @@ export async function getMLModelMetrics(): Promise<MLModelMetric[] | null> {
   if (!db) return null;
   try {
     const { rows } = await db.query(
-      `SELECT model_name, rank, accepted, rmse, mae, wmape, r2,
-              diagnosis, rejected_reason, updated_at
+      // MASE is the acceptance criterion (< 1.0 beats the seasonal-naive
+      // benchmark), so dropping it left the dashboard unable to show WHY a model
+      // was rejected. AIC/BIC and the weather flag drive the comparison panels.
+      `SELECT model_name, rank, accepted, rmse, mae, mse, wmape, r2, mase,
+              mape, smape, rmsse, adjusted_r2, train_r2, val_r2, gap,
+              uses_weather, aic, bic, diagnosis, rejected_reason, updated_at
        FROM gold.ml_model_metrics
        ORDER BY rank NULLS LAST, model_name`
     );
+    const num = (v: unknown) => (v === null || v === undefined ? null : Number(v));
     return rows.map((r) => ({
       model: r.model_name,
-      rank: r.rank === null ? null : Number(r.rank),
+      // Both spellings are emitted: the chart and narrative key off model_name,
+      // while newer pages read `model`. Cheap insurance against another rename.
+      model_name: r.model_name,
+      rank: num(r.rank),
       accepted: Boolean(r.accepted),
-      rmse: r.rmse === null ? null : Number(r.rmse),
-      mae: r.mae === null ? null : Number(r.mae),
-      wmape: r.wmape === null ? null : Number(r.wmape),
-      r2: r.r2 === null ? null : Number(r.r2),
+      rmse: num(r.rmse),
+      mae: num(r.mae),
+      mse: num(r.mse),
+      wmape: num(r.wmape),
+      r2: num(r.r2),
+      mase: num(r.mase),
+      mape: num(r.mape),
+      smape: num(r.smape),
+      rmsse: num(r.rmsse),
+      adjusted_r2: num(r.adjusted_r2),
+      train_r2: num(r.train_r2),
+      val_r2: num(r.val_r2),
+      gap: num(r.gap),
+      uses_weather: r.uses_weather === null ? null : Boolean(r.uses_weather),
+      aic: num(r.aic),
+      bic: num(r.bic),
       diagnosis: r.diagnosis ?? null,
       rejectedReason: r.rejected_reason ?? null,
+      rejected_reason: r.rejected_reason ?? null,
       updatedAt: r.updated_at ? new Date(r.updated_at).toISOString() : null,
     }));
   } catch (error) {
     console.error("Database query failed for ML model metrics:", error);
+    return null;
+  }
+}
+
+
+export type WeatherCorrelation = {
+  variable: string;
+  label: string;
+  pearson: number | null;
+  spearman: number | null;
+  days: number;
+};
+
+export type WeatherEvidence = {
+  correlations: WeatherCorrelation[];
+  // The controlled experiment: same model, same protocol, weather in vs out.
+  modelComparison: { model: string; withWeather: number | null; withoutWeather: number | null; deltaPts: number | null }[];
+};
+
+/**
+ * Evidence for whether weather predicts traffic on this corridor.
+ *
+ * Correlations are computed live rather than stored, so they always describe the
+ * data currently in the warehouse. Weather is aggregated the corrected way —
+ * averaged across the 20 stations per hour, THEN summed/averaged over the day.
+ * Summing across stations (the original bug) inflated rainfall ~20x.
+ */
+export async function getWeatherEvidenceFromDb(): Promise<WeatherEvidence | null> {
+  if (!db) return null;
+  try {
+    const CTE = `
+      WITH hourly AS (
+        SELECT (timestamp_utc + interval '8 hours')::date AS ds, timestamp_utc AS hr,
+               AVG(temperature) t, AVG(rainfall) r, AVG(wind_speed) w, AVG(humidity) h
+        FROM public.hourly_weather GROUP BY 1, 2
+      ), wx AS (
+        SELECT ds, AVG(t) avg_temp, SUM(r) total_rain, AVG(w) avg_wind, AVG(h) avg_humidity
+        FROM hourly GROUP BY ds
+      ), joined AS (
+        SELECT v.total_volume::float y, wx.*
+        FROM gold.daily_traffic_volume_corrected v JOIN wx ON wx.ds = v.date
+        WHERE v.total_volume > 0
+      ), ranked AS (
+        SELECT RANK() OVER (ORDER BY y) ry,
+               RANK() OVER (ORDER BY total_rain)   r_rain,
+               RANK() OVER (ORDER BY avg_wind)     r_wind,
+               RANK() OVER (ORDER BY avg_temp)     r_temp,
+               RANK() OVER (ORDER BY avg_humidity) r_hum
+        FROM joined
+      )`;
+    const { rows } = await db.query(`${CTE}
+      SELECT (SELECT COUNT(*) FROM joined)::int AS days,
+             (SELECT CORR(y, total_rain)   FROM joined) AS p_rain,
+             (SELECT CORR(y, avg_wind)     FROM joined) AS p_wind,
+             (SELECT CORR(y, avg_temp)     FROM joined) AS p_temp,
+             (SELECT CORR(y, avg_humidity) FROM joined) AS p_hum,
+             (SELECT CORR(ry, r_rain) FROM ranked) AS s_rain,
+             (SELECT CORR(ry, r_wind) FROM ranked) AS s_wind,
+             (SELECT CORR(ry, r_temp) FROM ranked) AS s_temp,
+             (SELECT CORR(ry, r_hum)  FROM ranked) AS s_hum`);
+    const r = rows[0];
+    const num = (v: unknown) => (v === null || v === undefined ? null : Number(v));
+    const correlations: WeatherCorrelation[] = [
+      { variable: "avg_humidity", label: "Humidity",    pearson: num(r.p_hum),  spearman: num(r.s_hum),  days: r.days },
+      { variable: "total_rain",   label: "Rainfall",    pearson: num(r.p_rain), spearman: num(r.s_rain), days: r.days },
+      { variable: "avg_wind",     label: "Wind speed",  pearson: num(r.p_wind), spearman: num(r.s_wind), days: r.days },
+      { variable: "avg_temp",     label: "Temperature", pearson: num(r.p_temp), spearman: num(r.s_temp), days: r.days },
+    ].sort((a, b) => Math.abs(b.pearson ?? 0) - Math.abs(a.pearson ?? 0));
+
+    // Pair each weather model with its weather-free twin from the same run.
+    const m = await db.query(
+      `SELECT model_name, wmape FROM gold.ml_model_metrics WHERE target = 'Total Traffic'`
+    );
+    const byName = new Map(m.rows.map((x) => [x.model_name, x.wmape === null ? null : Number(x.wmape)]));
+    const modelComparison = ["Prophet", "SARIMAX", "LSTM"].map((name) => {
+      const withW = byName.get(name) ?? null;
+      const without = byName.get(`${name}_nw`) ?? null;
+      return {
+        model: name,
+        withWeather: withW,
+        withoutWeather: without,
+        // positive => the weather version is better
+        deltaPts: withW != null && without != null ? Number((without - withW).toFixed(3)) : null,
+      };
+    });
+    return { correlations, modelComparison };
+  } catch (error) {
+    console.error("Database query failed for weather evidence:", error);
     return null;
   }
 }

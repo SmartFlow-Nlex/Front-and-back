@@ -4,8 +4,6 @@ import { useEffect, useMemo, useState } from "react";
 import type { EChartsOption } from "echarts";
 import DashboardChart from "./DashboardChart";
 
-const BACKEND = process.env.NEXT_PUBLIC_BACKEND_URL ?? "http://localhost:4000";
-
 type State = "Low" | "Med" | "High";
 
 type RawRow = { segment: string; hours: number; state: State; probability: number | string };
@@ -39,6 +37,8 @@ const STATE_META: Record<State, { rank: number; color: string; text: string; lab
 const LOW_CONF = 0.8;
 
 type CellItem = { value: [number, number, number]; state: State; conf: number; label: { color: string } };
+const BACKEND = process.env.NEXT_PUBLIC_BACKEND_URL ?? "http://localhost:4000";
+
 type Alert = { segment: string; state: State; from: number; to: number; conf: number };
 
 export default function PredictiveCongestionChart() {
@@ -50,7 +50,7 @@ export default function PredictiveCongestionChart() {
     fetch(`${BACKEND}/api/traffic/forecast`)
       .then((r) => r.json())
       .then((json) => {
-        if (cancelled || !json.success || !json.data.congestion) return;
+        if (cancelled || !json.success || !json.data?.congestion) return;
         setRaw(json.data.congestion as RawRow[]);
       })
       .catch((err) => console.error("Failed to fetch ML congestion forecast", err));
@@ -224,13 +224,13 @@ export default function PredictiveCongestionChart() {
         const low = d.conf < LOW_CONF;
         return `
           <div style="padding:2px 4px; min-width:215px;">
-            <b style="font-size:1.05em; color:var(--text-primary);">${segments[y]}</b>
-            <span style="color:var(--text-muted); font-size:0.85em;"> · km ${KM_POST[segments[y]] ?? "—"}</span>
+            <b style="font-size:1.05em; color:#0f172a;">${segments[y]}</b>
+            <span style="color:#94a3b8; font-size:0.85em;"> · km ${KM_POST[segments[y]] ?? "—"}</span>
             <div style="margin-top:8px; display:grid; grid-template-columns:112px 1fr; gap:5px 8px; font-size:0.9em;">
-              <span style="color:var(--text-muted);">Horizon</span><span style="font-weight:600;">${hourLabels[x]}</span>
-              <span style="color:var(--text-muted);">Predicted state</span><span style="color:${d.state === "Low" ? "#166534" : d.state === "Med" ? "#b45309" : "#dc2626"}; font-weight:700;">${meta.label}</span>
-              <span style="color:var(--text-muted);">Speed band</span><span style="font-weight:500;">${meta.speed}</span>
-              <span style="color:var(--text-muted);">Model confidence</span><span style="font-weight:600; color:${low ? "#b45309" : "#334155"};">${(d.conf * 100).toFixed(1)}%${low ? " · lower" : ""}</span>
+              <span style="color:#64748b;">Horizon</span><span style="font-weight:600;">${hourLabels[x]}</span>
+              <span style="color:#64748b;">Predicted state</span><span style="color:${d.state === "Low" ? "#166534" : d.state === "Med" ? "#b45309" : "#dc2626"}; font-weight:700;">${meta.label}</span>
+              <span style="color:#64748b;">Speed band</span><span style="font-weight:500;">${meta.speed}</span>
+              <span style="color:#64748b;">Model confidence</span><span style="font-weight:600; color:${low ? "#b45309" : "#334155"};">${(d.conf * 100).toFixed(1)}%${low ? " · lower" : ""}</span>
             </div>
           </div>`;
       },

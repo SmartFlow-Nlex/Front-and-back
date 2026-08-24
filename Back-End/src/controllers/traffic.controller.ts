@@ -1,6 +1,6 @@
 import type { Request, Response } from "express";
 import { TrafficQuerySchema, IncidentQuerySchema, ForecastQuerySchema, HourlyForecastQuerySchema, AnalyticsQuerySchema } from "../validators/traffic.validator.js";
-import { getTrafficVolumesFromDb, getDirectionalFlowFromDb, getVehicleClassDistributionFromDb, getTrafficAnalyticsFromDb, getMLPredictiveVolume, getMLPredictiveVolumeHourly, getMLPredictiveCongestion, getMLEventSurge, getMLModelMetrics } from "../services/traffic.service.js";
+import { getTrafficVolumesFromDb, getDirectionalFlowFromDb, getVehicleClassDistributionFromDb, getTrafficAnalyticsFromDb, getMLPredictiveVolume, getMLPredictiveVolumeHourly, getMLPredictiveCongestion, getMLEventSurge, getMLModelMetrics, getWeatherEvidenceFromDb } from "../services/traffic.service.js";
 
 // GET /api/traffic/analytics — descriptive dashboard aggregates
 export const getTrafficAnalytics = async (req: Request, res: Response) => {
@@ -167,4 +167,16 @@ export const getVolumeAdt = async (_req: Request, res: Response) => {
   };
 
   res.json({ success: true, source: "mock", data: mockData });
+};
+
+
+// GET /api/traffic/weather-evidence
+// Whether weather predicts traffic on this corridor — correlations computed live,
+// plus the controlled with/without model comparison from the last training run.
+export const getWeatherEvidence = async (_req: Request, res: Response) => {
+  const data = await getWeatherEvidenceFromDb();
+  if (!data) {
+    return res.status(503).json({ success: false, message: "Weather evidence unavailable: database not reachable" });
+  }
+  res.json({ success: true, source: "database", data });
 };

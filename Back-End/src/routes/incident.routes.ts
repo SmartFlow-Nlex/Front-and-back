@@ -1,5 +1,5 @@
 import { Router } from "express";
-import { getIncidentList, getIncidentMetrics, getWeatherCorrelation, getIncidentAnalytics, getIncidentPredictive } from "../controllers/incident.controller.js";
+import { getIncidentList, getIncidentMetrics, getWeatherCorrelation, getIncidentAnalytics, getIncidentPredictive, getIncidentHourly } from "../controllers/incident.controller.js";
 import { asyncHandler } from "../middleware/error.middleware.js";
 
 const router = Router();
@@ -10,6 +10,7 @@ const router = Router();
 // returning 400. The traffic routes already wrap for this reason.
 router.get("/analytics", asyncHandler(getIncidentAnalytics));
 router.get("/predictive", asyncHandler(getIncidentPredictive));
+router.get("/hourly", asyncHandler(getIncidentHourly));
 router.get("/list", asyncHandler(getIncidentList));
 router.get("/metrics", asyncHandler(getIncidentMetrics));
 router.get("/weather-correlation", asyncHandler(getWeatherCorrelation));

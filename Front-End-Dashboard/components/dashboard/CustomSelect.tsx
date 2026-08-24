@@ -10,7 +10,21 @@ import styles from "../../app/dashboard/traffic/traffic.module.css";
  * control rather than each growing a slightly different one. Styling comes from
  * the shared traffic module, which all three pages already import.
  */
-export default function CustomSelect({ value, options, onChange }: { value: string; options: { label: string; value: string }[]; onChange: (val: string) => void }) {
+export default function CustomSelect({
+  value,
+  options,
+  onChange,
+  disabled = false,
+  title,
+}: {
+  value: string;
+  options: { label: string; value: string }[];
+  onChange: (val: string) => void;
+  /** Locked shut — the trigger cannot be opened and the menu cannot render. */
+  disabled?: boolean;
+  /** Shown on hover; use it to say why a disabled control is disabled. */
+  title?: string;
+}) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
 
@@ -27,11 +41,17 @@ export default function CustomSelect({ value, options, onChange }: { value: stri
 
   return (
     <div className={styles.customSelectWrap} ref={ref}>
-      <button className={styles.customSelectBtn} onClick={() => setOpen(!open)} aria-expanded={open}>
+      <button
+        className={styles.customSelectBtn}
+        onClick={() => setOpen(!open)}
+        aria-expanded={open}
+        disabled={disabled}
+        title={title}
+      >
         {selectedLabel}
         <svg width="12" height="12" viewBox="0 0 16 16" fill="none"><path d="M4 6l4 4 4-4" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" /></svg>
       </button>
-      {open && (
+      {open && !disabled && (
         <div className={styles.customSelectMenu}>
           {options.map((o) => (
             <button

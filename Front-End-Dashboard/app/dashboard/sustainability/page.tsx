@@ -839,14 +839,20 @@ export default function SustainabilityPage() {
             <CustomSelect
               value={classView}
               onChange={(v) => setClassView(v as ClassChoice)}
-              // Only what the loaded data can actually show. With the tab already
-              // filtered to one class the others hold nothing, so offering them
-              // here would draw an empty chart.
+              // Locked once the tab itself is filtered to one class: the other two
+              // series hold nothing at that point, so there is nothing left for
+              // this control to show or hide.
+              disabled={classFilter !== "All"}
+              title={
+                classFilter !== "All"
+                  ? "The tab is filtered to one class — set Class back to all to choose what this chart shows"
+                  : undefined
+              }
               options={[
                 { label: "All classes", value: "All" },
-                ...(["1", "2", "3"] as const)
-                  .filter((c) => classFilter === "All" || classFilter === c)
-                  .map((c) => ({ label: CLASS_SHORT[Number(c) - 1], value: c })),
+                { label: CLASS_SHORT[0], value: "1" },
+                { label: CLASS_SHORT[1], value: "2" },
+                { label: CLASS_SHORT[2], value: "3" },
               ]}
             />
           </div>

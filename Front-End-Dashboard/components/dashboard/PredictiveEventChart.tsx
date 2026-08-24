@@ -32,16 +32,18 @@ const fmtK = (n: number) => (n >= 1000 ? `${(n / 1000).toFixed(0)}k` : String(n)
 // mistaken for the "Bocaue Interchange" that the event actually hits.
 const NON_EXIT = /barrier|ramp|spur/i;
 
+const BACKEND = process.env.NEXT_PUBLIC_BACKEND_URL ?? "http://localhost:4000";
+
 export default function PredictiveEventChart() {
   const [raw, setRaw] = useState<RawRow[] | null>(null);
   const [showAllOthers, setShowAllOthers] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
-    fetch("http://localhost:4000/api/traffic/forecast")
+    fetch(`${BACKEND}/api/traffic/forecast`)
       .then((r) => r.json())
       .then((json) => {
-        if (cancelled || !json.success || !json.data.events?.length) return;
+        if (cancelled || !json.success || !json.data?.events?.length) return;
         setRaw(json.data.events as RawRow[]);
       })
       .catch((err) => console.error("Failed to fetch ML event surge forecast", err));

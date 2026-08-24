@@ -7,12 +7,16 @@
     "dev": "tsx watch src/server.ts",
     "build": "tsc -p tsconfig.json",
     "start": "node dist/server.js",
+    "init-db": "tsx scripts/init-db.ts",
+    "verify-db": "tsx scripts/init-db.ts --verify-only",
+    "seed-holidays": "tsx scripts/seed-holidays.ts",
     "lint": "echo \"add lint config\""
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.108.2",
     "cors": "^2.8.5",
     "csv-parse": "^7.0.1",
+    "date-holidays": "^3.34.1",
     "dotenv": "^16.4.7",
     "express": "^4.21.2",
     "express-rate-limit": "^8.5.2",

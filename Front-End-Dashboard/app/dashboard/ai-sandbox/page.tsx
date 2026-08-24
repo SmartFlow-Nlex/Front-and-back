@@ -1,25 +1,13 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { displayExitName, useNlexExits } from "../../../lib/nlex-exits";
 import { Car } from "lucide-react";
 import PageHeader from "../../../components/dashboard/PageHeader";
 import { TrafficSim, CLASS_META, mixHex, type Metrics, type Interventions } from "./simulation";
 
 const BACKEND = process.env.NEXT_PUBLIC_BACKEND_URL ?? "http://localhost:4000";
 
-// NLEX northbound exits, ordered by km-post. The pair chosen sets the corridor
-// the segment stands in for; the visible sim is one representative stretch.
-const EXITS = [
-  { name: "Balintawak", km: 0 },
-  { name: "Karuhatan", km: 4 },
-  { name: "Valenzuela", km: 8 },
-  { name: "Meycauayan", km: 16 },
-  { name: "Marilao", km: 22 },
-  { name: "Bocaue", km: 26 },
-  { name: "Balagtas", km: 30 },
-  { name: "Tabang", km: 35 },
-  { name: "Santa Rita", km: 40 },
-];
 
 const SEG_LENGTH = 280; // metres of corridor shown (a representative merge stretch)
 const SIM_DT = 0.2; // fixed physics timestep (s)
@@ -38,6 +26,9 @@ export default function AiSandboxPage() {
   const metricAccRef = useRef<number>(0);
   const simAccRef = useRef<number>(0);
 
+  // Corridor exits come from the shared list so this tab, maintenance and the
+  // map all offer the same set. See lib/nlex-exits.
+  const { exits: EXITS } = useNlexExits();
   const [origin, setOrigin] = useState(0);
   const [destination, setDestination] = useState(4);
   const [laneCount, setLaneCount] = useState(4);
@@ -226,15 +217,15 @@ export default function AiSandboxPage() {
 
   const anyIntervention = closedLanes.some(Boolean) || speedLimit != null || incidentCount > 0;
   const recommendation = getRecommendation(metrics, baseline, closedLanes, incidentCount, speedLimit);
-  const originExit = EXITS[origin];
-  const destExit = EXITS[destination];
+  const originExit = EXITS[Math.min(origin, EXITS.length - 1)];
+  const destExit = EXITS[Math.min(destination, EXITS.length - 1)];
 
   return (
     <section className="ds-content sandbox-page">
       <PageHeader
         icon={Car}
         title="AI Traffic Sandbox"
-        subtitle={`Agent-based what-if simulation · ${originExit.name} → ${destExit.name} corridor`}
+        subtitle={`Agent-based what-if simulation · ${originExit ? displayExitName(originExit.exit_name) : ""} → ${destExit ? displayExitName(destExit.exit_name) : ""} corridor`}
       />
 
       {/* Live metric tiles */}
@@ -337,8 +328,8 @@ export default function AiSandboxPage() {
             Origin
             <select value={origin} onChange={(e) => setOrigin(Number(e.target.value))}>
               {EXITS.map((ex, i) => (
-                <option key={ex.name} value={i} disabled={i >= destination}>
-                  {ex.name} (Km {ex.km})
+                <option key={ex.exit_id} value={i} disabled={i >= destination}>
+                  {displayExitName(ex.exit_name)} (Km {ex.km})
                 </option>
               ))}
             </select>
@@ -347,8 +338,8 @@ export default function AiSandboxPage() {
             Destination
             <select value={destination} onChange={(e) => setDestination(Number(e.target.value))}>
               {EXITS.map((ex, i) => (
-                <option key={ex.name} value={i} disabled={i <= origin}>
-                  {ex.name} (Km {ex.km})
+                <option key={ex.exit_id} value={i} disabled={i <= origin}>
+                  {displayExitName(ex.exit_name)} (Km {ex.km})
                 </option>
               ))}
             </select>

@@ -106,8 +106,21 @@ type EmissionsCacheEntry = { at: number; data: unknown };
 const emissionsCache = new Map<string, EmissionsCacheEntry>();
 const EMISSIONS_CACHE_TTL_MS = 10 * 60 * 1000;
 
-const LOCAL_DATE = `(timestamp_utc + interval '8 hours')::date`;
-const LOCAL_HOUR = `EXTRACT(hour FROM timestamp_utc + interval '8 hours')::int`;
+// nlex_theoretical_emissions.timestamp_utc is a naive `timestamp without time
+// zone` that, despite the column name, already holds Philippine local time.
+// Verified against the toll matview, whose h00..h23 columns are local hours:
+// the unshifted emissions volume peaks at 07:00 and 17:00, matching the toll
+// peaks exactly, while adding 8 hours moves them to 01:00 and 15:00.
+//
+// So no offset is applied here. (The measured-AQI queries further down do add
+// 8 hours, correctly — those read nlex_emissions.api_dt, a real Unix epoch.)
+// Measured AQI carries a real timestamptz observation time (silver derives it
+// from the source's api_dt epoch), so local time is a timezone conversion rather
+// than a manual +8h on a naive value.
+const AQI_LOCAL = `recorded_at AT TIME ZONE 'Asia/Manila'`;
+
+const LOCAL_DATE = `timestamp_utc::date`;
+const LOCAL_HOUR = `EXTRACT(hour FROM timestamp_utc)::int`;
 
 export async function getEmissionsAnalyticsFromDb(filters: EmissionsAnalyticsFilters) {
   if (!db) return null;
@@ -191,13 +204,13 @@ export async function getEmissionsAnalyticsFromDb(filters: EmissionsAnalyticsFil
       ),
       // Measured air quality: monthly hours per AQI level + avg PM2.5
       db.query(
-        `SELECT to_char(to_timestamp(api_dt) + interval '8 hours', 'YYYY-MM') AS m,
+        `SELECT to_char(${AQI_LOCAL}, 'YYYY-MM') AS m,
                 COUNT(*) FILTER (WHERE aqi <= 2)::int AS good,
                 COUNT(*) FILTER (WHERE aqi = 3)::int AS moderate,
                 COUNT(*) FILTER (WHERE aqi >= 4)::int AS poor,
                 ROUND(AVG(pm2_5)::numeric, 1)::float AS pm25
          FROM nlex_emissions
-         WHERE (to_timestamp(api_dt) + interval '8 hours')::date BETWEEN $1 AND $2
+         WHERE (${AQI_LOCAL})::date BETWEEN $1 AND $2
          GROUP BY 1 ORDER BY 1`,
         params
       ),
@@ -206,7 +219,7 @@ export async function getEmissionsAnalyticsFromDb(filters: EmissionsAnalyticsFil
         `SELECT ROUND(AVG(aqi)::numeric, 2)::float AS avg_aqi, COUNT(*)::int AS samples,
                 ROUND(AVG(pm2_5)::numeric, 1)::float AS avg_pm25
          FROM nlex_emissions
-         WHERE (to_timestamp(api_dt) + interval '8 hours')::date BETWEEN $1 AND $2`,
+         WHERE (${AQI_LOCAL})::date BETWEEN $1 AND $2`,
         params
       ),
     ]);
@@ -235,11 +248,31 @@ export async function getEmissionsAnalyticsFromDb(filters: EmissionsAnalyticsFil
   }
 }
 
+// Measured air quality lives in nlex_emissions (OpenWeather per-exit readings)
+// and modelled output in nlex_theoretical_emissions. The flat emissions_log /
+// incidents_table from the original schema were never loaded, so the three
+// endpoints below read the populated tables and keep the original result keys.
+
 // [DEV-01] Get Emissions Index and AQI
 export async function getEmissionsIndexFromDb() {
   if (!db) return null;
   try {
-    const { rows } = await db.query(`SELECT * FROM emissions_log ORDER BY recorded_at DESC LIMIT 1`);
+    // Corridor-wide snapshot at the most recent reading timestamp, rather than
+    // a single exit's row — one exit is not representative of the corridor.
+    const { rows } = await db.query(`
+      WITH latest AS (SELECT MAX(recorded_at) AS ts FROM nlex_emissions)
+      SELECT ROUND(AVG(e.aqi)::numeric, 2)::float    AS aqi_level,
+             ROUND(AVG(e.pm2_5)::numeric, 2)::float  AS pm2_5,
+             ROUND(AVG(e.pm10)::numeric, 2)::float   AS pm10,
+             ROUND(AVG(e.no2)::numeric, 2)::float    AS no2,
+             ROUND(AVG(e.co)::numeric, 2)::float     AS co,
+             ROUND(AVG(e.o3)::numeric, 2)::float     AS o3,
+             COUNT(*)::int                           AS exits_sampled,
+             latest.ts                               AS recorded_at
+      FROM nlex_emissions e, latest
+      WHERE e.recorded_at = latest.ts
+      GROUP BY latest.ts
+    `);
     return rows[0];
   } catch (error) {
     console.error("Database query failed for emissions index:", error);
@@ -251,10 +284,29 @@ export async function getEmissionsIndexFromDb() {
 export async function getPeakPenaltyFromDb() {
   if (!db) return null;
   try {
+    // "Peak penalty" = the extra CO2 emitted during rush hours (06:00-09:00 and
+    // 16:00-19:00 PHT) above the same period's off-peak hourly average.
+    // The original peak_penalty_applied flag has no equivalent in this
+    // warehouse, so it is derived from the modelled hourly emissions instead.
     const { rows } = await db.query(`
-      SELECT COUNT(*) as penalty_count, SUM(co2_emissions_tons) as excess_emissions
-      FROM emissions_log
-      WHERE peak_penalty_applied = TRUE
+      WITH hourly AS (
+        SELECT ${LOCAL_HOUR} AS h,
+               SUM(co2_grams) / 1e6 AS co2_tons
+        FROM nlex_theoretical_emissions
+        WHERE co2_grams IS NOT NULL AND co2_grams::text <> 'NaN'
+        GROUP BY 1
+      ), split AS (
+        SELECT
+          SUM(co2_tons) FILTER (WHERE h BETWEEN 6 AND 8 OR h BETWEEN 16 AND 18) AS peak_total,
+          COUNT(*)      FILTER (WHERE h BETWEEN 6 AND 8 OR h BETWEEN 16 AND 18) AS peak_hours,
+          AVG(co2_tons) FILTER (WHERE NOT (h BETWEEN 6 AND 8 OR h BETWEEN 16 AND 18)) AS offpeak_avg
+        FROM hourly
+      )
+      SELECT peak_hours::int                                              AS penalty_count,
+             ROUND((peak_total - offpeak_avg * peak_hours)::numeric, 1)::float AS excess_emissions,
+             ROUND(peak_total::numeric, 1)::float                         AS peak_emissions,
+             ROUND((offpeak_avg * peak_hours)::numeric, 1)::float         AS baseline_emissions
+      FROM split
     `);
     return rows[0];
   } catch (error) {
@@ -267,11 +319,21 @@ export async function getPeakPenaltyFromDb() {
 export async function getClimateResilienceFromDb() {
   if (!db) return null;
   try {
-    // A simplified metric joining incident weather data
+    // Incidents grouped by the weather at the hour they were reported, using
+    // the same >0.3mm wet/dry rule as the incident dashboard.
     const { rows } = await db.query(`
-      SELECT weather_condition, COUNT(*) as preventable_incidents
-      FROM incidents_table
-      GROUP BY weather_condition
+      WITH wx AS (
+        SELECT (timestamp_utc + interval '8 hours')::date AS d,
+               EXTRACT(hour FROM timestamp_utc + interval '8 hours')::int AS h,
+               AVG(rainfall) > 0.3 AS wet
+        FROM hourly_weather
+        GROUP BY 1, 2
+      )
+      SELECT CASE WHEN w.wet THEN 'Rainy' ELSE 'Clear' END AS weather_condition,
+             COUNT(*)::int AS preventable_incidents
+      FROM fact_incident_log f
+      JOIN wx w ON w.d = f.date_day AND w.h = f.hour_of_day
+      GROUP BY 1 ORDER BY 2 DESC
     `);
     return rows;
   } catch (error) {

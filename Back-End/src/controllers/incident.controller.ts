@@ -1,7 +1,7 @@
 import type { Request, Response } from "express";
 import { z } from "zod";
 import { IncidentQuerySchema } from "../validators/incident.validator.js";
-import { getIncidentListFromDb, getIncidentMetricsFromDb, getWeatherCorrelationFromDb, getIncidentAnalyticsFromDb } from "../services/incident.service.js";
+import { getIncidentListFromDb, getIncidentMetricsFromDb, getWeatherCorrelationFromDb, getIncidentAnalyticsFromDb, getIncidentPredictiveFromDb } from "../services/incident.service.js";
 
 const IncidentAnalyticsQuerySchema = z.object({
   months: z.enum(["3", "12", "all"]).optional().default("12"),
@@ -19,6 +19,34 @@ export const getIncidentAnalytics = async (req: Request, res: Response) => {
 
   if (!data) {
     return res.status(503).json({ success: false, message: "Incident analytics unavailable: database not reachable" });
+  }
+
+  res.json({ success: true, source: "database", data });
+};
+
+// Same filter vocabulary as the descriptive tab so the one control strip above
+// the page means the same thing on either. `months`/`from`/`to` set how much
+// observed history is drawn behind the forecast; `weather` re-scores the models
+// over just the wet or just the dry days of the validation window.
+// No default on `months`: absent means "leave the chart geometry alone" and the
+// service falls back to its original fixed context width. Defaulting to 12
+// months here would silently rescale the chart for every existing caller.
+const IncidentPredictiveQuerySchema = z.object({
+  months: z.enum(["3", "12", "all"]).optional(),
+  from: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+  to: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+  weather: z.enum(["all", "dry", "wet"]).optional().default("all"),
+});
+
+// [ML-01] GET /api/incident/predictive — incident forecast. The champion is
+// whichever model the pipeline last wrote to ml_training_metadata, not a fixed
+// one; the response carries champion_model so callers never assume.
+export const getIncidentPredictive = async (req: Request, res: Response) => {
+  const query = IncidentPredictiveQuerySchema.parse(req.query);
+  const data = await getIncidentPredictiveFromDb(query);
+
+  if (!data) {
+    return res.status(503).json({ success: false, message: "Predictive analytics unavailable: database not reachable" });
   }
 
   res.json({ success: true, source: "database", data });

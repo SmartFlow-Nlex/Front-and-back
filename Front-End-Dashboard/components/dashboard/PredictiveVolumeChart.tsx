@@ -5,6 +5,8 @@ import type { EChartsOption } from "echarts";
 import DashboardChart from "./DashboardChart";
 import ModelNarrative, { type MetricRow } from "./ModelNarrative";
 import { aggregateSeries } from "./aggregateSeries";
+import { useThemeTokens, zoneTints } from "./useThemeTokens";
+import WeatherEvidencePanel from "./WeatherEvidencePanel";
 
 type ModelType = "LSTM" | "Prophet" | "HoltWinters" | "SARIMAX" | "HoltsLinear";
 
@@ -49,6 +51,10 @@ const MODELS: ModelMeta[] = [
 
 const META = Object.fromEntries(MODELS.map((m) => [m.key, m])) as Record<ModelType, ModelMeta>;
 const ACTUAL_COLOR = "#2563eb";
+// Same pattern the other dashboard pages use. The literal URL was refactored out
+// of this file but the constant was never declared here, so every fetch threw a
+// ReferenceError, was swallowed by the catch, and the chart sat on "Loading…".
+const BACKEND = process.env.NEXT_PUBLIC_BACKEND_URL ?? "http://localhost:4000";
 const VALIDATED_HORIZON = 14; // must match retrain_honest.py HORIZON
 // Show every stored training day. The blue line is meant to BE the trained
 // dataset, and only at full width do the 80/20 proportions read correctly.
@@ -122,111 +128,6 @@ const extremeLabel = (hours: HourlyPoint[], pick: "max" | "min") => {
   return p ? `${fmtHour(p.hour)} · ${fmtVeh(p.v)}` : "—";
 };
 
-function buildSecondaryXAxis(dates: string[], granularity: string) {
-  if (granularity === "Daily" || granularity === "Hourly" || dates.length === 0) {
-    return null;
-  }
-
-  if (granularity === "Weekly") {
-    const secondaryData: string[] = [];
-    let weekNum = 1;
-
-    for (let i = 0; i < dates.length; i++) {
-      if (i % 7 === 0) {
-        const endIdx = Math.min(i + 6, dates.length - 1);
-        const startStr = dates[i];
-        const endStr = dates[endIdx];
-        secondaryData.push(`[ Week ${weekNum}: ${startStr} – ${endStr} ]`);
-        weekNum++;
-      } else {
-        secondaryData.push("");
-      }
-    }
-
-    return {
-      type: "category" as const,
-      data: secondaryData,
-      position: "bottom" as const,
-      offset: 24,
-      axisPointer: { show: false },
-      axisLine: { show: true, lineStyle: { color: "#2563eb", width: 1.5, type: "dashed" as const } },
-      axisTick: {
-        show: true,
-        interval: (index: number) => index % 7 === 0,
-        length: 8,
-        lineStyle: { color: "#2563eb", width: 2 },
-      },
-      axisLabel: {
-        show: true,
-        interval: 0,
-        color: "#1d4ed8",
-        fontWeight: "bold" as const,
-        fontSize: 10,
-        align: "left" as const,
-      },
-    };
-  }
-
-  if (granularity === "Monthly") {
-    const secondaryData: string[] = [];
-    let currentMonth = "";
-    let monthNum = 1;
-    let monthStartIdx = 0;
-
-    for (let i = 0; i < dates.length; i++) {
-      const d = dates[i] || "";
-      const monthName = d.split(" ")[0] || d;
-
-      if (i === 0) currentMonth = monthName;
-
-      const monthChanged = monthName !== currentMonth;
-      if (monthChanged) {
-        const endIdx = i - 1;
-        const startStr = dates[monthStartIdx];
-        const endStr = dates[endIdx];
-        secondaryData[monthStartIdx] = `[ Month ${monthNum}: ${currentMonth} (${startStr} – ${endStr}) ]`;
-        currentMonth = monthName;
-        monthStartIdx = i;
-        monthNum++;
-        secondaryData.push("");
-      } else {
-        secondaryData.push("");
-      }
-
-      if (i === dates.length - 1) {
-        const startStr = dates[monthStartIdx];
-        const endStr = dates[i];
-        secondaryData[monthStartIdx] = `[ Month ${monthNum}: ${currentMonth} (${startStr} – ${endStr}) ]`;
-      }
-    }
-
-    return {
-      type: "category" as const,
-      data: secondaryData,
-      position: "bottom" as const,
-      offset: 24,
-      axisPointer: { show: false },
-      axisLine: { show: true, lineStyle: { color: "#2563eb", width: 1.5, type: "dashed" as const } },
-      axisTick: {
-        show: true,
-        interval: (index: number) => secondaryData[index] !== "",
-        length: 10,
-        lineStyle: { color: "#2563eb", width: 2 },
-      },
-      axisLabel: {
-        show: true,
-        interval: 0,
-        color: "#1d4ed8",
-        fontWeight: "bold" as const,
-        fontSize: 10,
-        align: "left" as const,
-      },
-    };
-  }
-
-  return null;
-}
-
 type Props = {
   months?: "3" | "12" | "all";
   from?: string;
@@ -251,6 +152,10 @@ export default function PredictiveVolumeChart({ months = "all", from, to, weathe
   //
   // Granularity & zone window controls
   const [granularity, setGranularity] = useState<"Hourly" | "Daily" | "Weekly" | "Monthly" | "Yearly">("Daily");
+  // ECharts needs literal colours, so the CSS tokens are resolved at runtime.
+  const T = useThemeTokens();
+  const ZONE = zoneTints(T.isDark);
+
   const [pastDays, setPastDays] = useState<number>(ALL_PAST);
   const [futureDays, setFutureDays] = useState<number>(14);
 
@@ -328,9 +233,9 @@ export default function PredictiveVolumeChart({ months = "all", from, to, weathe
         if (weather && weather !== "all") {
           qs.set("weather", weather);
         }
-        const res = await fetch(`http://localhost:4000/api/traffic/forecast?${qs}`);
+        const res = await fetch(`${BACKEND}/api/traffic/forecast?${qs}`);
         const json = await res.json();
-        if (cancelled || !json.success || !json.data.volumes) return;
+        if (cancelled || !json.success || !json.data?.volumes) return;
 
         const rows = json.data.volumes as ForecastRow[];
 
@@ -363,7 +268,8 @@ export default function PredictiveVolumeChart({ months = "all", from, to, weathe
         const holdoutStart = rows.findIndex((v) => v.is_holdout);
         const futureStart = rows.findIndex((v) => v.is_future);
 
-        if (json.data.metrics) setRawMetrics(json.data.metrics as MetricRow[]);
+        const metricsData = json.data.modelMetrics ?? json.data.metrics;
+        if (metricsData) setRawMetrics(metricsData as MetricRow[]);
 
         setChartData({
           // The year MUST be part of the category value, not just its label. Zone
@@ -429,7 +335,7 @@ export default function PredictiveVolumeChart({ months = "all", from, to, weathe
   // ---------- Shared chrome ----------
   const modelToolbar = (
     <div style={{ display: "flex", alignItems: "center", gap: "8px", flex: "0 1 auto", minWidth: 0 }}>
-      <svg width="15" height="15" viewBox="0 0 16 16" fill="none" style={{ color: "#94a3b8", flex: "none" }}>
+      <svg width="15" height="15" viewBox="0 0 16 16" fill="none" style={{ color: "var(--text-muted)", flex: "none" }}>
         <path d="M2 11.5l3.5-4 3 3L13.5 4" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
         <path d="M10.5 4h3v3" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
       </svg>
@@ -441,7 +347,7 @@ export default function PredictiveVolumeChart({ months = "all", from, to, weathe
       <div
         style={{
           display: "inline-flex", flexWrap: "wrap", gap: "2px", padding: "3px",
-          background: "var(--bg-surface, #fff)", border: "1px solid #dce2ef", borderRadius: "999px",
+          background: "var(--bg-surface)", border: "1px solid #dce2ef", borderRadius: "999px",
         }}
       >
         {MODELS.map((baseM) => {
@@ -460,7 +366,7 @@ export default function PredictiveVolumeChart({ months = "all", from, to, weathe
                 fontSize: "0.76rem", fontWeight: 600, whiteSpace: "nowrap",
                 cursor: locked ? "default" : "pointer", transition: "all 0.15s",
                 background: on ? m.color : "transparent",
-                color: on ? "#fff" : "var(--text-secondary, #4b5e7d)",
+                color: on ? "var(--bg-surface)" : "var(--text-secondary, #4b5e7d)",
                 boxShadow: on ? `0 1px 4px ${m.color}40` : "none",
               }}
             >
@@ -478,17 +384,17 @@ export default function PredictiveVolumeChart({ months = "all", from, to, weathe
   );
 
   const metricsTable = (
-    <div style={{ background: "#f8fafc", borderRadius: "8px", padding: "16px", border: "1px solid #e2e8f0" }}>
+    <div style={{ background: "var(--bg-surface-hover)", borderRadius: "8px", padding: "16px", border: "1px solid var(--border-default)" }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "12px" }}>
-        <h4 style={{ margin: "0", fontSize: "0.95rem", color: "#334155", fontWeight: 600 }}>
+        <h4 style={{ margin: "0", fontSize: "0.95rem", color: "var(--text-primary)", fontWeight: 600 }}>
           Real-World ML Validation Metrics
         </h4>
         <button
           onClick={() => setShowAllMetrics(!showAllMetrics)}
           style={{
             display: "inline-flex", alignItems: "center", gap: "6px", padding: "4px 10px", borderRadius: "6px",
-            background: showAllMetrics ? "#e2e8f0" : "#fff", border: "1px solid #cbd5e1",
-            color: "#475569", fontSize: "0.75rem", fontWeight: 600, cursor: "pointer", transition: "all 0.15s"
+            background: showAllMetrics ? "var(--bg-surface-hover)" : "var(--bg-surface)", border: "1px solid var(--border-strong)",
+            color: "var(--text-secondary)", fontSize: "0.75rem", fontWeight: 600, cursor: "pointer", transition: "all 0.15s"
           }}
         >
           {showAllMetrics ? "Show Less" : "Show All Metrics"}
@@ -497,7 +403,7 @@ export default function PredictiveVolumeChart({ months = "all", from, to, weathe
       <div style={{ overflowX: "auto" }}>
         <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "0.85rem", minWidth: showAllMetrics ? "1000px" : "600px" }}>
           <thead>
-            <tr style={{ textAlign: "left", color: "#64748b", fontSize: "0.72rem", textTransform: "uppercase", letterSpacing: "0.05em" }}>
+            <tr style={{ textAlign: "left", color: "var(--text-muted)", fontSize: "0.72rem", textTransform: "uppercase", letterSpacing: "0.05em" }}>
               <th style={{ padding: "6px 10px", fontWeight: 600 }}>Model</th>
               <th style={{ padding: "6px 10px", fontWeight: 600, textAlign: "right" }}>RMSE (veh)</th>
               <th style={{ padding: "6px 10px", fontWeight: 600, textAlign: "right" }}>MAE (veh)</th>
@@ -516,28 +422,28 @@ export default function PredictiveVolumeChart({ months = "all", from, to, weathe
           </thead>
           <tbody>
             {MODELS.map(baseM => metricsMeta[baseM.key]).filter((m) => selected.includes(m.key)).map((m) => (
-              <tr key={m.key} style={{ background: "#fff", borderTop: "1px solid #e2e8f0" }}>
-                <td style={{ padding: "10px", fontWeight: 700, color: "#0f172a" }}>
+              <tr key={m.key} style={{ background: "var(--bg-surface)", borderTop: "1px solid var(--border-default)" }}>
+                <td style={{ padding: "10px", fontWeight: 700, color: "var(--text-primary)" }}>
                   <span style={{ display: "inline-flex", alignItems: "center", gap: "8px" }}>
                     <span style={{ width: 10, height: 10, borderRadius: "50%", background: m.color }} />
                     {m.label}
-                    <span style={{ fontSize: "0.72rem", fontWeight: 500, color: m.accepted ? "#15803d" : "#b91c1c" }}>{m.note}</span>
+                    <span style={{ fontSize: "0.72rem", fontWeight: 500, color: m.accepted ? "var(--color-success)" : "var(--color-danger)" }}>{m.note}</span>
                   </span>
                 </td>
-                <td style={{ padding: "10px", textAlign: "right", color: "#0f172a" }}>{m.rmse}</td>
-                <td style={{ padding: "10px", textAlign: "right", color: "#0f172a" }}>{m.mae}</td>
+                <td style={{ padding: "10px", textAlign: "right", color: "var(--text-primary)" }}>{m.rmse}</td>
+                <td style={{ padding: "10px", textAlign: "right", color: "var(--text-primary)" }}>{m.mae}</td>
                 <td style={{ padding: "10px", textAlign: "right", fontWeight: 700, color: m.color }}>{m.wmape}</td>
                 <td style={{ padding: "10px", textAlign: "right", fontWeight: 700, color: m.color }}>{m.r2}</td>
                 <td style={{ padding: "10px", textAlign: "right", fontWeight: 700,
-                  color: m.mase && m.mase !== "—" ? (parseFloat(m.mase) < 1 ? "#15803d" : "#b91c1c") : "#475569" }}>
+                  color: m.mase && m.mase !== "—" ? (parseFloat(m.mase) < 1 ? "var(--color-success)" : "var(--color-danger)") : "var(--text-secondary)" }}>
                   {m.mase ?? "—"}
                 </td>
                 {showAllMetrics && (
                   <>
-                    <td style={{ padding: "10px", textAlign: "right", color: "#475569" }}>{m.mape ?? "—"}</td>
-                    <td style={{ padding: "10px", textAlign: "right", color: "#475569" }}>{m.smape ?? "—"}</td>
-                    <td style={{ padding: "10px", textAlign: "right", color: "#475569" }}>{m.rmsse ?? "—"}</td>
-                                        <td style={{ padding: "10px", textAlign: "right", color: "#475569" }}>{m.adjusted_r2 ?? "—"}</td>
+                    <td style={{ padding: "10px", textAlign: "right", color: "var(--text-secondary)" }}>{m.mape ?? "—"}</td>
+                    <td style={{ padding: "10px", textAlign: "right", color: "var(--text-secondary)" }}>{m.smape ?? "—"}</td>
+                    <td style={{ padding: "10px", textAlign: "right", color: "var(--text-secondary)" }}>{m.rmsse ?? "—"}</td>
+                                        <td style={{ padding: "10px", textAlign: "right", color: "var(--text-secondary)" }}>{m.adjusted_r2 ?? "—"}</td>
                                       </>
                 )}
               </tr>
@@ -551,7 +457,7 @@ export default function PredictiveVolumeChart({ months = "all", from, to, weathe
   if (!chartData) {
     return (
       <article className="chart-card wide" style={{ padding: "24px" }}>
-        <div style={{ color: "#64748b" }}>Loading ML forecast from AWS…</div>
+        <div style={{ color: "var(--text-secondary)" }}>Loading ML forecast from AWS…</div>
       </article>
     );
   }
@@ -615,7 +521,7 @@ export default function PredictiveVolumeChart({ months = "all", from, to, weathe
   const zoneLabel = (text: string) => ({
     show: true,
     position: "insideTop" as const,
-    color: "#94a3b8",
+    color: "var(--text-muted)",
     fontSize: 11,
     fontWeight: 600 as const,
     formatter: text,
@@ -714,7 +620,7 @@ export default function PredictiveVolumeChart({ months = "all", from, to, weathe
   ];
   const rainBand = (mm: number) => RAIN_BANDS.find((b) => mm < b.max) ?? RAIN_BANDS[RAIN_BANDS.length - 1];
 
-  const weatherSeries: any[] = showWeather ? [
+  const weatherSeries: NonNullable<EChartsOption["series"]> = showWeather ? [
     {
       name: "Rainfall (mm)",
       type: "bar",
@@ -727,8 +633,6 @@ export default function PredictiveVolumeChart({ months = "all", from, to, weathe
       itemStyle: { borderRadius: [3, 3, 0, 0] },
     },
   ] : [];
-
-  const secondaryAxis = buildSecondaryXAxis(dates, granularity);
 
   // Only worth spending a second label line on the year when the window actually
   // crosses one — at the 80/20 split it usually does, at "3 mo" it usually doesn't.
@@ -765,6 +669,9 @@ export default function PredictiveVolumeChart({ months = "all", from, to, weathe
     grid: { left: 80, right: showWeather ? 80 : 24, top: 28, bottom: 104 },
     tooltip: {
       trigger: "axis",
+      backgroundColor: T.tooltipBg,
+      borderColor: T.border,
+      textStyle: { color: T.tooltipText },
       formatter: (params: unknown) => {
         const items = params as { name: string; marker: string; seriesName: string; value: number | null }[];
         if (!items || items.length === 0) return "";
@@ -793,20 +700,22 @@ export default function PredictiveVolumeChart({ months = "all", from, to, weathe
       bottom: 0,
       icon: "circle",
       itemGap: 16,
-      textStyle: { fontSize: 12 },
+      textStyle: { fontSize: 12, color: T.chartText },
     },
     dataZoom: [
       { type: "slider", start: 0, end: 100, height: 18, bottom: 44,
-        borderColor: "#e2e8f0", fillerColor: "rgba(37,99,235,0.08)",
-        handleStyle: { color: "#2563eb" }, textStyle: { color: "#94a3b8", fontSize: 10 } },
+        borderColor: T.border, fillerColor: T.isDark ? "rgba(56,118,245,0.18)" : "rgba(37,99,235,0.08)",
+        handleStyle: { color: "#3876f5" }, textStyle: { color: T.textMuted, fontSize: 10 },
+        backgroundColor: T.isDark ? "rgba(255,255,255,0.03)" : "transparent",
+        dataBackground: { lineStyle: { color: T.chartAxis }, areaStyle: { color: T.chartSplit } } },
     ],
     xAxis: {
       type: "category",
       data: dates,
       triggerEvent: true,
-      axisLine: { lineStyle: { color: "#cbd5e1" } },
+      axisLine: { lineStyle: { color: T.chartAxis } },
       axisLabel: {
-        color: "#64748b",
+        color: T.chartText,
         // Space labels by how many points there actually are, not a fixed modulo.
         // The 80/20 split pushed the series to ~744 days; `index % 5` then asked
         // for 149 labels in ~1,300px and they collapsed into an unreadable smear.
@@ -831,8 +740,8 @@ export default function PredictiveVolumeChart({ months = "all", from, to, weathe
         name: isAggregated ? "Avg Daily Volume (per period)" : "Total Vehicle Volume",
         nameLocation: "middle",
         nameGap: 60,
-        axisLabel: { color: "#64748b", formatter: (val: number) => `${(val / 1000).toFixed(0)}k` },
-        splitLine: { lineStyle: { color: "#e2e8f0", type: "dashed" } },
+        axisLabel: { color: T.chartText, formatter: (val: number) => `${(val / 1000).toFixed(0)}k` },
+        splitLine: { lineStyle: { color: T.chartSplit, type: "dashed" } },
         scale: true,
       },
       {
@@ -840,10 +749,10 @@ export default function PredictiveVolumeChart({ months = "all", from, to, weathe
         name: showWeather ? "Daily rainfall (mm)" : "",
         nameLocation: "middle",
         nameGap: 50,
-        nameTextStyle: { color: "#0284c7", fontSize: 11, fontWeight: "bold" },
+        nameTextStyle: { color: T.isDark ? "#38bdf8" : "#0284c7", fontSize: 11, fontWeight: "bold" },
         position: "right",
-        axisLabel: { show: showWeather, color: "#0284c7", formatter: (val: number) => `${val.toFixed(0)}` },
-        axisLine: { show: showWeather, lineStyle: { color: "#0284c7" } },
+        axisLabel: { show: showWeather, color: T.isDark ? "#38bdf8" : "#0284c7", formatter: (val: number) => `${val.toFixed(0)}` },
+        axisLine: { show: showWeather, lineStyle: { color: T.isDark ? "#38bdf8" : "#0284c7" } },
         splitLine: { show: false },
         min: 0,
         max: (value: { max: number }) => Math.ceil(value.max * 1.2) || 10,
@@ -866,9 +775,9 @@ export default function PredictiveVolumeChart({ months = "all", from, to, weathe
         markArea: {
           silent: true,
           data: [
-            { name: "Past", from: 0, to: holdoutStart - 1, color: "rgba(37, 99, 235, 0.05)" },
-            { name: "Present", from: holdoutStart, to: futureStart - 1, color: "rgba(249, 115, 22, 0.08)" },
-            { name: "Future", from: futureStart, to: dates.length - 1, color: "rgba(22, 163, 74, 0.08)" },
+            { name: "Past", from: 0, to: holdoutStart - 1, color: ZONE.past },
+            { name: "Present", from: holdoutStart, to: futureStart - 1, color: ZONE.present },
+            { name: "Future", from: futureStart, to: dates.length - 1, color: ZONE.future },
           ]
             .filter((z) => z.from <= z.to && dates[z.from] != null && dates[z.to] != null)
             .map((z) => [
@@ -879,7 +788,7 @@ export default function PredictiveVolumeChart({ months = "all", from, to, weathe
         markLine: {
           silent: true,
           symbol: "none",
-          lineStyle: { type: "dashed", color: "#94a3b8" },
+          lineStyle: { type: "dashed", color: ZONE.divider },
           data: [
             ...[holdoutStart, futureStart]
               .filter((i) => dates[i] != null)
@@ -897,7 +806,7 @@ export default function PredictiveVolumeChart({ months = "all", from, to, weathe
               if (periods.length === 0) return [];
               const stride = Math.max(1, Math.ceil(periods.length / 12));
               const tint = granularity === "Weekly" ? "#3b82f6" : "#16a34a";
-              const ink = granularity === "Weekly" ? "#1d4ed8" : "#15803d";
+              const ink = granularity === "Weekly" ? "#1d4ed8" : "var(--color-success)";
               const wash = granularity === "Weekly" ? "rgba(239,246,255,0.92)" : "rgba(240,253,244,0.92)";
               return periods
                 .filter((_, i) => i % stride === 0)
@@ -923,7 +832,7 @@ export default function PredictiveVolumeChart({ months = "all", from, to, weathe
                   lineStyle: { type: "dotted" as const, color: "#f59e0b", width: 2 },
                   label: {
                     show: true, position: "end" as const, formatter: "beyond validated 14d",
-                    color: "#b45309", fontSize: 10, fontWeight: 600 as const,
+                    color: "var(--color-warning)", fontSize: 10, fontWeight: 600 as const,
                   },
                 }]
               : []),
@@ -1018,8 +927,8 @@ export default function PredictiveVolumeChart({ months = "all", from, to, weathe
         xAxis: {
           type: "category",
           data: hourLabels,
-          axisLabel: { color: "#64748b", interval: 1, rotate: 45 },
-          axisLine: { lineStyle: { color: "#cbd5e1" } },
+          axisLabel: { color: "var(--text-secondary)", interval: 1, rotate: 45 },
+          axisLine: { lineStyle: { color: "var(--border-strong)" } },
         },
         yAxis: [
           {
@@ -1027,8 +936,8 @@ export default function PredictiveVolumeChart({ months = "all", from, to, weathe
             name: "Vehicle Volume",
             nameLocation: "middle",
             nameGap: 60,
-            axisLabel: { color: "#64748b", formatter: (val: number) => `${(val / 1000).toFixed(0)}k` },
-            splitLine: { lineStyle: { color: "#e2e8f0", type: "dashed" } },
+            axisLabel: { color: "var(--text-secondary)", formatter: (val: number) => `${(val / 1000).toFixed(0)}k` },
+            splitLine: { lineStyle: { color: "var(--border-default)", type: "dashed" } },
           },
           {
             type: "value",
@@ -1088,26 +997,26 @@ export default function PredictiveVolumeChart({ months = "all", from, to, weathe
       <article className="chart-card wide" style={{ padding: "24px", display: "flex", flexDirection: "column", gap: "18px" }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: "16px", flexWrap: "wrap" }}>
           <div style={{ minWidth: 0 }}>
-            <h3 style={{ fontSize: "1.05rem", color: "#0f172a", fontWeight: 700, margin: 0, letterSpacing: "-0.01em", display: "flex", alignItems: "center", gap: "8px", flexWrap: "wrap" }}>
+            <h3 style={{ fontSize: "1.05rem", color: "var(--text-primary)", fontWeight: 700, margin: 0, letterSpacing: "-0.01em", display: "flex", alignItems: "center", gap: "8px", flexWrap: "wrap" }}>
               Hourly Breakdown — {drillLabel}
               {anyHourly && (
-                <span style={{ fontSize: "0.8rem", padding: "2px 8px", background: "#e2e8f0", color: "#475569", borderRadius: "12px", fontWeight: 600 }}>
+                <span style={{ fontSize: "0.8rem", padding: "2px 8px", background: "var(--border-default)", color: "var(--text-secondary)", borderRadius: "12px", fontWeight: 600 }}>
                   {anyHourly.weekday}
                 </span>
               )}
               {anyHourly?.isFuture && (
-                <span style={{ fontSize: "0.8rem", padding: "2px 8px", background: "#dcfce7", color: "#15803d", borderRadius: "12px", fontWeight: 600 }}>
+                <span style={{ fontSize: "0.8rem", padding: "2px 8px", background: "var(--color-success-bg)", color: "var(--color-success)", borderRadius: "12px", fontWeight: 600 }}>
                   Forecast
                 </span>
               )}
             </h3>
-            <p style={{ color: "#64748b", fontSize: "0.82rem", margin: "4px 0 0 0", maxWidth: "80ch" }}>
+            <p style={{ color: "var(--text-secondary)", fontSize: "0.82rem", margin: "4px 0 0 0", maxWidth: "80ch" }}>
               {anyHourly?.profileSource === "weekday-profile"
                 ? `No hourly ground truth exists for a future date — each model's daily total is distributed over the typical ${anyHourly.weekday} shape from the last 90 days.`
                 : "Observed hourly volume for this day, with each model's daily prediction distributed across the same shape."}
             </p>
             {weather !== "all" && (
-              <p style={{ color: anyHourly && anyHourly.observedHours === 0 ? "#b45309" : "#64748b", fontSize: "0.78rem", margin: "4px 0 0 0" }}>
+              <p style={{ color: anyHourly && anyHourly.observedHours === 0 ? "var(--color-warning)" : "var(--text-secondary)", fontSize: "0.78rem", margin: "4px 0 0 0" }}>
                 {anyHourly && anyHourly.observedHours === 0
                   ? `No ${weather} hours recorded for this date — weather data only covers up to 1 Jul 2026. Bars are hidden; the model curve is unaffected.`
                   : `Showing ${weather} hours only (${anyHourly?.observedHours ?? 0} of 24). The models carry no weather dimension, so their curves are unfiltered.`}
@@ -1118,7 +1027,7 @@ export default function PredictiveVolumeChart({ months = "all", from, to, weathe
             onClick={closeDrill}
             style={{
               display: "inline-flex", alignItems: "center", gap: "6px", padding: "7px 14px", borderRadius: "8px",
-              border: "1px solid #cbd5e1", background: "#fff", color: "#334155",
+              border: "1px solid #cbd5e1", background: "var(--bg-surface)", color: "var(--text-primary)",
               fontSize: "0.85rem", fontWeight: 600, cursor: "pointer", flex: "none",
             }}
           >
@@ -1135,7 +1044,7 @@ export default function PredictiveVolumeChart({ months = "all", from, to, weathe
               borderRadius: "999px", border: "1px solid #dce2ef",
               fontSize: "0.76rem", fontWeight: 600, cursor: "pointer", transition: "all 0.15s",
               background: showWeather ? "linear-gradient(135deg, #38bdf8, #0ea5e9)" : "var(--bg-surface, #fff)",
-              color: showWeather ? "#fff" : "var(--text-secondary, #4b5e7d)",
+              color: showWeather ? "var(--bg-surface)" : "var(--text-secondary, #4b5e7d)",
               boxShadow: showWeather ? "0 1px 6px rgba(56,189,248,0.35)" : "none",
             }}
           >
@@ -1154,9 +1063,9 @@ export default function PredictiveVolumeChart({ months = "all", from, to, weathe
         </div>
 
         {hourlyLoading && !anyHourly ? (
-          <div style={{ height: "420px", display: "grid", placeItems: "center", color: "#64748b" }}>Loading hourly breakdown…</div>
+          <div style={{ height: "420px", display: "grid", placeItems: "center", color: "var(--text-secondary)" }}>Loading hourly breakdown…</div>
         ) : hourlyError ? (
-          <div style={{ height: "420px", display: "grid", placeItems: "center", color: "#b91c1c" }}>{hourlyError}</div>
+          <div style={{ height: "420px", display: "grid", placeItems: "center", color: "var(--color-danger)" }}>{hourlyError}</div>
         ) : hourlyOption ? (
           <div style={{ height: "420px", width: "100%" }}>
             <DashboardChart option={hourlyOption} height={420} />
@@ -1165,26 +1074,26 @@ export default function PredictiveVolumeChart({ months = "all", from, to, weathe
 
         {anyHourly && (
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: "12px" }}>
-            <div style={{ background: "#f8fafc", padding: "12px 14px", borderRadius: "8px", border: "1px solid #e2e8f0" }}>
-              <div style={{ fontSize: "0.72rem", color: "#64748b", textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: "4px" }}>Day Actual</div>
-              <div style={{ fontSize: "1.1rem", fontWeight: 700, color: "#0f172a" }}>{anyHourly.dayActual != null ? fmtVeh(anyHourly.dayActual) : "—"}</div>
+            <div style={{ background: "var(--bg-surface-hover)", padding: "12px 14px", borderRadius: "8px", border: "1px solid #e2e8f0" }}>
+              <div style={{ fontSize: "0.72rem", color: "var(--text-secondary)", textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: "4px" }}>Day Actual</div>
+              <div style={{ fontSize: "1.1rem", fontWeight: 700, color: "var(--text-primary)" }}>{anyHourly.dayActual != null ? fmtVeh(anyHourly.dayActual) : "—"}</div>
             </div>
             {selected.map((k) => {
               const h = hourlyByModel[k];
               return (
-                <div key={k} style={{ background: "#f8fafc", padding: "12px 14px", borderRadius: "8px", border: "1px solid #e2e8f0" }}>
-                  <div style={{ fontSize: "0.72rem", color: "#64748b", textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: "4px" }}>{metricsMeta[k].label} Predicted</div>
+                <div key={k} style={{ background: "var(--bg-surface-hover)", padding: "12px 14px", borderRadius: "8px", border: "1px solid #e2e8f0" }}>
+                  <div style={{ fontSize: "0.72rem", color: "var(--text-secondary)", textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: "4px" }}>{metricsMeta[k].label} Predicted</div>
                   <div style={{ fontSize: "1.1rem", fontWeight: 700, color: metricsMeta[k].color }}>{h?.dayPredicted != null ? fmtVeh(h.dayPredicted) : "—"}</div>
                 </div>
               );
             })}
-            <div style={{ background: "#f8fafc", padding: "12px 14px", borderRadius: "8px", border: "1px solid #e2e8f0" }}>
-              <div style={{ fontSize: "0.72rem", color: "#64748b", textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: "4px" }}>Peak Hour</div>
-              <div style={{ fontSize: "1.1rem", fontWeight: 700, color: "#0f172a" }}>{extremeLabel(anyHourly.hours, "max")}</div>
+            <div style={{ background: "var(--bg-surface-hover)", padding: "12px 14px", borderRadius: "8px", border: "1px solid #e2e8f0" }}>
+              <div style={{ fontSize: "0.72rem", color: "var(--text-secondary)", textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: "4px" }}>Peak Hour</div>
+              <div style={{ fontSize: "1.1rem", fontWeight: 700, color: "var(--text-primary)" }}>{extremeLabel(anyHourly.hours, "max")}</div>
             </div>
-            <div style={{ background: "#f8fafc", padding: "12px 14px", borderRadius: "8px", border: "1px solid #e2e8f0" }}>
-              <div style={{ fontSize: "0.72rem", color: "#64748b", textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: "4px" }}>Quietest Hour</div>
-              <div style={{ fontSize: "1.1rem", fontWeight: 700, color: "#0f172a" }}>{extremeLabel(anyHourly.hours, "min")}</div>
+            <div style={{ background: "var(--bg-surface-hover)", padding: "12px 14px", borderRadius: "8px", border: "1px solid #e2e8f0" }}>
+              <div style={{ fontSize: "0.72rem", color: "var(--text-secondary)", textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: "4px" }}>Quietest Hour</div>
+              <div style={{ fontSize: "1.1rem", fontWeight: 700, color: "var(--text-primary)" }}>{extremeLabel(anyHourly.hours, "min")}</div>
             </div>
           </div>
         )}
@@ -1198,10 +1107,10 @@ export default function PredictiveVolumeChart({ months = "all", from, to, weathe
           too narrow to hold both. */}
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "16px", flexWrap: "wrap" }}>
         <div style={{ minWidth: "260px" }}>
-          <h3 style={{ fontSize: "1.05rem", color: "#0f172a", fontWeight: 700, margin: 0, letterSpacing: "-0.01em" }}>
+          <h3 style={{ fontSize: "1.05rem", color: "var(--text-primary)", fontWeight: 700, margin: 0, letterSpacing: "-0.01em" }}>
             Traffic Volume Walk-Forward Forecast
           </h3>
-          <p style={{ color: "#64748b", fontSize: "0.82rem", margin: "4px 0 0 0" }}>
+          <p style={{ color: "var(--text-secondary)", fontSize: "0.82rem", margin: "4px 0 0 0" }}>
             Click any point to view that day&apos;s hourly breakdown · Toggle models to overlay predictions
           </p>
         </div>
@@ -1214,7 +1123,7 @@ export default function PredictiveVolumeChart({ months = "all", from, to, weathe
               borderRadius: "999px", border: "1px solid #dce2ef",
               fontSize: "0.76rem", fontWeight: 600, cursor: "pointer", transition: "all 0.15s",
               background: showWeather ? "linear-gradient(135deg, #38bdf8, #0ea5e9)" : "var(--bg-surface, #fff)",
-              color: showWeather ? "#fff" : "var(--text-secondary, #4b5e7d)",
+              color: showWeather ? "var(--bg-surface)" : "var(--text-secondary, #4b5e7d)",
               boxShadow: showWeather ? "0 1px 6px rgba(56,189,248,0.35)" : "none",
             }}
           >
@@ -1236,8 +1145,8 @@ export default function PredictiveVolumeChart({ months = "all", from, to, weathe
       {/* Zone window & Granularity controls */}
       <div style={{
         display: "flex", alignItems: "center", gap: "20px", flexWrap: "wrap",
-        padding: "10px 14px", borderRadius: "10px", background: "#f8fafc",
-        border: "1px solid #e8edf5", fontSize: "0.76rem",
+        padding: "10px 14px", borderRadius: "10px", background: "var(--bg-surface-hover)",
+        border: "1px solid var(--border-default)", fontSize: "0.76rem",
       }}>
         {/* GRANULARITY control pill */}
         <span style={{ display: "inline-flex", alignItems: "center", gap: "8px" }}>
@@ -1246,13 +1155,13 @@ export default function PredictiveVolumeChart({ months = "all", from, to, weathe
           </b>
           <div style={{
             display: "inline-flex", alignItems: "center", padding: "2px",
-            borderRadius: "999px", background: "#fff", border: "1px solid #dce2ef",
+            borderRadius: "999px", background: "var(--bg-surface)", border: "1px solid #dce2ef",
           }}>
             {/* Hourly (grayed out) */}
             <span
               title="Click any daily point on the chart to view 24-hour hourly breakdown"
               style={{
-                padding: "3px 10px", borderRadius: "999px", color: "#94a3b8",
+                padding: "3px 10px", borderRadius: "999px", color: "var(--text-muted)",
                 fontWeight: 600, fontSize: "0.72rem", cursor: "not-allowed", opacity: 0.5,
               }}
             >
@@ -1275,7 +1184,7 @@ export default function PredictiveVolumeChart({ months = "all", from, to, weathe
                 style={{
                   padding: "3px 10px", borderRadius: "999px", cursor: "pointer", border: "none",
                   background: "transparent",
-                  color: granularity === g ? "#2563eb" : "#4b5e7d",
+                  color: granularity === g ? "#3876f5" : "var(--text-secondary)",
                   fontWeight: granularity === g ? 700 : 600, fontSize: "0.72rem",
                 }}
               >
@@ -1288,14 +1197,14 @@ export default function PredictiveVolumeChart({ months = "all", from, to, weathe
         {/* Past */}
         <span style={{ display: "inline-flex", alignItems: "center", gap: "8px" }}>
           <span style={{ width: 10, height: 10, borderRadius: 2, background: "rgba(37,99,235,0.25)" }} />
-          <b style={{ color: "#0f172a" }}>Past</b>
+          <b style={{ color: "var(--text-primary)" }}>Past</b>
         </span>
 
         {/* Present */}
         <span style={{ display: "inline-flex", alignItems: "center", gap: "8px" }}>
           <span style={{ width: 10, height: 10, borderRadius: 2, background: "rgba(249,115,22,0.35)" }} />
-          <b style={{ color: "#0f172a" }}>Present</b>
-          <span style={{ color: "#64748b" }}>
+          <b style={{ color: "var(--text-primary)" }}>Present</b>
+          <span style={{ color: "var(--text-secondary)" }}>
             {chartData.futureStart - chartData.holdoutStart}d scored · fixed by evaluation
           </span>
         </span>
@@ -1303,7 +1212,7 @@ export default function PredictiveVolumeChart({ months = "all", from, to, weathe
         {/* Future */}
         <span style={{ display: "inline-flex", alignItems: "center", gap: "8px" }}>
           <span style={{ width: 10, height: 10, borderRadius: 2, background: "rgba(22,163,74,0.3)" }} />
-          <b style={{ color: "#0f172a" }}>Future</b>
+          <b style={{ color: "var(--text-primary)" }}>Future</b>
           {[
             { label: "2 wk", d: 14 },
             { label: "1 mo", d: 28 },
@@ -1314,12 +1223,12 @@ export default function PredictiveVolumeChart({ months = "all", from, to, weathe
                 padding: "3px 10px", borderRadius: "999px",
                 cursor: item.d > chartData.dates.length - chartData.futureStart ? "not-allowed" : "pointer",
                 border: futureDays === item.d ? "1px solid #16a34a" : "1px solid #dce2ef",
-                background: futureDays === item.d ? "#16a34a" : "#fff",
-                color: futureDays === item.d ? "#fff" : "#4b5e7d", fontWeight: 600, fontSize: "0.72rem",
+                background: futureDays === item.d ? "#16a34a" : "var(--bg-surface)",
+                color: futureDays === item.d ? "var(--bg-surface)" : "var(--text-secondary)", fontWeight: 600, fontSize: "0.72rem",
                 opacity: item.d > chartData.dates.length - chartData.futureStart ? 0.4 : 1,
               }}>{item.label}</button>
           ))}
-          <span style={{ color: "#64748b" }}>· validated at 14d</span>
+          <span style={{ color: "var(--text-secondary)" }}>· validated at 14d</span>
         </span>
       </div>
 
@@ -1332,10 +1241,10 @@ export default function PredictiveVolumeChart({ months = "all", from, to, weathe
       {showWeather && (
         <div style={{
           display: "flex", alignItems: "center", gap: "18px", flexWrap: "wrap",
-          padding: "10px 14px", borderRadius: "10px", background: "#f8fafc",
-          border: "1px solid #e8edf5", fontSize: "0.75rem", color: "#4b5e7d",
+          padding: "10px 14px", borderRadius: "10px", background: "var(--bg-surface-hover)",
+          border: "1px solid var(--border-default)", fontSize: "0.75rem", color: "var(--text-secondary)",
         }}>
-          <span style={{ fontWeight: 700, color: "#0f172a" }}>Daily rainfall</span>
+          <span style={{ fontWeight: 700, color: "var(--text-primary)" }}>Daily rainfall</span>
           {RAIN_BANDS.map((b, i) => (
             <span key={b.label} style={{ display: "inline-flex", alignItems: "center", gap: "6px" }}>
               <span style={{
@@ -1343,18 +1252,21 @@ export default function PredictiveVolumeChart({ months = "all", from, to, weathe
                 border: "1px solid rgba(2,132,199,0.5)", display: "inline-block",
               }} />
               {b.label}
-              <span style={{ color: "#94a3b8" }}>
+              <span style={{ color: "var(--text-muted)" }}>
                 {i === 0 ? `< ${b.max} mm`
                   : b.max === Infinity ? `≥ ${RAIN_BANDS[i - 1].max} mm`
                   : `${RAIN_BANDS[i - 1].max}–${b.max} mm`}
               </span>
             </span>
           ))}
-          <span style={{ color: "#64748b", borderLeft: "1px solid #dbe3ef", paddingLeft: "14px" }}>
+          <span style={{ color: "var(--text-secondary)", borderLeft: "1px solid var(--border-default)", paddingLeft: "14px" }}>
             Taller bar = wetter day. Heavy rain typically coincides with lower traffic volume.
           </span>
         </div>
       )}
+
+      {/* Answers "why is only rainfall plotted?" with the numbers for all four. */}
+      {showWeather && <WeatherEvidencePanel plotted="total_rain" />}
 
       {metricsTable}
 

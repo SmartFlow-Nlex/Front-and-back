@@ -1,143 +1,233 @@
 /**
  * ETL Transformer — Maps cleaned rows to the exact database schema
+ *
+ * TARGETS: the warehouse is a medallion layout (bronze -> silver -> gold), and
+ * raw ingestion belongs in BRONZE. The `public` names that look like tables
+ * (nlex_traffic_volume, nlex_road_crashes, ...) are views and materialized
+ * views built on top of bronze, so they cannot receive inserts:
+ *
+ *   nlex_traffic_volume      MATERIALIZED VIEW -> write bronze.nlex_traffic_volume
+ *   nlex_road_crashes        view (computed cols) -> write bronze.nlex_incidents
+ *   nlex_motorcycle_crashes  view (computed cols) -> write bronze.nlex_incidents
+ *   nlex_theoretical_emissions / nlex_emissions   -> bronze equivalents
+ *   nlex_stalled_vehicles    real table in public (6 columns only)
  */
 import type { RawRow } from "./parser.js";
 import type { DatasetType } from "./classifier.js";
+import { extractKmPost } from "./cleaner.js";
 
 export interface TransformResult {
   tableName: string;
   columns: string[];
   rows: any[][];
   skipped: number;
+  /** Set when a materialized view must be refreshed for the load to become visible. */
+  refreshMaterializedView?: string;
 }
 
+const DAY_NAMES = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+const MONTH_NAMES = ["January", "February", "March", "April", "May", "June",
+                     "July", "August", "September", "October", "November", "December"];
+
+function toInt(v: unknown): number {
+  if (typeof v === "number") return Math.round(v);
+  if (v === null || v === undefined || v === "") return 0;
+  const n = parseInt(String(v).replace(/,/g, ""), 10);
+  return Number.isNaN(n) ? 0 : n;
+}
+
+function toNumOrNull(v: unknown): number | null {
+  if (v === null || v === undefined || v === "") return null;
+  const n = typeof v === "number" ? v : parseFloat(String(v).replace(/,/g, ""));
+  return Number.isNaN(n) ? null : n;
+}
+
+/** "Class 2" | 2 | "2" -> 2; "Total" -> null */
+function parseVehicleClass(v: unknown): number | null {
+  if (v === null || v === undefined) return null;
+  if (typeof v === "number") return v >= 1 && v <= 3 ? v : null;
+  const s = String(v).trim();
+  if (/^total$/i.test(s)) return null;
+  const n = parseInt(s.replace(/\D/g, ""), 10);
+  return n >= 1 && n <= 3 ? n : null;
+}
+
+/** Combine an ISO date with an HH:MM[:SS] time into a timestamp string. */
+function combineDateTime(date: string, time: unknown): string | null {
+  if (!time) return null;
+  const t = String(time).trim();
+  if (!/^\d{1,2}:\d{2}/.test(t)) return null;
+  return `${date} ${t.length === 5 ? t + ":00" : t}`;
+}
+
+function minutesBetween(a: string | null, b: string | null): number | null {
+  if (!a || !b) return null;
+  const ms = Date.parse(b.replace(" ", "T")) - Date.parse(a.replace(" ", "T"));
+  if (Number.isNaN(ms)) return null;
+  // Crossing midnight shows up as a negative gap; wrap into the next day.
+  return Math.round((ms < 0 ? ms + 86_400_000 : ms) / 60_000);
+}
+
+/**
+ * Traffic volume: the upload format is WIDE (one row per date/plaza/direction/
+ * vehicle_class with columns h00..h23), while bronze.nlex_traffic_volume is
+ * LONG (one row per date/hour/plaza/direction, with the three classes as
+ * separate columns). So each input row is unpivoted across 24 hours, and the
+ * per-class rows are folded together on the shared date/hour/plaza/direction key.
+ */
 function transformTrafficVolume(rows: RawRow[]): TransformResult {
   const columns = [
-    "date", "direction", "type", "toll_plaza", "vehicle_class",
-    "h00", "h01", "h02", "h03", "h04", "h05", "h06", "h07",
-    "h08", "h09", "h10", "h11", "h12", "h13", "h14", "h15",
-    "h16", "h17", "h18", "h19", "h20", "h21", "h22", "h23",
+    "date_day", "hour_of_day", "toll_plaza", "direction",
+    "volume_class1", "volume_class2", "volume_class3", "total_volume",
+    "day_of_week", "is_weekend", "month_name", "quarter", "is_rush_hour",
   ];
 
+  type Bucket = {
+    date: string; hour: number; plaza: string; direction: string;
+    c1: number; c2: number; c3: number; total: number; sawTotal: boolean;
+  };
+  const buckets = new Map<string, Bucket>();
   let skipped = 0;
-  const transformed: any[][] = [];
 
   for (const row of rows) {
-    const date = row.date;
-    const direction = row.direction;
-    const type = row.type ?? "Entries";
-    const plaza = row.toll_plaza ?? row.plaza;
-    const vc = row.vehicle_class;
+    const date = row.date as string;
+    const direction = row.direction as string;
+    const plaza = (row.toll_plaza ?? row.plaza) as string;
 
     if (!date || !direction || !plaza) {
       skipped++;
       continue;
     }
 
-    const hourlyValues: number[] = [];
-    for (let h = 0; h < 24; h++) {
-      const keyH = `h${String(h).padStart(2, "0")}`;
-      const keyNum = `${String(h).padStart(2, "0")}_00`;
-      const val = row[keyH] ?? row[keyNum];
-      hourlyValues.push(typeof val === "number" ? val : (val ? parseInt(String(val).replace(/,/g, ''), 10) || 0 : 0));
-    }
+    const vc = parseVehicleClass(row.vehicle_class);
 
-    transformed.push([date, direction, type, plaza, vc, ...hourlyValues]);
+    for (let h = 0; h < 24; h++) {
+      const hh = String(h).padStart(2, "0");
+      const raw = row[`h${hh}`] ?? row[`${hh}_00`];
+      const value = toInt(raw);
+
+      const key = `${date}|${hh}|${plaza}|${direction}`;
+      let b = buckets.get(key);
+      if (!b) {
+        b = { date, hour: h, plaza, direction, c1: 0, c2: 0, c3: 0, total: 0, sawTotal: false };
+        buckets.set(key, b);
+      }
+
+      if (vc === 1) b.c1 += value;
+      else if (vc === 2) b.c2 += value;
+      else if (vc === 3) b.c3 += value;
+      else { b.total += value; b.sawTotal = true; }  // a "Total" row
+    }
   }
 
-  return { tableName: "nlex_traffic_volume", columns, rows: transformed, skipped };
-}
-
-function transformRoadCrash(rows: RawRow[]): TransformResult {
-  const columns = [
-    "date", "reported_time", "response_time", "cleared_time", "location",
-    "lane_occupied", "no_of_vehicles_involved", "cause_of_accident",
-    "type_of_accident", "weather_condition", "type_of_pavement",
-    "injuries_male", "injuries_female", "fatalities_male", "fatalities_female",
-    "damage_to_toll_property",
-  ];
-
-  let skipped = 0;
   const transformed: any[][] = [];
+  for (const b of buckets.values()) {
+    // Prefer an explicit Total row; otherwise sum the classes.
+    const total = b.sawTotal ? b.total : b.c1 + b.c2 + b.c3;
+    const d = new Date(`${b.date}T00:00:00Z`);
+    const dow = d.getUTCDay();
+    const isRush = (b.hour >= 6 && b.hour <= 8) || (b.hour >= 16 && b.hour <= 18);
 
-  for (const row of rows) {
-    if (!row.date || !row.location) { skipped++; continue; }
     transformed.push([
-      row.date, row.reported_time, row.response_time, row.cleared_time,
-      row.location, row.lane_occupied,
-      typeof row.no_of_vehicles_involved === "number" ? row.no_of_vehicles_involved : parseInt(String(row.no_of_vehicles_involved ?? "0"), 10),
-      row.cause_of_accident, row.type_of_accident,
-      row.weather_condition, row.type_of_pavement,
-      row.injuries_male ?? 0, row.injuries_female ?? 0,
-      row.fatalities_male ?? 0, row.fatalities_female ?? 0,
-      row.damage_to_toll_property,
+      b.date, b.hour, b.plaza, b.direction,
+      b.c1, b.c2, b.c3, total,
+      DAY_NAMES[dow], dow === 0 || dow === 6,
+      MONTH_NAMES[d.getUTCMonth()], `Q${Math.floor(d.getUTCMonth() / 3) + 1}`, isRush,
     ]);
   }
 
-  return { tableName: "nlex_road_crashes", columns, rows: transformed, skipped };
+  return {
+    tableName: "bronze.nlex_traffic_volume",
+    columns,
+    rows: transformed,
+    skipped,
+    refreshMaterializedView: "nlex_traffic_volume",
+  };
 }
 
-function transformStalledVehicle(rows: RawRow[]): TransformResult {
+/**
+ * Road and motorcycle crashes both land in bronze.nlex_incidents, distinguished
+ * by incident_type. The public nlex_road_crashes / nlex_motorcycle_crashes views
+ * derive reported_time, response_time and the `date` text column from these
+ * base columns, so they must not be written to directly.
+ */
+function transformCrash(rows: RawRow[], incidentType: "road_crash" | "motorcycle_crash"): TransformResult {
   const columns = [
-    "date", "reported_time", "responded_time", "cleared_time",
-    "entry_point", "vehicle_cause", "location",
-    "driver_gender", "assistance_rendered", "remarks",
+    "incident_date", "reported_time", "cleared_time", "location", "incident_type",
+    "no_of_vehicles", "cause_of_accident", "type_of_accident", "weather_condition",
+    "injuries_male", "injuries_female", "fatalities_male", "fatalities_female",
+    "total_injuries", "total_fatalities",
+    "hour_of_day", "km_value", "clearance_minutes", "severity",
   ];
 
   let skipped = 0;
   const transformed: any[][] = [];
 
   for (const row of rows) {
-    if (!row.date || !row.location) { skipped++; continue; }
+    const date = row.date as string;
+    const location = row.location as string;
+    if (!date || !location) { skipped++; continue; }
+
+    const reported = combineDateTime(date, row.reported_time);
+    const cleared = combineDateTime(date, row.cleared_time ?? row.response_time);
+
+    const im = toInt(row.injuries_male);
+    const iff = toInt(row.injuries_female);
+    const fm = toInt(row.fatalities_male);
+    const ff = toInt(row.fatalities_female);
+
+    const hour = reported ? Number(reported.slice(11, 13)) : null;
+    const clearance = minutesBetween(reported, cleared);
+
+    // Severity is not supplied by the upload format; derive it the same way the
+    // dashboard reads it — fatalities outrank injuries.
+    const severity = fm + ff > 0 ? "Fatal" : im + iff > 0 ? "Injury" : "Property Damage";
+
     transformed.push([
-      row.date, row.reported_time, row.responded_time, row.cleared_time,
-      row.entry_point ?? "NLEX", row.vehicle_cause, row.location,
-      row.driver_gender, row.assistance_rendered, row.remarks,
+      date, reported, cleared, location, incidentType,
+      toInt(row.no_of_vehicles_involved ?? row.no_of_vehicles ?? 1),
+      row.cause_of_accident ?? null, row.type_of_accident ?? null, row.weather_condition ?? null,
+      im, iff, fm, ff, im + iff, fm + ff,
+      hour, extractKmPost(location), clearance, severity,
+    ]);
+  }
+
+  return { tableName: "bronze.nlex_incidents", columns, rows: transformed, skipped };
+}
+
+/** public.nlex_stalled_vehicles is a real table, but only has these 5 writable columns. */
+function transformStalledVehicle(rows: RawRow[]): TransformResult {
+  const columns = ["date", "reported_time", "responded_time", "location", "vehicle_cause"];
+
+  let skipped = 0;
+  const transformed: any[][] = [];
+
+  for (const row of rows) {
+    const date = row.date as string;
+    const location = row.location as string;
+    if (!date || !location) { skipped++; continue; }
+
+    transformed.push([
+      date,
+      combineDateTime(date, row.reported_time),
+      combineDateTime(date, row.responded_time),
+      location,
+      row.vehicle_cause ?? null,
     ]);
   }
 
   return { tableName: "nlex_stalled_vehicles", columns, rows: transformed, skipped };
 }
 
-function transformMotorcycleCrash(rows: RawRow[]): TransformResult {
-  // Use same schema as road crashes — motorcycle_crashes has identical columns
-  const columns = [
-    "date", "reported_time", "response_time", "cleared_time", "location",
-    "lane_occupied", "no_of_vehicles_involved", "cause_of_accident",
-    "type_of_accident", "weather_condition", "type_of_pavement",
-    "injuries_male", "injuries_female", "fatalities_male", "fatalities_female",
-    "damage_to_toll_property",
-  ];
-
-  let skipped = 0;
-  const transformed: any[][] = [];
-
-  for (const row of rows) {
-    if (!row.date || !row.location) { skipped++; continue; }
-    transformed.push([
-      row.date, row.reported_time, row.response_time, row.cleared_time,
-      row.location, row.lane_occupied,
-      row.no_of_vehicles_involved ?? 1,
-      row.cause_of_accident, row.type_of_accident,
-      row.weather_condition, row.type_of_pavement,
-      row.injuries_male ?? 0, row.injuries_female ?? 0,
-      row.fatalities_male ?? 0, row.fatalities_female ?? 0,
-      row.damage_to_toll_property,
-    ]);
-  }
-
-  return { tableName: "nlex_motorcycle_crashes", columns, rows: transformed, skipped };
-}
-
 function transformEmissions(rows: RawRow[]): TransformResult {
-  // Detect if it's theoretical (Climatiq) or measured (OpenWeather)
+  // Theoretical (modelled, per-class grams) vs measured (OpenWeather AQI).
   const hasGrams = rows[0] && ("co2_grams" in rows[0] || "co_grams" in rows[0]);
 
   if (hasGrams) {
     const columns = [
-      "timestamp_utc", "direction", "vehicle_class", "volume",
+      "exit_id", "timestamp_utc", "direction", "vehicle_class", "volume",
       "segment_distance_km", "co2_grams", "co_grams", "no2_grams",
-      "pm25_grams", "pm10_grams", "so2_grams", "methodology_tier",
+      "pm25_grams", "pm10_grams", "so2_grams",
     ];
 
     let skipped = 0;
@@ -146,33 +236,55 @@ function transformEmissions(rows: RawRow[]): TransformResult {
     for (const row of rows) {
       if (!row.timestamp_utc) { skipped++; continue; }
       transformed.push([
-        row.timestamp_utc, row.direction ?? "NB", row.vehicle_class ?? 1,
-        row.volume ?? 0, row.segment_distance_km ?? 11.61,
-        row.co2_grams ?? 0, row.co_grams ?? 0, row.no2_grams ?? 0,
-        row.pm25_grams ?? 0, row.pm10_grams ?? 0, row.so2_grams ?? 0,
-        row.methodology_tier ?? "Uploaded via ETL Pipeline",
+        toNumOrNull(row.exit_id),
+        row.timestamp_utc,
+        row.direction ?? "NB",
+        parseVehicleClass(row.vehicle_class) ?? 1,
+        toInt(row.volume),
+        toNumOrNull(row.segment_distance_km) ?? 11.61,
+        toNumOrNull(row.co2_grams) ?? 0,
+        toNumOrNull(row.co_grams) ?? 0,
+        toNumOrNull(row.no2_grams) ?? 0,
+        toNumOrNull(row.pm25_grams),
+        toNumOrNull(row.pm10_grams),
+        toNumOrNull(row.so2_grams),
       ]);
     }
 
-    return { tableName: "nlex_theoretical_emissions", columns, rows: transformed, skipped };
-  } else {
-    // OpenWeather AQI format
-    const columns = ["aqi", "co", "no", "no2", "o3", "so2", "nh3", "pm2_5", "pm10", "data_confidence"];
-
-    let skipped = 0;
-    const transformed: any[][] = [];
-
-    for (const row of rows) {
-      transformed.push([
-        row.aqi ?? 0, row.co ?? 0, row.no ?? 0, row.no2 ?? 0,
-        row.o3 ?? 0, row.so2 ?? 0, row.nh3 ?? null,
-        row.pm2_5 ?? row.pm25 ?? 0, row.pm10 ?? 0,
-        row.data_confidence ?? "Uploaded via ETL Pipeline",
-      ]);
-    }
-
-    return { tableName: "nlex_emissions", columns, rows: transformed, skipped };
+    return { tableName: "bronze.nlex_theoretical_emissions", columns, rows: transformed, skipped };
   }
+
+  // Measured air quality
+  const columns = [
+    "exit_id", "exit_name", "direction", "latitude", "longitude",
+    "aqi", "co", "no", "no2", "o3", "so2", "nh3", "pm2_5", "pm10", "recorded_at",
+  ];
+
+  let skipped = 0;
+  const transformed: any[][] = [];
+
+  for (const row of rows) {
+    if (!row.timestamp_utc) { skipped++; continue; }
+    transformed.push([
+      toNumOrNull(row.exit_id),
+      row.exit_name ?? null,
+      row.direction ?? null,
+      toNumOrNull(row.latitude),
+      toNumOrNull(row.longitude),
+      toInt(row.aqi),
+      toNumOrNull(row.co) ?? 0,
+      toNumOrNull(row.no) ?? 0,
+      toNumOrNull(row.no2) ?? 0,
+      toNumOrNull(row.o3) ?? 0,
+      toNumOrNull(row.so2) ?? 0,
+      toNumOrNull(row.nh3),
+      toNumOrNull(row.pm2_5 ?? row.pm25) ?? 0,
+      toNumOrNull(row.pm10) ?? 0,
+      row.timestamp_utc,
+    ]);
+  }
+
+  return { tableName: "bronze.nlex_emissions", columns, rows: transformed, skipped };
 }
 
 /**
@@ -183,11 +295,11 @@ export function transformData(rows: RawRow[], datasetType: DatasetType): Transfo
     case "traffic_volume":
       return transformTrafficVolume(rows);
     case "road_crash":
-      return transformRoadCrash(rows);
+      return transformCrash(rows, "road_crash");
+    case "motorcycle_crash":
+      return transformCrash(rows, "motorcycle_crash");
     case "stalled_vehicle":
       return transformStalledVehicle(rows);
-    case "motorcycle_crash":
-      return transformMotorcycleCrash(rows);
     case "emissions":
       return transformEmissions(rows);
     default:

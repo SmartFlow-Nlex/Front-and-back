@@ -99,11 +99,18 @@ banner("STEP 1: Loading traffic and weather")
 conn = psycopg2.connect(POSTGRES_URL)
 
 # total_volume > 0 drops the zero-filled placeholder rows that run to 2026-12-30.
+# gold.daily_traffic_volume summed Entries AND Exits across all 25 CSV plaza
+# names, which double-counted every trip, included two plazas absent from the
+# 20-exit reference, and credited movements to plazas that do not have them
+# (Bocaue Barrier is Exit-only southbound and None northbound, yet carried
+# entries in both). gold.daily_traffic_volume_corrected applies
+# gold.exit_name_map and gold.exit_direction_role, then counts entries only —
+# one count per trip.
 traffic_df = pd.read_sql_query(
     """
-    SELECT (date + interval '8 hours')::date AS ds, total_volume AS y
-    FROM gold.daily_traffic_volume
-    WHERE date IS NOT NULL AND total_volume > 0
+    SELECT date AS ds, total_volume AS y
+    FROM gold.daily_traffic_volume_corrected
+    WHERE total_volume > 0
     ORDER BY 1
     """,
     conn,
@@ -372,6 +379,10 @@ MODELS = {
 
 # name -> (uses_weather, weather-free twin) for reporting and DB writes
 NO_WEATHER_TWIN = {"SARIMAX": "SARIMAX_nw", "Prophet": "Prophet_nw", "LSTM": "LSTM_nw"}
+# Which models actually receive the weather regressors. Holt-Winters and Holts
+# Linear are univariate by construction, so they are neither "with weather" nor
+# "without" — the flag is False because weather is not part of the model at all.
+USES_WEATHER = {"SARIMAX", "Prophet", "LSTM"}
 BASELINES = ("SeasonalNaive", "Climatology")
 
 
@@ -396,7 +407,8 @@ failures = {name: [] for name in MODELS}
 import pickle
 
 CKPT = "retrain_checkpoint.pkl"
-FINGERPRINT = (HORIZON, STEP, N_ORIGINS, len(df), sorted(MODELS))
+_data_sig = int(pd.util.hash_pandas_object(df["y"], index=False).sum() % (10 ** 12))
+FINGERPRINT = (HORIZON, STEP, N_ORIGINS, len(df), _data_sig, sorted(MODELS))
 done_origins: set[int] = set()
 
 if os.path.exists(CKPT):
@@ -710,7 +722,7 @@ for name, r in learned.iterrows():
            VALUES (%s,'Total Traffic',%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,NOW())""",
         (name, r.rmse, r.mae, r.mse, r.wmape, r.r2, r.mase, r.mape, r.smape, r.rmsse,
          int(r["rank"]), bool(r.accepted), _reason,
-         not name.endswith("_nw"), _aic, _bic),
+         name in USES_WEATHER, _aic, _bic),
     )
 conn.commit()
 cur.close()

@@ -1,6 +1,6 @@
 import type { Request, Response } from "express";
 import { TrafficQuerySchema, IncidentQuerySchema, ForecastQuerySchema, HourlyForecastQuerySchema, AnalyticsQuerySchema } from "../validators/traffic.validator.js";
-import { getTrafficVolumesFromDb, getDirectionalFlowFromDb, getVehicleClassDistributionFromDb, getTrafficAnalyticsFromDb, getMLPredictiveVolume, getMLPredictiveVolumeHourly, getMLPredictiveCongestion, getMLEventSurge, getMLModelMetrics } from "../services/traffic.service.js";
+import { getTrafficVolumesFromDb, getDirectionalFlowFromDb, getVehicleClassDistributionFromDb, getTrafficAnalyticsFromDb, getMLPredictiveVolume, getMLPredictiveVolumeHourly, getMLPredictiveCongestion, getMLEventSurge, getMLModelMetrics, getWeatherEvidenceFromDb } from "../services/traffic.service.js";
 
 // GET /api/traffic/analytics — descriptive dashboard aggregates
 export const getTrafficAnalytics = async (req: Request, res: Response) => {
@@ -72,28 +72,36 @@ export const getIncidents = async (req: Request, res: Response) => {
 export const getForecast = async (req: Request, res: Response) => {
   const query = ForecastQuerySchema.parse(req.query);
   
-  // Fetch real ML predictions and latest evaluation metrics from AWS PostgreSQL DB
-  const [volumes, congestion, events, metrics] = await Promise.all([
+  // Fetch real ML predictions from AWS PostgreSQL DB
+  const [volumes, congestion, events, modelMetrics] = await Promise.all([
     getMLPredictiveVolume({ months: query.months, from: query.from, to: query.to }),
     getMLPredictiveCongestion(),
     getMLEventSurge(),
     getMLModelMetrics()
   ]);
 
-  if (!volumes && !congestion && !events && !metrics) {
+  if (!volumes && !congestion && !events) {
     return res.status(503).json({ success: false, message: "ML Predictions unavailable: database not reachable" });
   }
 
-  res.json({ 
-    success: true, 
+  // Confidence follows the best ACCEPTED model's wMAPE rather than a constant.
+  // It used to be hardcoded at 0.89, which stayed put through every retrain.
+  const champion = (modelMetrics ?? []).find((m) => m.accepted && m.wmape !== null);
+  const mlConfidence = champion?.wmape != null
+    ? Number((1 - champion.wmape / 100).toFixed(4))
+    : null;
+
+  res.json({
+    success: true,
     data: {
       horizon: query.horizon,
-      mlConfidence: 0.89, // This could also be stored in DB
-      metrics,
+      mlConfidence,
+      championModel: champion?.model ?? null,
+      modelMetrics: modelMetrics ?? [],
       volumes: volumes || [],
       congestion: congestion || [],
       events: events || []
-    } 
+    }
   });
 };
 
@@ -159,4 +167,16 @@ export const getVolumeAdt = async (_req: Request, res: Response) => {
   };
 
   res.json({ success: true, source: "mock", data: mockData });
+};
+
+
+// GET /api/traffic/weather-evidence
+// Whether weather predicts traffic on this corridor — correlations computed live,
+// plus the controlled with/without model comparison from the last training run.
+export const getWeatherEvidence = async (_req: Request, res: Response) => {
+  const data = await getWeatherEvidenceFromDb();
+  if (!data) {
+    return res.status(503).json({ success: false, message: "Weather evidence unavailable: database not reachable" });
+  }
+  res.json({ success: true, source: "database", data });
 };

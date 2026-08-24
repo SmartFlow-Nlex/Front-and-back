@@ -20,18 +20,26 @@
   --bg-topbar: #ffffff;
   --bg-login: #d8e1ef;
 
+  /* Borders were hardcoded (#e7ebf4 / #d4dbea) throughout, so card edges could
+     not follow the theme. Tokenised here and overridden in both dark blocks. */
+  --border-default: #e7ebf4;
+  --border-strong: #d4dbea;
+
   /* Text */
+  /* Muted text and the success/warning hues were below WCAG AA 4.5 on both the
+     card and the page background (3.2-4.3). Darkened just enough to clear it —
+     the dark palette already passes, so only the light values moved. */
   --text-primary: #071a44;
   --text-secondary: #4b5e7d;
-  --text-muted: #6b7b94;
+  --text-muted: #627188;
   --text-on-dark: #ffffff;
   --text-on-dark-muted: rgba(255, 255, 255, 0.7);
 
   /* Semantic */
-  --color-success: #0f9e3c;
+  --color-success: #0c8231;
   --color-success-bg: #e8f8ec;
   --color-success-border: #b9e9c5;
-  --color-warning: #ea580c;
+  --color-warning: #c2490a;
   --color-warning-bg: #fff5dc;
   --color-warning-border: #edd28a;
   --color-danger: #dc2626;
@@ -69,6 +77,141 @@
   /* Transitions */
   --transition-fast: 150ms ease;
   --transition-base: 220ms ease;
+
+  /* Chart surface tokens — read by ECharts through getComputedStyle so plots
+     follow the theme instead of hardcoding near-black text on any background. */
+  --chart-text: #4b5e7d;
+  --chart-axis: #c9d3e4;
+  --chart-split: #eaeef6;
+  --chart-tooltip-bg: #ffffff;
+  --chart-tooltip-text: #071a44;
+  --chart-seq-lightest: #eef2fb;
+}
+
+/* ============================================================
+   DARK THEME
+   Only tokens are redefined — no component rule below this point needs to
+   know which theme is active. Three states are covered deliberately:
+     :root                             the complete light palette (above)
+     prefers-color-scheme: dark        the default "System" setting, which
+                                       stamps no attribute at all
+     [data-theme="dark"]               an explicit user choice, which must win
+                                       even on a light OS
+   The media query is guarded with :not([data-theme="light"]) so choosing Light
+   on a dark OS is respected.
+   ============================================================ */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg-body: #0d1117;
+    --bg-surface: #161b22;
+    --bg-surface-hover: #1c2230;
+    --bg-sidebar: #0a0e14;
+    --bg-sidebar-active: #1a2942;
+    --bg-sidebar-hover: rgba(255, 255, 255, 0.06);
+    --bg-topbar: #161b22;
+    --bg-login: #0d1117;
+
+    --text-primary: #e6edf3;
+    --text-secondary: #9aa8bd;
+    --text-muted: #7d8b9e;
+
+    --brand-primary: #5c7aff;
+    --brand-primary-light: #7d93ff;
+    --brand-primary-dark: #3660ff;
+
+    /* Status colours keep their hue but drop the pale fills, which glow on a
+       dark ground; borders carry the meaning instead. */
+    --color-success: #3fb950;
+    --color-success-bg: rgba(63, 185, 80, 0.12);
+    --color-success-border: rgba(63, 185, 80, 0.35);
+    --color-warning: #f0883e;
+    --color-warning-bg: rgba(240, 136, 62, 0.12);
+    --color-warning-border: rgba(240, 136, 62, 0.35);
+    --color-danger: #f85149;
+    --color-danger-bg: rgba(248, 81, 73, 0.12);
+    --color-danger-border: rgba(248, 81, 73, 0.35);
+    --color-info: #6e9bff;
+    --color-info-bg: rgba(110, 155, 255, 0.12);
+    --color-info-border: rgba(110, 155, 255, 0.35);
+    --color-purple: #a371f7;
+    --color-purple-bg: rgba(163, 113, 247, 0.14);
+
+    --border-default: #262c36;
+    --border-strong: #363d49;
+
+    /* Dark surfaces read depth from borders, not drop shadows. */
+    --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.4);
+    --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.45);
+    --shadow-lg: 0 10px 24px rgba(0, 0, 0, 0.55);
+    --shadow-card: 0 2px 8px rgba(0, 0, 0, 0.4);
+
+    --chart-text: #9aa8bd;
+    --chart-axis: #30363d;
+    --chart-split: #21262d;
+    --chart-tooltip-bg: #1c2230;
+    --chart-tooltip-text: #e6edf3;
+    --chart-seq-lightest: #1f2937;
+  }
+}
+
+:root[data-theme="dark"] {
+  --bg-body: #0d1117;
+  --bg-surface: #161b22;
+  --bg-surface-hover: #1c2230;
+  --bg-sidebar: #0a0e14;
+  --bg-sidebar-active: #1a2942;
+  --bg-sidebar-hover: rgba(255, 255, 255, 0.06);
+  --bg-topbar: #161b22;
+  --bg-login: #0d1117;
+
+  --border-default: #262c36;
+  --border-strong: #363d49;
+
+  --text-primary: #e6edf3;
+  --text-secondary: #9aa8bd;
+  --text-muted: #7d8b9e;
+
+  --brand-primary: #5c7aff;
+  --brand-primary-light: #7d93ff;
+  --brand-primary-dark: #3660ff;
+
+  --color-success: #3fb950;
+  --color-success-bg: rgba(63, 185, 80, 0.12);
+  --color-success-border: rgba(63, 185, 80, 0.35);
+  --color-warning: #f0883e;
+  --color-warning-bg: rgba(240, 136, 62, 0.12);
+  --color-warning-border: rgba(240, 136, 62, 0.35);
+  --color-danger: #f85149;
+  --color-danger-bg: rgba(248, 81, 73, 0.12);
+  --color-danger-border: rgba(248, 81, 73, 0.35);
+  --color-info: #6e9bff;
+  --color-info-bg: rgba(110, 155, 255, 0.12);
+  --color-info-border: rgba(110, 155, 255, 0.35);
+  --color-purple: #a371f7;
+  --color-purple-bg: rgba(163, 113, 247, 0.14);
+
+  --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.4);
+  --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.45);
+  --shadow-lg: 0 10px 24px rgba(0, 0, 0, 0.55);
+  --shadow-card: 0 2px 8px rgba(0, 0, 0, 0.4);
+
+  --chart-text: #9aa8bd;
+  --chart-axis: #30363d;
+  --chart-split: #21262d;
+  --chart-tooltip-bg: #1c2230;
+  --chart-tooltip-text: #e6edf3;
+  --chart-seq-lightest: #1f2937;
+}
+
+/* Respect users who ask the OS to reduce motion. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
 }
 
 
@@ -588,7 +731,7 @@ body {
 .ds-sidebar {
   background: var(--bg-sidebar);
   color: var(--text-on-dark);
-  padding: 18px 14px;
+  padding: 25px 14px 18px;
   display: flex;
   flex-direction: column;
   overflow: hidden;
@@ -608,7 +751,7 @@ body {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  margin-bottom: 16px;
+  margin-bottom: 0;
   padding-right: 4px;
   flex-shrink: 0;
 }
@@ -836,7 +979,7 @@ body {
 .ds-topbar {
   height: 64px;
   background: var(--bg-topbar);
-  border-bottom: 1px solid #e7ebf4;
+  border-bottom: 1px solid var(--border-default);
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -905,6 +1048,50 @@ body {
   object-fit: contain;
 }
 
+/* --- Brand mark, light and dark cuts --------------------------------------
+   Same three-state guard as the hero and the palette: a bare default, an OS
+   preference that an explicit Light choice still overrides, and an explicit Dark
+   choice that beats a light OS.
+
+   `display` rather than `opacity`, because these are in normal flow — a
+   transparent-but-present image would still occupy its 40px and push the
+   wordmark across.
+   ------------------------------------------------------------------------- */
+
+.ds-brand-logo.is-dark  { display: none; }
+.ds-brand-logo.is-light { display: block; }
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .ds-brand-logo.is-dark  { display: block; }
+  :root:not([data-theme="light"]) .ds-brand-logo.is-light { display: none; }
+}
+
+:root[data-theme="dark"] .ds-brand-logo.is-dark  { display: block; }
+:root[data-theme="dark"] .ds-brand-logo.is-light { display: none; }
+
+/* The dark cut is an opaque navy tile rather than a transparent mark, so it
+   would otherwise sit on the topbar as a hard square. Rounding it and trimming
+   the bleed makes it read as a deliberate badge. */
+.ds-brand-logo.is-dark {
+  border-radius: 9px;
+  object-fit: cover;
+}
+
+/* Same swap for the login screen's larger mark. Its own .brand-logo rule sets
+   the size, so this only decides which of the two is shown. */
+.ds-brand-swap.is-dark  { display: none; }
+.ds-brand-swap.is-light { display: block; }
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .ds-brand-swap.is-dark  { display: block; }
+  :root:not([data-theme="light"]) .ds-brand-swap.is-light { display: none; }
+}
+
+:root[data-theme="dark"] .ds-brand-swap.is-dark  { display: block; }
+:root[data-theme="dark"] .ds-brand-swap.is-light { display: none; }
+
+.ds-brand-swap.is-dark { border-radius: 18px; }
+
 .ds-datetime-block {
   text-align: right;
   color: var(--text-secondary);
@@ -920,7 +1107,7 @@ body {
 
 .ds-user-chip,
 .ds-date-filter {
-  border: 1px solid #d4dbea;
+  border: 1px solid var(--border-strong);
   border-radius: var(--radius-sm);
   height: 36px;
   padding: 0 12px;
@@ -1019,7 +1206,7 @@ body {
   justify-content: space-between;
   align-items: center;
   padding: 16px 20px;
-  border-bottom: 1px solid #e7ebf4;
+  border-bottom: 1px solid var(--border-default);
   background: #fafbfd;
 }
 
@@ -1063,7 +1250,7 @@ body {
 }
 
 .df-cal-panel + .df-cal-panel {
-  border-left: 1px solid #e7ebf4;
+  border-left: 1px solid var(--border-default);
   padding-left: 20px;
 }
 
@@ -1100,7 +1287,7 @@ body {
 }
 
 .df-cal-select {
-  border: 1px solid #d4dbea;
+  border: 1px solid var(--border-strong);
   border-radius: var(--radius-sm);
   padding: 4px 8px;
   font-size: 0.82rem;
@@ -1179,7 +1366,7 @@ body {
   justify-content: flex-end;
   gap: 10px;
   padding: 14px 20px;
-  border-top: 1px solid #e7ebf4;
+  border-top: 1px solid var(--border-default);
 }
 
 .df-cal-btn {
@@ -1195,7 +1382,7 @@ body {
 .df-cal-btn-cancel {
   background: #fff;
   color: var(--text-secondary);
-  border: 1px solid #d4dbea;
+  border: 1px solid var(--border-strong);
 }
 
 .df-cal-btn-cancel:hover {
@@ -1224,7 +1411,7 @@ body {
 
   .df-cal-panel + .df-cal-panel {
     border-left: 0;
-    border-top: 1px solid #e7ebf4;
+    border-top: 1px solid var(--border-default);
     padding-left: 8px;
     padding-top: 16px;
     margin-top: 12px;
@@ -1268,76 +1455,10 @@ body {
 }
 
 
-/* ---------- Hero Card ---------- */
-.ds-hero-card {
-  position: relative;
-  height: 500px;
-  border-radius: var(--radius-lg);
-  overflow: hidden;
-  box-shadow: var(--shadow-sm);
-  margin-bottom: 24px;
-}
-
-.ds-scroll-down {
-  position: absolute;
-  bottom: 4px;
-  left: 50%;
-  transform: translateX(-50%);
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 0px;
-  color: var(--text-primary);
-  text-decoration: none;
-  font-weight: 800;
-  font-size: 0.85rem;
-  transition: opacity var(--transition-fast), transform var(--transition-fast);
-  z-index: 10;
-  text-shadow: 0 1px 4px rgba(255, 255, 255, 0.9), 0 0 8px rgba(255, 255, 255, 0.9);
-}
-
-.ds-scroll-down svg {
-  width: 20px;
-  height: 20px;
-}
-
-.ds-scroll-down:hover {
-  opacity: 1;
-  transform: translateX(-50%) translateY(4px);
-}
-
-.ds-scroll-down svg {
-  animation: bounce 2s infinite;
-}
-
-@keyframes bounce {
-
-  0%,
-  20%,
-  50%,
-  80%,
-  100% {
-    transform: translateY(0);
-  }
-
-  40% {
-    transform: translateY(-8px);
-  }
-
-  60% {
-    transform: translateY(-4px);
-  }
-}
-
 .ds-hero-image {
   object-fit: cover;
   object-position: center;
 }
-
-.ds-hero-overlay {
-  display: none;
-}
-
 
 /* ---------- Section Block ---------- */
 .ds-section-block {
@@ -1403,7 +1524,7 @@ body {
 .ds-feature-card {
   margin-top: 18px;
   background: var(--bg-surface);
-  border: 1px solid #e7ebf4;
+  border: 1px solid var(--border-default);
   border-radius: var(--radius-lg);
   padding: 20px;
   box-shadow: var(--shadow-card);
@@ -1634,7 +1755,7 @@ body {
 
 .tab-stat-card {
   background: var(--bg-surface);
-  border: 1px solid #e7ebf4;
+  border: 1px solid var(--border-default);
   border-radius: var(--radius-lg);
   padding: 16px;
   box-shadow: var(--shadow-card);
@@ -1803,7 +1924,7 @@ body {
 .panel {
   margin-top: 18px;
   background: var(--bg-surface);
-  border: 1px solid #e7ebf4;
+  border: 1px solid var(--border-default);
   border-radius: var(--radius-lg);
   padding: 18px 20px;
   box-shadow: var(--shadow-card);
@@ -1919,7 +2040,7 @@ body {
 
 .chart-card {
   background: var(--bg-surface);
-  border: 1px solid #e7ebf4;
+  border: 1px solid var(--border-default);
   border-radius: var(--radius-lg);
   padding: 16px;
   min-height: 280px;
@@ -1934,7 +2055,7 @@ body {
 /* ---------- Scenario Slider ---------- */
 .scenario-container {
   margin-top: 10px;
-  border-top: 1px solid #e7ebf4;
+  border-top: 1px solid var(--border-default);
   padding-top: 16px;
 }
 
@@ -1951,7 +2072,7 @@ body {
   width: 100%;
   -webkit-appearance: none;
   height: 6px;
-  background: #e7ebf4;
+  background: var(--border-default);
   border-radius: 4px;
   outline: none;
 }
@@ -2053,7 +2174,7 @@ body {
 
 .map-card {
   background: var(--bg-surface);
-  border: 1px solid #e7ebf4;
+  border: 1px solid var(--border-default);
   border-radius: var(--radius-lg);
   overflow: hidden;
   box-shadow: var(--shadow-card);
@@ -2108,12 +2229,12 @@ body {
   display: grid;
   grid-template-columns: repeat(3, 1fr);
   padding: 12px 0;
-  border-top: 1px solid #e7ebf4;
+  border-top: 1px solid var(--border-default);
 }
 
 .map-stats-card {
   background: var(--bg-surface);
-  border: 1px solid #e7ebf4;
+  border: 1px solid var(--border-default);
   border-radius: var(--radius-lg);
   overflow: hidden;
 }
@@ -2152,7 +2273,7 @@ body {
 
 .mini-stat {
   background: var(--bg-surface);
-  border: 1px solid #e7ebf4;
+  border: 1px solid var(--border-default);
   border-radius: var(--radius-lg);
   padding: 16px;
   box-shadow: var(--shadow-card);
@@ -2253,7 +2374,7 @@ body {
 .sandbox-main,
 .sandbox-side {
   background: var(--bg-surface);
-  border: 1px solid #e7ebf4;
+  border: 1px solid var(--border-default);
   border-radius: var(--radius-lg);
   padding: 18px;
   box-shadow: var(--shadow-card);
@@ -2347,7 +2468,7 @@ body {
 }
 .sandbox-metric {
   background: var(--bg-surface);
-  border: 1px solid #e7ebf4;
+  border: 1px solid var(--border-default);
   border-radius: var(--radius-md);
   padding: 12px 14px;
   box-shadow: var(--shadow-card);
@@ -2508,7 +2629,7 @@ body {
 
 /* ---------- AI Command Prompt (preview) ---------- */
 .ai-command {
-  border: 1px solid #e7ebf4;
+  border: 1px solid var(--border-default);
   border-radius: var(--radius-lg);
   padding: 16px;
   background: linear-gradient(180deg, #faf8ff, var(--bg-surface));
@@ -2808,7 +2929,7 @@ body {
 .table-card {
   margin-top: 14px;
   background: var(--bg-surface);
-  border: 1px solid #e7ebf4;
+  border: 1px solid var(--border-default);
   border-radius: var(--radius-lg);
   padding: 0;
   overflow: hidden;
@@ -2820,7 +2941,7 @@ body {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
-  border-bottom: 1px solid #e7ebf4;
+  border-bottom: 1px solid var(--border-default);
   align-items: center;
 }
 
@@ -3007,10 +3128,6 @@ body {
     padding: 18px;
   }
 
-  .ds-hero-card {
-    height: 240px;
-  }
-
   .tab-title {
     font-size: 1.5rem;
   }
@@ -3054,10 +3171,6 @@ body {
   .tab-stat-grid,
   .mini-stats-grid {
     grid-template-columns: 1fr;
-  }
-
-  .ds-hero-card {
-    height: 180px;
   }
 
   .tab-title {
@@ -3178,613 +3291,634 @@ body {
    INTERACTIVE NLEX ROADMAP
    ============================================================ */
 /* ─── Section wrapper ─── */
-.ds-roadmap-section {
-  background: #e5ecf6;
+/* ===========================================================================
+   LIVE CORRIDOR STATUS — a divided highway
+
+   Northbound on top, southbound below, exits in the median. One shared km axis
+   left to right, so an exit sits at the same point on both carriageways and the
+   two directions can be read straight down the column.
+
+   The asphalt and its markings are fixed colours, not tokens: a road is dark and
+   its lines are white in both themes, and tinting the tarmac with the page would
+   stop it reading as tarmac. Everything around it is tokenised as usual.
+   =========================================================================== */
+
+.ds-rd {
+  background: var(--bg-surface);
+  border: 1px solid var(--border-default);
   border-radius: var(--radius-lg);
-  padding: 32px 32px 32px;
-  box-shadow: 0 14px 40px rgba(15, 23, 42, 0.12);
-  border: 1px solid #cdd6e8;
+  box-shadow: var(--shadow-card);
   color: var(--text-primary);
-  position: relative;
-}
-
-.ds-roadmap-header-row {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  margin-bottom: 30px;
-}
-
-.ds-roadmap-header {
-  text-align: center;
-  margin-bottom: 12px;
-}
-
-.ds-roadmap-header h2 {
-  font-size: 1.4rem;
-  font-weight: 800;
-  color: var(--brand-primary);
-  margin: 0 0 6px;
-}
-
-.ds-roadmap-subtitle {
-  font-size: 0.75rem;
-  font-weight: 600;
-  letter-spacing: 0.12em;
-  color: #94a3b8;
-  text-transform: uppercase;
-  margin: 0;
-}
-
-.ds-header-right {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 8px;
-}
-
-.ds-last-update {
-  font-size: 0.7rem;
-  color: #64748b;
-  font-family: monospace;
-}
-
-/* ─── Legend ─── */
-.ds-roadmap-legend {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 18px;
-  flex-wrap: wrap;
-}
-
-.ds-legend-item {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  font-size: 0.82rem;
-  font-weight: 500;
-  color: var(--text-secondary);
-}
-
-.ds-legend-dot {
-  width: 12px;
-  height: 12px;
-  border-radius: 50%;
-}
-
-.ds-legend-dot.seg-red {
-  background: #e74c3c;
-}
-
-.ds-legend-dot.seg-orange {
-  background: #e67e22;
-}
-
-.ds-legend-dot.seg-green {
-  background: #27ae60;
-}
-
-.ds-legend-drag-hint {
-  font-size: 0.75rem;
-  color: var(--text-tertiary);
-  font-style: italic;
-  margin-left: 8px;
-}
-
-/* ─── Scrollable container ─── */
-.ds-roadmap-container {
-  width: 100%;
-  display: flex;
-  flex-direction: column;
-  gap: 60px;
-}
-
-/* ─── Track Row ─── */
-.ds-track-row {
-  display: flex;
-  flex-direction: column;
-}
-
-.ds-track-title {
-  font-size: 1.1rem;
-  font-weight: 700;
-  color: var(--brand-primary);
-  margin: 0 0 40px 10px;
-  letter-spacing: 0.02em;
-}
-
-/* ─── Track ─── */
-.ds-roadmap-track {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  width: 100%;
-}
-
-/* ─── Each stop (node + segment) ─── */
-.ds-roadmap-stop {
-  display: flex;
-  align-items: center;
-  flex: 1;
-  opacity: 0;
-  transform: translateY(18px);
-  transition: opacity 0.5s ease, transform 0.5s ease;
-  transition-delay: var(--delay, 0s);
-}
-
-.ds-roadmap-stop:last-child {
-  flex: 0;
-}
-
-.ds-roadmap-container.is-visible .ds-roadmap-stop {
-  opacity: 1;
-  transform: translateY(0);
-}
-
-/* ─── Node ─── */
-.ds-roadmap-node {
-  position: relative;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  cursor: pointer;
-  z-index: 2;
-  height: 60px;
-}
-
-.ds-node-km {
-  position: absolute;
-  top: -24px;
-  font-size: 0.65rem;
-  font-weight: 700;
-  color: #64748b;
-  letter-spacing: 0.04em;
-  white-space: nowrap;
-}
-
-.ds-node-name {
-  position: absolute;
-  top: 35px;
-  left: 50%;
-  transform: translateX(-50%) rotate(45deg);
-  transform-origin: top center;
-  font-size: 0.65rem;
-  font-weight: 700;
-  color: var(--text-primary);
-  white-space: nowrap;
-  letter-spacing: 0.02em;
-}
-
-/* Hexagon dot */
-.ds-node-dot.hex {
-  position: relative;
-  width: 32px;
-  height: 32px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  border-radius: 0;
-  border: none;
-  background: transparent;
-  box-shadow: none;
-  clip-path: polygon(25% 0%, 75% 0%, 100% 50%, 75% 100%, 25% 100%, 0% 50%);
-  background-color: #e5ecf6;
-  transition: transform 0.25s ease, filter 0.25s ease;
-}
-
-.ds-node-dot.hex svg {
-  color: currentColor;
-  transform: scale(0.85);
-}
-
-.ds-roadmap-node.seg-red .ds-node-dot.hex {
-  color: #e74c3c;
-  filter: drop-shadow(0 0 8px rgba(231, 76, 60, 0.6));
-}
-
-.ds-roadmap-node.seg-orange .ds-node-dot.hex {
-  color: #e67e22;
-  filter: drop-shadow(0 0 8px rgba(230, 126, 34, 0.6));
-}
-
-.ds-roadmap-node.seg-green .ds-node-dot.hex {
-  color: #27ae60;
-  filter: drop-shadow(0 0 8px rgba(39, 174, 96, 0.6));
-}
-
-.ds-roadmap-node:hover .ds-node-dot.hex,
-.ds-roadmap-node.is-active .ds-node-dot.hex {
-  transform: scale(1.3);
-  filter: drop-shadow(0 0 16px currentColor);
-}
-
-/* Pulse ring */
-.ds-node-pulse {
-  position: absolute;
-  inset: -6px;
-  border-radius: 50%;
-  opacity: 0;
-  pointer-events: none;
-}
-
-.ds-roadmap-node.seg-red .ds-node-pulse {
-  border: 2px solid rgba(231, 76, 60, 0.4);
-}
-
-.ds-roadmap-node.seg-orange .ds-node-pulse {
-  border: 2px solid rgba(230, 126, 34, 0.4);
-}
-
-.ds-roadmap-node.seg-green .ds-node-pulse {
-  border: 2px solid rgba(39, 174, 96, 0.4);
-}
-
-.ds-roadmap-container.is-visible .ds-node-pulse {
-  animation: nodePulse 2.2s ease-out infinite;
-  animation-delay: var(--delay, 0s);
-}
-
-@keyframes nodePulse {
-  0% {
-    transform: scale(0.8);
-    opacity: 0.8;
-  }
-
-  70% {
-    transform: scale(2.2);
-    opacity: 0;
-  }
-
-  100% {
-    transform: scale(2.2);
-    opacity: 0;
-  }
-}
-
-/* ─── Segment connector ─── */
-.ds-roadmap-segment {
-  position: relative;
-  flex: 1;
-  height: 8px;
-  background: #cdd6e8;
   overflow: hidden;
-  margin: 0 -2px;
-  align-self: center;
 }
 
-.ds-segment-fill {
-  position: absolute;
-  inset: 0;
-  border-radius: 99px;
-  transform: scaleX(0);
-  transform-origin: left;
-  transition: transform 0.6s ease;
-  transition-delay: var(--delay, 0s);
-}
+/* --- Header --------------------------------------------------------------- */
 
-.ds-roadmap-segment.seg-red .ds-segment-fill {
-  background: linear-gradient(90deg, #c0392b, #e74c3c, #c0392b);
-  box-shadow: 0 0 10px rgba(231, 76, 60, 0.5);
-}
-
-.ds-roadmap-segment.seg-orange .ds-segment-fill {
-  background: linear-gradient(90deg, #d35400, #e67e22, #d35400);
-  box-shadow: 0 0 10px rgba(230, 126, 34, 0.5);
-}
-
-.ds-roadmap-segment.seg-green .ds-segment-fill {
-  background: linear-gradient(90deg, #1e8449, #27ae60, #1e8449);
-  box-shadow: 0 0 10px rgba(39, 174, 96, 0.5);
-}
-
-.ds-roadmap-container.is-visible .ds-segment-fill {
-  transform: scaleX(1);
-}
-
-.ds-segment-arrow {
-  position: absolute;
-  top: 50%;
-  left: 50%;
-  transform: translate(-50%, -50%);
-  font-size: 10px;
-  font-weight: bold;
-  color: rgba(255, 255, 255, 0.6);
-  z-index: 1;
-}
-
-.ds-segment-time {
-  position: absolute;
-  top: -20px;
-  left: 50%;
-  transform: translateX(-50%);
-  font-size: 0.6rem;
-  color: #94a3b8;
-  white-space: nowrap;
-}
-
-/* ─── Animated car ─── */
-.ds-segment-car {
-  position: absolute;
-  top: 50%;
-  left: -10px;
-  transform: translateY(-50%);
-  font-size: 10px;
-  opacity: 0;
-  pointer-events: none;
-}
-
-.ds-roadmap-container.is-visible .ds-segment-car {
-  animation: carDrive 3s ease-in-out infinite;
-  animation-delay: calc(var(--delay, 0s) + 0.8s);
-}
-
-@keyframes carDrive {
-  0% {
-    left: -10px;
-    opacity: 0;
-  }
-
-  15% {
-    opacity: 1;
-  }
-
-  85% {
-    opacity: 1;
-  }
-
-  100% {
-    left: calc(100% + 10px);
-    opacity: 0;
-  }
-}
-
-/* ─── Tooltip ─── */
-.ds-roadmap-tooltip {
-  position: absolute;
-  bottom: calc(100% + 18px);
-  left: 50%;
-  transform: translateX(-50%);
-  background: #ffffff;
-  border: 1px solid #e7ebf4;
-  color: var(--text-primary);
-  border-radius: 12px;
-  padding: 14px 18px;
-  min-width: 200px;
-  z-index: 50;
-  box-shadow: var(--shadow-xl);
-  pointer-events: none;
-  animation: tooltipFade 0.25s ease;
-}
-
-.ds-roadmap-tooltip::after {
-  content: "";
-  position: absolute;
-  top: 100%;
-  left: 50%;
-  transform: translateX(-50%);
-  border-width: 8px;
-  border-style: solid;
-  border-color: var(--bg-surface) transparent transparent transparent;
-}
-
-/* Left-edge nodes: pin tooltip to the left of the node, caret follows */
-.ds-roadmap-tooltip.tip-left {
-  left: 0;
-  transform: none;
-}
-.ds-roadmap-tooltip.tip-left::after {
-  left: 20px;
-  transform: none;
-}
-
-/* Right-edge nodes: pin tooltip to the right of the node, caret follows */
-.ds-roadmap-tooltip.tip-right {
-  left: auto;
-  right: 0;
-  transform: none;
-}
-.ds-roadmap-tooltip.tip-right::after {
-  left: auto;
-  right: 20px;
-  transform: none;
-}
-
-.ds-roadmap-tooltip strong {
-  font-size: 0.82rem;
-  display: block;
-  margin-bottom: 8px;
-  color: var(--brand-primary);
-  letter-spacing: 0.02em;
-}
-
-.ds-tooltip-row {
+.ds-rd-head {
   display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
   justify-content: space-between;
   gap: 14px;
-  font-size: 0.75rem;
-  padding: 4px 6px;
-  border-bottom: 1px solid #e7ebf4;
-  line-height: 1.35;
+  padding: 18px 22px 16px;
+  border-bottom: 1px solid var(--border-default);
 }
 
-.ds-tooltip-row:last-child {
-  border-bottom: none;
-}
-
-.ds-status-badge {
-  font-weight: 700;
-  font-size: 0.72rem;
-  padding: 2px 10px;
-  border-radius: 99px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  text-align: center;
-  white-space: nowrap;
-}
-
-.ds-status-badge.seg-red {
-  background: rgba(231, 76, 60, 0.2);
-  color: #e74c3c;
-}
-
-.ds-status-badge.seg-orange {
-  background: rgba(230, 126, 34, 0.2);
-  color: #e67e22;
-}
-
-.ds-status-badge.seg-green {
-  background: rgba(39, 174, 96, 0.2);
-  color: #27ae60;
-}
-
-@keyframes tooltipFade {
-  from {
-    opacity: 0;
-    transform: translateX(-50%) translateY(8px);
-  }
-
-  to {
-    opacity: 1;
-    transform: translateX(-50%) translateY(0);
-  }
-}
-
-/* ─── Control Panel ─── */
-.ds-roadmap-controls {
-  margin: 24px auto 0;
-  background: var(--bg-surface);
-  border: 1px solid #e7ebf4;
-  border-radius: 99px;
-  padding: 10px 24px;
-  display: flex;
-  align-items: center;
-  gap: 40px;
-  box-shadow: var(--shadow-md);
-  z-index: 10;
-  width: max-content;
-}
-
-.ds-control-left {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-}
-
-.ds-control-label {
-  font-size: 0.7rem;
-  font-weight: 700;
-  color: var(--text-secondary);
-  letter-spacing: 0.05em;
-}
-
-.ds-control-val {
-  font-size: 0.7rem;
-  font-weight: 600;
-  color: var(--text-muted);
-  cursor: pointer;
-  transition: color 0.2s;
-}
-
-.ds-control-val.active {
-  color: var(--brand-primary);
-  font-weight: 700;
-}
-
-.ds-control-val:hover {
-  color: var(--text-primary);
-}
-
-.ds-slider-track {
-  width: 100px;
-  height: 4px;
-  background: #e2e8f0;
-  border-radius: 99px;
-  position: relative;
-  margin-left: 10px;
-}
-
-.ds-slider-thumb {
-  width: 14px;
-  height: 14px;
-  background: var(--brand-primary);
-  border-radius: 50%;
-  position: absolute;
-  top: 50%;
-  left: 0;
-  transform: translateY(-50%);
-  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.3);
-  cursor: pointer;
-}
-
-.ds-control-right {
+.ds-rd-titles h2 {
   display: flex;
   align-items: center;
   gap: 10px;
+  margin: 0;
+  font-size: 1.05rem;
+  font-weight: 700;
+  letter-spacing: -0.01em;
 }
 
-.ds-toggle-btn {
+.ds-rd-stale {
+  padding: 3px 9px;
+  border: 1px solid var(--color-warning-border);
+  border-radius: var(--radius-full);
+  background: var(--color-warning-bg);
+  color: var(--color-warning);
+  font-size: 0.58rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.ds-rd-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-left: auto;
+}
+
+.ds-rd-tally { display: flex; gap: 7px; flex-wrap: wrap; }
+
+.ds-rd-tally span {
+  padding: 3px 10px;
+  border-radius: var(--radius-full);
+  font-size: 0.7rem;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  border: 1px solid transparent;
+}
+
+.ds-rd-tally .seg-red    { background: var(--color-danger-bg);  color: var(--color-danger);  border-color: var(--color-danger-border); }
+.ds-rd-tally .seg-orange { background: var(--color-warning-bg); color: var(--color-warning); border-color: var(--color-warning-border); }
+.ds-rd-tally .seg-green  { background: var(--color-success-bg); color: var(--color-success); border-color: var(--color-success-border); }
+
+.ds-rd-updated {
+  margin: 4px 0 0;
+  font-size: 0.72rem;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+/* --- Detail rail -----------------------------------------------------------
+   Replaces the floating tooltip, which had to be positioned somewhere and
+   covered whatever it described. A reserved strip cannot collide, holds a steady
+   height so the road does not jump, and with both carriageways on screen it
+   reports one exit in both directions from a single hover.
+   -------------------------------------------------------------------------- */
+
+.ds-rd-rail {
+  /* A column, not a wrapping row. Side by side, the readings moved to a second
+     line only when the name happened to be long enough to push them there, so
+     the panel changed shape from one exit to the next. Stacking makes the name
+     the heading and the readings its detail, the same way every time. */
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: center;
+  gap: 6px;
+  /* Holds two lines, so the road below does not jump as the pointer moves
+     between exits with and without a reading. */
+  min-height: 62px;
+  padding: 11px 22px;
+  background: var(--bg-surface-hover);
+  border-bottom: 1px solid var(--border-default);
+}
+
+.ds-rd-rail-name {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 9px;
+  font-size: 0.86rem;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+.ds-rd-rail-name em {
+  font-style: normal;
+  font-size: 0.72rem;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-muted);
+}
+
+.ds-rd-rail-facts {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 8px 22px;
+}
+
+.ds-rd-rail-dir {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 10px;
+  font-size: 0.75rem;
+  color: var(--text-muted);
+}
+
+/* Facts read as one sentence otherwise — "CLEAR Free flowing No active jams"
+   runs together. A hairline between them separates the readings without adding
+   punctuation that competes with the middot already used in the names. */
+.ds-rd-facts {
+  display: inline-flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 0;
+}
+
+.ds-rd-facts > * + *::before {
+  content: "";
+  display: inline-block;
+  width: 1px;
+  height: 0.9em;
+  margin: 0 10px;
+  background: var(--border-strong);
+  vertical-align: -0.08em;
+}
+
+.ds-rd-rail-dirname {
+  padding: 2px 7px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-full);
+  font-size: 0.6rem;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  color: var(--text-secondary);
+}
+
+.ds-rd-rail-dir b { font-weight: 800; letter-spacing: 0.05em; }
+.ds-rd-rail-dir b.seg-red    { color: var(--color-danger); }
+.ds-rd-rail-dir b.seg-orange { color: var(--color-warning); }
+.ds-rd-rail-dir b.seg-green  { color: var(--color-success); }
+.ds-rd-rail-dir b.muted      { color: var(--text-muted); font-style: italic; }
+
+.ds-rd-rail-hint {
+  font-size: 0.75rem;
+  font-style: italic;
+  color: var(--text-muted);
+}
+
+/* --- Track ----------------------------------------------------------------- */
+
+.ds-rd-body { padding: 16px 22px 14px; }
+
+/* Twenty exits need room for a readable name each; below that the track scrolls
+   rather than crushing the columns. */
+.ds-rd-scroll {
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding-bottom: 6px;
+  scrollbar-width: thin;
+}
+
+.ds-rd-track { min-width: 940px; }
+
+.ds-rd-caption {
   display: flex;
   align-items: center;
-  gap: 6px;
-  background: transparent;
-  border: 1px solid #cbd5e1;
-  padding: 4px 12px;
-  border-radius: 99px;
+  gap: 8px;
+  margin: 0;
+  font-size: 0.82rem;
+  font-weight: 700;
+  letter-spacing: 0.02em;
   color: var(--text-secondary);
-  font-size: 0.7rem;
+}
+.ds-rd-caption.top    { margin-bottom: 7px; }
+.ds-rd-caption.bottom { margin-top: 7px; justify-content: flex-end; }
+
+/* The arrow is the quickest read of which way the carriageway runs, so it is
+   sized up and given the brand colour rather than sharing the label's weight. */
+.ds-rd-caption span {
+  font-size: 1.25em;
+  line-height: 1;
+  font-weight: 800;
+  color: var(--brand-primary);
+}
+
+/* --- Carriageways ---------------------------------------------------------- */
+
+.ds-rd-way {
+  position: relative;
+  height: 46px;
+  overflow: hidden;
+  /* Asphalt. Fixed in both themes — a road is dark. */
+  background: #2c313a;
+}
+
+/* Outer shoulder rounded, inner edge square: the two carriageways meet at the
+   median, so rounding both would read as two separate strips. */
+.ds-rd-way.dir-nb { border-radius: 8px 8px 0 0; }
+.ds-rd-way.dir-sb { border-radius: 0 0 8px 8px; }
+
+/* Shoulder lines along both edges. */
+.ds-rd-way::before,
+.ds-rd-way::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 2px;
+  background: rgba(255, 255, 255, 0.5);
+  z-index: 3;
+}
+.ds-rd-way::before { top: 5px; }
+.ds-rd-way::after  { bottom: 5px; }
+
+/* Traffic sits on the tarmac rather than replacing it, so the lane markings
+   still read through — the way a congestion overlay sits on a map. */
+.ds-rd-segs {
+  position: absolute;
+  inset: 7px 0;
+  display: flex;
+}
+
+.ds-rd-seg {
+  flex: 1 1 0;
+  opacity: 0.85;
+  transition: opacity 140ms ease, filter 140ms ease;
+}
+
+.ds-rd-seg.seg-red    { background: #e04434; }
+.ds-rd-seg.seg-orange { background: #e08a2e; }
+.ds-rd-seg.seg-green  { background: #23a55a; }
+/* No ramp this way: bare tarmac, no traffic claim. */
+.ds-rd-seg.no-ramp    { background: none; }
+
+.ds-rd-seg.is-active { filter: brightness(1.22); }
+
+/* Two dashed dividers giving three lanes. Drawn once across the whole track
+   rather than once per exit, so there is no seam to align at every marker. */
+.ds-rd-lanes {
+  position: absolute;
+  inset: 7px 0;
+  z-index: 3;
+  pointer-events: none;
+}
+
+.ds-rd-lanes::before,
+.ds-rd-lanes::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 2px;
+  background: repeating-linear-gradient(
+    to right,
+    rgba(255, 255, 255, 0.85) 0 16px,
+    transparent 16px 34px
+  );
+}
+.ds-rd-lanes::before { top: 33%; }
+.ds-rd-lanes::after  { top: 66%; }
+
+/* Direction of travel. Both carriageways get the same drifting highlight, at the
+   same speed and weight; only the heading differs, because they carry traffic
+   the opposite way. Matching everything except the heading is what makes the two
+   read as one divided road rather than two unrelated strips. */
+.ds-rd-flow {
+  position: absolute;
+  inset: 7px 0;
+  z-index: 2;
+  pointer-events: none;
+  background: linear-gradient(
+    to right,
+    transparent 0%,
+    rgba(255, 255, 255, 0.16) 45%,
+    rgba(255, 255, 255, 0.26) 50%,
+    rgba(255, 255, 255, 0.16) 55%,
+    transparent 100%
+  );
+  background-size: 220px 100%;
+  background-repeat: repeat-x;
+  animation: rdFlowRight 3.2s linear infinite;
+}
+
+.ds-rd-way.dir-sb .ds-rd-flow { animation-name: rdFlowLeft; }
+
+@keyframes rdFlowRight { to { background-position:  220px 0; } }
+@keyframes rdFlowLeft  { to { background-position: -220px 0; } }
+
+/* --- Median: markers serving both carriageways ----------------------------- */
+
+.ds-rd-stops {
+  display: grid;
+  /* Same column count as the segments, so a marker sits under the piece of road
+     it belongs to on both carriageways. */
+  grid-template-columns: repeat(var(--lanes, 20), minmax(0, 1fr));
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  background: var(--bg-surface-hover);
+  border-left: 1px solid var(--border-default);
+  border-right: 1px solid var(--border-default);
+}
+
+.ds-rd-stop {
+  display: flex;
+  justify-content: center;
+  opacity: 0;
+  transform: translateY(4px);
+  transition: opacity 0.35s ease, transform 0.35s ease;
+}
+
+.ds-rd-body.is-visible .ds-rd-stop { opacity: 1; transform: translateY(0); }
+
+.ds-rd-hit {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 1px;
+  width: 100%;
+  padding: 5px 0 6px;
+  border: 0;
+  background: none;
+  font: inherit;
+  cursor: pointer;
+  transition: background 140ms ease;
+}
+
+.ds-rd-hit:hover { background: var(--bg-surface); }
+.ds-rd-hit:focus-visible { outline: 2px solid var(--brand-primary); outline-offset: -2px; }
+
+.ds-rd-node {
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  color: var(--text-muted);
+  transition: color 150ms ease, transform 150ms ease;
+}
+
+.ds-rd-node .ds-hex-svg { width: 21px; height: 21px; }
+
+.ds-rd-stop.is-active .ds-rd-node,
+.ds-rd-hit:hover .ds-rd-node { color: var(--brand-primary); transform: scale(1.16); }
+
+.ds-rd-stop.no-ramp .ds-rd-node { opacity: 0.4; }
+
+.ds-rd-km {
+  font-size: 0.62rem;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-muted);
+}
+
+/* --- Names ----------------------------------------------------------------- */
+
+.ds-rd-labels {
+  display: grid;
+  grid-template-columns: repeat(var(--lanes, 20), minmax(0, 1fr));
+  list-style: none;
+  margin: 8px 0 0;
+  padding: 0;
+}
+
+.ds-rd-labels > li { display: flex; justify-content: center; min-width: 0; }
+
+/* Names run bottom-to-top rather than at an angle. Angled labels were what
+   collided in the first layout; upright ones take no horizontal room at all, so
+   twenty fit however long the names are. */
+.ds-rd-label {
+  writing-mode: vertical-rl;
+  transform: rotate(180deg);
+  height: 116px;
+  padding: 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  font-size: 0.72rem;
+  font-weight: 600;
+  color: var(--text-secondary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  cursor: pointer;
+  transition: color 140ms ease;
+}
+
+.ds-rd-label:hover,
+.ds-rd-label.is-active { color: var(--brand-primary); }
+
+/* --- Footer ---------------------------------------------------------------- */
+
+.ds-rd-foot {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 12px 22px 14px;
+  border-top: 1px solid var(--border-default);
+  background: var(--bg-surface-hover);
+}
+
+.ds-rd-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 14px;
+  font-size: 0.72rem;
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
+.ds-rd-legend span { display: inline-flex; align-items: center; gap: 6px; }
+
+.ds-rd-legend i { width: 15px; height: 7px; border-radius: 2px; }
+.ds-rd-legend i.seg-red    { background: #e04434; }
+.ds-rd-legend i.seg-orange { background: #e08a2e; }
+.ds-rd-legend i.seg-green  { background: #23a55a; }
+
+.ds-rd-foot p {
+  margin: 0;
+  font-size: 0.71rem;
+  color: var(--text-muted);
+  max-width: 58ch;
+}
+
+/* --- Jam level scale ------------------------------------------------------
+   The level is the one number on this panel that cannot be guessed from the
+   drawing, so it gets an explanation on demand rather than a permanent caption.
+   -------------------------------------------------------------------------- */
+
+.ds-rd-scale-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 10px 3px 6px;
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-full);
+  background: var(--bg-surface);
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: 0.71rem;
   font-weight: 600;
   cursor: pointer;
-  transition: all 0.2s;
+  transition: border-color 140ms ease, color 140ms ease;
 }
 
-.ds-toggle-btn.active {
-  border-color: var(--brand-primary);
-  background: var(--brand-primary);
+.ds-rd-scale-btn span {
+  display: grid;
+  place-items: center;
+  width: 15px;
+  height: 15px;
+  border-radius: 50%;
+  background: var(--color-info-bg);
+  color: var(--color-info);
+  font-size: 0.62rem;
+  font-weight: 800;
+}
+
+.ds-rd-scale-btn:hover { border-color: var(--brand-primary); color: var(--brand-primary); }
+.ds-rd-scale-btn:focus-visible { outline: 2px solid var(--brand-primary); outline-offset: 2px; }
+
+.ds-rd-scale-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 1100;
+  display: grid;
+  place-items: center;
+  padding: 20px;
+  background: rgba(6, 16, 34, 0.55);
+  backdrop-filter: blur(2px);
+  animation: rdScaleIn 140ms ease-out;
+}
+
+.ds-rd-scale {
+  width: min(100%, 430px);
+  max-height: 86vh;
+  overflow-y: auto;
+  padding: 18px 20px 20px;
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-lg);
+  background: var(--bg-surface);
+  box-shadow: var(--shadow-lg);
+}
+
+@keyframes rdScaleIn {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+
+.ds-rd-scale-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 8px;
+}
+
+.ds-rd-scale-head h3 {
+  margin: 0;
+  font-size: 1rem;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+.ds-rd-scale-head button {
+  width: 26px;
+  height: 26px;
+  border: 0;
+  border-radius: 7px;
+  background: none;
+  color: var(--text-muted);
+  font-size: 1.2rem;
+  line-height: 1;
+  cursor: pointer;
+  transition: background 140ms ease, color 140ms ease;
+}
+.ds-rd-scale-head button:hover { background: var(--bg-surface-hover); color: var(--text-primary); }
+.ds-rd-scale-head button:focus-visible { outline: 2px solid var(--brand-primary); outline-offset: 1px; }
+
+.ds-rd-scale-intro {
+  margin: 0;
+  font-size: 0.76rem;
+  line-height: 1.45;
+  color: var(--text-muted);
+}
+
+.ds-rd-scale-list {
+  list-style: none;
+  margin: 14px 0 0;
+  padding: 0;
+}
+
+.ds-rd-scale-list li {
+  display: grid;
+  grid-template-columns: 26px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 11px;
+  padding: 7px 0;
+  border-bottom: 1px solid var(--border-default);
+}
+.ds-rd-scale-list li:last-child { border-bottom: 0; }
+
+/* The chips carry the same three colours the road uses, so the table reads as an
+   index to the diagram rather than a separate scheme: 0-2 are the amber-and-below
+   half, 3 upward is what the panel paints red. */
+.ds-rd-scale-chip {
+  display: grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  border-radius: 8px;
+  font-size: 0.76rem;
+  font-weight: 800;
   color: #fff;
 }
+.ds-rd-scale-chip.lv-0 { background: #23a55a; }
+.ds-rd-scale-chip.lv-1,
+.ds-rd-scale-chip.lv-2 { background: #e08a2e; }
+.ds-rd-scale-chip.lv-3,
+.ds-rd-scale-chip.lv-4,
+.ds-rd-scale-chip.lv-5 { background: #e04434; }
 
-.ds-toggle-btn .ds-dot {
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
+.ds-rd-scale-band {
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: var(--text-primary);
 }
 
-.ds-toggle-btn .ds-dot.green {
-  background: #27ae60;
-  box-shadow: 0 0 6px #27ae60;
+.ds-rd-scale-word {
+  font-size: 0.72rem;
+  color: var(--text-muted);
+  text-transform: lowercase;
 }
 
-.ds-toggle-btn .ds-dot.red {
-  background: #e74c3c;
-  box-shadow: 0 0 6px #e74c3c;
+@media (prefers-reduced-motion: reduce) {
+  .ds-rd-scale-backdrop { animation: none; }
 }
 
-/* ─── Responsive ─── */
-@media (max-width: 1024px) {
-  .ds-roadmap-container {
-    overflow-x: auto;
-  }
+/* --- Responsive ------------------------------------------------------------ */
 
-  .ds-roadmap-track {
-    min-width: max-content;
-    padding: 0 30px;
-  }
+@media (max-width: 700px) {
+  .ds-rd-body { padding: 14px 12px 12px; }
+  .ds-rd-head, .ds-rd-foot, .ds-rd-rail { padding-left: 14px; padding-right: 14px; }
+  .ds-rd-meta { justify-content: flex-start; margin-left: 0; }
+  .ds-rd-updated { text-align: left; }
+}
 
-  .ds-roadmap-segment {
-    width: 40px;
-  }
-
-  .ds-roadmap-controls {
-    flex-direction: column;
-    gap: 14px;
-    border-radius: 16px;
-    padding: 16px;
-    width: auto;
-    margin: 20px 16px 0;
-  }
+@media (prefers-reduced-motion: reduce) {
+  .ds-rd-stop { opacity: 1; transform: none; transition: none; }
+  .ds-rd-flow { animation: none; }
+  .ds-rd-node { transition: none; }
 }
 
 /* ============================================================
@@ -4541,3 +4675,421 @@ body {
 .maplibregl-popup-tip {
   display: none !important;
 }
+/* ============================================================
+   NAV GROUPS — the sidebar "spine"
+   Grouping links by intent, with admin utilities pushed to the bottom, so the
+   list reads as a hierarchy instead of nine equal-weight items.
+   ============================================================ */
+.ds-nav-group {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.ds-nav-group + .ds-nav-group {
+  margin-top: var(--space-lg);
+}
+
+.ds-nav-group-label {
+  padding: 0 12px 6px;
+  font-size: 0.66rem;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--text-on-dark-muted);
+  opacity: 0.65;
+}
+
+/* Admin is separated by a rule and pushed down, away from daily-use links. */
+.ds-nav-group-admin {
+  margin-top: auto;
+  padding-top: var(--space-lg);
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+/* The nav must be able to grow for margin-top:auto to push Admin down. */
+.ds-sidebar-nav {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+/* ============================================================
+   THEME TOGGLE — Light / Dark / System
+   ============================================================ */
+.ds-theme-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 3px;
+  background: var(--bg-body);
+  border: 1px solid var(--color-info-border);
+  border-radius: var(--radius-full);
+}
+
+.ds-theme-option {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  border: none;
+  background: transparent;
+  border-radius: var(--radius-full);
+  color: var(--text-muted);
+  font: inherit;
+  font-size: 0.78rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background var(--transition-fast), color var(--transition-fast);
+}
+
+.ds-theme-option:hover {
+  color: var(--text-primary);
+  background: var(--bg-surface-hover);
+}
+
+.ds-theme-option.active {
+  background: var(--bg-surface);
+  color: var(--brand-primary);
+  box-shadow: var(--shadow-sm);
+}
+
+.ds-theme-option:focus-visible {
+  outline: 2px solid var(--brand-primary);
+  outline-offset: 1px;
+}
+
+/* Below ~1100px the labels are dropped and the control becomes three icons. */
+@media (max-width: 1100px) {
+  .ds-theme-option-label {
+    display: none;
+  }
+  .ds-theme-option {
+    padding: 6px 8px;
+  }
+}
+
+/* ---------------------------------------------------------------------------
+   Toasts
+   Colours come from the semantic tokens, which are already redefined in both
+   dark blocks, so these follow the theme without a dark rule of their own.
+   --------------------------------------------------------------------------- */
+.ds-toast-viewport {
+  position: fixed;
+  bottom: 20px;
+  right: 20px;
+  z-index: 1200; /* above the modals these actions are fired from */
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  width: min(380px, calc(100vw - 40px));
+  /* The container spans the stack but must not swallow clicks around them. */
+  pointer-events: none;
+}
+
+.ds-toast {
+  pointer-events: auto;
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 12px 12px 12px 14px;
+  border: 1px solid var(--border-default);
+  border-left-width: 3px;
+  border-radius: 10px;
+  background: var(--bg-surface);
+  box-shadow: var(--shadow-lg, 0 10px 24px rgba(15, 23, 42, 0.10));
+  animation: ds-toast-in 180ms ease-out;
+}
+
+@keyframes ds-toast-in {
+  from { opacity: 0; transform: translateY(8px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+.ds-toast-success { border-left-color: var(--color-success); }
+.ds-toast-error   { border-left-color: var(--color-danger); }
+.ds-toast-info    { border-left-color: var(--color-info); }
+
+.ds-toast-icon {
+  flex: none;
+  width: 20px;
+  height: 20px;
+  margin-top: 1px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  font-size: 0.72rem;
+  font-weight: 700;
+  line-height: 1;
+}
+.ds-toast-success .ds-toast-icon { background: var(--color-success-bg); color: var(--color-success); }
+.ds-toast-error   .ds-toast-icon { background: var(--color-danger-bg);  color: var(--color-danger); }
+.ds-toast-info    .ds-toast-icon { background: var(--color-info-bg);    color: var(--color-info); }
+
+.ds-toast-body { flex: 1; min-width: 0; }
+
+.ds-toast-message {
+  margin: 0;
+  font-size: 0.82rem;
+  font-weight: 600;
+  line-height: 1.35;
+  color: var(--text-primary);
+}
+
+.ds-toast-detail {
+  margin: 3px 0 0;
+  font-size: 0.75rem;
+  line-height: 1.4;
+  color: var(--text-secondary, #4b5e7d);
+  /* Server messages can be long; wrap rather than clip so they stay readable. */
+  overflow-wrap: anywhere;
+}
+
+.ds-toast-close {
+  flex: none;
+  width: 22px;
+  height: 22px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-muted, #8a93a6);
+  font-size: 1.05rem;
+  line-height: 1;
+  cursor: pointer;
+  transition: background 120ms ease, color 120ms ease;
+}
+.ds-toast-close:hover { background: var(--bg-surface-hover); color: var(--text-primary); }
+.ds-toast-close:focus-visible { outline: 2px solid var(--brand-primary); outline-offset: 1px; }
+
+@media (max-width: 560px) {
+  .ds-toast-viewport { left: 20px; right: 20px; width: auto; }
+}
+
+/* Sortable table headers (see lib/table-sort). The button fills the cell so the
+   whole header area is the target, not just the few pixels of the label. */
+.ds-th-sort {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  padding: 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  letter-spacing: inherit;
+  text-transform: inherit;
+  color: inherit;
+  text-align: inherit;
+  cursor: pointer;
+}
+.ds-th-sort:hover { color: var(--brand-primary); }
+.ds-th-sort:focus-visible { outline: 2px solid var(--brand-primary); outline-offset: 2px; border-radius: 4px; }
+.ds-th-sort.active { color: var(--brand-primary); }
+
+.ds-th-arrow {
+  flex: none;
+  font-size: 0.62em;
+  /* Dim until the column is the active sort, so the header row does not read as
+     a row of arrows competing with the labels. */
+  opacity: 0.35;
+  transition: opacity 120ms ease;
+}
+.ds-th-sort:hover .ds-th-arrow,
+.ds-th-sort.active .ds-th-arrow { opacity: 1; }
+
+/* Marks a panel whose numbers are built-in samples rather than warehouse data.
+   Sits inside the heading so it cannot be cropped away in a screenshot. */
+.ds-demo-badge {
+  display: inline-block;
+  margin-left: 10px;
+  padding: 3px 9px;
+  border: 1px solid var(--color-warning-border);
+  border-radius: var(--radius-full);
+  background: var(--color-warning-bg);
+  color: var(--color-warning);
+  font-size: 0.6rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  vertical-align: middle;
+  white-space: nowrap;
+}
+
+/* ===========================================================================
+   HOME TAB — hero
+
+   A purpose-made banner in two cuts, light and dark. It carries the logo,
+   wordmark and tagline itself, so nothing is drawn over it — these rules only
+   frame it and swap the cut with the theme.
+   =========================================================================== */
+
+.ds-hero-card {
+  position: relative;
+  /* Width first, height second — the reverse of what was here before.
+     `aspect-ratio` plus `max-height` looks like "keep the shape, cap the height",
+     but once max-height makes the height definite the ratio derives the WIDTH
+     from it, so the card collapsed to about 930px inside a 1480px column instead
+     of filling it. Setting the width explicitly and giving the height its own
+     clamp keeps the card full-bleed at every size.
+
+     The banner is 2.17:1 and the card is wider than that, so `cover` trims top
+     and bottom evenly. The artwork's content sits in the middle 40%, which
+     leaves comfortable margin at this height. */
+  width: 100%;
+  height: clamp(260px, 26vw, 460px);
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+  border: 1px solid var(--border-default);
+  box-shadow: var(--shadow-md);
+  margin-bottom: 22px;
+  isolation: isolate;
+  animation: heroIn 420ms ease-out backwards;
+}
+
+@keyframes heroIn {
+  from { opacity: 0; transform: translateY(8px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+.ds-hero-image {
+  object-fit: cover;
+  object-position: center;
+}
+
+/* --- Theme swap ------------------------------------------------------------
+   Three states, matching the rest of the palette: a bare :root default, an OS
+   preference that an explicit Light choice must still override, and an explicit
+   Dark choice that must beat a light OS. Getting this wrong in either direction
+   shows the wrong artwork, which is more obvious than a wrong token.
+   -------------------------------------------------------------------------- */
+
+/* Default: light artwork. */
+.ds-hero-image.is-dark { opacity: 0; }
+.ds-hero-image.is-light { opacity: 1; }
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .ds-hero-image.is-dark  { opacity: 1; }
+  :root:not([data-theme="light"]) .ds-hero-image.is-light { opacity: 0; }
+}
+
+:root[data-theme="dark"] .ds-hero-image.is-dark  { opacity: 1; }
+:root[data-theme="dark"] .ds-hero-image.is-light { opacity: 0; }
+
+/* Opacity rather than display, so switching themes cross-fades instead of
+   snapping. Both images are stacked, so the outgoing one fades under the
+   incoming one. */
+.ds-hero-image { transition: opacity 220ms ease; }
+
+/* --- Scroll cue ------------------------------------------------------------
+   The white scrim that used to sit here is gone. It existed to lift the cue off
+   a photograph, but this artwork keeps its lower band clear in both cuts, and on
+   the dark banner a white fade would have been a bright bar across the bottom.
+   The pill now carries its own contrast and follows the theme, because unlike
+   the previous artwork this one does change with it.
+   -------------------------------------------------------------------------- */
+
+.ds-scroll-down {
+  position: absolute;
+  left: 50%;
+  bottom: 16px;
+  transform: translateX(-50%);
+  z-index: 2;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 8px 18px;
+  border-radius: var(--radius-full);
+  background: rgba(255, 255, 255, 0.84);
+  border: 1px solid rgba(9, 30, 66, 0.12);
+  box-shadow: 0 2px 10px rgba(9, 30, 66, 0.14);
+  backdrop-filter: blur(6px);
+  color: #0b2350;
+  font-size: 0.8rem;
+  font-weight: 700;
+  letter-spacing: 0.01em;
+  text-decoration: none;
+  transition: background 160ms ease, box-shadow 160ms ease, transform 160ms ease, color 160ms ease;
+}
+
+.ds-scroll-down:hover {
+  background: #ffffff;
+  box-shadow: 0 4px 16px rgba(9, 30, 66, 0.2);
+  transform: translateX(-50%) translateY(-1px);
+}
+
+/* Dark cut: a translucent dark pill so it reads as part of the banner rather
+   than a white chip punched into it. Same three-state guard as the artwork. */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .ds-scroll-down {
+    background: rgba(12, 22, 40, 0.72);
+    border-color: rgba(255, 255, 255, 0.22);
+    box-shadow: 0 2px 12px rgba(0, 0, 0, 0.45);
+    color: #eaf1ff;
+  }
+  :root:not([data-theme="light"]) .ds-scroll-down:hover {
+    background: rgba(18, 32, 56, 0.88);
+    box-shadow: 0 4px 18px rgba(0, 0, 0, 0.55);
+  }
+}
+
+:root[data-theme="dark"] .ds-scroll-down {
+  background: rgba(12, 22, 40, 0.72);
+  border-color: rgba(255, 255, 255, 0.22);
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.45);
+  color: #eaf1ff;
+}
+:root[data-theme="dark"] .ds-scroll-down:hover {
+  background: rgba(18, 32, 56, 0.88);
+  box-shadow: 0 4px 18px rgba(0, 0, 0, 0.55);
+}
+
+.ds-scroll-down:focus-visible {
+  outline: 2px solid var(--brand-primary);
+  outline-offset: 2px;
+}
+
+.ds-scroll-down svg { animation: heroNudge 2.4s ease-in-out infinite; }
+
+@keyframes heroNudge {
+  0%, 100% { transform: translateY(0); }
+  50%      { transform: translateY(3px); }
+}
+
+@media (max-width: 720px) {
+  /* The banner is left-weighted, so on a narrow screen holding its full width
+     would shrink the wordmark to nothing. Cropping to a squarer card and biasing
+     left keeps the logo and wordmark at a readable size. */
+  .ds-hero-card { height: clamp(170px, 34vw, 240px); }
+  .ds-hero-image { object-position: 28% center; }
+  .ds-scroll-down { font-size: 0.74rem; padding: 7px 14px; bottom: 12px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ds-hero-card { animation: none; }
+  .ds-hero-image { transition: none; }
+  .ds-scroll-down svg { animation: none; }
+  .ds-scroll-down:hover { transform: translateX(-50%); }
+}
+
+/* ---------------------------------------------------------------------------
+   Per-tab KPI accents
+
+   Each analytics page carries its own colour family, so its KPI row takes the
+   same three ramp steps plus two reserved status colours. Set on the page shell
+   so the tiles inherit without every tile knowing which tab it is on.
+   --------------------------------------------------------------------------- */
+.viz-traffic   { --kpi-1: #3f7ad9; --kpi-2: #1d3f8f; --kpi-3: #8ab6f5; --kpi-4: var(--color-info);    --kpi-5: var(--color-success); }
+.viz-incident  { --kpi-1: #b8760a; --kpi-2: #7d4606; --kpi-3: #e0b01f; --kpi-4: var(--color-danger);  --kpi-5: var(--color-warning); }
+.viz-emissions { --kpi-1: #118f46; --kpi-2: #08582b; --kpi-3: #4cbd79; --kpi-4: var(--color-success); --kpi-5: var(--color-info); }
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .viz-traffic   { --kpi-1: #5b8fe6; --kpi-2: #a8c8f8; --kpi-3: #2f5fba; }
+  :root:not([data-theme="light"]) .viz-incident  { --kpi-1: #d18f18; --kpi-2: #f2c94c; --kpi-3: #9d5d0d; }
+  :root:not([data-theme="light"]) .viz-emissions { --kpi-1: #23a55a; --kpi-2: #6ed99a; --kpi-3: #12703a; }
+}
+
+:root[data-theme="dark"] .viz-traffic   { --kpi-1: #5b8fe6; --kpi-2: #a8c8f8; --kpi-3: #2f5fba; }
+:root[data-theme="dark"] .viz-incident  { --kpi-1: #d18f18; --kpi-2: #f2c94c; --kpi-3: #9d5d0d; }
+:root[data-theme="dark"] .viz-emissions { --kpi-1: #23a55a; --kpi-2: #6ed99a; --kpi-3: #12703a; }

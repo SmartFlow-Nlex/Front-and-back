@@ -131,7 +131,7 @@ export default function ModelNarrative({
       style={{
         border: "1px solid #e8edf5",
         borderRadius: 12,
-        background: "#fff",
+        background: "var(--bg-surface)",
         padding: open ? "18px 20px" : "12px 18px",
         display: "flex",
         flexDirection: "column",
@@ -140,11 +140,11 @@ export default function ModelNarrative({
     >
       <div style={{ display: "flex", alignItems: "center", gap: 16, flexWrap: "wrap" }}>
         <div style={{ minWidth: 190 }}>
-          <h4 style={{ margin: 0, fontSize: "0.98rem", fontWeight: 700, color: "#0f172a" }}>
+          <h4 style={{ margin: 0, fontSize: "0.98rem", fontWeight: 700, color: "var(--text-primary)" }}>
             Narrative Explanation
           </h4>
           {!open && (
-            <p style={{ margin: "3px 0 0", fontSize: "0.78rem", color: "#64748b" }}>
+            <p style={{ margin: "3px 0 0", fontSize: "0.78rem", color: "var(--text-secondary)" }}>
               Plain-language read-out of how {selected.length === 1 ? "the selected model" : `the ${selected.length} selected models`} performed
             </p>
           )}
@@ -166,20 +166,20 @@ export default function ModelNarrative({
                   style={{
                     display: "inline-flex", alignItems: "center", gap: 7,
                     padding: "5px 11px", borderRadius: 8, fontSize: "0.735rem",
-                    background: isAcc ? "#f0fdf4" : "#f8fafc",
-                    border: `1px solid ${isAcc ? "#bbf7d0" : "#e6ebf3"}`,
+                    background: isAcc ? "var(--color-success-bg)" : "var(--bg-surface-hover)",
+                    border: `1px solid ${isAcc ? "var(--color-success-border)" : "var(--border-default)"}`,
                   }}
                 >
                   <span style={{ width: 8, height: 8, borderRadius: "50%", background: COLOR[k] }} />
-                  <b style={{ color: "#0f172a" }}>{LABEL[k]}</b>
-                  <span style={{ fontWeight: 700, fontSize: "0.66rem", color: isAcc ? "#15803d" : "#94a3b8" }}>
+                  <b style={{ color: "var(--text-primary)" }}>{LABEL[k]}</b>
+                  <span style={{ fontWeight: 700, fontSize: "0.66rem", color: isAcc ? "var(--color-success)" : "var(--text-muted)" }}>
                     {isAcc ? `RANK #${r.rank}` : "REJECTED"}
                   </span>
                   {r.wmape != null && (
-                    <span style={{ color: "#475569" }}>{r.wmape.toFixed(2)}%</span>
+                    <span style={{ color: "var(--text-secondary)" }}>{r.wmape.toFixed(2)}%</span>
                   )}
                   {mase != null && (
-                    <span style={{ color: mase < 1 ? "#15803d" : "#b91c1c", fontWeight: 600 }}>
+                    <span style={{ color: mase < 1 ? "var(--color-success)" : "var(--color-danger)", fontWeight: 600 }}>
                       MASE {mase.toFixed(2)}
                     </span>
                   )}
@@ -196,8 +196,8 @@ export default function ModelNarrative({
             marginLeft: open ? "auto" : 0, flexShrink: 0,
             borderRadius: 999, cursor: "pointer", fontSize: "0.76rem", fontWeight: 600,
             border: open ? "1px solid #cbd5e1" : "1px solid transparent",
-            background: open ? "#fff" : "linear-gradient(135deg, #6366f1, #4f46e5)",
-            color: open ? "#475569" : "#fff",
+            background: open ? "var(--bg-surface)" : "linear-gradient(135deg, #6366f1, #4f46e5)",
+            color: open ? "var(--text-secondary)" : "var(--bg-surface)",
             boxShadow: open ? "none" : "0 1px 6px rgba(79,70,229,0.35)",
           }}
         >
@@ -207,7 +207,7 @@ export default function ModelNarrative({
 
       {open && (
       <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
-        <p style={{ margin: 0, fontSize: "0.8rem", color: "#64748b" }}>
+        <p style={{ margin: 0, fontSize: "0.8rem", color: "var(--text-secondary)" }}>
           Generated from the stored validation metrics for the models currently selected
           {scoredDays != null && windowStart && windowEnd ? (
             <>
@@ -222,8 +222,8 @@ export default function ModelNarrative({
         const r = rowFor(k);
         if (!r) {
           return (
-            <article key={k} style={{ fontSize: "0.85rem", color: "#64748b" }}>
-              <b style={{ color: "#0f172a" }}>{LABEL[k]}</b> — no stored metrics for this model yet.
+            <article key={k} style={{ fontSize: "0.85rem", color: "var(--text-secondary)" }}>
+              <b style={{ color: "var(--text-primary)" }}>{LABEL[k]}</b> — no stored metrics for this model yet.
             </article>
           );
         }
@@ -269,13 +269,13 @@ export default function ModelNarrative({
         if (rmse) stats.push({ label: "RMSE", value: rmse });
         if (r.r2 != null && isFinite(r.r2)) stats.push({ label: "R²", value: r.r2.toFixed(3) });
         if (r.mase != null && isFinite(r.mase))
-          stats.push({ label: "MASE", value: r.mase.toFixed(3), tone: r.mase < 1 ? "#15803d" : "#b91c1c" });
+          stats.push({ label: "MASE", value: r.mase.toFixed(3), tone: r.mase < 1 ? "var(--color-success)" : "var(--color-danger)" });
 
         return (
           <article
             key={k}
             style={{
-              borderLeft: `3px solid ${isAcc ? "#16a34a" : "#cbd5e1"}`,
+              borderLeft: `3px solid ${isAcc ? "#16a34a" : "var(--border-strong)"}`,
               paddingLeft: 14,
               display: "flex",
               flexDirection: "column",
@@ -283,46 +283,46 @@ export default function ModelNarrative({
             }}
           >
             <div style={{ display: "flex", alignItems: "center", gap: 9, flexWrap: "wrap" }}>
-              <b style={{ fontSize: "0.9rem", color: "#0f172a" }}>{LABEL[k]}</b>
+              <b style={{ fontSize: "0.9rem", color: "var(--text-primary)" }}>{LABEL[k]}</b>
               <span
                 style={{
                   fontSize: "0.64rem", fontWeight: 700, padding: "2px 7px", borderRadius: 999,
-                  background: isAcc ? "#dcfce7" : "#f1f5f9",
-                  color: isAcc ? "#15803d" : "#64748b",
+                  background: isAcc ? "var(--color-success-bg)" : "var(--bg-surface-hover)",
+                  color: isAcc ? "var(--color-success)" : "var(--text-secondary)",
                 }}
               >
                 {isAcc ? `RANK #${r.rank ?? "—"}` : "REJECTED"}
               </span>
               {!showWeather && twinName && r.model_name === twinName && (
-                <span style={{ fontSize: "0.66rem", color: "#94a3b8" }}>weather-free</span>
+                <span style={{ fontSize: "0.66rem", color: "var(--text-muted)" }}>weather-free</span>
               )}
-              <span style={{ fontSize: "0.78rem", color: "#64748b" }}>{HOW_IT_WORKS[k]}</span>
+              <span style={{ fontSize: "0.78rem", color: "var(--text-secondary)" }}>{HOW_IT_WORKS[k]}</span>
             </div>
 
             {/* Numbers as a strip rather than buried in a sentence */}
             <div style={{ display: "flex", gap: 14, flexWrap: "wrap" }}>
               {stats.map((st) => (
                 <span key={st.label} style={{ display: "inline-flex", alignItems: "baseline", gap: 5 }}>
-                  <span style={{ fontSize: "0.64rem", color: "#94a3b8", textTransform: "uppercase", letterSpacing: "0.04em" }}>
+                  <span style={{ fontSize: "0.64rem", color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.04em" }}>
                     {st.label}
                   </span>
-                  <b style={{ fontSize: "0.84rem", color: st.tone ?? "#0f172a" }}>{st.value}</b>
+                  <b style={{ fontSize: "0.84rem", color: st.tone ?? "var(--text-primary)" }}>{st.value}</b>
                 </span>
               ))}
             </div>
 
-            <div style={{ fontSize: "0.8rem", color: "#4b5e7d", lineHeight: 1.5 }}>
+            <div style={{ fontSize: "0.8rem", color: "var(--text-secondary)", lineHeight: 1.5 }}>
               {maseSentence(r.mase)}
               {weatherLine ? <> {weatherLine}</> : null}
             </div>
 
             {icLine && (
-              <div style={{ fontSize: "0.74rem", color: "#94a3b8" }}>{icLine}</div>
+              <div style={{ fontSize: "0.74rem", color: "var(--text-muted)" }}>{icLine}</div>
             )}
 
-            <div style={{ fontSize: "0.8rem", fontWeight: 600, color: isAcc ? "#15803d" : "#b45309" }}>
+            <div style={{ fontSize: "0.8rem", fontWeight: 600, color: isAcc ? "var(--color-success)" : "var(--color-warning)" }}>
               {verdictLine}
-              <span style={{ fontWeight: 400, color: "#64748b" }}>{vsBest}</span>
+              <span style={{ fontWeight: 400, color: "var(--text-secondary)" }}>{vsBest}</span>
             </div>
           </article>
         );
@@ -332,7 +332,7 @@ export default function ModelNarrative({
         style={{
           margin: 0,
           fontSize: "0.74rem",
-          color: "#94a3b8",
+          color: "var(--text-muted)",
           lineHeight: 1.5,
           borderTop: "1px solid #eef2f7",
           paddingTop: 10,

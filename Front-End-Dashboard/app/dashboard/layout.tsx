@@ -6,18 +6,28 @@ import { usePathname, useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { AlertTriangle, Brain, Calendar, Car, ChevronDown, ClipboardList, Home, Leaf, LogOut, Map, Menu, TrendingUp, User, Wrench, X } from "lucide-react";
 import { supabase } from "../../lib/supabase";
+import ThemeToggle from "../../components/dashboard/ThemeToggle";
 
+// The sidebar is the product's spine, so it is grouped by what the user is
+// trying to do rather than listed flat. Admin utilities sit in their own group
+// and are rendered pinned to the bottom, away from the daily-use links.
 const tabs = [
-  { label: "Home", href: "/dashboard", icon: Home },
-  { label: "Traffic", href: "/dashboard/traffic", icon: TrendingUp },
-  { label: "Incident", href: "/dashboard/incident", icon: AlertTriangle },
-  { label: "Emissions", href: "/dashboard/sustainability", icon: Leaf },
-  { label: "AI Sandbox", href: "/dashboard/ai-sandbox", icon: Car },
-  { label: "Maintenance", href: "/dashboard/maintenance", icon: Wrench },
-  { label: "Map Comparison", href: "/dashboard/map-comparison", icon: Map },
-  { label: "Data Management", href: "/dashboard/data-management", icon: Brain },
-  { label: "Audit Log", href: "/dashboard/audit-log", icon: ClipboardList },
+  { label: "Overview", href: "/dashboard", icon: Home, group: "Analytics" },
+  { label: "Traffic", href: "/dashboard/traffic", icon: TrendingUp, group: "Analytics" },
+  { label: "Incidents", href: "/dashboard/incident", icon: AlertTriangle, group: "Analytics" },
+  { label: "Emissions", href: "/dashboard/sustainability", icon: Leaf, group: "Analytics" },
+
+  { label: "Live Map", href: "/dashboard/map-comparison", icon: Map, group: "Operations" },
+  { label: "Maintenance", href: "/dashboard/maintenance", icon: Wrench, group: "Operations" },
+
+  { label: "Scenario Sandbox", href: "/dashboard/ai-sandbox", icon: Car, group: "Planning" },
+
+  { label: "Data Management", href: "/dashboard/data-management", icon: Brain, group: "Admin" },
+  { label: "Audit Log", href: "/dashboard/audit-log", icon: ClipboardList, group: "Admin" },
 ];
+
+/** Daily-use groups, in order. "Admin" is deliberately excluded — it renders last. */
+const NAV_GROUPS = ["Analytics", "Operations", "Planning"] as const;
 
 const MOBILE_BREAKPOINT = 980;
 
@@ -195,30 +205,36 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
       )}
 
       <aside className="ds-sidebar">
-        <div className="ds-sidebar-brand">
-          <div className="ds-sidebar-logo-container">
-            <div className="ds-sidebar-brand-text">
-              <span className="ds-sidebar-title"><span className="ds-brand-highlight">SmartFlow</span> NLEX</span>
-              <span className="ds-sidebar-subtitle">Where Traffic Meets Intelligence</span>
-            </div>
-          </div>
-          <button
-            type="button"
-            className="ds-sidebar-close"
-            aria-label="Close sidebar"
-            onClick={closeSidebar}
-          >
-            <X size={20} strokeWidth={2.5} />
-          </button>
-        </div>
 
         <nav className="ds-sidebar-nav">
-          {visibleTabs.map((tab) => (
-            <Link key={tab.href} href={tab.href} prefetch={true} className={`ds-sidebar-tab ${pathname === tab.href ? "active" : ""}`}>
-              <tab.icon size={18} strokeWidth={2} />
-              {tab.label}
-            </Link>
-          ))}
+          {NAV_GROUPS.map((group) => {
+            const items = visibleTabs.filter((t) => t.group === group);
+            if (items.length === 0) return null; // a role may see none of a group
+            return (
+              <div key={group} className="ds-nav-group">
+                <span className="ds-nav-group-label">{group}</span>
+                {items.map((tab) => (
+                  <Link key={tab.href} href={tab.href} prefetch={true} className={`ds-sidebar-tab ${pathname === tab.href ? "active" : ""}`}>
+                    <tab.icon size={18} strokeWidth={2} />
+                    {tab.label}
+                  </Link>
+                ))}
+              </div>
+            );
+          })}
+
+          {/* Admin sits after a spacer so it reads as separate from daily work. */}
+          {visibleTabs.some((t) => t.group === "Admin") && (
+            <div className="ds-nav-group ds-nav-group-admin">
+              <span className="ds-nav-group-label">Admin</span>
+              {visibleTabs.filter((t) => t.group === "Admin").map((tab) => (
+                <Link key={tab.href} href={tab.href} prefetch={true} className={`ds-sidebar-tab ${pathname === tab.href ? "active" : ""}`}>
+                  <tab.icon size={18} strokeWidth={2} />
+                  {tab.label}
+                </Link>
+              ))}
+            </div>
+          )}
         </nav>
 
         <div className="ds-sidebar-footer">
@@ -244,12 +260,26 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
               <span />
             </button>
             <div className="ds-top-brand">
+              {/* Two cuts of the mark, swapped in CSS for the same reason as the
+                  hero: an explicit theme choice has to beat the OS setting in
+                  both directions, and a JS swap would flash the wrong one on
+                  load. Hidden with `display`, not `opacity` — unlike the hero
+                  these sit in normal flow, so a transparent one would still take
+                  up space and shove the wordmark sideways. */}
               <Image
                 src="/SMARTFLOW_LOGO_WHITE.png"
-                alt="SmartFlow Logo"
-                width={224}
-                height={64}
-                className="w-auto max-h-12 object-contain"
+                alt="SmartFlow NLEX"
+                width={256}
+                height={256}
+                className="ds-brand-logo is-light"
+                priority
+              />
+              <Image
+                src="/logo-dark-bg.png"
+                alt=""
+                width={256}
+                height={256}
+                className="ds-brand-logo is-dark"
                 priority
               />
               SmartFlow NLEX
@@ -257,6 +287,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
           </div>
 
           <div className="ds-topbar-right">
+            <ThemeToggle />
             {/* Live clock differs between server render and first client tick;
                 suppress the expected hydration text mismatch on these nodes. */}
             <div className="ds-datetime-block">

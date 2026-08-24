@@ -1,174 +1,207 @@
+/**
+ * Database initialiser / verifier for SmartFlow.
+ *
+ * The warehouse is a medallion layout and is NOT created here:
+ *
+ *   bronze  raw ingested data          (nlex_traffic_volume, nlex_incidents, ...)
+ *   silver  cleaned facts & dimensions (fact_incident_log, dim_location, ...)
+ *   gold    aggregates & ML outputs    (ml_predictive_volume, ...)
+ *   public  views/matviews over the above, which the API reads
+ *
+ * Those are produced by the data pipeline, so this script does not attempt to
+ * recreate them — it VERIFIES they are present and reports anything missing.
+ *
+ * What it does create are the four tables the *application* owns: rows the API
+ * writes at runtime rather than data the pipeline loads. Those are safe to
+ * create on a fresh database.
+ *
+ * Usage:  npm run init-db          (create app tables + verify warehouse)
+ *         npm run init-db -- --verify-only   (verify, create nothing)
+ *
+ * NOTE: this replaces an older version of this script that created a flat
+ * schema (traffic_volumes, incidents_table, emissions_log, directional_flow,
+ * vehicle_classes). Those tables still exist in the database but are empty and
+ * unused — no code reads or writes them. Do not reintroduce them.
+ */
 import { Pool } from "pg";
 import { env } from "../src/config/env.js";
 
-const db = env.POSTGRES_URL ? new Pool({ connectionString: env.POSTGRES_URL }) : null;
+const verifyOnly = process.argv.includes("--verify-only");
 
-async function runSeeder() {
-  if (!db) {
-    console.error("No POSTGRES_URL found in environment. Skipping database seed.");
-    process.exit(1);
-  }
+if (!env.POSTGRES_URL) {
+  console.error(
+    "No database configured. Set POSTGRES_URL, or PG_HOST/PG_DATABASE/PG_USER/PG_PASSWORD,\n" +
+      "in Back-End/.env (copy Back-End/.env.example to start)."
+  );
+  process.exit(1);
+}
 
-  console.log("Connecting to PostgreSQL...");
+const db = new Pool({
+  connectionString: env.POSTGRES_URL,
+  ssl: env.PG_SSL_MODE === "disable" ? undefined : { rejectUnauthorized: false },
+  connectionTimeoutMillis: 15_000,
+});
+
+/** Tables the API writes at runtime. Safe to create; mirrors the live schema. */
+const APP_TABLES: { name: string; ddl: string; indexes: string[] }[] = [
+  {
+    name: "audit_logs",
+    ddl: `
+      CREATE TABLE IF NOT EXISTS audit_logs (
+        id              BIGSERIAL PRIMARY KEY,
+        user_id         VARCHAR(100) NOT NULL,
+        action          VARCHAR(120) NOT NULL,
+        target_resource VARCHAR(160),
+        details         JSONB DEFAULT '{}'::jsonb,
+        timestamp       TIMESTAMPTZ NOT NULL DEFAULT now()
+      )`,
+    indexes: [
+      `CREATE INDEX IF NOT EXISTS ix_audit_ts ON audit_logs ("timestamp" DESC)`,
+      `CREATE INDEX IF NOT EXISTS ix_audit_user_action ON audit_logs (user_id, action)`,
+    ],
+  },
+  {
+    name: "data_uploads",
+    ddl: `
+      CREATE TABLE IF NOT EXISTS data_uploads (
+        id                BIGSERIAL PRIMARY KEY,
+        filename          VARCHAR(255) NOT NULL,
+        dataset_type      VARCHAR(80),
+        status            VARCHAR(50) NOT NULL DEFAULT 'uploaded',
+        processed_records INTEGER NOT NULL DEFAULT 0,
+        uploaded_at       TIMESTAMPTZ NOT NULL DEFAULT now()
+      )`,
+    indexes: [`CREATE INDEX IF NOT EXISTS ix_uploads_at ON data_uploads (uploaded_at DESC)`],
+  },
+  {
+    name: "nlex_maintenance_schedules",
+    // gen_random_uuid() comes from pgcrypto, already installed on this database.
+    ddl: `
+      CREATE TABLE IF NOT EXISTS nlex_maintenance_schedules (
+        id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        title         TEXT NOT NULL,
+        description   TEXT,
+        start_km      NUMERIC NOT NULL,
+        end_km        NUMERIC NOT NULL,
+        direction     TEXT NOT NULL,
+        lane_closure  TEXT NOT NULL,
+        starts_at     TIMESTAMPTZ NOT NULL,
+        ends_at       TIMESTAMPTZ NOT NULL,
+        status        TEXT NOT NULL DEFAULT 'scheduled',
+        status_reason TEXT,
+        created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+        updated_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+      )`,
+    indexes: [
+      `CREATE INDEX IF NOT EXISTS ix_maint_status_starts ON nlex_maintenance_schedules (status, starts_at DESC)`,
+    ],
+  },
+  {
+    name: "sandbox_simulations",
+    ddl: `
+      CREATE TABLE IF NOT EXISTS sandbox_simulations (
+        id            BIGSERIAL PRIMARY KEY,
+        simulation_id VARCHAR(80) NOT NULL UNIQUE,
+        parameters    JSONB NOT NULL,
+        status        VARCHAR(30) NOT NULL DEFAULT 'pending',
+        results       JSONB,
+        created_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+      )`,
+    indexes: [],
+  },
+];
+
+/** Warehouse relations the API reads. Verified, never created. */
+const WAREHOUSE_READS = [
+  "nlex_traffic_volume", "nlex_road_crashes", "nlex_motorcycle_crashes",
+  "nlex_stalled_vehicles", "nlex_emissions", "nlex_theoretical_emissions",
+  "nlex_emission_factors", "nlex_exits", "philippine_arena_events",
+  "fact_incident_log", "fact_hourly_jams", "dim_incident_type",
+  "dim_time", "hourly_weather", "ml_daily_actuals", "ml_predictive_incidents",
+  // Built by `npm run seed-holidays` — if this is missing or empty, run that.
+  "ph_holidays",
+  "gold.ml_predictive_volume", "gold.ml_predictive_congestion", "gold.ml_event_surge_forecast",
+];
+
+/** Bronze tables the ETL writes into on upload. */
+const WAREHOUSE_WRITES = [
+  "bronze.nlex_traffic_volume", "bronze.nlex_incidents",
+  "bronze.nlex_theoretical_emissions", "bronze.nlex_emissions",
+];
+
+async function main() {
   const client = await db.connect();
+  let problems = 0;
 
   try {
-    console.log("Creating tables...");
+    const who = await client.query("SELECT current_database() AS db, current_user AS usr");
+    console.log(`Connected to ${who.rows[0].db} as ${who.rows[0].usr}\n`);
 
-    // 1. Traffic Volumes (DEV-01)
-    await client.query(`
-      CREATE TABLE IF NOT EXISTS traffic_volumes (
-        id SERIAL PRIMARY KEY,
-        segment_id VARCHAR(50) NOT NULL,
-        volume_count INT NOT NULL,
-        avg_speed_kmh INT NOT NULL,
-        recorded_at TIMESTAMP NOT NULL DEFAULT NOW()
-      );
-    `);
+    // ── Application-owned tables ──────────────────────────────────────
+    if (verifyOnly) {
+      console.log("Application tables (verify only):");
+    } else {
+      console.log("Application tables:");
+    }
+    for (const t of APP_TABLES) {
+      const existed = (await client.query("SELECT to_regclass($1) AS r", [t.name])).rows[0].r !== null;
+      if (!existed && verifyOnly) {
+        console.log(`   MISSING  ${t.name}`);
+        problems++;
+        continue;
+      }
+      if (!existed) {
+        await client.query(t.ddl);
+        for (const ix of t.indexes) await client.query(ix);
+        console.log(`   created  ${t.name}`);
+      } else {
+        // Present already — make sure the indexes exist, then leave data alone.
+        if (!verifyOnly) for (const ix of t.indexes) await client.query(ix);
+        console.log(`   ok       ${t.name}`);
+      }
+    }
 
-    // 2. Directional Flow (DEV-02)
-    await client.query(`
-      CREATE TABLE IF NOT EXISTS directional_flow (
-        id SERIAL PRIMARY KEY,
-        direction VARCHAR(2) NOT NULL, -- 'NB' or 'SB'
-        vehicle_count INT NOT NULL,
-        recorded_at TIMESTAMP NOT NULL DEFAULT NOW()
-      );
-    `);
+    // ── Warehouse relations ───────────────────────────────────────────
+    console.log("\nWarehouse relations the API reads:");
+    for (const name of WAREHOUSE_READS) {
+      const reg = await client.query("SELECT to_regclass($1) AS r", [name]);
+      if (!reg.rows[0].r) {
+        console.log(`   MISSING  ${name}`);
+        problems++;
+        continue;
+      }
+      const n = await client.query(`SELECT COUNT(*)::int AS n FROM ${name}`);
+      const count = n.rows[0].n;
+      console.log(`   ${count > 0 ? "ok      " : "EMPTY   "} ${name.padEnd(36)} ${count.toLocaleString()}`);
+      if (count === 0) problems++;
+    }
 
-    // 3. Vehicle Classes (DEV-03)
-    await client.query(`
-      CREATE TABLE IF NOT EXISTS vehicle_classes (
-        id SERIAL PRIMARY KEY,
-        class_type INT NOT NULL, -- 1, 2, or 3
-        count INT NOT NULL,
-        recorded_at TIMESTAMP NOT NULL DEFAULT NOW()
-      );
-    `);
+    console.log("\nBronze tables the ETL writes to:");
+    for (const name of WAREHOUSE_WRITES) {
+      const reg = await client.query("SELECT to_regclass($1) AS r", [name]);
+      if (!reg.rows[0].r) {
+        console.log(`   MISSING  ${name}`);
+        problems++;
+      } else {
+        console.log(`   ok       ${name}`);
+      }
+    }
 
-    // 4. INCIDENT (DEV-01)
-    await client.query(`
-      CREATE TABLE IF NOT EXISTS incidents_table (
-        id SERIAL PRIMARY KEY,
-        incident_id VARCHAR(50) UNIQUE NOT NULL,
-        type VARCHAR(50) NOT NULL,
-        severity VARCHAR(20) NOT NULL,
-        km_marker DECIMAL NOT NULL,
-        direction VARCHAR(2) NOT NULL,
-        clearance_time_mins INT,
-        weather_condition VARCHAR(50),
-        reported_at TIMESTAMP NOT NULL DEFAULT NOW()
-      );
-    `);
-
-    // 5. SUSTAIN (DEV-01)
-    await client.query(`
-      CREATE TABLE IF NOT EXISTS emissions_log (
-        id SERIAL PRIMARY KEY,
-        aqi_level INT NOT NULL,
-        co2_emissions_tons DECIMAL NOT NULL,
-        peak_penalty_applied BOOLEAN DEFAULT FALSE,
-        recorded_at TIMESTAMP NOT NULL DEFAULT NOW()
-      );
-    `);
-
-    // 6. SANDBOX (DEV-01)
-    await client.query(`
-      CREATE TABLE IF NOT EXISTS sandbox_simulations (
-        id SERIAL PRIMARY KEY,
-        simulation_id VARCHAR(50) UNIQUE NOT NULL,
-        parameters JSONB NOT NULL,
-        status VARCHAR(20) DEFAULT 'pending',
-        results JSONB,
-        created_at TIMESTAMP NOT NULL DEFAULT NOW()
-      );
-    `);
-
-    // 7. MAINT (DEV-01)
-    await client.query(`
-      CREATE TABLE IF NOT EXISTS maintenance_schedules (
-        id SERIAL PRIMARY KEY,
-        segment_id VARCHAR(50) NOT NULL,
-        description TEXT,
-        start_date TIMESTAMP NOT NULL,
-        end_date TIMESTAMP NOT NULL,
-        status VARCHAR(20) DEFAULT 'scheduled'
-      );
-    `);
-
-    // 8. UPLOAD (DEV-01)
-    await client.query(`
-      CREATE TABLE IF NOT EXISTS data_uploads (
-        id SERIAL PRIMARY KEY,
-        filename VARCHAR(255) NOT NULL,
-        status VARCHAR(50) DEFAULT 'uploaded',
-        processed_records INT DEFAULT 0,
-        uploaded_at TIMESTAMP NOT NULL DEFAULT NOW()
-      );
-    `);
-
-    // 9. AUDIT (DEV-01)
-    await client.query(`
-      CREATE TABLE IF NOT EXISTS audit_logs (
-        id SERIAL PRIMARY KEY,
-        user_id VARCHAR(50) NOT NULL,
-        action VARCHAR(100) NOT NULL,
-        target_resource VARCHAR(100),
-        details JSONB,
-        timestamp TIMESTAMP NOT NULL DEFAULT NOW()
-      );
-    `);
-
-    console.log("Tables created successfully. Seeding data...");
-
-    // Clear existing data
-    await client.query("TRUNCATE traffic_volumes, directional_flow, vehicle_classes, incidents_table, emissions_log, sandbox_simulations, maintenance_schedules, data_uploads, audit_logs RESTART IDENTITY CASCADE");
-
-    // Seed Volumes
-    await client.query(`
-      INSERT INTO traffic_volumes (segment_id, volume_count, avg_speed_kmh) VALUES 
-      ('NB-01', 1200, 65),
-      ('NB-02', 2500, 20),
-      ('SB-01', 950, 80),
-      ('SB-02', 1100, 75);
-    `);
-
-    // Seed Directional Flow
-    await client.query(`
-      INSERT INTO directional_flow (direction, vehicle_count) VALUES 
-      ('NB', 154000),
-      ('SB', 142000);
-    `);
-
-    // Seed Vehicle Classes
-    await client.query(`
-      INSERT INTO vehicle_classes (class_type, count) VALUES 
-      (1, 280000),
-      (2, 50000),
-      (3, 20000);
-    `);
-
-    // Seed Incidents
-    await client.query(`
-      INSERT INTO incidents_table (incident_id, type, severity, km_marker, direction, clearance_time_mins, weather_condition) VALUES 
-      ('INC-992', 'Traffic Jam', 'High', 14.5, 'NB', 45, 'Clear'),
-      ('INC-993', 'Construction', 'Medium', 26.2, 'SB', NULL, 'Clear');
-    `);
-
-    // Seed Emissions
-    await client.query(`
-      INSERT INTO emissions_log (aqi_level, co2_emissions_tons, peak_penalty_applied) VALUES 
-      (45, 120.5, FALSE),
-      (150, 450.2, TRUE);
-    `);
-
-    console.log("Database seeded successfully!");
-  } catch (err) {
-    console.error("Error seeding database:", err);
+    console.log(
+      problems === 0
+        ? "\nAll good — schema is complete."
+        : `\n${problems} issue(s) above. Missing or empty warehouse relations mean the data ` +
+            `pipeline has not been run against this database; the API will fall back to mock data ` +
+            `for the affected dashboards.`
+    );
+    process.exitCode = problems === 0 ? 0 : 1;
   } finally {
     client.release();
     await db.end();
   }
 }
 
-runSeeder();
+main().catch((err) => {
+  console.error("init-db failed:", err.message);
+  process.exit(1);
+});

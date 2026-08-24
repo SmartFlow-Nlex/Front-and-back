@@ -6,19 +6,12 @@ import PageHeader from "../../../components/dashboard/PageHeader";
 import styles from "../traffic/traffic.module.css";
 import { supabase } from "../../../lib/supabase";
 
+import { useToast } from "../../../lib/toast";
+import { SortableTh, useTableSort } from "../../../lib/table-sort";
+import { useNlexExits, exitNearestKm, displayExitName, CORRIDOR_KM, type NlexExit } from "../../../lib/nlex-exits";
+
 const BACKEND = process.env.NEXT_PUBLIC_BACKEND_URL ?? "http://localhost:4000";
 
-const NLEX_EXITS = [
-  { name: "Balintawak", km: 0 }, { name: "Skyway Exit", km: 2 }, { name: "Libis Baesa", km: 4 },
-  { name: "Smart Connect", km: 6 }, { name: "Paso de Blas", km: 8 }, { name: "Lawang Bato", km: 10 },
-  { name: "Lingunan", km: 12 }, { name: "Libtong", km: 14 }, { name: "Meycauayan", km: 16 },
-  { name: "Pandayan", km: 18 }, { name: "F. Raymundo", km: 20 }, { name: "Marilao", km: 22 },
-  { name: "Ciudad de Victoria", km: 24 }, { name: "Bocaue", km: 26 }, { name: "Tambubong", km: 28 },
-  { name: "Balagtas", km: 30 }, { name: "Tabang", km: 35 }, { name: "Sta. Rita", km: 40 },
-  { name: "Pulilan", km: 45 }, { name: "San Simon", km: 52 }, { name: "San Fernando", km: 60 },
-  { name: "Mexico", km: 68 }, { name: "Angeles", km: 76 }, { name: "Dau", km: 82 },
-  { name: "Clark/SCTEX", km: 88 }, { name: "Sta. Ines", km: 94 },
-];
 
 const DIRECTIONS = ["Both", "NB", "SB"] as const;
 const LANE_CLOSURES = ["None", "Shoulder only", "1 lane", "2 lanes", "Full closure"] as const;
@@ -69,8 +62,11 @@ const fmtWindow = (startIso: string, endIso: string) => {
 const kmRange = (s: Schedule) =>
   `Km ${s.start_km}${s.end_km !== s.start_km ? `–${s.end_km}` : ""}`;
 
-const nearestExit = (km: number) =>
-  NLEX_EXITS.reduce((best, e) => (Math.abs(e.km - km) < Math.abs(best.km - km) ? e : best), NLEX_EXITS[0]);
+// Nearest exit to a km-post, against the shared corridor list.
+const nearestExitName = (exits: NlexExit[], km: number) => {
+  const x = exitNearestKm(exits, km);
+  return x ? displayExitName(x.exit_name) : "-";
+};
 
 // Modern dropdown — same look and behavior as the Traffic tab's custom select
 function Select({
@@ -242,6 +238,9 @@ const emptyForm = {
 };
 
 export default function MaintenancePage() {
+  // Same corridor list as the map and the AI sandbox. See lib/nlex-exits.
+  const { exits: NLEX_EXITS } = useNlexExits();
+  const toast = useToast();
   const [schedules, setSchedules] = useState<Schedule[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -308,7 +307,7 @@ export default function MaintenancePage() {
     [schedules]
   );
 
-  const visible = useMemo(() => {
+  const filteredVisible = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();
     return schedules.filter((s) => {
       if (statusFilter !== "all" && s.status !== statusFilter) return false;
@@ -321,6 +320,23 @@ export default function MaintenancePage() {
       );
     });
   }, [schedules, statusFilter, searchQuery]);
+
+  // Status sorts along the lifecycle, not the alphabet: scheduled work is what
+  // an operator acts on, cancelled work is what they ignore. A-Z would open with
+  // "cancelled" and bury "scheduled" in the middle.
+  const STATUS_RANK: Record<Status, number> = { scheduled: 0, in_progress: 1, completed: 2, cancelled: 3 };
+  const { sorted: visible, sort, toggle } = useTableSort(
+    filteredVisible,
+    {
+      status: (s) => STATUS_RANK[s.status],
+      title: (s) => s.title,
+      location: (s) => s.start_km,
+      window: (s) => new Date(s.starts_at),
+    },
+    // Soonest first by default: the next window to happen is the useful default,
+    // and it is what someone scanning this page is looking for.
+    { key: "window", dir: "asc" },
+  );
 
   // ---------- Mutations ----------
   const changeStatus = async (s: Schedule, to: Status, reason?: string) => {
@@ -339,11 +355,14 @@ export default function MaintenancePage() {
       setDetail(null);
       setCancelTarget(null);
       setCancelReason("");
+      toast.success(`"${s.title}" is now ${STATUS_META[to].label.toLowerCase()}.`);
     } catch (e) {
       // Re-sync with the database so a stale row never sits next to the error
       await refresh();
-      setActionError(e instanceof Error ? e.message : "Update failed");
+      const msg = e instanceof Error ? e.message : "Update failed";
+      setActionError(msg);
       setTimeout(() => setActionError(null), 5000);
+      toast.error(`Could not update "${s.title}".`, msg);
     } finally {
       setMutating(false);
     }
@@ -405,12 +424,21 @@ export default function MaintenancePage() {
       });
       const json = await r.json();
       if (!json.success) throw new Error(json.message ?? "Save failed");
+      const wasEdit = editId !== null;
       await refresh();
       setFormOpen(false);
       setForm(emptyForm);
       setEditId(null);
+      toast.success(
+        wasEdit ? `Updated "${form.title.trim()}".` : `Scheduled "${form.title.trim()}".`,
+        `${form.direction} · Km ${startKm}–${endKm} · ${form.laneClosure}`,
+      );
     } catch (e) {
-      setFormError(e instanceof Error ? e.message : "Save failed — is the backend running?");
+      // Kept inline as well as in the toast: the form stays open on failure, so
+      // the message belongs next to the fields that need fixing.
+      const msg = e instanceof Error ? e.message : "Save failed — is the backend running?";
+      setFormError(msg);
+      toast.error(editId ? "Could not save your changes." : "Could not schedule the work.", msg);
     } finally {
       setSaving(false);
     }
@@ -421,7 +449,7 @@ export default function MaintenancePage() {
 
   const segmentNote =
     form.startKm !== "" && form.endKm !== "" && !Number.isNaN(Number(form.startKm)) && !Number.isNaN(Number(form.endKm))
-      ? `${Math.abs(Number(form.endKm) - Number(form.startKm)).toFixed(1)} km · near ${nearestExit(Number(form.startKm)).name} → ${nearestExit(Number(form.endKm)).name}`
+      ? `${Math.abs(Number(form.endKm) - Number(form.startKm)).toFixed(1)} km · near ${nearestExitName(NLEX_EXITS, Number(form.startKm))} → ${nearestExitName(NLEX_EXITS, Number(form.endKm))}`
       : null;
 
   const check = (
@@ -507,7 +535,12 @@ export default function MaintenancePage() {
           <div className={styles.plazaTableWrap} style={{ maxHeight: "none", overflow: "visible" }}>
             <table className={styles.plazaTable}>
               <thead>
-                <tr><th>Status</th><th>Work</th><th>Location</th><th>Window</th></tr>
+                <tr>
+                  <SortableTh label="Status" sortKey="status" sort={sort} onToggle={toggle} />
+                  <SortableTh label="Work" sortKey="title" sort={sort} onToggle={toggle} />
+                  <SortableTh label="Location" sortKey="location" sort={sort} onToggle={toggle} />
+                  <SortableTh label="Window" sortKey="window" sort={sort} onToggle={toggle} />
+                </tr>
               </thead>
               <tbody>
                 {visible.map((s) => (
@@ -562,7 +595,7 @@ export default function MaintenancePage() {
             <div className={styles.detailBody}>
               {([
                 ["Location", `${kmRange(detail)} · ${detail.direction}`],
-                ["Near", `${nearestExit(detail.start_km).name} → ${nearestExit(detail.end_km).name}`],
+                ["Near", `${nearestExitName(NLEX_EXITS, detail.start_km)} → ${nearestExitName(NLEX_EXITS, detail.end_km)}`],
                 ["Lane closure", detail.lane_closure],
                 ["Window", fmtWindow(detail.starts_at, detail.ends_at)],
                 ["Description", detail.description || "—"],
@@ -678,27 +711,27 @@ export default function MaintenancePage() {
               <div style={{ display: "grid", gridTemplateColumns: "0.65fr 1.35fr 0.65fr 1.35fr", gap: 12 }}>
                 <div className="ms-input-group">
                   <label>Start Km <span className="ms-req">*</span></label>
-                  <input type="number" min={0} max={100} className="ms-input" placeholder="0–94" value={form.startKm} onChange={(e) => set("startKm", e.target.value)} />
+                  <input type="number" min={0} max={100} className="ms-input" placeholder={`0–${CORRIDOR_KM}`} value={form.startKm} onChange={(e) => set("startKm", e.target.value)} />
                 </div>
                 <div className="ms-input-group">
                   <label>Start exit</label>
                   <Select
                     value={form.startKm}
                     placeholder="Pick an exit…"
-                    options={NLEX_EXITS.map((x) => ({ label: `${x.name} (Km ${x.km})`, value: String(x.km) }))}
+                    options={NLEX_EXITS.map((x) => ({ label: `${displayExitName(x.exit_name)} (Km ${x.km})`, value: String(x.km) }))}
                     onChange={(v) => set("startKm", v)}
                   />
                 </div>
                 <div className="ms-input-group">
                   <label>End Km <span className="ms-req">*</span></label>
-                  <input type="number" min={0} max={100} className="ms-input" placeholder="0–94" value={form.endKm} onChange={(e) => set("endKm", e.target.value)} />
+                  <input type="number" min={0} max={100} className="ms-input" placeholder={`0–${CORRIDOR_KM}`} value={form.endKm} onChange={(e) => set("endKm", e.target.value)} />
                 </div>
                 <div className="ms-input-group">
                   <label>End exit</label>
                   <Select
                     value={form.endKm}
                     placeholder="Pick an exit…"
-                    options={NLEX_EXITS.map((x) => ({ label: `${x.name} (Km ${x.km})`, value: String(x.km) }))}
+                    options={NLEX_EXITS.map((x) => ({ label: `${displayExitName(x.exit_name)} (Km ${x.km})`, value: String(x.km) }))}
                     onChange={(v) => set("endKm", v)}
                   />
                 </div>

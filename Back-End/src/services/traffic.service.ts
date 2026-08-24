@@ -1,5 +1,10 @@
 import { db } from "../config/db.js";
 
+// Hourly columns of nlex_traffic_volume (h00..h23)
+const HOUR_COLS = Array.from({ length: 24 }, (_, i) => `h${String(i).padStart(2, "0")}`);
+const DAY_TOTAL = HOUR_COLS.join(" + ");
+const HOUR_ARRAY = `ARRAY[${HOUR_COLS.join(", ")}]`;
+
 export type AnalyticsRange = "3" | "12" | "all";
 
 export type AnalyticsFilters = {
@@ -9,6 +14,7 @@ export type AnalyticsFilters = {
   plazas?: string[];
   direction?: "NB" | "SB";
   vehicleClass?: "Class 1" | "Class 2" | "Class 3";
+  weather?: "all" | "dry" | "wet";
 };
 
 type CacheEntry = { at: number; data: unknown };
@@ -24,12 +30,10 @@ export async function getTrafficAnalyticsFromDb(filters: AnalyticsFilters) {
 
   try {
     const bounds = await db.query(
-      `SELECT min(date_day)::text AS lo, max(date_day)::text AS hi FROM bronze.nlex_traffic_volume`
+      `SELECT min(date)::text AS lo, max(date)::text AS hi FROM nlex_traffic_volume`
     );
     const minDate: string = bounds.rows[0].lo;
     const maxDate: string = bounds.rows[0].hi;
-
-    if (!minDate || !maxDate) return null;
 
     let lo: string;
     let hi: string;
@@ -39,29 +43,30 @@ export async function getTrafficAnalyticsFromDb(filters: AnalyticsFilters) {
       lo = f < minDate ? minDate : f;
       hi = t > maxDate ? maxDate : t;
     } else {
-      hi = maxDate;
-      lo =
+      // Month ranges anchor at the default year (2025), clamped to available data:
+      // "12 mo" opens as calendar 2025, "3 mo" as Jan-Apr 2025.
+      const anchor = "2025-01-01";
+      lo = anchor < minDate ? minDate : anchor > maxDate ? minDate : anchor;
+      hi =
         filters.months === "all"
-          ? minDate
+          ? maxDate
           : (
-              await db.query(`SELECT ($1::date - ($2 || ' months')::interval)::date::text AS lo`, [
-                hi,
+              await db.query(`SELECT LEAST(($1::date + ($2 || ' months')::interval)::date, $3::date)::text AS hi`, [
+                lo,
                 filters.months,
+                maxDate,
               ])
-            ).rows[0].lo;
+            ).rows[0].hi;
     }
 
     // Hourly detail is heavy and noisy beyond ~2 weeks; only ship it for short spans
     const spanDays = Math.round((Date.parse(hi) - Date.parse(lo)) / 86_400_000);
     const includeHourly = spanDays <= 14;
 
-    let volumeCol = "total_volume";
-    if (filters.vehicleClass === "Class 1") volumeCol = "volume_class1";
-    else if (filters.vehicleClass === "Class 2") volumeCol = "volume_class2";
-    else if (filters.vehicleClass === "Class 3") volumeCol = "volume_class3";
-
-    const params: unknown[] = [lo, hi];
-    let volumeWhere = `date_day BETWEEN $1 AND $2`;
+    // Shared volume filter. 'Total' rows aggregate classes 1-3; a class filter
+    // swaps to that class's rows. $1=lo $2=hi $3=class, optional $4/$5.
+    const params: unknown[] = [lo, hi, filters.vehicleClass ?? "Total"];
+    let volumeWhere = `type = 'Entries' AND vehicle_class = $3 AND date BETWEEN $1 AND $2`;
     if (filters.direction) {
       params.push(filters.direction);
       volumeWhere += ` AND direction = $${params.length}`;
@@ -70,153 +75,356 @@ export async function getTrafficAnalyticsFromDb(filters: AnalyticsFilters) {
       params.push(filters.plazas);
       volumeWhere += ` AND toll_plaza = ANY($${params.length})`;
     }
-    const volumeWhereNoDate = volumeWhere.replace(` AND date_day BETWEEN $1 AND $2`, '');
+    // Same filter without the date bounds (for full-history baselines)
+    const volumeWhereNoDate = volumeWhere.replace(` AND date BETWEEN $1 AND $2`, "");
+
+    // Optional weather filter: keep only hours classified wet/dry by expressway-avg
+    // rainfall > 0.3 mm — the same rule as the incident dashboard. Volume queries
+    // switch to per-hour rows joined to the weather grid. Calendar analyses
+    // (events, holidays) compare whole days against baselines and stay unfiltered.
+    const wet = filters.weather && filters.weather !== "all" ? filters.weather === "wet" : null;
+    const wparams = wet === null ? params : [...params, wet];
+    const W = params.length + 1; // $ index of the wet flag in wparams
+    // Spans the previous period too so the KPI comparison stays weather-filtered
+    const TWX_CTE = `
+      wx AS (
+        SELECT (timestamp_utc + interval '8 hours')::date AS d,
+               EXTRACT(hour FROM timestamp_utc + interval '8 hours')::int AS h,
+               AVG(rainfall) > 0.3 AS wet
+        FROM hourly_weather
+        WHERE (timestamp_utc + interval '8 hours')::date BETWEEN $1::date - ($2::date - $1::date + 1) AND $2
+        GROUP BY 1, 2
+      )`;
+    const HV_CTE = `
+      hv AS (
+        SELECT t.date, t.toll_plaza, t.direction, u.hr - 1 AS hour, u.v
+        FROM nlex_traffic_volume t,
+             LATERAL unnest(${HOUR_ARRAY}) WITH ORDINALITY AS u(v, hr)
+        WHERE ${volumeWhere}
+      ),
+      hvw AS (
+        SELECT hv.* FROM hv JOIN wx w ON w.d = hv.date AND w.h = hv.hour WHERE w.wet = $${W}
+      )`;
+    const NB_SB_HOURLY = `COALESCE(SUM(v) FILTER (WHERE direction = 'NB'), 0)::bigint AS nb,
+                          COALESCE(SUM(v) FILTER (WHERE direction = 'SB'), 0)::bigint AS sb`;
+
+    const NB_SB = `COALESCE(SUM(${DAY_TOTAL}) FILTER (WHERE direction = 'NB'), 0)::bigint AS nb,
+                   COALESCE(SUM(${DAY_TOTAL}) FILTER (WHERE direction = 'SB'), 0)::bigint AS sb`;
 
     const [daily, hourly, byPlaza, hourDow, speedByHour, eventImpact, holidayImpact, holidayYearly, kpi, plazaList] =
       await Promise.all([
         // Daily NB/SB volume
-        db.query(
-          `SELECT date_day::text AS d,
-                  COALESCE(SUM(${volumeCol}) FILTER (WHERE direction = 'NB'), 0)::bigint AS nb,
-                  COALESCE(SUM(${volumeCol}) FILTER (WHERE direction = 'SB'), 0)::bigint AS sb
-           FROM bronze.nlex_traffic_volume WHERE ${volumeWhere}
-           GROUP BY 1 ORDER BY 1`,
-          params
-        ),
-        // Hourly NB/SB volume — only for short ranges (payload size)
-        includeHourly
+        wet === null
           ? db.query(
-              `SELECT date_day::text AS d, hour_of_day AS hour,
-                      COALESCE(SUM(${volumeCol}) FILTER (WHERE direction = 'NB'), 0)::bigint AS nb,
-                      COALESCE(SUM(${volumeCol}) FILTER (WHERE direction = 'SB'), 0)::bigint AS sb
-               FROM bronze.nlex_traffic_volume
-               WHERE ${volumeWhere}
-               GROUP BY 1, 2 ORDER BY 1, 2`,
+              `SELECT date::text AS d, ${NB_SB}
+               FROM nlex_traffic_volume WHERE ${volumeWhere}
+               GROUP BY 1 ORDER BY 1`,
               params
             )
+          : db.query(
+              `WITH ${TWX_CTE}, ${HV_CTE}
+               SELECT date::text AS d, ${NB_SB_HOURLY}
+               FROM hvw GROUP BY 1 ORDER BY 1`,
+              wparams
+            ),
+        // Hourly NB/SB volume — only for short ranges (payload size)
+        includeHourly
+          ? wet === null
+            ? db.query(
+                `SELECT t.date::text AS d, u.hr - 1 AS hour,
+                        COALESCE(SUM(u.v) FILTER (WHERE t.direction = 'NB'), 0)::bigint AS nb,
+                        COALESCE(SUM(u.v) FILTER (WHERE t.direction = 'SB'), 0)::bigint AS sb
+                 FROM nlex_traffic_volume t,
+                      LATERAL unnest(${HOUR_ARRAY}) WITH ORDINALITY AS u(v, hr)
+                 WHERE ${volumeWhere}
+                 GROUP BY 1, 2 ORDER BY 1, 2`,
+                params
+              )
+            : db.query(
+                `WITH ${TWX_CTE}, ${HV_CTE}
+                 SELECT date::text AS d, hour, ${NB_SB_HOURLY}
+                 FROM hvw GROUP BY 1, 2 ORDER BY 1, 2`,
+                wparams
+              )
           : Promise.resolve(null),
-        // Volume per plaza — full ranked list
-        db.query(
-          `SELECT toll_plaza AS plaza, SUM(${volumeCol})::bigint AS v
-           FROM bronze.nlex_traffic_volume WHERE ${volumeWhere}
-           GROUP BY 1 ORDER BY 2 DESC`,
-          params
-        ),
+        // Volume per plaza — full ranked list (client derives top 10 + Others)
+        wet === null
+          ? db.query(
+              `SELECT toll_plaza AS plaza, SUM(${DAY_TOTAL})::bigint AS v
+               FROM nlex_traffic_volume WHERE ${volumeWhere}
+               GROUP BY 1 ORDER BY 2 DESC`,
+              params
+            )
+          : db.query(
+              `WITH ${TWX_CTE}, ${HV_CTE}
+               SELECT toll_plaza AS plaza, SUM(v)::bigint AS v
+               FROM hvw GROUP BY 1 ORDER BY 2 DESC`,
+              wparams
+            ),
         // Average volume per hour-of-day x day-of-week (0=Sun)
+        wet === null
+          ? db.query(
+              `WITH hourly AS (
+                 SELECT t.date, u.hr - 1 AS hour, SUM(u.v) AS v
+                 FROM nlex_traffic_volume t,
+                      LATERAL unnest(${HOUR_ARRAY}) WITH ORDINALITY AS u(v, hr)
+                 WHERE ${volumeWhere}
+                 GROUP BY 1, 2
+               )
+               SELECT EXTRACT(dow FROM date)::int AS dow, hour::int, ROUND(AVG(v))::int AS v
+               FROM hourly GROUP BY 1, 2 ORDER BY 1, 2`,
+              params
+            )
+          : db.query(
+              `WITH ${TWX_CTE}, ${HV_CTE},
+               hourly AS (SELECT date, hour, SUM(v) AS v FROM hvw GROUP BY 1, 2)
+               SELECT EXTRACT(dow FROM date)::int AS dow, hour::int, ROUND(AVG(v))::int AS v
+               FROM hourly GROUP BY 1, 2 ORDER BY 1, 2`,
+              wparams
+            ),
+        // Congestion: avg speed & jam level per hour (Waze jams; date filter only —
+        // jam records do not join to plazas/classes)
+        wet === null
+          ? db.query(
+              `SELECT hour_of_day AS hour,
+                      ROUND(AVG(avg_speed_kmh)::numeric, 1)::float AS speed,
+                      ROUND(AVG(avg_jam_level)::numeric, 2)::float AS jam_level
+               FROM fact_hourly_jams
+               WHERE date_day BETWEEN $1 AND $2
+               GROUP BY 1 ORDER BY 1`,
+              [lo, hi]
+            )
+          : db.query(
+              `WITH ${TWX_CTE}
+               SELECT j.hour_of_day AS hour,
+                      ROUND(AVG(j.avg_speed_kmh)::numeric, 1)::float AS speed,
+                      ROUND(AVG(j.avg_jam_level)::numeric, 2)::float AS jam_level
+               FROM fact_hourly_jams j JOIN wx w ON w.d = j.date_day AND w.h = j.hour_of_day
+               WHERE j.date_day BETWEEN $1 AND $2 AND w.wet = $3
+               GROUP BY 1 ORDER BY 1`,
+              [lo, hi, wet]
+            ),
+        // Arena/venue events: event-day volume at the serving plaza vs a clean
+        // same-weekday baseline drawn from the +/-45 days around it.
+        //
+        // Baseline hygiene — a day only counts toward the baseline if it is
+        // neither another event day nor a holiday. Leaving holidays in was
+        // skewing the baseline for any event near Christmas or Holy Week.
+        //
+        // Multi-event days are folded into ONE row rather than picked between.
+        // The traffic on 20 Jan 2024 was produced by Coldplay AND SEVENTEEN AND
+        // NCT 127 together; attributing it to one of them is wrong. (The old
+        // DISTINCT ON also ranked by `attendance`, which is TEXT — so it sorted
+        // "9,000" above "54,589" and often kept the smaller event.)
+        //
+        // Which plaza — measured at the venue's OWN interchange. The events
+        // table points at Cdv/Ph Arena (the Philippine Arena's exit) and bronze
+        // now carries a volume series for it, so no proxy is needed. This
+        // previously fell back to Bocaue, 2.4 km away, because the public
+        // matview had no CDV series.
+        //
+        // Reads the nlex_traffic_volume serving matview like every other
+        // descriptive query. It briefly read bronze directly, while the matview
+        // was stale and its source held duplicate rows; both are fixed, so the
+        // layering is intact again.
+        //
+        // Also note the volume series only contains type = 'Entries', so this
+        // counts vehicles ENTERING NLEX at the plaza — largely the post-event
+        // exodus onto the expressway rather than arrivals.
+        //
+        // Events falling on a holiday are flagged, since their deviation is
+        // really a holiday effect.
         db.query(
-          `SELECT EXTRACT(dow FROM date_day)::int AS dow, hour_of_day AS hour, ROUND(AVG(${volumeCol}))::int AS v
-           FROM bronze.nlex_traffic_volume
-           WHERE ${volumeWhere}
-           GROUP BY 1, 2 ORDER BY 1, 2`,
-          params
-        ),
-        // Congestion: avg speed & jam level per hour
-        db.query(
-          `SELECT hour_of_day AS hour,
-                  ROUND(AVG(avg_speed_kmh)::numeric, 1)::float AS speed,
-                  ROUND(AVG(avg_jam_level)::numeric, 2)::float AS jam_level
-           FROM bronze.nlex_traffic_volume
-           WHERE ${volumeWhere}
-           GROUP BY 1 ORDER BY 1`,
-          params
-        ),
-        // Philippine Arena events: volume vs same-weekday baseline
-        db.query(
-          `WITH ev AS (
-             SELECT DISTINCT ON (start_date) start_date, title, attendance
-             FROM public.philippine_arena_events
-             ORDER BY start_date, attendance DESC NULLS LAST
-           ), daily_vol AS (
-             SELECT date_day, SUM(${volumeCol})::bigint AS v
-             FROM bronze.nlex_traffic_volume
-             GROUP BY 1
+          `WITH pv AS (
+             SELECT t.toll_plaza, t.date, SUM(${DAY_TOTAL})::bigint AS v
+             FROM nlex_traffic_volume t
+             WHERE t.type = 'Entries' AND t.vehicle_class = 'Total'
+             GROUP BY 1, 2
+           ), clean AS (
+             SELECT p.* FROM pv p
+             WHERE NOT EXISTS (SELECT 1 FROM philippine_arena_events x WHERE x.start_date = p.date)
+               AND NOT EXISTS (SELECT 1 FROM ph_holidays h WHERE h.date_day = p.date)
+           ), ev_rows AS (
+             -- Case-only duplicates exist in the source ("SEVENTEEN - BE THE
+             -- SUN World Tour" vs "Seventeen - Be The Sun World Tour" on
+             -- 2022-12-17), so titles are de-duplicated case-insensitively and
+             -- one spelling is kept as the representative.
+             SELECT e.start_date, x.exit_name AS plaza,
+                    MIN(x.exit_name) AS venue_exit,
+                    MIN(e.title) AS title,
+                    MAX(NULLIF(replace((regexp_match(e.attendance, '[0-9][0-9,]*'))[1], ',', ''), '')::bigint) AS attendance
+             FROM philippine_arena_events e
+             JOIN nlex_exits x ON x.exit_id = e.nlex_exit_id
+             GROUP BY e.start_date, x.exit_name, lower(btrim(e.title))
+           ), ev AS (
+             SELECT e.start_date,
+                    e.plaza,
+                    MIN(e.venue_exit) AS venue_exit,
+                    string_agg(e.title, ' + ' ORDER BY e.title) AS title,
+                    COUNT(*)::int AS event_count,
+                    -- attendance is free text ("54,589", "10,886 / 10,886",
+                    -- "100,000 - 150,000 (Festival Total)"); the first number is
+                    -- taken, which is the lower bound for a range.
+                    MAX(e.attendance) AS attendance,
+                    bool_or(EXISTS (SELECT 1 FROM ph_holidays h WHERE h.date_day = e.start_date)) AS on_holiday
+             FROM ev_rows e
+             GROUP BY 1, 2
            )
-           SELECT e.title AS label, e.start_date::text AS date, e.attendance,
-                  c.v::int AS day_volume,
-                  ROUND((SELECT AVG(c2.v) FROM daily_vol c2
-                         WHERE EXTRACT(dow FROM c2.date_day) = EXTRACT(dow FROM e.start_date)
-                           AND c2.date_day BETWEEN e.start_date - 45 AND e.start_date + 45
-                           AND c2.date_day NOT IN (SELECT start_date FROM public.philippine_arena_events)))::int AS baseline
-           FROM ev e JOIN daily_vol c ON c.date_day = e.start_date
+           SELECT e.title AS label, e.start_date::text AS date, e.plaza, e.venue_exit,
+                  e.event_count, e.attendance, e.on_holiday,
+                  p.v::bigint AS day_volume,
+                  ROUND(b.bv)::bigint AS baseline,
+                  b.bn::int AS baseline_n,
+                  ROUND(((p.v - b.bv) / b.bv * 100)::numeric, 1)::float AS deviation_pct
+           FROM ev e
+           JOIN pv p ON p.date = e.start_date AND p.toll_plaza = e.plaza
+           CROSS JOIN LATERAL (
+             SELECT AVG(cb.v) AS bv, COUNT(*) AS bn
+             FROM clean cb
+             WHERE cb.toll_plaza = e.plaza
+               AND EXTRACT(dow FROM cb.date) = EXTRACT(dow FROM e.start_date)
+               AND cb.date BETWEEN e.start_date - 45 AND e.start_date + 45
+           ) b
+           -- Drop occurrences whose baseline rests on too few days to mean
+           -- anything; the previous query allowed a sample of zero.
+           WHERE b.bn >= 4 AND b.bv > 0
            ORDER BY e.start_date DESC LIMIT 200`
         ),
-        // Holidays vs same-weekday non-holiday baseline
+        // Holidays vs same-weekday non-holiday baseline (obeys plaza/direction/class filters)
         db.query(
           `WITH daily AS (
-             SELECT date_day, SUM(${volumeCol})::bigint AS v, bool_or(is_holiday) as is_hol
-             FROM bronze.nlex_traffic_volume
+             SELECT date, SUM(${DAY_TOTAL})::bigint AS v
+             FROM nlex_traffic_volume
+             -- full history for stable baselines; $1/$2 referenced to satisfy the bind
              WHERE ${volumeWhereNoDate} AND $1::date IS NOT NULL AND $2::date IS NOT NULL
              GROUP BY 1
-           ), base AS (
-             SELECT EXTRACT(dow FROM date_day) AS dow, AVG(v) AS bv
-             FROM daily
-             WHERE NOT is_hol GROUP BY 1
+           ), clean AS (
+             -- Days eligible as baseline: neither a holiday nor an event day.
+             SELECT d.* FROM daily d
+             WHERE NOT EXISTS (SELECT 1 FROM ph_holidays p WHERE p.date_day = d.date)
+               AND NOT EXISTS (SELECT 1 FROM philippine_arena_events e WHERE e.start_date = d.date)
+           ), occ AS (
+             -- One row per holiday occurrence, each compared against a LOCAL
+             -- baseline: same weekday, within +/-45 days of that occurrence.
+             --
+             -- This replaces a single baseline averaged over all history, which
+             -- silently mixed the 2020-2021 pandemic period into every
+             -- comparison. Under that global baseline the average holiday
+             -- deviation swung from -27% (2020) to +42% (2025) — an artefact of
+             -- lockdown traffic levels, not of the holidays. With a local
+             -- baseline each year lands in a consistent +10% to +19% band,
+             -- because a 2020 holiday is now measured against 2020 normal days.
+             SELECT h.holiday_name, h.holiday_type, d.date, d.v, b.bv, b.bn
+             FROM daily d
+             JOIN ph_holidays h ON h.date_day = d.date
+             CROSS JOIN LATERAL (
+               SELECT AVG(cb.v) AS bv, COUNT(*) AS bn
+               FROM clean cb
+               WHERE EXTRACT(dow FROM cb.date) = EXTRACT(dow FROM d.date)
+                 AND cb.date BETWEEN d.date - 45 AND d.date + 45
+             ) b
+             WHERE b.bn >= 4 AND b.bv > 0
            )
-           SELECT 'Holidays' AS label,
-                  ROUND(((AVG(d.v) - AVG(b.bv)) / NULLIF(AVG(b.bv), 0) * 100)::numeric, 1)::float AS deviation_pct,
-                  ROUND(AVG(d.v))::int AS avg_volume,
-                  ROUND(AVG(b.bv))::int AS avg_baseline,
+           SELECT holiday_name AS label,
+                  MAX(holiday_type) AS holiday_type,
+                  ROUND(AVG((v - bv) / bv * 100)::numeric, 1)::float AS deviation_pct,
                   COUNT(*)::int AS occurrences,
-                  ROUND(AVG(b.bv))::bigint AS avg_baseline_big,
-                  ROUND(AVG(d.v))::bigint AS avg_volume_big
-           FROM daily d
-           JOIN base b ON b.dow = EXTRACT(dow FROM d.date_day)
-           WHERE d.is_hol
-           GROUP BY 1 ORDER BY 2 DESC`,
+                  MIN(bn)::int AS min_baseline_n,
+                  ROUND(AVG(bv))::bigint AS avg_baseline,
+                  ROUND(AVG(v))::bigint AS avg_volume
+           FROM occ GROUP BY 1 ORDER BY 3 DESC`,
           params
         ),
         // Per-year holiday deviation (popup drill-down)
         db.query(
           `WITH daily AS (
-             SELECT date_day, SUM(${volumeCol})::bigint AS v, bool_or(is_holiday) as is_hol
-             FROM bronze.nlex_traffic_volume
+             SELECT date, SUM(${DAY_TOTAL})::bigint AS v
+             FROM nlex_traffic_volume
              WHERE ${volumeWhereNoDate} AND $1::date IS NOT NULL AND $2::date IS NOT NULL
              GROUP BY 1
-           ), base AS (
-             SELECT EXTRACT(dow FROM date_day) AS dow, AVG(v) AS bv
-             FROM daily
-             WHERE NOT is_hol GROUP BY 1
+           ), clean AS (
+             SELECT d.* FROM daily d
+             WHERE NOT EXISTS (SELECT 1 FROM ph_holidays p WHERE p.date_day = d.date)
+               AND NOT EXISTS (SELECT 1 FROM philippine_arena_events e WHERE e.start_date = d.date)
            )
-           SELECT 'Holidays' AS label,
-                  EXTRACT(year FROM d.date_day)::int AS year,
-                  ROUND(AVG((d.v - b.bv) / NULLIF(b.bv, 0) * 100)::numeric, 1)::float AS pct,
+           -- Same local-baseline rule as the summary above, kept identical so
+           -- the drill-down always reconciles with the headline figure.
+           SELECT h.holiday_name AS label,
+                  EXTRACT(year FROM d.date)::int AS year,
+                  ROUND(AVG((d.v - b.bv) / b.bv * 100)::numeric, 1)::float AS pct,
                   ROUND(AVG(d.v))::int AS volume
            FROM daily d
-           JOIN base b ON b.dow = EXTRACT(dow FROM d.date_day)
-           WHERE d.is_hol
+           JOIN ph_holidays h ON h.date_day = d.date
+           CROSS JOIN LATERAL (
+             SELECT AVG(cb.v) AS bv, COUNT(*) AS bn
+             FROM clean cb
+             WHERE EXTRACT(dow FROM cb.date) = EXTRACT(dow FROM d.date)
+               AND cb.date BETWEEN d.date - 45 AND d.date + 45
+           ) b
+           WHERE b.bn >= 4 AND b.bv > 0
            GROUP BY 1, 2 ORDER BY 1, 2`,
           params
         ),
-        // KPI: current vs previous period volume + congestion index
-        db.query(
-          `WITH cur AS (
-             SELECT COALESCE(SUM(${volumeCol}), 0)::bigint AS total, COUNT(DISTINCT date_day)::int AS days
-             FROM bronze.nlex_traffic_volume WHERE ${volumeWhere}
-           ), prev AS (
-             SELECT COALESCE(SUM(${volumeCol}), 0)::bigint AS total, COUNT(DISTINCT date_day)::int AS days
-             FROM bronze.nlex_traffic_volume
-             WHERE ${volumeWhereNoDate}
-               AND date_day >= $1::date - ($2::date - $1::date + 1) AND date_day < $1::date
-           ), jam_cur AS (
-             SELECT ROUND(AVG(avg_jam_level)::numeric, 2)::float AS jam FROM bronze.nlex_traffic_volume
-             WHERE date_day BETWEEN $1 AND $2
-           ), jam_prev AS (
-             SELECT ROUND(AVG(avg_jam_level)::numeric, 2)::float AS jam FROM bronze.nlex_traffic_volume
-             WHERE date_day >= $1::date - ($2::date - $1::date + 1) AND date_day < $1::date
-           )
-           SELECT cur.total AS cur_total, cur.days AS cur_days,
-                  prev.total AS prev_total, prev.days AS prev_days,
-                  jam_cur.jam AS cur_jam, jam_prev.jam AS prev_jam
-           FROM cur, prev, jam_cur, jam_prev`,
-          params
-        ),
+        // KPI: current vs previous period volume + congestion index (avg jam level)
+        wet === null
+          ? db.query(
+              `WITH cur AS (
+                 SELECT COALESCE(SUM(${DAY_TOTAL}), 0)::bigint AS total, COUNT(DISTINCT date)::int AS days
+                 FROM nlex_traffic_volume WHERE ${volumeWhere}
+               ), prev AS (
+                 SELECT COALESCE(SUM(${DAY_TOTAL}), 0)::bigint AS total, COUNT(DISTINCT date)::int AS days
+                 FROM nlex_traffic_volume
+                 WHERE ${volumeWhereNoDate}
+                   AND date >= $1::date - ($2::date - $1::date + 1) AND date < $1::date
+               ), jam_cur AS (
+                 SELECT ROUND(AVG(avg_jam_level)::numeric, 2)::float AS jam FROM fact_hourly_jams
+                 WHERE date_day BETWEEN $1 AND $2
+               ), jam_prev AS (
+                 SELECT ROUND(AVG(avg_jam_level)::numeric, 2)::float AS jam FROM fact_hourly_jams
+                 WHERE date_day >= $1::date - ($2::date - $1::date + 1) AND date_day < $1::date
+               )
+               SELECT cur.total AS cur_total, cur.days AS cur_days,
+                      prev.total AS prev_total, prev.days AS prev_days,
+                      jam_cur.jam AS cur_jam, jam_prev.jam AS prev_jam
+               FROM cur, prev, jam_cur, jam_prev`,
+              params
+            )
+          : db.query(
+              `WITH ${TWX_CTE}, ${HV_CTE},
+               hvprev AS (
+                 SELECT t.date, u.hr - 1 AS hour, u.v
+                 FROM nlex_traffic_volume t,
+                      LATERAL unnest(${HOUR_ARRAY}) WITH ORDINALITY AS u(v, hr)
+                 WHERE ${volumeWhereNoDate}
+                   AND t.date >= $1::date - ($2::date - $1::date + 1) AND t.date < $1::date
+               ),
+               hvprevw AS (
+                 SELECT hvprev.* FROM hvprev JOIN wx w ON w.d = hvprev.date AND w.h = hvprev.hour WHERE w.wet = $${W}
+               ),
+               cur AS (SELECT COALESCE(SUM(v), 0)::bigint AS total, COUNT(DISTINCT date)::int AS days FROM hvw),
+               prev AS (SELECT COALESCE(SUM(v), 0)::bigint AS total, COUNT(DISTINCT date)::int AS days FROM hvprevw),
+               jam_cur AS (
+                 SELECT ROUND(AVG(j.avg_jam_level)::numeric, 2)::float AS jam
+                 FROM fact_hourly_jams j JOIN wx w ON w.d = j.date_day AND w.h = j.hour_of_day
+                 WHERE j.date_day BETWEEN $1 AND $2 AND w.wet = $${W}
+               ), jam_prev AS (
+                 SELECT ROUND(AVG(j.avg_jam_level)::numeric, 2)::float AS jam
+                 FROM fact_hourly_jams j JOIN wx w ON w.d = j.date_day AND w.h = j.hour_of_day
+                 WHERE j.date_day >= $1::date - ($2::date - $1::date + 1) AND j.date_day < $1::date AND w.wet = $${W}
+               )
+               SELECT cur.total AS cur_total, cur.days AS cur_days,
+                      prev.total AS prev_total, prev.days AS prev_days,
+                      jam_cur.jam AS cur_jam, jam_prev.jam AS prev_jam
+               FROM cur, prev, jam_cur, jam_prev`,
+              wparams
+            ),
         // All plaza names for the filter control
-        db.query(`SELECT DISTINCT toll_plaza AS plaza FROM bronze.nlex_traffic_volume ORDER BY 1`),
+        db.query(`SELECT DISTINCT toll_plaza AS plaza FROM nlex_traffic_volume ORDER BY 1`),
       ]);
 
     const data = {
       range: { from: lo, to: hi },
-      meta: { plazas: plazaList.rows.map((r: any) => r.plaza), minDate, maxDate },
+      meta: { plazas: plazaList.rows.map((r) => r.plaza), minDate, maxDate },
       kpis: {
         totalVolume: Number(kpi.rows[0].cur_total),
         prevTotalVolume: Number(kpi.rows[0].prev_total),
@@ -229,23 +437,41 @@ export async function getTrafficAnalyticsFromDb(filters: AnalyticsFilters) {
       hourlyTrend: hourly
         ? hourly.rows.map((r) => ({ d: r.d, hour: Number(r.hour), nb: Number(r.nb), sb: Number(r.sb) }))
         : null,
-      byPlaza: byPlaza.rows.map((r: any) => ({ plaza: r.plaza, v: Number(r.v) })),
+      byPlaza: byPlaza.rows.map((r) => ({ plaza: r.plaza, v: Number(r.v) })),
       hourDow: hourDow.rows,
       speedByHour: speedByHour.rows,
       eventImpact: eventImpact.rows.map((r) => ({
         label: r.label,
         date: r.date,
-        dayVolume: r.day_volume,
-        baseline: r.baseline,
-        deviationPct:
-          r.baseline > 0 ? Number((((r.day_volume - r.baseline) / r.baseline) * 100).toFixed(1)) : null,
+        dayVolume: Number(r.day_volume),
+        baseline: Number(r.baseline),
+        // Computed in SQL against the cleaned baseline rather than recomputed
+        // here, so the figure and its sample size always come from the same set.
+        deviationPct: r.deviation_pct,
+        /** Toll plaza the volume is measured at. */
+        plaza: r.plaza,
+        /** The venue's own interchange, which may differ from the metering plaza. */
+        venueExit: r.venue_exit,
+        /** How many distinct events shared this date. */
+        eventCount: r.event_count,
+        /** Reported attendance, parsed from free text; null when not published. */
+        attendance: r.attendance === null ? null : Number(r.attendance),
+        /** True when the date is also a holiday — the deviation is then mostly a holiday effect. */
+        onHoliday: r.on_holiday,
+        /** Number of comparable days behind the baseline. */
+        baselineDays: r.baseline_n,
       })),
       holidayImpact: holidayImpact.rows.map((r) => ({
         label: r.label,
+        // "Regular" or "Special" — the two classes of Philippine non-working
+        // holiday, which behave differently in the volume data.
+        holidayType: r.holiday_type,
         deviationPct: r.deviation_pct,
         occurrences: r.occurrences,
         baseline: Number(r.avg_baseline),
         volume: Number(r.avg_volume),
+        /** Smallest baseline sample behind any occurrence of this holiday. */
+        minBaselineDays: r.min_baseline_n,
       })),
       holidayYearly: holidayYearly.rows.map((r) => ({
         label: r.label,
@@ -263,29 +489,80 @@ export async function getTrafficAnalyticsFromDb(filters: AnalyticsFilters) {
   }
 }
 
+// The warehouse keeps toll-plaza volume in the nlex_traffic_volume matview
+// (one row per date/plaza/direction/class, with hourly columns h00..h23). The
+// flat traffic_volumes / directional_flow / vehicle_classes tables from the
+// original schema exist but were never loaded in this database, so the three
+// functions below read the matview and shape the result to the API the
+// controllers already expect.
+
+/** Most recent 365 days of data, used as the ADT averaging window. */
+const ADT_SPAN = `span AS (SELECT MAX(date) AS hi, (MAX(date) - 364) AS lo FROM nlex_traffic_volume)`;
+
 // [DEV-01] Get Volumes and ADT from Database
 export async function getTrafficVolumesFromDb(direction?: string) {
-  // Table does not exist in new schema, returning null gracefully
-  return null;
+  if (!db) return null;
+  try {
+    // Average volume per minute over the last 30 days, per plaza+direction.
+    const params: string[] = [];
+    let directionFilter = "";
+    if (direction) {
+      params.push(direction);
+      directionFilter = ` AND t.direction = $${params.length}`;
+    }
+
+    const { rows } = await db.query(
+      `WITH span AS (SELECT MAX(date) AS hi, (MAX(date) - 29) AS lo FROM nlex_traffic_volume)
+       SELECT t.toll_plaza AS "segmentId",
+              t.direction AS "direction",
+              ROUND(AVG(${DAY_TOTAL}) / 1440.0)::int AS "volumePerMin"
+       FROM nlex_traffic_volume t, span
+       WHERE t.type = 'Entries' AND t.vehicle_class = 'Total'
+         AND t.date BETWEEN span.lo AND span.hi${directionFilter}
+       GROUP BY 1, 2 ORDER BY 1, 2`,
+      params
+    );
+    return rows;
+  } catch (error) {
+    console.error("Database query failed for traffic volumes:", error);
+    return null;
+  }
 }
 
 // [DEV-02] Get Directional Flow from Database
 export async function getDirectionalFlowFromDb() {
-  // Table does not exist in new schema, returning null gracefully
-  return null;
+  if (!db) return null;
+  try {
+    const { rows } = await db.query(
+      `WITH ${ADT_SPAN}
+       SELECT direction,
+              ROUND(SUM(${DAY_TOTAL})::numeric / NULLIF(COUNT(DISTINCT date), 0))::bigint AS total
+       FROM nlex_traffic_volume, span
+       WHERE type = 'Entries' AND vehicle_class = 'Total'
+         AND date BETWEEN span.lo AND span.hi
+       GROUP BY direction ORDER BY direction`
+    );
+    return rows;
+  } catch (error) {
+    console.error("Database query failed for directional flow:", error);
+    return null;
+  }
 }
 
 // [DEV-03] Get Vehicle Class Distribution from Database
 export async function getVehicleClassDistributionFromDb() {
   if (!db) return null;
   try {
-    const { rows } = await db.query(`
-      SELECT 'Class 1' as class_type, SUM(volume_class1)::bigint as count FROM bronze.nlex_traffic_volume
-      UNION ALL
-      SELECT 'Class 2' as class_type, SUM(volume_class2)::bigint as count FROM bronze.nlex_traffic_volume
-      UNION ALL
-      SELECT 'Class 3' as class_type, SUM(volume_class3)::bigint as count FROM bronze.nlex_traffic_volume
-    `);
+    // class_type must come back as a number — the controller matches it with ===
+    const { rows } = await db.query(
+      `WITH ${ADT_SPAN}
+       SELECT RIGHT(vehicle_class, 1)::int AS class_type,
+              ROUND(SUM(${DAY_TOTAL})::numeric / NULLIF(COUNT(DISTINCT date), 0))::bigint AS count
+       FROM nlex_traffic_volume, span
+       WHERE type = 'Entries' AND vehicle_class IN ('Class 1', 'Class 2', 'Class 3')
+         AND date BETWEEN span.lo AND span.hi
+       GROUP BY 1 ORDER BY 1`
+    );
     return rows;
   } catch (error) {
     console.error("Database query failed for vehicle classes:", error);
@@ -293,32 +570,13 @@ export async function getVehicleClassDistributionFromDb() {
   }
 }
 
-
-// [ML-METRICS] Fetch model evaluation metrics from gold.ml_model_metrics
-export async function getMLModelMetrics(target?: string) {
-  if (!db) return null;
-  try {
-    const query = target
-      ? `SELECT model_name, target, rmse, mae, wmape, r2, mase, mape, smape, rmsse, me, mpe, adjusted_r2, theils_u, mse, train_r2, val_r2, gap, diagnosis, rank, accepted, rejected_reason, uses_weather, aic, bic, updated_at
-         FROM gold.ml_model_metrics WHERE target = $1 ORDER BY rank ASC`
-      : `SELECT model_name, target, rmse, mae, wmape, r2, mase, mape, smape, rmsse, me, mpe, adjusted_r2, theils_u, mse, train_r2, val_r2, gap, diagnosis, rank, accepted, rejected_reason, uses_weather, aic, bic, updated_at
-         FROM gold.ml_model_metrics ORDER BY target, rank ASC`;
-    const { rows } = target ? await db.query(query, [target]) : await db.query(query);
-    return rows;
-  } catch (error) {
-    console.error("Failed to fetch ML model metrics:", error);
-    return null;
-  }
-}
-type ForecastWindow = {
-  months?: "3" | "12" | "all" | string;
-  from?: string;
-  to?: string;
-  weather?: "all" | "dry" | "wet" | string;
-};
+// [ML-01] Get Predictive Volume (All Models) from Database
+export type ForecastWindow = { months?: "3" | "12" | "all"; from?: string; to?: string };
 
 export async function getMLPredictiveVolume(window: ForecastWindow = {}) {
   if (!db) return null;
+  // weather_* drive the rainfall bars; the _nw columns are the weather-free twins
+  // the Weather toggle switches to. Without them the toggle changes nothing.
   const cols = `forecast_date as "date", actual_volume, pred_lstm, pred_prophet, pred_xgboost, pred_holtwinters, pred_sarimax, pred_holts_linear, is_holdout, is_future, weather_rainfall, weather_temp, pred_prophet_nw, pred_sarimax_nw, pred_lstm_nw`;
   try {
     // An explicit from/to wins; otherwise months trims back from the newest
@@ -334,23 +592,19 @@ export async function getMLPredictiveVolume(window: ForecastWindow = {}) {
     }
 
     if (window.months && window.months !== "all") {
-      // The range control trims HISTORY ONLY. It must never cut into the holdout
-      // or the forecast: the scored window is fixed by the evaluation run, and
-      // clipping it would put a partial validation period on screen underneath a
-      // metrics table computed over the whole thing — the chart and the numbers
-      // would disagree, which is the exact defect this dashboard already had once.
+      // The range control trims HISTORY ONLY. The scored window is fixed by the
+      // evaluation run, so clipping it would put a partial validation period on
+      // screen beneath a metrics table computed over all of it.
       //
-      // The 80/20 split makes the holdout ~16 months long, so anchoring on the
-      // last observed day (as this did before) truncated it for every preset
-      // shorter than that: "12 mo" showed 366 of 476 scored days and zero history.
-      // Anchoring on the holdout START keeps it whole and lets `months` mean what
-      // a reader expects — how much run-up to show before validation begins.
+      // Anchoring on MAX(forecast_date) truncates badly here: that row sits in the
+      // projected FUTURE, and the 80/20 split makes the holdout ~16 months long, so
+      // every preset shorter than that ate the entire history — "12 mo" returned
+      // 0 past rows. Anchoring on the holdout START keeps it whole.
       const { rows } = await db.query(
         `SELECT ${cols} FROM gold.ml_predictive_volume
          WHERE is_holdout OR is_future
             OR forecast_date >= (
-                 SELECT MIN(forecast_date) FROM gold.ml_predictive_volume
-                 WHERE is_holdout
+                 SELECT MIN(forecast_date) FROM gold.ml_predictive_volume WHERE is_holdout
                ) - ($1::int * interval '1 month')
          ORDER BY forecast_date ASC`,
         [Number(window.months)]
@@ -393,24 +647,20 @@ export async function getMLEventSurge() {
   if (!db) return null;
   try {
     const { rows } = await db.query(`
-      WITH daily_vols AS (
-        SELECT toll_plaza, date_day, SUM(total_volume) as day_total
-        FROM bronze.nlex_traffic_volume
-        WHERE date_day >= (SELECT MAX(date_day) FROM bronze.nlex_traffic_volume WHERE total_volume > 0) - interval '90 days'
-        GROUP BY toll_plaza, date_day
-      ),
-      observed AS (
+      WITH observed AS (
         SELECT toll_plaza,
-               ROUND(AVG(day_total))::int AS baseline
-        FROM daily_vols
+               ROUND(AVG(${DAY_TOTAL}))::int AS baseline
+        FROM nlex_traffic_volume
+        WHERE type = 'Entries' AND vehicle_class = 'Total'
+          AND date >= (SELECT MAX(date) FROM nlex_traffic_volume) - interval '90 days'
         GROUP BY 1
-        HAVING ROUND(AVG(day_total)) > 0
+        HAVING ROUND(AVG(${DAY_TOTAL})) > 0
       ),
       -- Forecast exit names are free text ("Bocaue Exit"); a prefix match would
       -- also catch "Bocaue Barrier", which is a mainline barrier and not the
       -- exit the model means. Map explicitly.
       alias(forecast_name, plaza) AS (
-        VALUES ('Bocaue Exit', 'Bocaue'),
+        VALUES ('Bocaue Exit', 'Bocaue Interchange'),
                ('Marilao Exit', 'Marilao'),
                ('Balagtas Exit', 'Balagtas')
       ),
@@ -471,20 +721,7 @@ const MODEL_COLUMN: Record<string, string> = {
   XGBoost: "pred_xgboost",
   HoltWinters: "pred_holtwinters",
   SARIMAX: "pred_sarimax",
-  HoltsLinear: "pred_holts_linear"
-};
-
-export type HourlyForecastPoint = { hour: number; actual: number | null; predicted: number | null; rainfall?: number | null; temperature?: number | null };
-export type HourlyForecastResult = {
-  date: string;
-  weekday: string;
-  isFuture: boolean;
-  dayActual: number | null;
-  dayPredicted: number | null;
-  profileSource: "observed" | "weekday-profile" | null;
-  weather: "all" | "dry" | "wet";
-  observedHours: number;
-  hours: HourlyForecastPoint[];
+  HoltsLinear: "pred_holts_linear",
 };
 
 export async function getMLPredictiveVolumeHourly(
@@ -508,7 +745,7 @@ export async function getMLPredictiveVolumeHourly(
   )`;
 
   try {
-    const [dayRes, actualRes, profileRes, weatherRes] = await Promise.all([
+    const [dayRes, actualRes, profileRes] = await Promise.all([
       // The day's totals as the models see them
       db.query(
         `SELECT forecast_date::text AS date, actual_volume, ${column} AS predicted, is_future
@@ -518,39 +755,40 @@ export async function getMLPredictiveVolumeHourly(
       // Observed hourly totals, if this date has been recorded
       wetFilter === null
         ? db.query(
-            `SELECT hour_of_day AS hour, COALESCE(SUM(total_volume), 0)::bigint AS v
-             FROM bronze.nlex_traffic_volume
-             WHERE date_day = $1::date
+            `SELECT u.hr - 1 AS hour, COALESCE(SUM(u.v), 0)::bigint AS v
+             FROM nlex_traffic_volume t,
+                  LATERAL unnest(${HOUR_ARRAY}) WITH ORDINALITY AS u(v, hr)
+             WHERE t.date = $1::date
              GROUP BY 1 ORDER BY 1`,
             [date]
           )
         : db.query(
-            `WITH ${WX_CTE}
-             SELECT t.hour_of_day AS hour, COALESCE(SUM(t.total_volume), 0)::bigint AS v
-             FROM bronze.nlex_traffic_volume t
-             JOIN wx w ON w.d = t.date_day AND w.h = t.hour_of_day
-             WHERE t.date_day = $1::date AND w.wet = $2
+            // The comma-join to LATERAL has to be isolated in its own CTE —
+            // a JOIN in the same FROM cannot reference `t` across it.
+            `WITH ${WX_CTE},
+             hv AS (
+               SELECT t.date AS d, u.hr - 1 AS hour, u.v AS v
+               FROM nlex_traffic_volume t,
+                    LATERAL unnest(${HOUR_ARRAY}) WITH ORDINALITY AS u(v, hr)
+               WHERE t.date = $1::date
+             )
+             SELECT hv.hour, COALESCE(SUM(hv.v), 0)::bigint AS v
+             FROM hv JOIN wx w ON w.d = hv.d AND w.h = hv.hour
+             WHERE w.wet = $2
              GROUP BY 1 ORDER BY 1`,
             [date, wetFilter]
           ),
       // Typical share of the day carried by each hour, same weekday, recent history
       db.query(
-        `SELECT hour_of_day AS hour, AVG(total_volume)::float AS v 
-         FROM bronze.nlex_traffic_volume
-         WHERE EXTRACT(dow FROM date_day) = EXTRACT(dow FROM $1::date)
-           AND date_day < $1::date
-           AND date_day >= $1::date - interval '90 days'
-         GROUP BY 1 ORDER BY 1`,
-        [date]
-      ),
-      // Hourly weather metrics (rainfall and temp) for this date
-      db.query(
-        `SELECT EXTRACT(hour FROM timestamp_utc + interval '8 hours')::int AS hour,
-                AVG(rainfall)::float AS rainfall,
-                AVG(temperature)::float AS temperature
-         FROM hourly_weather
-         WHERE (timestamp_utc + interval '8 hours')::date = $1::date
-         GROUP BY 1 ORDER BY 1`,
+        `WITH hv AS (
+           SELECT t.date, u.hr - 1 AS hour, u.v
+           FROM nlex_traffic_volume t,
+                LATERAL unnest(${HOUR_ARRAY}) WITH ORDINALITY AS u(v, hr)
+           WHERE EXTRACT(dow FROM t.date) = EXTRACT(dow FROM $1::date)
+             AND t.date < $1::date
+             AND t.date >= $1::date - interval '90 days'
+         )
+         SELECT hour, AVG(v)::float AS v FROM hv GROUP BY 1 ORDER BY 1`,
         [date]
       ),
     ]);
@@ -563,12 +801,6 @@ export async function getMLPredictiveVolumeHourly(
     const actualByHour = new Map<number, number>(
       actualRes.rows.map((r: { hour: number; v: string }) => [Number(r.hour), Number(r.v)])
     );
-    const weatherByHour = new Map<number, { rainfall: number; temperature: number }>(
-      weatherRes.rows.map((r: { hour: number; rainfall: number; temperature: number }) => [
-        Number(r.hour),
-        { rainfall: Number(r.rainfall || 0), temperature: Number(r.temperature || 0) }
-      ])
-    );
     const profile = profileRes.rows.map((r: { hour: number; v: number }) => Number(r.v));
     const profileTotal = profile.reduce((s, v) => s + v, 0);
 
@@ -576,16 +808,13 @@ export async function getMLPredictiveVolumeHourly(
     const hasActualHours = actualByHour.size > 0;
     const canShapePrediction = dayPredicted != null && profileTotal > 0 && profile.length === 24;
 
-    const hours: HourlyForecastPoint[] = Array.from({ length: 24 }, (_, h) => {
-      const wx = weatherByHour.get(h);
-      return {
-        hour: h,
-        actual: !hasActualHours ? null : wetFilter === null ? actualByHour.get(h) ?? 0 : actualByHour.get(h) ?? null,
-        predicted: canShapePrediction ? Math.round((profile[h] / profileTotal) * dayPredicted) : null,
-        rainfall: wx ? wx.rainfall : null,
-        temperature: wx ? wx.temperature : null,
-      };
-    });
+    const hours: HourlyForecastPoint[] = Array.from({ length: 24 }, (_, h) => ({
+      hour: h,
+      // With a weather filter on, hours that don't match are absent rather
+      // than zero — a zero bar would read as "no traffic".
+      actual: !hasActualHours ? null : wetFilter === null ? actualByHour.get(h) ?? 0 : actualByHour.get(h) ?? null,
+      predicted: canShapePrediction ? Math.round((profile[h] / profileTotal) * dayPredicted) : null,
+    }));
 
     return {
       date: day.date,
@@ -600,6 +829,180 @@ export async function getMLPredictiveVolumeHourly(
     };
   } catch (error) {
     console.error("Failed to fetch hourly ML volume:", error);
+    return null;
+  }
+}
+
+/**
+ * Model evaluation metrics for the predictive volume dashboard.
+ *
+ * These come from gold.ml_model_metrics, written by the training pipeline, so
+ * the table always reflects the most recent run. The dashboard previously
+ * carried these figures as hardcoded strings, which had drifted badly out of
+ * step with the pipeline: it presented LSTM as the rank-1 accepted model with
+ * R2 0.9911 while the table records LSTM as rank 4, REJECTED, with R2 -0.0611,
+ * and the actual rank-1 model as Holt-Winters. Serving them from the database
+ * keeps the reported champion honest after every retrain.
+ */
+export type MLModelMetric = {
+  model: string;
+  model_name: string;
+  rank: number | null;
+  accepted: boolean;
+  rmse: number | null;
+  mae: number | null;
+  mse: number | null;
+  wmape: number | null;
+  r2: number | null;
+  mase: number | null;
+  mape: number | null;
+  smape: number | null;
+  rmsse: number | null;
+  adjusted_r2: number | null;
+  train_r2: number | null;
+  val_r2: number | null;
+  gap: number | null;
+  uses_weather: boolean | null;
+  aic: number | null;
+  bic: number | null;
+  diagnosis: string | null;
+  rejectedReason: string | null;
+  rejected_reason: string | null;
+  updatedAt: string | null;
+};
+
+export async function getMLModelMetrics(): Promise<MLModelMetric[] | null> {
+  if (!db) return null;
+  try {
+    const { rows } = await db.query(
+      // MASE is the acceptance criterion (< 1.0 beats the seasonal-naive
+      // benchmark), so dropping it left the dashboard unable to show WHY a model
+      // was rejected. AIC/BIC and the weather flag drive the comparison panels.
+      `SELECT model_name, rank, accepted, rmse, mae, mse, wmape, r2, mase,
+              mape, smape, rmsse, adjusted_r2, train_r2, val_r2, gap,
+              uses_weather, aic, bic, diagnosis, rejected_reason, updated_at
+       FROM gold.ml_model_metrics
+       ORDER BY rank NULLS LAST, model_name`
+    );
+    const num = (v: unknown) => (v === null || v === undefined ? null : Number(v));
+    return rows.map((r) => ({
+      model: r.model_name,
+      // Both spellings are emitted: the chart and narrative key off model_name,
+      // while newer pages read `model`. Cheap insurance against another rename.
+      model_name: r.model_name,
+      rank: num(r.rank),
+      accepted: Boolean(r.accepted),
+      rmse: num(r.rmse),
+      mae: num(r.mae),
+      mse: num(r.mse),
+      wmape: num(r.wmape),
+      r2: num(r.r2),
+      mase: num(r.mase),
+      mape: num(r.mape),
+      smape: num(r.smape),
+      rmsse: num(r.rmsse),
+      adjusted_r2: num(r.adjusted_r2),
+      train_r2: num(r.train_r2),
+      val_r2: num(r.val_r2),
+      gap: num(r.gap),
+      uses_weather: r.uses_weather === null ? null : Boolean(r.uses_weather),
+      aic: num(r.aic),
+      bic: num(r.bic),
+      diagnosis: r.diagnosis ?? null,
+      rejectedReason: r.rejected_reason ?? null,
+      rejected_reason: r.rejected_reason ?? null,
+      updatedAt: r.updated_at ? new Date(r.updated_at).toISOString() : null,
+    }));
+  } catch (error) {
+    console.error("Database query failed for ML model metrics:", error);
+    return null;
+  }
+}
+
+
+export type WeatherCorrelation = {
+  variable: string;
+  label: string;
+  pearson: number | null;
+  spearman: number | null;
+  days: number;
+};
+
+export type WeatherEvidence = {
+  correlations: WeatherCorrelation[];
+  // The controlled experiment: same model, same protocol, weather in vs out.
+  modelComparison: { model: string; withWeather: number | null; withoutWeather: number | null; deltaPts: number | null }[];
+};
+
+/**
+ * Evidence for whether weather predicts traffic on this corridor.
+ *
+ * Correlations are computed live rather than stored, so they always describe the
+ * data currently in the warehouse. Weather is aggregated the corrected way —
+ * averaged across the 20 stations per hour, THEN summed/averaged over the day.
+ * Summing across stations (the original bug) inflated rainfall ~20x.
+ */
+export async function getWeatherEvidenceFromDb(): Promise<WeatherEvidence | null> {
+  if (!db) return null;
+  try {
+    const CTE = `
+      WITH hourly AS (
+        SELECT (timestamp_utc + interval '8 hours')::date AS ds, timestamp_utc AS hr,
+               AVG(temperature) t, AVG(rainfall) r, AVG(wind_speed) w, AVG(humidity) h
+        FROM public.hourly_weather GROUP BY 1, 2
+      ), wx AS (
+        SELECT ds, AVG(t) avg_temp, SUM(r) total_rain, AVG(w) avg_wind, AVG(h) avg_humidity
+        FROM hourly GROUP BY ds
+      ), joined AS (
+        SELECT v.total_volume::float y, wx.*
+        FROM gold.daily_traffic_volume_corrected v JOIN wx ON wx.ds = v.date
+        WHERE v.total_volume > 0
+      ), ranked AS (
+        SELECT RANK() OVER (ORDER BY y) ry,
+               RANK() OVER (ORDER BY total_rain)   r_rain,
+               RANK() OVER (ORDER BY avg_wind)     r_wind,
+               RANK() OVER (ORDER BY avg_temp)     r_temp,
+               RANK() OVER (ORDER BY avg_humidity) r_hum
+        FROM joined
+      )`;
+    const { rows } = await db.query(`${CTE}
+      SELECT (SELECT COUNT(*) FROM joined)::int AS days,
+             (SELECT CORR(y, total_rain)   FROM joined) AS p_rain,
+             (SELECT CORR(y, avg_wind)     FROM joined) AS p_wind,
+             (SELECT CORR(y, avg_temp)     FROM joined) AS p_temp,
+             (SELECT CORR(y, avg_humidity) FROM joined) AS p_hum,
+             (SELECT CORR(ry, r_rain) FROM ranked) AS s_rain,
+             (SELECT CORR(ry, r_wind) FROM ranked) AS s_wind,
+             (SELECT CORR(ry, r_temp) FROM ranked) AS s_temp,
+             (SELECT CORR(ry, r_hum)  FROM ranked) AS s_hum`);
+    const r = rows[0];
+    const num = (v: unknown) => (v === null || v === undefined ? null : Number(v));
+    const correlations: WeatherCorrelation[] = [
+      { variable: "avg_humidity", label: "Humidity",    pearson: num(r.p_hum),  spearman: num(r.s_hum),  days: r.days },
+      { variable: "total_rain",   label: "Rainfall",    pearson: num(r.p_rain), spearman: num(r.s_rain), days: r.days },
+      { variable: "avg_wind",     label: "Wind speed",  pearson: num(r.p_wind), spearman: num(r.s_wind), days: r.days },
+      { variable: "avg_temp",     label: "Temperature", pearson: num(r.p_temp), spearman: num(r.s_temp), days: r.days },
+    ].sort((a, b) => Math.abs(b.pearson ?? 0) - Math.abs(a.pearson ?? 0));
+
+    // Pair each weather model with its weather-free twin from the same run.
+    const m = await db.query(
+      `SELECT model_name, wmape FROM gold.ml_model_metrics WHERE target = 'Total Traffic'`
+    );
+    const byName = new Map(m.rows.map((x) => [x.model_name, x.wmape === null ? null : Number(x.wmape)]));
+    const modelComparison = ["Prophet", "SARIMAX", "LSTM"].map((name) => {
+      const withW = byName.get(name) ?? null;
+      const without = byName.get(`${name}_nw`) ?? null;
+      return {
+        model: name,
+        withWeather: withW,
+        withoutWeather: without,
+        // positive => the weather version is better
+        deltaPts: withW != null && without != null ? Number((without - withW).toFixed(3)) : null,
+      };
+    });
+    return { correlations, modelComparison };
+  } catch (error) {
+    console.error("Database query failed for weather evidence:", error);
     return null;
   }
 }

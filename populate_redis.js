@@ -1,5 +1,39 @@
-const REDIS_REST_URL = "https://united-mayfly-138714.upstash.io";
-const REDIS_REST_TOKEN = "gQAAAAAAAh3aAAIgcDFhYjk2NjA4N2FiNDQ0YjlmYjVkOGZlOTliNGRkZDMyYw";
+/**
+ * Seeds sample Waze alerts/jams into Upstash Redis for the map tab.
+ *
+ * Credentials come from Back-End/.env (gitignored) — they used to be written
+ * directly in this file, which published them, because the repository is public.
+ *
+ * Usage:  node populate_redis.js
+ */
+const fs = require("node:fs");
+const path = require("node:path");
+
+// Minimal .env reader so this script needs no dependencies of its own.
+function loadEnvFile(file) {
+  if (!fs.existsSync(file)) return;
+  for (const line of fs.readFileSync(file, "utf8").split(/\r?\n/)) {
+    const m = line.match(/^\s*([A-Z0-9_]+)\s*=\s*(.*)\s*$/i);
+    if (!m) continue;
+    const value = m[2].replace(/^["']|["']$/g, "");
+    if (!(m[1] in process.env)) process.env[m[1]] = value;
+  }
+}
+
+loadEnvFile(path.join(__dirname, "Back-End", ".env"));
+
+const REDIS_REST_URL = process.env.REDIS_REST_URL;
+const REDIS_REST_TOKEN = process.env.REDIS_REST_TOKEN;
+
+if (!REDIS_REST_URL || !REDIS_REST_TOKEN) {
+  console.error(
+    "Missing Upstash credentials.\n\n" +
+      "Set REDIS_REST_URL and REDIS_REST_TOKEN in Back-End/.env (see Back-End/.env.example),\n" +
+      "or export them in your shell before running this script.\n\n" +
+      "Do not paste them into this file — the repository is public."
+  );
+  process.exit(1);
+}
 
 const alerts = [
   {

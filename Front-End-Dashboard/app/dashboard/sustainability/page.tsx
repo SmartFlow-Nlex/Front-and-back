@@ -1,10 +1,13 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import { attachCategoryClick } from "../../../lib/chart-click";
+import { useChartTheme, applyChartTheme, seriesRamp, seriesPair } from "../../../lib/chart-theme";
 import ReactECharts from "echarts-for-react";
 import type { EChartsOption } from "echarts";
-import { Leaf } from "lucide-react";
+import { CalendarClock, Clock, Leaf, Truck, Wind } from "lucide-react";
 import DashboardChart from "../../../components/dashboard/DashboardChart";
+import ChartSkeleton, { KpiSkeleton } from "../../../components/dashboard/ChartSkeleton";
 import PageHeader from "../../../components/dashboard/PageHeader";
 import PredictiveEmissionChart from "../../../components/dashboard/PredictiveEmissionChart";
 import DateRangePicker from "../traffic/components/DateRangePicker";
@@ -12,16 +15,7 @@ import styles from "../traffic/traffic.module.css";
 
 const BACKEND = process.env.NEXT_PUBLIC_BACKEND_URL ?? "http://localhost:4000";
 
-// Vehicle classes are ordered light → heavy, so they wear an ordinal single-hue
-// ramp (validated): darker = heavier fleet.
-const CLASS_RAMP = ["#8fa8ee", "#3e67ef", "#1d3aa8"];
 const CLASS_SHORT = ["Class 1 · Light", "Class 2 · Medium", "Class 3 · Heavy"];
-// Categorical pair for weekday/weekend and NB/SB comparisons (validated)
-const BLUE = "#3e67ef";
-const ORANGE = "#e06b47";
-// Measured air quality bands, ordered good → poor (validated ordinal warm ramp):
-// darker = more polluted.
-const AQI_RAMP = ["#e3a06b", "#c96a33", "#8d4118"];
 const AQI_BANDS = ["Good (AQI 1–2)", "Moderate (AQI 3)", "Poor (AQI 4–5)"] as const;
 
 const DOW_LABELS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
@@ -73,6 +67,16 @@ const prescriptiveEmissionReduction: EChartsOption = {
 };
 
 export default function SustainabilityPage() {
+  // Chart furniture follows the active theme; series hues stay fixed.
+  const chartTheme = useChartTheme();
+
+  /* This tab's colour family. The ramp is ordinal — lightest to darkest — and
+     both modes are selected steps validated against their own surface, not an
+     automatic flip. A pair of nominal series takes the outer two steps, which is
+     where the separation margin lives. See lib/chart-theme. */
+  const RAMP = seriesRamp("emissions", chartTheme);
+  const [PAIR_A, PAIR_B] = seriesPair("emissions", chartTheme);
+  const SEQ = [chartTheme.seqLightest, ...RAMP];
   const [activeTab, setActiveTab] = useState<"Descriptive" | "Predictive" | "Prescriptive">("Descriptive");
 
   // Global filters
@@ -133,7 +137,7 @@ export default function SustainabilityPage() {
     return { deltaPct, heavyVolPct, heavyCo2Pct, avgDailyT, totVol, totCo2 };
   }, [data]);
 
-  // ---------- Hero: CO2 trend by class ----------
+    // ---------- Hero: CO2 trend by class ----------
   type TrendRow = { label: string; c1: number; c2: number; c3: number; nb: number; sb: number; total: number };
   const trendRows = useMemo<TrendRow[]>(() => {
     if (!data) return [];
@@ -179,7 +183,7 @@ export default function SustainabilityPage() {
     });
 
     return {
-      grid: { left: 62, right: 16, top: 30, bottom: 22 },
+      grid: { left: 62, right: 16, top: 10, bottom: 52 },
       xAxis: { type: "category", data: labels, axisLabel: { interval: labelInterval, fontSize: 10, hideOverlap: true }, axisTick: { show: false } },
       yAxis: { type: "value", name: "tonnes CO₂", nameGap: 10, nameTextStyle: { fontSize: 9, align: "left" }, splitNumber: 3, axisLabel: { fontSize: 10, formatter: (v: number) => fmtCompact(v) } },
       tooltip: {
@@ -192,8 +196,8 @@ export default function SustainabilityPage() {
           return `<b>${r.label}</b><br/>${rows}<br/>Total: <b>${fmtInt(r.total)} t</b>`;
         },
       },
-      legend: { show: true, top: 0, right: 8, itemWidth: 14, textStyle: { fontSize: 11 } },
-      series: [mk(CLASS_SHORT[0], "c1", CLASS_RAMP[0]), mk(CLASS_SHORT[1], "c2", CLASS_RAMP[1]), mk(CLASS_SHORT[2], "c3", CLASS_RAMP[2])],
+      legend: { show: true, bottom: 0, left: "center", itemWidth: 14, itemHeight: 8, itemGap: 18, padding: 0, textStyle: { fontSize: 11 } },
+      series: [mk(CLASS_SHORT[0], "c1", RAMP[0]), mk(CLASS_SHORT[1], "c2", RAMP[1]), mk(CLASS_SHORT[2], "c3", RAMP[2])],
     };
   }, [trendRows, grain]);
 
@@ -241,11 +245,11 @@ export default function SustainabilityPage() {
     if (timeView === "hour") {
       const peakIdx = timeProfile.weekday.indexOf(Math.max(...timeProfile.weekday));
       return {
-        grid: { left: 48, right: 16, top: 34, bottom: 24 },
+        grid: { left: 48, right: 16, top: 10, bottom: 54 },
         xAxis: { type: "category", boundaryGap: false, data: Array.from({ length: 24 }, (_, h) => fmtHour(h)), axisLabel: { interval: 3, fontSize: 10 }, axisTick: { show: false } },
         yAxis: { type: "value", name: "avg t CO₂ / day", nameGap: 10, nameTextStyle: { fontSize: 9, align: "left" }, splitNumber: 3, axisLabel: { fontSize: 10 } },
         tooltip: { trigger: "axis", valueFormatter: (v) => (v == null ? "—" : `${fmt1(Number(v))} t`) },
-        legend: { show: true, top: 0, right: 8, itemWidth: 14, textStyle: { fontSize: 11 } },
+        legend: { show: true, bottom: 0, left: "center", itemWidth: 14, itemHeight: 8, itemGap: 18, padding: 0, textStyle: { fontSize: 11 } },
         series: [
           {
             name: "Weekdays",
@@ -253,12 +257,12 @@ export default function SustainabilityPage() {
             data: timeProfile.weekday.map((v) => Number(v.toFixed(2))),
             symbol: "none",
             smooth: true,
-            itemStyle: { color: BLUE },
-            lineStyle: { width: 2.5, color: BLUE },
+            itemStyle: { color: PAIR_A },
+            lineStyle: { width: 2.5, color: PAIR_A },
             markPoint: {
               symbol: "circle",
               symbolSize: 8,
-              itemStyle: { color: BLUE, borderColor: "#fff", borderWidth: 2 },
+              itemStyle: { color: PAIR_A, borderColor: "#fff", borderWidth: 2 },
               label: { show: true, position: "top", fontSize: 10, color: "#475069", formatter: `Peak · ${fmtHour(peakIdx)}` },
               data: [{ name: "Peak", coord: [peakIdx, Number(timeProfile.weekday[peakIdx].toFixed(2))] }],
             },
@@ -269,8 +273,8 @@ export default function SustainabilityPage() {
             data: timeProfile.weekend.map((v) => Number(v.toFixed(2))),
             symbol: "none",
             smooth: true,
-            itemStyle: { color: ORANGE },
-            lineStyle: { width: 2.5, color: ORANGE },
+            itemStyle: { color: PAIR_B },
+            lineStyle: { width: 2.5, color: PAIR_B },
           },
         ],
       };
@@ -278,7 +282,7 @@ export default function SustainabilityPage() {
 
     const maxIdx = timeProfile.busiestDow;
     return {
-      grid: { left: 48, right: 16, top: 34, bottom: 24 },
+      grid: { left: 48, right: 16, top: 10, bottom: 54 },
       xAxis: { type: "category", data: DOW_LABELS, axisLabel: { interval: 0, fontSize: 10 }, axisTick: { show: false } },
       yAxis: { type: "value", name: "avg t CO₂ / day", nameGap: 10, nameTextStyle: { fontSize: 9, align: "left" }, splitNumber: 3, axisLabel: { fontSize: 10 } },
       tooltip: {
@@ -292,7 +296,7 @@ export default function SustainabilityPage() {
           type: "bar",
           data: timeProfile.dowAvg.map((v, i) => ({
             value: Number(v.toFixed(1)),
-            itemStyle: { color: i === maxIdx ? BLUE : "#8fa8ee", borderRadius: [4, 4, 0, 0] },
+            itemStyle: { color: i === maxIdx ? PAIR_A : RAMP[0], borderRadius: [4, 4, 0, 0] },
             label: i === maxIdx ? { show: true, position: "top", fontSize: 10, color: "#475069", formatter: () => fmt1(v) } : undefined,
           })),
           barMaxWidth: 26,
@@ -329,10 +333,11 @@ export default function SustainabilityPage() {
     if (!fleetRows) return null;
     const rows = [...fleetRows.rows].reverse(); // display top-to-bottom: volume first
     return {
-      grid: { left: 92, right: 16, top: 34, bottom: 24 },
+      grid: { left: 92, right: 16, top: 10, bottom: 54 },
       xAxis: { type: "value", max: 100, interval: 25, axisLabel: { fontSize: 10, formatter: "{value}%" } },
       yAxis: { type: "category", data: rows.map((r) => r.label), axisLabel: { interval: 0, fontSize: 10 }, axisTick: { show: false } },
       tooltip: {
+          axisPointer: { type: "shadow" },
         trigger: "axis",
         formatter: (p) => {
           const items = p as { seriesIndex: number; dataIndex: number; value: number; marker: string }[];
@@ -343,17 +348,18 @@ export default function SustainabilityPage() {
           return `<b>${r.label}</b><br/>${lines}`;
         },
       },
-      legend: { show: true, top: 0, right: 8, itemWidth: 14, textStyle: { fontSize: 11 } },
+      legend: { show: true, bottom: 0, left: "center", itemWidth: 14, itemHeight: 8, itemGap: 18, padding: 0, textStyle: { fontSize: 11 } },
       series: fleetRows.cls.map((c, ci) => ({
         name: CLASS_SHORT[ci],
         type: "bar" as const,
         stack: "share",
         data: rows.map((r) => Number(r.shares[ci].toFixed(1))),
-        itemStyle: { color: CLASS_RAMP[ci], borderColor: "#fff", borderWidth: 1 },
+        itemStyle: { color: RAMP[ci], borderColor: chartTheme.tooltipBg, borderWidth: 1 },
         barMaxWidth: 18,
       })),
     };
-  }, [fleetRows]);
+    // chartTheme supplies the stack divider colour.
+  }, [fleetRows, chartTheme]);
 
   // ---------- Heavy-vehicle share of CO2 over time ----------
   const heavyShareRows = useMemo(() => {
@@ -378,7 +384,7 @@ export default function SustainabilityPage() {
     const labelInterval = (i: number) => i === 0 || boundaryKey(labels[i]) !== boundaryKey(labels[i - 1]);
     const avg = heavyShareRows.reduce((s, r) => s + r.share, 0) / heavyShareRows.length;
     return {
-      grid: { left: 44, right: 16, top: 30, bottom: 22 },
+      grid: { left: 44, right: 16, top: 10, bottom: 52 },
       xAxis: { type: "category", data: labels, axisLabel: { interval: labelInterval, fontSize: 10, hideOverlap: true }, axisTick: { show: false } },
       yAxis: {
         type: "value",
@@ -395,25 +401,28 @@ export default function SustainabilityPage() {
           return `<b>${r.label}</b><br/>Heavy-vehicle share: <b>${items[0].value}%</b><br/>${fmtInt(r.c2 + r.c3)} t of ${fmtInt(r.total)} t CO₂`;
         },
       },
+      legend: { show: true, bottom: 0, left: "center", itemWidth: 14, itemHeight: 8, itemGap: 18, padding: 0, textStyle: { fontSize: 11 } },
       series: [
         {
+          name: "Heavy-vehicle share of CO₂",
           type: "line",
           data: heavyShareRows.map((r) => Number(r.share.toFixed(1))),
           symbol: "none",
           smooth: true,
-          itemStyle: { color: BLUE },
-          lineStyle: { width: 2.5, color: BLUE },
+          itemStyle: { color: PAIR_A },
+          lineStyle: { width: 2.5, color: PAIR_A },
           markLine: {
             silent: true,
             symbol: "none",
             lineStyle: { color: "#9aa4b8", type: "dashed", width: 1 },
-            label: { fontSize: 9, color: "#8a93a6", formatter: `avg ${avg.toFixed(1)}%`, position: "insideEndTop" },
+            label: { fontSize: 9, color: chartTheme.text, formatter: `avg ${avg.toFixed(1)}%`, position: "insideEndTop" },
             data: [{ yAxis: Number(avg.toFixed(1)) }],
           },
         },
       ],
     };
-  }, [heavyShareRows, trendRows, grain]);
+    // chartTheme colours the average markLine's label.
+  }, [heavyShareRows, trendRows, grain, chartTheme]);
 
   // ---------- Measured air quality ----------
   const aqiOption = useMemo<EChartsOption | null>(() => {
@@ -424,10 +433,11 @@ export default function SustainabilityPage() {
     const share = (v: number, i: number) => (totals[i] > 0 ? Number(((v / totals[i]) * 100).toFixed(1)) : 0);
     const keys = ["good", "moderate", "poor"] as const;
     return {
-      grid: { left: 40, right: 16, top: 34, bottom: 24 },
+      grid: { left: 40, right: 16, top: 10, bottom: 54 },
       xAxis: { type: "category", data: labels, axisLabel: { fontSize: 10, hideOverlap: true }, axisTick: { show: false } },
       yAxis: { type: "value", max: 100, splitNumber: 4, axisLabel: { fontSize: 10, formatter: "{value}%" } },
       tooltip: {
+          axisPointer: { type: "shadow" },
         trigger: "axis",
         formatter: (p) => {
           const items = p as { seriesIndex: number; dataIndex: number; value: number; marker: string }[];
@@ -439,13 +449,13 @@ export default function SustainabilityPage() {
           return `<b>${labels[i]}</b><br/>${lines}<br/>Avg PM2.5: ${r.pm25 != null ? `${fmt1(r.pm25)} µg/m³` : "—"}`;
         },
       },
-      legend: { show: true, top: 0, right: 8, itemWidth: 14, textStyle: { fontSize: 11 } },
+      legend: { show: true, bottom: 0, left: "center", itemWidth: 14, itemHeight: 8, itemGap: 18, padding: 0, textStyle: { fontSize: 11 } },
       series: keys.map((k, ki) => ({
         name: AQI_BANDS[ki],
         type: "bar" as const,
         stack: "aqi",
         data: rows.map((r, i) => share(r[k], i)),
-        itemStyle: { color: AQI_RAMP[ki], borderColor: "#fff", borderWidth: 1 },
+        itemStyle: { color: RAMP[ki], borderColor: "#fff", borderWidth: 1 },
         barMaxWidth: 22,
       })),
     };
@@ -464,7 +474,7 @@ export default function SustainabilityPage() {
       grid: { left: 0, right: 0, top: 2, bottom: 2 },
       xAxis: { type: "category", show: false, data: vals.map((_, i) => i) },
       yAxis: { type: "value", show: false, min: "dataMin" },
-      series: [{ type: "line", data: vals, symbol: "none", smooth: true, lineStyle: { width: 1.5, color: BLUE } }],
+      series: [{ type: "line", data: vals, symbol: "none", smooth: true, lineStyle: { width: 1.5, color: PAIR_A } }],
     };
   }, [data]);
 
@@ -582,28 +592,39 @@ export default function SustainabilityPage() {
   };
 
   const chartFrame = (option: EChartsOption | null, emptyNote: string, onClick?: (p: never) => void) => {
-    if (loading && !data) return <div className={styles.placeholder}>Loading…</div>;
+    if (loading && !data) return <ChartSkeleton />;
     if (error) return <div className={styles.placeholder}>Live data unavailable — is the backend running on port 4000?</div>;
     if (!option) return <div className={styles.placeholder}>{emptyNote}</div>;
     return (
       <ReactECharts
-        option={option}
+        option={applyChartTheme(option, chartTheme)}
         notMerge
         lazyUpdate
         style={{ width: "100%", height: "100%" }}
         opts={{ renderer: "canvas" }}
         onEvents={onClick ? { click: onClick as (p: unknown) => void } : undefined}
+        // Lines are drawn with symbol:"none", so they have no clickable points
+        // and ECharts' item click never fires with the right index. Resolve the
+        // category from the cursor position instead.
+        onChartReady={
+          onClick
+            ? (chart) => attachCategoryClick(chart as never, onClick as never)
+            : undefined
+        }
       />
     );
   };
 
-  const kpiValue = (v: string | null) => (loading && !data ? "…" : v ?? "—");
+  // A skeleton rather than an ellipsis: the tile keeps its height, so the KPI
+  // row does not resize under the cursor as the numbers arrive.
+  const kpiValue = (v: string | null) =>
+    loading && !data ? <KpiSkeleton /> : (v ?? "—");
   const aqiWord = (a: number) => (a < 1.5 ? "Good" : a < 2.5 ? "Fair" : a < 3.5 ? "Moderate" : a < 4.5 ? "Poor" : "Very poor");
 
   // ---------- Predictive / Prescriptive share the same shell ----------
   if (activeTab !== "Descriptive") {
     return (
-      <section className={styles.page}>
+      <section className={`${styles.page} viz-emissions`}>
         <PageHeader icon={Leaf} title="Emissions Overview" subtitle="Vehicle emissions and air quality trends across NLEX" />
         <div className={styles.filterRow}>
           {activeTab === "Prescriptive" && <span className={styles.filterLabel}>Projected emission reduction by strategy</span>}
@@ -636,7 +657,7 @@ export default function SustainabilityPage() {
   }
 
   return (
-    <section className={styles.page}>
+    <section className={`${styles.page} viz-emissions`}>
       <PageHeader icon={Leaf} title="Emissions Overview" subtitle="Vehicle emissions and air quality trends across NLEX" />
 
       {/* Row A — global filters */}
@@ -680,6 +701,7 @@ export default function SustainabilityPage() {
       {/* Row B — KPI tiles */}
       <div className={styles.kpiRow}>
         <article className={styles.kpiTile}>
+          <span className={styles.kpiIcon} aria-hidden="true"><Leaf size={15} /></span>
           <h3>Total CO₂ (Modeled)</h3>
           <div className={styles.kpiValue} title={data ? `${fmtInt(data.kpis.totalCo2T)} tonnes` : undefined}>
             {kpiValue(data ? `${fmtCompact(data.kpis.totalCo2T)} t` : null)}
@@ -692,6 +714,7 @@ export default function SustainabilityPage() {
           </p>
         </article>
         <article className={styles.kpiTile}>
+          <span className={styles.kpiIcon} aria-hidden="true"><CalendarClock size={15} /></span>
           <h3>Avg Daily CO₂</h3>
           <div className={styles.kpiValue}>{kpiValue(derived ? `${fmtInt(derived.avgDailyT)} t` : null)}</div>
           <div className={styles.sparkBox}>
@@ -699,6 +722,7 @@ export default function SustainabilityPage() {
           </div>
         </article>
         <article className={styles.kpiTile}>
+          <span className={styles.kpiIcon} aria-hidden="true"><Truck size={15} /></span>
           <h3>Heavy-Vehicle Impact</h3>
           <div className={styles.kpiValue}>{kpiValue(derived ? `${derived.heavyCo2Pct.toFixed(1)}%` : null)}</div>
           <p className={styles.kpiHint}>
@@ -706,6 +730,7 @@ export default function SustainabilityPage() {
           </p>
         </article>
         <article className={styles.kpiTile}>
+          <span className={styles.kpiIcon} aria-hidden="true"><Clock size={15} /></span>
           <h3>Peak Emission Hour</h3>
           <div className={styles.kpiValue}>{kpiValue(timeProfile ? fmtHour(timeProfile.peakHour) : null)}</div>
           <p className={styles.kpiHint}>
@@ -713,6 +738,7 @@ export default function SustainabilityPage() {
           </p>
         </article>
         <article className={styles.kpiTile}>
+          <span className={styles.kpiIcon} aria-hidden="true"><Wind size={15} /></span>
           <h3>Measured Air Quality</h3>
           <div className={styles.kpiValue}>
             {kpiValue(data?.kpis.avgAqi != null ? `${data.kpis.avgAqi.toFixed(1)} / 5` : null)}

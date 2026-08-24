@@ -22,6 +22,8 @@ export default function TrafficMapPanel({ title, subtitle, badge, endpoint, laye
   const containerRef = useRef<HTMLDivElement | null>(null);
   const activeMarkers = useRef<mapboxgl.Marker[]>([]);
   const alertMarkersRef = useRef<mapboxgl.Marker[]>([]);
+  const flyToHandlerRef = useRef<((e: Event) => void) | null>(null);
+  const resetViewHandlerRef = useRef<(() => void) | null>(null);
   // "ok" once the map builds; otherwise show a graceful fallback instead of
   // letting Mapbox throw and take the whole page down.
   const [status, setStatus] = useState<"ok" | "no-token" | "error">("ok");
@@ -29,8 +31,14 @@ export default function TrafficMapPanel({ title, subtitle, badge, endpoint, laye
   useEffect(() => {
     if (!containerRef.current) return;
 
-    const token = process.env.NEXT_PUBLIC_MAPBOX_TOKEN;
-    if (!token) {
+    // A Mapbox public token always starts with "pk.". Checking only for a
+    // non-empty string is not enough: the committed .env ships a
+    // "YOUR_MAPBOX_PUBLIC_TOKEN_HERE" placeholder, which is truthy, so it slips
+    // past and Mapbox then fails at tile-fetch time with a 401. That failure is
+    // asynchronous, so the try/catch below never sees it and the panel sits
+    // blank with no explanation. Validate the shape up front instead.
+    const token = process.env.NEXT_PUBLIC_MAPBOX_TOKEN?.trim();
+    if (!token || !token.startsWith("pk.")) {
       setStatus("no-token");
       return;
     }
@@ -60,7 +68,35 @@ export default function TrafficMapPanel({ title, subtitle, badge, endpoint, laye
 
     setStatus("ok");
     mapRef.current = map;
+
+    // A syntactically valid but rejected token (revoked, wrong account, URL
+    // restriction not matching) only shows up here, as a 401 on the first tile
+    // or style request. Without this the panel would stay blank and silent.
+    map.on("error", (e: { error?: { status?: number; message?: string } }) => {
+      const status = e?.error?.status;
+      if (status === 401 || status === 403) {
+        console.error("Mapbox rejected the access token:", e.error?.message);
+        setStatus("error");
+      }
+    });
+
     map.addControl(new mapboxgl.NavigationControl({ showCompass: false }), "top-right");
+
+    // The header's exit search broadcasts a pick; both panels fly to it together
+    // so the two maps stay on the same place for comparison.
+    const onFlyTo = (e: Event) => {
+      const d = (e as CustomEvent<{ lng: number; lat: number }>).detail;
+      if (!d || !Number.isFinite(d.lng) || !Number.isFinite(d.lat)) return;
+      map.flyTo({ center: [d.lng, d.lat], zoom: 12.5, duration: 900 });
+    };
+    // "Whole corridor" returns both panels to the opening view.
+    const onResetView = () => {
+      map.flyTo({ center: [120.79, 14.94], zoom: 9.2, duration: 900 });
+    };
+    window.addEventListener("nlex:flyto", onFlyTo);
+    window.addEventListener("nlex:resetview", onResetView);
+    flyToHandlerRef.current = onFlyTo;
+    resetViewHandlerRef.current = onResetView;
 
     // Hide all other roads from the base map so ONLY the NLEX corridor is visible
     map.on("style.load", () => {
@@ -290,14 +326,14 @@ export default function TrafficMapPanel({ title, subtitle, badge, endpoint, laye
         const iconEmoji = props.type === "ACCIDENT" ? "🚗💥" : props.type === "POLICE" ? "👮" : props.type === "CONSTRUCTION" ? "🚧" : props.type === "JAM" ? "🛑" : "⚠️";
 
         const description = `
-          <div style="font-family: 'Inter', system-ui, -apple-system, sans-serif; padding: 10px; width: 220px; border-radius: 12px; background: white; box-shadow: 0 4px 20px rgba(0,0,0,0.08); color: #1e293b;">
+          <div style="font-family: 'Inter', system-ui, -apple-system, sans-serif; padding: 10px; width: 220px; border-radius: 12px; background: var(--bg-surface); box-shadow: 0 4px 20px rgba(0,0,0,0.18); color: var(--text-primary);">
             <div style="font-weight: 700; font-size: 13px; text-transform: uppercase; display: flex; align-items: center; gap: 6px; color: ${props.type === "ACCIDENT" ? "#b91c1c" : props.type === "POLICE" ? "#3b82f6" : props.type === "CONSTRUCTION" ? "#f97316" : "#eab308"
           }; margin-bottom: 4px;">
               <span>${iconEmoji}</span> ${typeLabel}
             </div>
-            <div style="font-size: 11px; font-weight: 600; color: #475569; margin-bottom: 6px;">${props.street || "NLEX"} ${props.city ? `(${props.city})` : ""}</div>
-            ${props.report_description ? `<div style="font-size: 11px; color: #334155; line-height: 1.4; background: #f8fafc; padding: 6px; border-radius: 6px; margin-bottom: 6px;">"${props.report_description}"</div>` : ""}
-            <div style="font-size: 10px; color: #94a3b8; border-top: 1px solid #f1f5f9; padding-top: 6px; display: flex; justify-content: space-between;">
+            <div style="font-size: 11px; font-weight: 600; color: var(--text-secondary); margin-bottom: 6px;">${props.street || "NLEX"} ${props.city ? `(${props.city})` : ""}</div>
+            ${props.report_description ? `<div style="font-size: 11px; color: var(--text-secondary); line-height: 1.4; background: var(--bg-surface-hover); padding: 6px; border-radius: 6px; margin-bottom: 6px;">"${props.report_description}"</div>` : ""}
+            <div style="font-size: 10px; color: var(--text-muted); border-top: 1px solid var(--border-default); padding-top: 6px; display: flex; justify-content: space-between;">
               <span>Reliability: <strong>${props.reliability || 0}/10</strong></span>
               <span>Confidence: <strong>${props.confidence || 0}/5</strong></span>
             </div>
@@ -557,13 +593,13 @@ export default function TrafficMapPanel({ title, subtitle, badge, endpoint, laye
                 <div style="font-weight: 700; font-size: 13px; display: flex; align-items: center; gap: 6px; color: #0891b2; margin-bottom: 4px;">
                   <span>🛣️</span> ${toll.name}
                 </div>
-                <div style="font-size: 11px; font-weight: 600; color: #475569; margin-bottom: 4px;">${toll.location}</div>
+                <div style="font-size: 11px; font-weight: 600; color: var(--text-secondary); margin-bottom: 4px;">${toll.location}</div>
                 <div style="display: inline-block; font-size: 9px; font-weight: 700; padding: 2px 6px; border-radius: 4px; background: #ecfeff; color: #0e7490; margin-bottom: 6px; letter-spacing: 0.3px;">${toll.type}</div>
-                <div style="font-size: 11px; color: #334155; line-height: 1.4; background: #f8fafc; padding: 8px; border-radius: 6px; margin-bottom: 6px; font-weight: 500;">
+                <div style="font-size: 11px; color: var(--text-secondary); line-height: 1.4; background: var(--bg-surface-hover); padding: 8px; border-radius: 6px; margin-bottom: 6px; font-weight: 500;">
                   ${toll.description}
                 </div>
                 <div style="font-size: 10px; color: #0891b2; border-top: 1px solid #e2e8f0; padding-top: 6px;">
-                  <strong>Toll System:</strong> <span style="color: #334155;">${toll.rates}</span>
+                  <strong>Toll System:</strong> <span style="color: var(--text-secondary);">${toll.rates}</span>
                 </div>
               </div>
             `;
@@ -599,8 +635,8 @@ export default function TrafficMapPanel({ title, subtitle, badge, endpoint, laye
               <div style="font-weight: 700; font-size: 13px; color: ${severityColor}; margin-bottom: 4px; display: flex; align-items: center; gap: 6px;">
                 🚗 ${severity} Jam
               </div>
-              <div style="font-size: 11px; font-weight: 600; color: #475569; margin-bottom: 6px;">${props.street || "NLEX Corridor"} ${props.city ? `(${props.city})` : ""}</div>
-              <div style="font-size: 11px; color: #334155; line-height: 1.5; border-top: 1px solid #f1f5f9; padding-top: 6px;">
+              <div style="font-size: 11px; font-weight: 600; color: var(--text-secondary); margin-bottom: 6px;">${props.street || "NLEX Corridor"} ${props.city ? `(${props.city})` : ""}</div>
+              <div style="font-size: 11px; color: var(--text-secondary); line-height: 1.5; border-top: 1px solid var(--border-default); padding-top: 6px;">
                 Avg Speed: <strong>${props.speed || 0} km/h</strong><br/>
                 Delay: <strong>${Math.round((props.delay_seconds || 0) / 60)} min</strong>
               </div>
@@ -614,8 +650,8 @@ export default function TrafficMapPanel({ title, subtitle, badge, endpoint, laye
               <div style="font-weight: 700; font-size: 13px; color: #a855f7; margin-bottom: 4px; display: flex; align-items: center; gap: 6px;">
                 🔮 Predicted Traffic
               </div>
-              <div style="font-size: 11px; font-weight: 600; color: #475569; margin-bottom: 6px;">Segment: ${props.segment_id || "NLEX"}</div>
-              <div style="font-size: 11px; color: #334155; line-height: 1.5; border-top: 1px solid #f1f5f9; padding-top: 6px;">
+              <div style="font-size: 11px; font-weight: 600; color: var(--text-secondary); margin-bottom: 6px;">Segment: ${props.segment_id || "NLEX"}</div>
+              <div style="font-size: 11px; color: var(--text-secondary); line-height: 1.5; border-top: 1px solid var(--border-default); padding-top: 6px;">
                 Congestion Index: <strong>${score}%</strong><br/>
                 Horizon: <strong>${props.horizon || "2h"}</strong>
               </div>
@@ -726,8 +762,8 @@ export default function TrafficMapPanel({ title, subtitle, badge, endpoint, laye
               <div style="font-weight: 700; font-size: 13px; text-transform: uppercase; display: flex; align-items: center; gap: 6px; color: ${color}; margin-bottom: 4px;">
                 <span>${iconEmoji}</span> ${typeLabel}
               </div>
-              <div style="font-size: 11px; font-weight: 600; color: #475569; margin-bottom: 6px;">${props.street || "NLEX"} ${props.city ? `(${props.city})` : ""}</div>
-              ${props.report_description ? `<div style="font-size: 12px; line-height: 1.4; color: #334155; margin-bottom: 8px;">"${props.report_description}"</div>` : ""}
+              <div style="font-size: 11px; font-weight: 600; color: var(--text-secondary); margin-bottom: 6px;">${props.street || "NLEX"} ${props.city ? `(${props.city})` : ""}</div>
+              ${props.report_description ? `<div style="font-size: 12px; line-height: 1.4; color: var(--text-secondary); margin-bottom: 8px;">"${props.report_description}"</div>` : ""}
               <div style="display: flex; gap: 12px; font-size: 10px; color: #64748b; font-weight: 500;">
                 <div>Reliability: ${props.reliability || 0}/10</div>
                 <div>Confidence: ${props.confidence || 0}/10</div>
@@ -749,7 +785,7 @@ export default function TrafficMapPanel({ title, subtitle, badge, endpoint, laye
       }
 
       const source = map.getSource("traffic") as GeoJSONSource;
-      const _pollingInterval = setInterval(async () => {
+      const pollingInterval = setInterval(async () => {
         try {
           const fresh = await fetch(endpoint, { cache: "no-store" }).then((r) => r.json());
           source.setData(fresh);
@@ -760,6 +796,11 @@ export default function TrafficMapPanel({ title, subtitle, badge, endpoint, laye
           // No-op polling fallback
         }
       }, 15000);
+
+      mapRef.current = map;
+      return () => {
+        clearInterval(pollingInterval);
+      };
     });
 
     return () => {
@@ -767,6 +808,14 @@ export default function TrafficMapPanel({ title, subtitle, badge, endpoint, laye
       activeMarkers.current.forEach(m => m.remove());
       activeMarkers.current = [];
 
+      if (flyToHandlerRef.current) {
+        window.removeEventListener("nlex:flyto", flyToHandlerRef.current);
+        flyToHandlerRef.current = null;
+      }
+      if (resetViewHandlerRef.current) {
+        window.removeEventListener("nlex:resetview", resetViewHandlerRef.current);
+        resetViewHandlerRef.current = null;
+      }
       map.remove();
       mapRef.current = null;
     };
@@ -793,14 +842,20 @@ export default function TrafficMapPanel({ title, subtitle, badge, endpoint, laye
               <>
                 <p className="map-fallback-title">Map unavailable</p>
                 <p className="map-fallback-body">
-                  A Mapbox access token is required. Add <code>NEXT_PUBLIC_MAPBOX_TOKEN</code> to
-                  <code>Front-End-Dashboard/.env.local</code> and restart the dev server.
+                  No Mapbox token is set. Put your token (it starts with <code>pk.</code>) in{" "}
+                  <code>NEXT_PUBLIC_MAPBOX_TOKEN</code> inside{" "}
+                  <code>Front-End-Dashboard/.env.local</code>, then restart the dev server. The
+                  committed <code>.env</code> ships a placeholder, which does not count as a token.
                 </p>
               </>
             ) : (
               <>
-                <p className="map-fallback-title">Map failed to load</p>
-                <p className="map-fallback-body">The map could not be initialized. Check the access token and console for details.</p>
+                <p className="map-fallback-title">Map token rejected</p>
+                <p className="map-fallback-body">
+                  Mapbox refused the token. It may be revoked, from another account, or restricted
+                  to URLs that do not include this one. Check the browser console for the exact
+                  error.
+                </p>
               </>
             )}
           </div>

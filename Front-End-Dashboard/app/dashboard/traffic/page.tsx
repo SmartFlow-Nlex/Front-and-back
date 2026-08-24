@@ -1,10 +1,14 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import { attachCategoryClick } from "../../../lib/chart-click";
+import { useChartTheme, applyChartTheme, seriesRamp, seriesPair } from "../../../lib/chart-theme";
 import ReactECharts from "echarts-for-react";
 import type { EChartsOption } from "echarts";
-import { TrendingUp } from "lucide-react";
+import { Activity, ArrowDownWideNarrow, ArrowUpNarrowWide, Building2, CalendarClock, Clock, Gauge, TrendingUp } from "lucide-react";
 import DashboardChart from "../../../components/dashboard/DashboardChart";
+import ChartSkeleton, { KpiSkeleton } from "../../../components/dashboard/ChartSkeleton";
+import RampKey from "../../../components/dashboard/RampKey";
 import PageHeader from "../../../components/dashboard/PageHeader";
 import PredictiveVolumeChart from "../../../components/dashboard/PredictiveVolumeChart";
 import PredictiveCongestionChart from "../../../components/dashboard/PredictiveCongestionChart";
@@ -14,14 +18,6 @@ import DateRangePicker from "./components/DateRangePicker";
 
 const BACKEND = process.env.NEXT_PUBLIC_BACKEND_URL ?? "http://localhost:4000";
 
-// Categorical hues (NB/SB and event emphasis)
-const BLUE = "#3e67ef";
-const ORANGE = "#e06b47";
-// Sequential ramp (magnitude: heatmap, plaza bar)
-const SEQ = ["#eef2fb", "#8fa8ee", "#3e67ef", "#1d3aa8"];
-// Severity ramp for speed (low speed = severe)
-const SEVERITY = ["#d0483e", "#e8a13a", "#1d9d61"];
-const GRAY = "#9aa4b8";
 
 const DOW_LABELS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 const DOW_ORDER = [1, 2, 3, 4, 5, 6, 0]; // Postgres dow (0=Sun) -> Mon-first
@@ -43,8 +39,14 @@ type Analytics = {
   byPlaza: { plaza: string; v: number }[];
   hourDow: { dow: number; hour: number; v: number }[];
   speedByHour: { hour: number; speed: number; jam_level: number }[];
-  eventImpact: { label: string; date: string; dayVolume: number; baseline: number; deviationPct: number | null }[];
-  holidayImpact: { label: string; deviationPct: number; occurrences: number; baseline: number; volume: number }[];
+  eventImpact: {
+    label: string; date: string; dayVolume: number; baseline: number; deviationPct: number | null;
+    plaza?: string; venueExit?: string; eventCount?: number; attendance?: number | null; onHoliday?: boolean; baselineDays?: number;
+  }[];
+  holidayImpact: {
+    label: string; deviationPct: number; occurrences: number; baseline: number; volume: number;
+    holidayType?: string; minBaselineDays?: number;
+  }[];
   holidayYearly: { label: string; year: number; pct: number; volume: number }[];
 };
 
@@ -163,6 +165,19 @@ function CustomSelect({ value, options, onChange }: { value: string; options: { 
 }
 
 export default function TrafficPage() {
+  // Chart furniture follows the active theme; series hues stay fixed.
+  const chartTheme = useChartTheme();
+
+  /* This tab's colour family. The ramp is ordinal — lightest to darkest — and
+     both modes are selected steps validated against their own surface, not an
+     automatic flip. A pair of nominal series takes the outer two steps, which is
+     where the separation margin lives. See lib/chart-theme. */
+  const RAMP = seriesRamp("traffic", chartTheme);
+  const [PAIR_A, PAIR_B] = seriesPair("traffic", chartTheme);
+  const SEQ = [chartTheme.seqLightest, ...RAMP];
+  // Speed is a status reading, not a series, so it keeps the reserved
+  // good/warning/critical colours rather than the tab hue.
+  const SEVERITY = ["#d0483e", "#e8a13a", "#1d9d61"];
   const [activeTab, setActiveTab] = useState<"Descriptive" | "Predictive" | "Prescriptive">("Descriptive");
 
   // Global filters (Row A)
@@ -175,6 +190,8 @@ export default function TrafficPage() {
   const [weather, setWeather] = useState<"all" | "dry" | "wet">("all");
 
   // Chart-local interactivity
+  const [plazaSort, setPlazaSort] = useState<"desc" | "asc">("desc");
+  const [impactSort, setImpactSort] = useState<"desc" | "asc">("desc");
   const [grain, setGrain] = useState<Granularity>("daily");
   const [splitDirection, setSplitDirection] = useState(false);
   const [impactMode, setImpactMode] = useState<"Events" | "Holidays">("Holidays");
@@ -261,7 +278,7 @@ export default function TrafficPage() {
     return { curAdt, volumeDeltaPct, peakHour, peakHourVolume, busiest, plazaTotal, congestionDelta, sparkline };
   }, [data]);
 
-  // ---------- Chart options ----------
+    // ---------- Chart options ----------
   const trendRows = useMemo(() => (data ? buildTrend(data, grain) : []), [data, grain]);
 
   const trendOption = useMemo<EChartsOption | null>(() => {
@@ -284,21 +301,23 @@ export default function TrafficPage() {
           ? (v: string) => v
           : (v: string) => v.slice(0, 7);
 
-    const FAINT = "#c6d2ef";
+    // The raw series behind a moving average is context, not a second identity,
+    // so it takes the ramp's lightest step rather than a hue of its own.
+    const FAINT = RAMP[0];
     const series: EChartsOption["series"] = splitDirection
       ? [
-        { name: "Northbound", type: "line", data: rows.map((r) => r.nb), symbol: "none", itemStyle: { color: BLUE }, lineStyle: { width: 2.5, color: BLUE }, endLabel: { show: true, formatter: "NB", color: BLUE, fontWeight: 700 } },
-        { name: "Southbound", type: "line", data: rows.map((r) => r.sb), symbol: "none", itemStyle: { color: ORANGE }, lineStyle: { width: 2.5, color: ORANGE }, endLabel: { show: true, formatter: "SB", color: ORANGE, fontWeight: 700 } },
+        { name: "Northbound", type: "line", data: rows.map((r) => r.nb), symbol: "none", itemStyle: { color: PAIR_A }, lineStyle: { width: 2.5, color: PAIR_A }, endLabel: { show: true, formatter: "NB", color: PAIR_A, fontWeight: 700 } },
+        { name: "Southbound", type: "line", data: rows.map((r) => r.sb), symbol: "none", itemStyle: { color: PAIR_B }, lineStyle: { width: 2.5, color: PAIR_B }, endLabel: { show: true, formatter: "SB", color: PAIR_B, fontWeight: 700 } },
       ]
       : window > 0
         ? [
           { name: grain === "hourly" ? "Hourly volume" : "Daily volume", type: "line", data: rows.map((r) => r.total), symbol: "none", itemStyle: { color: FAINT }, lineStyle: { width: 1, color: FAINT } },
-          { name: `${window === 24 ? "24-hour" : "7-day"} average`, type: "line", data: movingAverage(rows.map((r) => r.total), window), symbol: "none", itemStyle: { color: BLUE }, lineStyle: { width: 3, color: BLUE } },
+          { name: `${window === 24 ? "24-hour" : "7-day"} average`, type: "line", data: movingAverage(rows.map((r) => r.total), window), symbol: "none", itemStyle: { color: PAIR_A }, lineStyle: { width: 3, color: PAIR_A } },
         ]
-        : [{ name: "Volume", type: "line", data: rows.map((r) => r.total), symbol: rows.length <= 24 ? "circle" : "none", symbolSize: 7, itemStyle: { color: BLUE }, lineStyle: { width: 3, color: BLUE } }];
+        : [{ name: "Volume", type: "line", data: rows.map((r) => r.total), symbol: rows.length <= 24 ? "circle" : "none", symbolSize: 7, itemStyle: { color: PAIR_A }, lineStyle: { width: 3, color: PAIR_A } }];
 
     return {
-      grid: { left: 52, right: splitDirection ? 44 : 16, top: 44, bottom: 22 },
+      grid: { left: 52, right: splitDirection ? 44 : 16, top: 14, bottom: 52 },
       xAxis: {
         type: "category",
         data: labels,
@@ -308,7 +327,10 @@ export default function TrafficPage() {
       // scale:true so the weekly rhythm is visible instead of a flat line on a zero base
       yAxis: { type: "value", scale: true, splitNumber: 3, axisLabel: { formatter: (v: number) => fmtCompact(v), fontSize: 10 } },
       tooltip: { trigger: "axis", valueFormatter: (v) => (v == null ? "—" : fmtInt(Number(v))) },
-      legend: { show: !splitDirection && window > 0, top: 12, right: 8, itemWidth: 14, textStyle: { fontSize: 11 } },
+      // A legend whenever there is more than one line. The old condition hid it
+      // precisely when the chart split into northbound and southbound — the case
+      // that needs it most, since two lines with no key are unreadable.
+      legend: { show: splitDirection || window > 0, bottom: 0, left: "center", itemWidth: 14, itemHeight: 8, itemGap: 18, padding: 0, textStyle: { fontSize: 11 } },
       series,
     };
   }, [data, grain, splitDirection, trendRows]);
@@ -319,7 +341,7 @@ export default function TrafficPage() {
     const heatMax = Math.max(...data.hourDow.map((r) => r.v));
     return {
       // Legend lives in a slim strip below the plot, never on it
-      grid: { left: 40, right: 10, top: 6, bottom: 44 },
+      grid: { left: 40, right: 10, top: 6, bottom: 26 },
       xAxis: { type: "category", data: Array.from({ length: 24 }, (_, h) => fmtHour(h)), splitArea: { show: true }, axisLabel: { interval: 3, fontSize: 10 }, axisTick: { show: false } },
       // inverse:true puts Mon at the top, Sun at the bottom
       yAxis: { type: "category", data: DOW_LABELS, inverse: true, splitArea: { show: true }, axisLabel: { interval: 0, fontSize: 10 }, axisTick: { show: false } },
@@ -330,23 +352,26 @@ export default function TrafficPage() {
         },
       },
       visualMap: {
+        show: false,
         type: "continuous",
         min: 0,
         max: heatMax,
         calculable: false,
-        orient: "horizontal",
-        left: "center",
-        bottom: 0,
-        itemWidth: 8,
-        itemHeight: 110,
-        padding: 0,
-        inRange: { color: SEQ },
-        textStyle: { fontSize: 10 },
+        // The lightest step is the theme's 'empty' tone: near-white on light,
+        // near-black on dark, so low values recede in both instead of glowing.
+        inRange: { color: [chartTheme.seqLightest, ...SEQ.slice(1)] },
+        // The same neutral the speed chart uses when scrubbed. Keeping the ramp
+        // at low opacity left every cell a slightly different washed-out blue,
+        // which on the dark surface turned the grid into grey-blue mud and made
+        // the highlighted cells harder to pick out, not easier. One flat grey
+        // gives the lit band something uniform to stand against.
+        outOfRange: { color: chartTheme.axis },
         formatter: (v) => fmtCompact(Number(v)),
       },
-      series: [{ type: "heatmap", data: heatData, emphasis: { itemStyle: { borderColor: "#1d3aa8", borderWidth: 1 } } }],
+      series: [{ type: "heatmap", data: heatData, emphasis: { itemStyle: { borderColor: RAMP[2], borderWidth: 1 } } }],
     };
-  }, [data]);
+    // chartTheme is a dependency because the ramp's lightest step comes from it.
+  }, [data, chartTheme]);
 
   const plazaChart = useMemo<{
     option: EChartsOption;
@@ -357,25 +382,44 @@ export default function TrafficPage() {
     const top = data.byPlaza.slice(0, 10).map((r) => ({ ...r, isOthers: false }));
     const others = data.byPlaza.slice(10);
     const othersSum = others.reduce((s, r) => s + r.v, 0);
-    const rows = othersSum > 0 ? [...top, { plaza: `Others (${others.length})`, v: othersSum, isOthers: true }] : top;
-    const display = [...rows].reverse();
-    const maxV = rows[0]?.v ?? 1;
+    // `top` arrives largest-first. A category axis draws index 0 at the bottom,
+    // so reversing puts the largest at the top ("highest first") and leaving it
+    // as-is puts the smallest there ("lowest first").
+    const ranked = plazaSort === "desc" ? [...top].reverse() : [...top];
+    // "Others" is a residual bucket, not a plaza, so it is pinned to the bottom
+    // rather than sorted with the rest. Ranking it alongside them sent it to the
+    // top in ascending order, where the largest bar on the chart sat in the slot
+    // that means "smallest".
+    const othersRow = { plaza: `Others (${others.length})`, v: othersSum, isOthers: true };
+    const display = othersSum > 0 ? [othersRow, ...ranked] : ranked;
+    const rows = display;
+    // Scaled against the largest real plaza, not against the Others total.
+    const maxV = top[0]?.v ?? 1;
     return {
       rows: display,
       others,
       option: {
-        grid: { left: 120, right: 46, top: 2, bottom: 20 },
+        grid: { left: 120, right: 46, top: 8, bottom: 46 },
         xAxis: { type: "value", splitNumber: 3, axisLabel: { formatter: (v: number) => fmtCompact(v), fontSize: 10 } },
         // interval:0 — every plaza name must be readable, that IS the chart
         yAxis: { type: "category", data: display.map((r) => r.plaza), axisLabel: { interval: 0, fontSize: 10 }, axisTick: { show: false } },
-        tooltip: { trigger: "axis", valueFormatter: (v) => `${fmtInt(Number(v))} vehicles` },
+        tooltip: { trigger: "axis", axisPointer: { type: "shadow" }, valueFormatter: (v) => `${fmtInt(Number(v))} vehicles` },
+        legend: { show: true, bottom: 0, left: "center", itemWidth: 14, itemHeight: 8, itemGap: 18, padding: 0, textStyle: { fontSize: 11 } },
         series: [
           {
+            name: "Volume by plaza",
             type: "bar",
             data: display.map((r) => ({
               value: r.v,
-              // sequential single hue: darker = larger
-              itemStyle: { color: SEQ[Math.min(3, 1 + Math.floor((r.v / maxV) * 2.99))], borderRadius: [0, 3, 3, 0] },
+              itemStyle: {
+                // The residual bucket is neutral. On the ramp it came out darkest
+                // of all — the shade this chart uses for the busiest plaza — which
+                // is the wrong signal for a row that is not a plaza at all.
+                color: r.isOthers
+                  ? chartTheme.axis
+                  : SEQ[Math.min(3, 1 + Math.floor((r.v / maxV) * 2.99))],
+                borderRadius: [0, 3, 3, 0],
+              },
             })),
             barMaxWidth: 12,
             barCategoryGap: "25%",
@@ -383,17 +427,20 @@ export default function TrafficPage() {
         ],
       },
     };
-  }, [data]);
+  }, [data, plazaSort, chartTheme]);
 
   const speedOption = useMemo<EChartsOption | null>(() => {
     if (!data || data.speedByHour.length === 0) return null;
     const speeds = data.speedByHour.map((r) => r.speed);
-    const CONGESTION_THRESHOLD = 20; // km/h — below this counts as heavy congestion
-    const yMax = Math.max(CONGESTION_THRESHOLD + 5, Math.ceil(Math.max(...speeds) / 5) * 5);
+    // Framed on the data rather than on zero. Every hour here sits well under the
+    // 20 km/h congestion threshold, so an axis stretched to hold that line spent
+    // most of its height on empty space the readings never reach.
+    const lo = Math.max(0, Math.floor(Math.min(...speeds)) - 1);
+    const hi = Math.ceil(Math.max(...speeds)) + 1;
     return {
-      grid: { left: 36, right: 14, top: 18, bottom: 20 },
+      grid: { left: 36, right: 14, top: 10, bottom: 26 },
       xAxis: { type: "category", data: data.speedByHour.map((r) => fmtHour(r.hour)), axisLabel: { interval: 3, fontSize: 10 }, axisTick: { show: false } },
-      yAxis: { type: "value", min: 0, max: yMax, splitNumber: 3, axisLabel: { formatter: "{value}", fontSize: 10 }, name: "km/h", nameGap: 6, nameTextStyle: { fontSize: 10 } },
+      yAxis: { type: "value", min: lo, max: hi, splitNumber: 4, axisLabel: { formatter: "{value}", fontSize: 10 }, name: "km/h", nameGap: 6, nameTextStyle: { fontSize: 10 } },
       tooltip: {
         trigger: "axis",
         formatter: (p) => {
@@ -402,25 +449,29 @@ export default function TrafficPage() {
           return `${fmtHour(r.hour)}<br/>Avg speed in jams: <b>${r.speed} km/h</b><br/>Avg jam level: ${r.jam_level} / 5`;
         },
       },
-      visualMap: { show: false, type: "continuous", seriesIndex: 0, min: Math.min(...speeds), max: Math.max(...speeds), inRange: { color: SEVERITY } },
+      visualMap: {
+        show: false, type: "continuous", seriesIndex: 0, calculable: false,
+        min: Math.min(...speeds), max: Math.max(...speeds), inRange: { color: SEVERITY },
+        // Scrubbing greys the rest of the line out. A neutral reads more clearly
+        // as "not this" on a single line than a washed-out version of the same
+        // ramp, which just looks like a lighter reading.
+        outOfRange: { color: chartTheme.axis },
+      },
       series: [
         {
           type: "line",
           data: speeds,
+          smooth: 0.35,
           symbol: "circle",
-          symbolSize: 5,
-          lineStyle: { width: 2.5 },
-          markLine: {
-            symbol: "none",
-            silent: true,
-            lineStyle: { color: GRAY, width: 1, type: "dashed" },
-            label: { formatter: "20 km/h — congestion threshold", position: "insideEndTop", fontSize: 9, color: GRAY },
-            data: [{ yAxis: CONGESTION_THRESHOLD }],
-          },
+          symbolSize: 7,
+          // A ring around each point so it stays visible where the line runs
+          // through a step of the same colour.
+          itemStyle: { borderColor: chartTheme.tooltipBg, borderWidth: 1.5 },
+          lineStyle: { width: 3.5 },
         },
       ],
     };
-  }, [data]);
+  }, [data, chartTheme]);
 
   type ImpactRow = {
     label: string;
@@ -445,14 +496,15 @@ export default function TrafficPage() {
     const display = [...rows]
       .sort((a, b) => Math.abs(b.pct) - Math.abs(a.pct))
       .slice(0, 9)
-      .sort((a, b) => a.pct - b.pct);
+      .sort((a, b) => (impactSort === "desc" ? a.pct - b.pct : b.pct - a.pct));
     return {
       rows: display,
       option: {
-        grid: { left: 128, right: 42, top: 2, bottom: 20 },
+        grid: { left: 128, right: 42, top: 8, bottom: 46 },
         xAxis: { type: "value", splitNumber: 3, axisLabel: { formatter: (v: number) => `${v}%`, fontSize: 10 } },
         yAxis: { type: "category", data: display.map((r) => r.label), axisLabel: { interval: 0, fontSize: 10 }, axisTick: { show: false } },
         tooltip: {
+          axisPointer: { type: "shadow" },
           formatter: (p) => {
             const i = (p as { dataIndex: number }).dataIndex;
             const r = display[i];
@@ -466,28 +518,35 @@ export default function TrafficPage() {
             return tip;
           },
         },
+        legend: { show: true, bottom: 0, left: "center", itemWidth: 14, itemHeight: 8, itemGap: 18, padding: 0, textStyle: { fontSize: 11 } },
         series: [
+          // Two zero-width entries purely so the legend can name what the two bar
+          // colours mean; the real bars are the third series below.
+          { name: "Above baseline", type: "bar", data: [], itemStyle: { color: PAIR_B } },
+          { name: "Below baseline", type: "bar", data: [], itemStyle: { color: PAIR_A } },
           {
+            name: "Deviation",
             type: "bar",
             data: display.map((r) => ({
               value: r.pct,
-              itemStyle: { color: r.pct >= 0 ? ORANGE : BLUE, borderRadius: r.pct >= 0 ? [0, 4, 4, 0] : [4, 0, 0, 4] },
+              itemStyle: { color: r.pct >= 0 ? PAIR_B : PAIR_A, borderRadius: r.pct >= 0 ? [0, 4, 4, 0] : [4, 0, 0, 4] },
             })),
             barMaxWidth: 12,
-            markLine: { symbol: "none", silent: true, lineStyle: { color: GRAY, width: 1 }, data: [{ xAxis: 0 }], label: { show: false } },
+            markLine: { symbol: "none", silent: true, lineStyle: { color: chartTheme.axis, width: 1 }, data: [{ xAxis: 0 }], label: { show: false } },
           },
         ],
       },
     };
-  }, [data, impactMode]);
+  }, [data, impactMode, impactSort]);
 
-  const sparkOption = useMemo<EChartsOption | null>(() => {
+  // Separate from `takeaways` because it depends on the Events/Holidays toggle.
+    const sparkOption = useMemo<EChartsOption | null>(() => {
     if (!derived || derived.sparkline.length === 0) return null;
     return {
       grid: { left: 0, right: 0, top: 2, bottom: 2 },
       xAxis: { type: "category", show: false, data: derived.sparkline.map((_, i) => i) },
       yAxis: { type: "value", show: false, min: "dataMin" },
-      series: [{ type: "line", data: derived.sparkline, symbol: "none", lineStyle: { width: 1.5, color: BLUE }, areaStyle: { color: "rgba(62,103,239,.12)" } }],
+      series: [{ type: "line", data: derived.sparkline, symbol: "none", lineStyle: { width: 1.5, color: PAIR_A }, areaStyle: { color: RAMP[0], opacity: 0.18 } }],
     };
   }, [derived]);
 
@@ -599,13 +658,20 @@ export default function TrafficPage() {
   const showEventDetail = (e: Analytics["eventImpact"][number]) => {
     setDetail({
       title: e.label,
-      subtitle: `Philippine Arena event · ${weekdayOf(e.date)}, ${e.date}`,
+      subtitle: `${e.eventCount && e.eventCount > 1 ? `${e.eventCount} events` : "Event"} · ${weekdayOf(e.date)}, ${e.date}`,
       rows: [
-        ["CDV plaza volume that day", `${fmtInt(e.dayVolume)} vehicles`],
+        [`${e.plaza ?? "Plaza"} entries that day`, `${fmtInt(e.dayVolume)} vehicles`],
         ["Same-weekday baseline", `${fmtInt(e.baseline)} vehicles`],
         ["Deviation", e.deviationPct != null ? fmtPct(e.deviationPct) : "—"],
+        ...(e.attendance ? ([["Reported attendance", `${fmtInt(e.attendance)}`]] as [string, string][]) : []),
+        ...(e.baselineDays ? ([["Days behind baseline", `${e.baselineDays}`]] as [string, string][]) : []),
+        ...(e.onHoliday ? ([["Note", "This date is also a holiday"]] as [string, string][]) : []),
       ],
-      note: "Baseline = average CDV volume on the same weekday within ±45 days, excluding other event days.",
+      note: `${
+        e.onHoliday
+          ? "This date is also a public holiday, so the deviation reflects the holiday as much as the event. "
+          : ""
+      }Baseline = average entries at ${e.plaza ?? "the same exit"} on the same weekday within ±45 days, excluding other event days and holidays. Figures are NLEX entries, so they capture traffic joining the expressway at the venue's own exit rather than arrivals.`,
     });
   };
 
@@ -615,12 +681,13 @@ export default function TrafficPage() {
       title: h.label,
       subtitle: "Holiday traffic vs normal days",
       rows: [
+        ...(h.holidayType ? ([["Holiday type", h.holidayType]] as [string, string][]) : []),
         ["Avg holiday volume", h.volume > 0 ? `${fmtInt(h.volume)} vehicles` : "—"],
         ["Same-weekday baseline", h.baseline > 0 ? `${fmtInt(h.baseline)} vehicles` : "—"],
         ["Avg deviation (all years)", fmtPct(h.deviationPct)],
         ...yearly.map((y): [string, string] => [String(y.year), `${fmtPct(y.pct)} · ${fmtInt(y.volume)} vehicles`]),
       ],
-      note: "Baseline = average volume on the same weekday on non-holiday dates. Special working days excluded.",
+      note: "Each occurrence is compared with its own local baseline: the average volume on the same weekday within ±45 days of that date, excluding holidays and event days. Comparing locally rather than against all-history keeps the 2020–2021 pandemic period from distorting other years.",
     });
   };
 
@@ -632,44 +699,133 @@ export default function TrafficPage() {
     else if (r.holiday) showHolidayDetail(r.holiday);
   };
 
-  const chartFrame = (option: EChartsOption | null, emptyNote: string, onClick?: (p: never) => void) => {
-    if (loading && !data) return <div className={styles.placeholder}>Loading…</div>;
+  // `categoryFallback: false` for charts whose handler needs the native event
+  // payload (the heatmap reads p.value as [hour, dow, volume]); a synthesised
+  // { dataIndex } would not satisfy it.
+  const chartFrame = (
+    option: EChartsOption | null,
+    emptyNote: string,
+    onClick?: (p: never) => void,
+    categoryFallback = true,
+    // Lets a caller keep the instance so it can drive the chart from outside —
+    // the colour keys use it to highlight a band.
+    onReady?: (chart: unknown) => void,
+  ) => {
+    if (loading && !data) return <ChartSkeleton />;
     if (error) return <div className={styles.placeholder}>Live data unavailable — is the backend running on port 4000?</div>;
     if (!option) return <div className={styles.placeholder}>{emptyNote}</div>;
     return (
       <ReactECharts
-        option={option}
+        option={applyChartTheme(option, chartTheme)}
         notMerge
         lazyUpdate
         style={{ width: "100%", height: "100%" }}
         opts={{ renderer: "canvas" }}
         onEvents={onClick ? { click: onClick as (p: unknown) => void } : undefined}
+        // Lines are drawn with symbol:"none", so they have no clickable points
+        // and ECharts' item click never fires with the right index. Resolve the
+        // category from the cursor position instead.
+        onChartReady={(chart) => {
+          if (onClick && categoryFallback) attachCategoryClick(chart as never, onClick as never);
+          onReady?.(chart);
+        }}
       />
     );
   };
 
-  const kpiValue = (v: string | null) => (loading && !data ? "…" : v ?? "—");
+  // A skeleton rather than an ellipsis: the tile keeps its height, so the KPI
+  // row does not resize under the cursor as the numbers arrive.
+  /* Scrubbing a colour key highlights the matching part of its chart.
+
+     The visualMaps are still there, just not drawn — so selectDataRange, the
+     action the visible control used to fire, still works. Narrowing the range
+     leaves matching cells at full strength and fades the rest, which is the
+     highlight the old visualMap gave and the static strip had lost. */
+  const heatChart = useRef<unknown>(null);
+  const speedChart = useRef<unknown>(null);
+
+  const scrub = (
+    ref: React.MutableRefObject<unknown>,
+    lo: number,
+    hi: number,
+  ) => (t: number | null) => {
+    const chart = ref.current as
+      | { dispatchAction: (a: Record<string, unknown>) => void }
+      | null;
+    if (!chart) return;
+    if (t == null) {
+      chart.dispatchAction({ type: "selectDataRange", visualMapIndex: 0, selected: [lo, hi] });
+      return;
+    }
+    // A band rather than a point: an exact value would match almost nothing.
+    const v = lo + t * (hi - lo);
+    const pad = (hi - lo) * 0.08;
+    chart.dispatchAction({
+      type: "selectDataRange",
+      visualMapIndex: 0,
+      selected: [Math.max(lo, v - pad), Math.min(hi, v + pad)],
+    });
+  };
+
+  /* The key needs the same domain the chart coloured against, or pointing at a
+     shade would report a value the heatmap never used. */
+  const heatMaxValue = useMemo(
+    () => (data ? Math.max(0, ...data.hourDow.map((r) => r.v)) : 0),
+    [data],
+  );
+  const speedRange = useMemo<[number, number]>(() => {
+    const sp = (data?.speedByHour ?? []).map((r) => r.speed).filter((v) => v > 0);
+    return sp.length ? [Math.min(...sp), Math.max(...sp)] : [0, 0];
+  }, [data]);
+
+  const kpiValue = (v: string | null) =>
+    loading && !data ? <KpiSkeleton /> : (v ?? "—");
 
   // ---------- Predictive / Prescriptive share the same shell ----------
   if (activeTab !== "Descriptive") {
     return (
-      <section className={styles.page}>
+      <section className={`${styles.page} viz-traffic`}>
         <PageHeader icon={TrendingUp} title="Traffic Overview" subtitle="Volume, congestion, and speed patterns across NLEX" />
         <div className={styles.filterRow} style={{ flexWrap: "wrap", rowGap: 8 }}>
-          {/* Predictive carries Weather control */}
+          {/* Predictive carries the same Range/Weather controls as Descriptive */}
           {activeTab === "Predictive" && (
-            <div className={styles.filterGroup}>
-              <svg width="15" height="15" viewBox="0 0 16 16" fill="none" style={{ color: "var(--text-muted)" }}><path d="M4.5 11.5a3 3 0 1 1 .4-5.97 4 4 0 0 1 7.75 1.1A2.5 2.5 0 0 1 12 11.5H4.5z" stroke="currentColor" strokeWidth="1.4" strokeLinejoin="round" /><path d="M6 13.2v1M9 13.2v1M12 13.2v1" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" /></svg>
-              <span className={styles.filterLabel}>Weather</span>
-              <div className={styles.segmented}>
-                {(["all", "dry", "wet"] as const).map((w) => (
-                  <button key={w} className={weather === w ? "active" : ""} onClick={() => setWeather(w)}>
-                    {weather === w && <svg width="12" height="12" viewBox="0 0 16 16" fill="none" style={{ marginRight: 4, marginBottom: -1 }}><path d="M3.5 8.5l3 3 6-7" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" /></svg>}
-                    {w === "all" ? "All" : w === "dry" ? "Dry" : "Wet"}
-                  </button>
-                ))}
+            <>
+              <div className={styles.filterGroup}>
+                <svg width="15" height="15" viewBox="0 0 16 16" fill="none" style={{ color: "var(--text-muted)" }}><rect x="2" y="2" width="12" height="12" rx="3" stroke="currentColor" strokeWidth="1.4" /><path d="M2 6h12" stroke="currentColor" strokeWidth="1.4" /><path d="M5.5 2V4M10.5 2V4" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" /></svg>
+                <span className={styles.filterLabel}>Range</span>
+                <div className={styles.segmented}>
+                  {(["3", "12", "all", "custom"] as const).map((m) => (
+                    <button key={m} className={rangeMode === m ? "active" : ""} onClick={() => setRangeMode(m)}>
+                      {rangeMode === m && <svg width="12" height="12" viewBox="0 0 16 16" fill="none" style={{ marginRight: 4, marginBottom: -1 }}><path d="M3.5 8.5l3 3 6-7" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" /></svg>}
+                      {m === "3" ? "3 mo" : m === "12" ? "12 mo" : m === "all" ? "All" : "Custom"}
+                    </button>
+                  ))}
+                </div>
+                {rangeMode === "custom" && (
+                  <DateRangePicker
+                    startDate={customFrom}
+                    endDate={customTo}
+                    onChange={(start, end) => {
+                      setCustomFrom(start);
+                      setCustomTo(end);
+                    }}
+                  />
+                )}
               </div>
-            </div>
+
+              <div className={styles.filterGroup}>
+                <svg width="15" height="15" viewBox="0 0 16 16" fill="none" style={{ color: "var(--text-muted)" }}><path d="M4.5 11.5a3 3 0 1 1 .4-5.97 4 4 0 0 1 7.75 1.1A2.5 2.5 0 0 1 12 11.5H4.5z" stroke="currentColor" strokeWidth="1.4" strokeLinejoin="round" /><path d="M6 13.2v1M9 13.2v1M12 13.2v1" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" /></svg>
+                <span className={styles.filterLabel}>Weather</span>
+                <div className={styles.segmented}>
+                  {(["all", "dry", "wet"] as const).map((w) => (
+                    <button key={w} className={weather === w ? "active" : ""} onClick={() => setWeather(w)}>
+                      {weather === w && <svg width="12" height="12" viewBox="0 0 16 16" fill="none" style={{ marginRight: 4, marginBottom: -1 }}><path d="M3.5 8.5l3 3 6-7" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" /></svg>}
+                      {w === "all" ? "All" : w === "dry" ? "Dry" : "Wet"}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            </>
           )}
           {activeTab === "Prescriptive" && <span className={styles.filterLabel}>Projected impact of traffic strategies</span>}
           <span className={styles.spacer} />
@@ -712,7 +868,7 @@ export default function TrafficPage() {
   }
 
   return (
-    <section className={styles.page}>
+    <section className={`${styles.page} viz-traffic`}>
       <PageHeader icon={TrendingUp} title="Traffic Overview" subtitle="Volume, congestion, and speed patterns across NLEX" />
 
       {/* Row A — global filters */}
@@ -769,6 +925,7 @@ export default function TrafficPage() {
       {/* Row B — KPI tiles */}
       <div className={styles.kpiRow}>
         <article className={styles.kpiTile}>
+          <span className={styles.kpiIcon} aria-hidden="true"><Activity size={15} /></span>
           <h3>Total Volume</h3>
           <div className={styles.kpiValue} title={data ? `${fmtInt(data.kpis.totalVolume)} vehicles` : undefined}>
             {kpiValue(data ? fmtCompact(data.kpis.totalVolume) : null)}
@@ -781,6 +938,7 @@ export default function TrafficPage() {
           </p>
         </article>
         <article className={styles.kpiTile}>
+          <span className={styles.kpiIcon} aria-hidden="true"><CalendarClock size={15} /></span>
           <h3>Avg Daily Volume</h3>
           <div className={styles.kpiValue}>{kpiValue(derived ? fmtInt(derived.curAdt) : null)}</div>
           <div className={styles.sparkBox}>
@@ -788,11 +946,13 @@ export default function TrafficPage() {
           </div>
         </article>
         <article className={styles.kpiTile}>
+          <span className={styles.kpiIcon} aria-hidden="true"><Clock size={15} /></span>
           <h3>Peak Hour (Weekdays)</h3>
           <div className={styles.kpiValue}>{kpiValue(derived ? fmtHour(derived.peakHour) : null)}</div>
           <p className={styles.kpiHint}>{derived ? `${fmtInt(derived.peakHourVolume)} vehicles/hr avg` : "—"}</p>
         </article>
         <article className={styles.kpiTile}>
+          <span className={styles.kpiIcon} aria-hidden="true"><Building2 size={15} /></span>
           <h3>Busiest Plaza</h3>
           <div className={styles.kpiValue}>{kpiValue(derived?.busiest ? derived.busiest.plaza : null)}</div>
           <p className={styles.kpiHint}>
@@ -800,6 +960,7 @@ export default function TrafficPage() {
           </p>
         </article>
         <article className={styles.kpiTile}>
+          <span className={styles.kpiIcon} aria-hidden="true"><Gauge size={15} /></span>
           <h3>Congestion Index</h3>
           <div className={styles.kpiValue}>{kpiValue(data?.kpis.congestionIndex != null ? `${data.kpis.congestionIndex.toFixed(2)} / 5` : null)}</div>
           <p className={styles.kpiHint}>
@@ -884,7 +1045,16 @@ export default function TrafficPage() {
             <h3>Average Volume by Hour × Day of Week</h3>
           </div>
         </div>
-        <div className={styles.chartBody}>{chartFrame(heatmapOption, "No data for the selected filters", onHeatmapClick)}</div>
+        <div className={styles.chartBody}>{chartFrame(heatmapOption, "No data for the selected filters", onHeatmapClick, false, (c) => { heatChart.current = c; })}</div>
+        <RampKey
+          colors={SEQ}
+          min={0}
+          max={heatMaxValue}
+          format={(v) => `${fmtCompact(v)} vehicles`}
+          lowLabel="Quieter"
+          highLabel="Busier"
+          onScrub={scrub(heatChart, 0, heatMaxValue)}
+        />
       </article>
 
       <article className={`${styles.chartCard} ${styles.chart3}`}>
@@ -892,6 +1062,15 @@ export default function TrafficPage() {
           <div className={styles.headText}>
             <h3>Volume by Plaza</h3>
           </div>
+          <button
+            type="button"
+            className={styles.sortBtn}
+            onClick={() => setPlazaSort(plazaSort === "desc" ? "asc" : "desc")}
+            title={plazaSort === "desc" ? "Sorted highest first — click for lowest first" : "Sorted lowest first — click for highest first"}
+            aria-label={`Sort order: ${plazaSort === "desc" ? "highest first" : "lowest first"}. Activate to reverse.`}
+          >
+            {plazaSort === "desc" ? <ArrowDownWideNarrow size={15} /> : <ArrowUpNarrowWide size={15} />}
+          </button>
           <button className={styles.secondaryButton} onClick={() => setAllPlazasOpen(true)}>
             View all plazas
             <svg width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M6 12l4-4-4-4" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" /></svg>
@@ -907,14 +1086,32 @@ export default function TrafficPage() {
             <h3>Average Speed in Jams by Hour</h3>
           </div>
         </div>
-        <div className={styles.chartBody}>{chartFrame(speedOption, "No congestion data in the selected range", onSpeedClick)}</div>
+        <div className={styles.chartBody}>{chartFrame(speedOption, "No congestion data in the selected range", onSpeedClick, true, (c) => { speedChart.current = c; })}</div>
+        <RampKey
+          colors={SEVERITY}
+          min={speedRange[0]}
+          max={speedRange[1]}
+          format={(v) => `${v.toFixed(0)} km/h`}
+          lowLabel="Slower"
+          highLabel="Faster"
+          onScrub={scrub(speedChart, speedRange[0], speedRange[1])}
+        />
       </article>
 
       <article className={`${styles.chartCard} ${styles.chart5}`}>
         <div className={styles.chartHead}>
           <div className={styles.headText}>
-            <h3>{impactMode === "Events" ? "Arena Event Impact (CDV Plaza)" : "Holiday Impact vs Normal Days"}</h3>
+            <h3>{impactMode === "Events" ? "Arena Event Impact (venue exit entries)" : "Holiday Impact vs Normal Days"}</h3>
           </div>
+          <button
+            type="button"
+            className={styles.sortBtn}
+            onClick={() => setImpactSort(impactSort === "desc" ? "asc" : "desc")}
+            title={impactSort === "desc" ? "Sorted highest first — click for lowest first" : "Sorted lowest first — click for highest first"}
+            aria-label={`Sort order: ${impactSort === "desc" ? "highest first" : "lowest first"}. Activate to reverse.`}
+          >
+            {impactSort === "desc" ? <ArrowDownWideNarrow size={15} /> : <ArrowUpNarrowWide size={15} />}
+          </button>
           <button className={styles.secondaryButton} onClick={() => setImpactListOpen(true)}>
             View all
             <svg width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M6 12l4-4-4-4" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" /></svg>
@@ -1011,7 +1208,7 @@ export default function TrafficPage() {
                 <h3>{impactMode === "Events" ? "Arena Events — Full List" : "Holidays — Full List"}</h3>
                 <p>
                   {impactMode === "Events"
-                    ? `${data.eventImpact.length} events with CDV traffic data · click a row for details`
+                    ? `${data.eventImpact.length} events vs same-weekday baseline · click a row for details`
                     : `${data.holidayImpact.length} holidays · click a row for details`}
                 </p>
               </div>
@@ -1023,7 +1220,7 @@ export default function TrafficPage() {
               {impactMode === "Events" ? (
                 <table className={styles.plazaTable}>
                   <thead>
-                    <tr><th>Date</th><th>Event</th><th>CDV volume</th><th>Baseline</th><th>Deviation</th></tr>
+                    <tr><th>Date</th><th>Event</th><th>Plaza volume</th><th>Baseline</th><th>Deviation</th></tr>
                   </thead>
                   <tbody>
                     {data.eventImpact.map((e) => (

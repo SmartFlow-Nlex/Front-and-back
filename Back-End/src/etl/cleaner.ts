@@ -82,7 +82,7 @@ function isNlexPlaza(name: string | null | undefined): boolean {
 /**
  * Extract numeric km value from strings like "Km 79+400", "Km. 14+200", "KM14+400"
  */
-function extractKmPost(location: string | null | undefined): number | null {
+export function extractKmPost(location: string | null | undefined): number | null {
   if (!location || typeof location !== "string") return null;
   const match = location.match(/km\.?\s*(\d+)/i);
   return match ? parseInt(match[1], 10) : null;

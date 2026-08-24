@@ -88,6 +88,21 @@ export async function loadData(transformResult: TransformResult): Promise<LoadRe
     }
   }
 
+  // The dashboard reads traffic volume through the nlex_traffic_volume
+  // materialized view, so a bronze insert stays invisible until it is
+  // refreshed. Do this once after the batches, not per batch.
+  if (totalInserted > 0 && transformResult.refreshMaterializedView) {
+    try {
+      await db.query(`REFRESH MATERIALIZED VIEW ${transformResult.refreshMaterializedView}`);
+    } catch (err: any) {
+      errors.push(
+        `Rows loaded, but refreshing materialized view ` +
+          `'${transformResult.refreshMaterializedView}' failed: ${err.message}. ` +
+          `The new rows will not appear on the dashboard until it is refreshed.`
+      );
+    }
+  }
+
   return {
     tableName,
     rowsInserted: totalInserted,

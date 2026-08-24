@@ -37,6 +37,8 @@ const STATE_META: Record<State, { rank: number; color: string; text: string; lab
 const LOW_CONF = 0.8;
 
 type CellItem = { value: [number, number, number]; state: State; conf: number; label: { color: string } };
+const BACKEND = process.env.NEXT_PUBLIC_BACKEND_URL ?? "http://localhost:4000";
+
 type Alert = { segment: string; state: State; from: number; to: number; conf: number };
 
 export default function PredictiveCongestionChart() {
@@ -45,10 +47,10 @@ export default function PredictiveCongestionChart() {
 
   useEffect(() => {
     let cancelled = false;
-    fetch("http://localhost:4000/api/traffic/forecast")
+    fetch(`${BACKEND}/api/traffic/forecast`)
       .then((r) => r.json())
       .then((json) => {
-        if (cancelled || !json.success || !json.data.congestion) return;
+        if (cancelled || !json.success || !json.data?.congestion) return;
         setRaw(json.data.congestion as RawRow[]);
       })
       .catch((err) => console.error("Failed to fetch ML congestion forecast", err));

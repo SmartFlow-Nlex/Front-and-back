@@ -14,12 +14,31 @@ import {
 import { saveAuditEventInDb } from "../services/audit-log.service.js";
 
 // Fire-and-forget audit entry; never blocks or fails the actual operation.
-const audit = (req: Request, action: string, targetId: string, details: Record<string, unknown>) => {
+type AuditExtra = {
+  from_status?: string | null;
+  to_status?: string | null;
+  outcome?: string;
+  details?: Record<string, unknown>;
+};
+
+// Fire-and-forget audit entry; never blocks or fails the actual operation.
+// The state transition is passed explicitly: `from` is known here at the call
+// site and used to be discarded, which left the log unable to answer how long a
+// schedule sat in a given status.
+const audit = (req: Request, action: string, targetId: string, extra: AuditExtra = {}) => {
   void saveAuditEventInDb({
-    user_id: req.header("x-user") ?? "dashboard",
+    user_id: req.header("x-user") ?? req.header("x-user-email") ?? "unknown",
+    actor_role: req.header("x-user-role") ?? undefined,
     action,
+    module: "maintenance",
+    entity_type: "schedule",
+    entity_id: targetId,
     target_resource: `maintenance:${targetId}`,
-    details,
+    request_id: req.header("x-request-id") ?? undefined,
+    from_status: extra.from_status ?? null,
+    to_status: extra.to_status ?? null,
+    outcome: extra.outcome,
+    details: extra.details ?? {},
   });
 };
 
@@ -38,12 +57,16 @@ export const createSchedule = async (req: Request, res: Response) => {
     return res.status(503).json({ success: false, message: "Could not save schedule: database not reachable" });
   }
   audit(req, "maintenance.schedule_created", dbRow.id, {
+    outcome: "created",
+    to_status: dbRow.status ?? "scheduled",
+    details: {
     title: parsed.data.title,
     startKm: parsed.data.startKm,
     endKm: parsed.data.endKm,
     direction: parsed.data.direction,
     startsAt: parsed.data.startsAt,
     endsAt: parsed.data.endsAt,
+    },
   });
   res.status(201).json({ success: true, source: "database", data: dbRow });
 };
@@ -73,11 +96,15 @@ export const updateSchedule = async (req: Request, res: Response) => {
     return res.status(404).json({ success: false, message: "Schedule not found" });
   }
   audit(req, "maintenance.schedule_edited", req.params.id, {
+    outcome: "revised",
+    to_status: ("row" in result && result.row ? result.row.status : null) ?? null,
+    details: {
     title: parsed.data.title,
     startKm: parsed.data.startKm,
     endKm: parsed.data.endKm,
     startsAt: parsed.data.startsAt,
     endsAt: parsed.data.endsAt,
+    },
   });
   res.json({ success: true, source: "database", data: result.row });
 };
@@ -108,9 +135,18 @@ export const updateScheduleStatus = async (req: Request, res: Response) => {
     });
   }
   audit(req, "maintenance.status_changed", req.params.id, {
-    to: parsed.data.status,
-    title: result.row.title,
-    ...(parsed.data.reason ? { reason: parsed.data.reason } : {}),
+    // The service reads the prior status before writing; returning it means the
+    // transition is recorded from the real value rather than inferred.
+    from_status: ("from" in result ? String(result.from) : null),
+    to_status: parsed.data.status,
+    outcome:
+      parsed.data.status === "cancelled" ? "rejected"
+      : parsed.data.status === "completed" ? "approved"
+      : "updated",
+    details: {
+      title: result.row.title,
+      ...(parsed.data.reason ? { reason: parsed.data.reason } : {}),
+    },
   });
   res.json({ success: true, source: "database", data: result.row });
 };
@@ -121,6 +157,6 @@ export const deleteSchedule = async (req: Request, res: Response) => {
   if (!success) {
     return res.status(503).json({ success: false, message: "Could not delete schedule: database not reachable" });
   }
-  audit(req, "maintenance.schedule_deleted", req.params.id, {});
+  audit(req, "maintenance.schedule_deleted", req.params.id, { outcome: "deleted" });
   res.json({ success: true, source: "database", message: "Deleted" });
 };

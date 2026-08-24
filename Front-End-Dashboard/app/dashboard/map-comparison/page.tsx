@@ -10,10 +10,40 @@ import type { Feature } from "geojson";
 import TrafficMapPanel from "../../../components/maps/TrafficMapPanel";
 import PageHeader from "../../../components/dashboard/PageHeader";
 
+const BACKEND = process.env.NEXT_PUBLIC_BACKEND_URL ?? "http://localhost:4000";
+
+import { displayExitName, useNlexExits, type NlexExit } from "../../../lib/nlex-exits";
+
+type ExitHit = NlexExit;
+
 export default function MapComparisonPage() {
   const [activeReports, setActiveReports] = useState(5);
   const [avgSpeed, setAvgSpeed] = useState(45);
   const [timeStr, setTimeStr] = useState("");
+
+  // Exit picker. The whole corridor is loaded once and shown as a dropdown in
+  // geographic order (Balintawak in the south through to Sta. Ines in the
+  // north), so the list itself tells you where along NLEX you are.
+  // Same corridor list as the dashboard road map, AI sandbox and maintenance.
+  const { exits } = useNlexExits();
+  const [selectedExit, setSelectedExit] = useState<string>("");
+  const [exitOpen, setExitOpen] = useState(false);
+
+  const flyToExit = (x: ExitHit) => {
+    setSelectedExit(x.exit_name);
+    setExitOpen(false);
+    window.dispatchEvent(
+      new CustomEvent("nlex:flyto", {
+        detail: { lng: Number(x.longitude), lat: Number(x.latitude), name: x.exit_name },
+      })
+    );
+  };
+
+  const resetView = () => {
+    setSelectedExit("");
+    setExitOpen(false);
+    window.dispatchEvent(new CustomEvent("nlex:resetview"));
+  };
 
   // Live running clock
   useEffect(() => {
@@ -84,9 +114,81 @@ export default function MapComparisonPage() {
         title="Traffic Map Comparison"
         subtitle="Side-by-side live traffic sources across the NLEX corridor"
         actions={
-          <div className="mc-search-bar">
-            <Search size={16} />
-            <input type="text" placeholder="Search exits (e.g., San Fernando)..." />
+          <div className="mc-search-bar" style={{ position: "relative", cursor: "pointer" }}>
+            <Milestone size={16} />
+            <button
+              type="button"
+              onClick={() => setExitOpen((o) => !o)}
+              aria-haspopup="listbox"
+              aria-expanded={exitOpen}
+              style={{
+                flex: 1, display: "flex", alignItems: "center", gap: "8px",
+                border: "none", background: "transparent", cursor: "pointer",
+                font: "inherit", color: selectedExit ? "#0f172a" : "#94a3b8",
+                textAlign: "left", padding: 0,
+              }}
+            >
+              {selectedExit || "Jump to exit…"}
+              <ChevronDown size={14} style={{ marginLeft: "auto", flexShrink: 0, color: "#64748b" }} />
+            </button>
+
+            {exitOpen && (
+              <ul
+                role="listbox"
+                style={{
+                  position: "absolute", top: "calc(100% + 6px)", left: 0, right: 0, zIndex: 30,
+                  margin: 0, padding: "4px", listStyle: "none", maxHeight: "320px", overflowY: "auto",
+                  background: "var(--bg-surface, #fff)", border: "1px solid #dce2ef",
+                  borderRadius: "10px", boxShadow: "0 8px 24px rgba(15,23,42,0.12)",
+                }}
+              >
+                <li>
+                  <button
+                    onClick={resetView}
+                    style={{
+                      display: "flex", width: "100%", alignItems: "center", gap: "8px",
+                      padding: "8px 12px", border: "none", background: "transparent",
+                      textAlign: "left", cursor: "pointer", borderRadius: "6px",
+                      fontSize: "0.85rem", color: "#64748b", borderBottom: "1px solid #eef2f7",
+                    }}
+                  >
+                    Whole corridor
+                  </button>
+                </li>
+                {exits.length === 0 ? (
+                  <li style={{ padding: "10px 12px", fontSize: "0.85rem", color: "#64748b" }}>
+                    Exit list unavailable
+                  </li>
+                ) : (
+                  exits.map((x) => {
+                    const on = x.exit_name === selectedExit;
+                    return (
+                      <li key={x.exit_id} role="option" aria-selected={on}>
+                        <button
+                          onClick={() => flyToExit(x)}
+                          style={{
+                            display: "flex", width: "100%", alignItems: "baseline", gap: "8px",
+                            padding: "8px 12px", border: "none", cursor: "pointer",
+                            borderRadius: "6px", fontSize: "0.88rem", textAlign: "left",
+                            background: on ? "#eef2fb" : "transparent",
+                            fontWeight: on ? 700 : 500, color: "#0f172a",
+                          }}
+                        >
+                          <span style={{
+                            fontSize: "0.7rem", color: "var(--text-muted)", minWidth: "1.4rem",
+                            fontVariantNumeric: "tabular-nums",
+                          }}>{x.exit_id}</span>
+                          {displayExitName(x.exit_name)}
+                          <span style={{ marginLeft: "auto", fontSize: "0.72rem", color: "var(--text-muted)" }}>
+                            Km {x.km}
+                          </span>
+                        </button>
+                      </li>
+                    );
+                  })
+                )}
+              </ul>
+            )}
           </div>
         }
       />

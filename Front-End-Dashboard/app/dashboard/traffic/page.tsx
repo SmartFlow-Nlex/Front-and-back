@@ -988,7 +988,20 @@ export default function TrafficPage() {
             <span className={styles.heroFilterLabel}>Direction</span>
             <div className={styles.segmentedSmall}>
               {(["Both", "NB", "SB"] as const).map((d) => (
-                <button key={d} className={direction === d ? "active" : ""} onClick={() => setDirection(d)}>
+                <button
+                  key={d}
+                  className={direction === d ? "active" : ""}
+                  // Direction filters the query, so picking one zeroes the other
+                  // series. While the chart is split there is nothing to filter
+                  // to — both carriageways are the point.
+                  disabled={splitDirection && d !== "Both"}
+                  title={
+                    splitDirection && d !== "Both"
+                      ? "Turn off Split NB / SB to filter to one direction"
+                      : undefined
+                  }
+                  onClick={() => setDirection(d)}
+                >
                   {direction === d && <svg width="10" height="10" viewBox="0 0 16 16" fill="none" style={{ marginRight: 4, marginBottom: -1 }}><path d="M3.5 8.5l3 3 6-7" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" /></svg>}
                   {d}
                 </button>
@@ -1029,7 +1042,19 @@ export default function TrafficPage() {
           </div>
           <div className={styles.heroFilterGroup} style={{ marginLeft: "auto" }}>
             <label className={styles.heroToggle}>
-              <input type="checkbox" checked={splitDirection} onChange={(e) => setSplitDirection(e.target.checked)} />
+              <input
+                type="checkbox"
+                checked={splitDirection}
+                onChange={(e) => {
+                  const on = e.target.checked;
+                  setSplitDirection(on);
+                  // Turning split on with a direction already chosen would draw
+                  // one real line and one flat zero, and the direction buttons
+                  // are disabled at that point — so there would be no way back
+                  // to a sensible chart except by turning split off again.
+                  if (on) setDirection("Both");
+                }}
+              />
               <span className={styles.heroToggleTrack}><span className={styles.heroToggleThumb} /></span>
               Split NB / SB
             </label>

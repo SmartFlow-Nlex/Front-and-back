@@ -53,24 +53,52 @@ export default function DateRangePicker({ startDate, endDate, onChange }: DateRa
         setIsOpen(false);
       }
     };
+    const handleKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setIsOpen(false);
+    };
     document.addEventListener("mousedown", handleClickOutside);
-    return () => document.removeEventListener("mousedown", handleClickOutside);
+    document.addEventListener("keydown", handleKey);
+    return () => {
+      document.removeEventListener("mousedown", handleClickOutside);
+      document.removeEventListener("keydown", handleKey);
+    };
   }, []);
 
+  /**
+   * A range needs two different days. Picking the same day twice used to submit
+   * from === to, which every chart on the page then reads as a one-day window —
+   * the trend collapses to a single point and the comparison against the
+   * previous period has nothing to compare. The start day is disabled while the
+   * end is being chosen, so it cannot be picked rather than being picked and
+   * rejected.
+   */
   const handleDayClick = (dayStr: string) => {
     if (!selStart || (selStart && selEnd)) {
-      // Start new selection
+      // Start a fresh selection.
       setSelStart(dayStr);
       setSelEnd(null);
-    } else {
-      // Complete selection
-      if (dayStr < selStart) {
-        onChange(dayStr, selStart);
-      } else {
-        onChange(selStart, dayStr);
-      }
-      setIsOpen(false); // Auto-close on complete selection
+      return;
     }
+    if (dayStr === selStart) return; // guarded in the UI too; belt and braces
+    if (dayStr < selStart) {
+      onChange(dayStr, selStart);
+    } else {
+      onChange(selStart, dayStr);
+    }
+    setIsOpen(false);
+  };
+
+  /** True while the picker is waiting for the second click. */
+  const awaitingEnd = Boolean(selStart && !selEnd);
+
+  const todayStr = formatDate(new Date());
+
+  const applyPreset = (days: number) => {
+    const e = new Date();
+    const s = new Date();
+    s.setDate(e.getDate() - days);
+    onChange(formatDate(s), formatDate(e));
+    setIsOpen(false);
   };
 
   const nextMonth = () => {
@@ -119,7 +147,7 @@ export default function DateRangePicker({ startDate, endDate, onChange }: DateRa
         onClick={() => setIsOpen(!isOpen)}
       >
         <div className={styles.dateBlock}>
-          <Calendar size={14} color="#64748b" />
+          <Calendar size={14} className={styles.triggerIcon} />
           <span>{formatDisplay(startDate)}</span>
         </div>
         <span className={styles.dash}>—</span>
@@ -181,10 +209,21 @@ export default function DateRangePicker({ startDate, endDate, onChange }: DateRa
                 if (isSelected && !isStart && !isEnd) classes += ` ${styles.selected}`; // fallback
 
                 const d = new Date(dayStr);
+                // Same day as the start: not a range, so it is not selectable.
+                const blocked = awaitingEnd && dayStr === selStart;
+                if (dayStr === todayStr) classes += ` ${styles.today}`;
                 return (
                   <button
                     key={dayStr}
                     className={classes}
+                    disabled={blocked}
+                    title={
+                      blocked
+                        ? "A range needs at least two days"
+                        : awaitingEnd
+                          ? "Set as end date"
+                          : "Set as start date"
+                    }
                     onClick={() => handleDayClick(dayStr)}
                     onMouseEnter={() => setHoverDate(dayStr)}
                     onMouseLeave={() => setHoverDate(null)}
@@ -227,21 +266,20 @@ export default function DateRangePicker({ startDate, endDate, onChange }: DateRa
             </div>
           )}
 
+          {/* Which click this is. Without it the calendar gives no sign that the
+              first click armed a selection, so a second click lands as a
+              surprise. */}
+          <p className={styles.hint}>
+            {awaitingEnd
+              ? `Start ${formatDisplay(selStart!)} — now pick the end date`
+              : "Pick a start date"}
+          </p>
+
           <div className={styles.presets}>
-            <button className={styles.presetBtn} onClick={() => {
-              const e = new Date();
-              const s = new Date();
-              s.setDate(e.getDate() - 7);
-              onChange(formatDate(s), formatDate(e));
-              setIsOpen(false);
-            }}>Last 7 days</button>
-            <button className={styles.presetBtn} onClick={() => {
-              const e = new Date();
-              const s = new Date();
-              s.setDate(e.getDate() - 30);
-              onChange(formatDate(s), formatDate(e));
-              setIsOpen(false);
-            }}>Last 30 days</button>
+            <button className={styles.presetBtn} onClick={() => applyPreset(7)}>Last 7 days</button>
+            <button className={styles.presetBtn} onClick={() => applyPreset(30)}>Last 30 days</button>
+            <button className={styles.presetBtn} onClick={() => applyPreset(90)}>Last 90 days</button>
+            <button className={styles.presetBtn} onClick={() => applyPreset(365)}>Last 12 months</button>
           </div>
         </div>
       )}

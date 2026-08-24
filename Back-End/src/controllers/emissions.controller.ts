@@ -6,6 +6,10 @@ const EmissionsAnalyticsQuerySchema = z.object({
   months: z.enum(["3", "12", "all"]).optional().default("12"),
   from: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
   to: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+  // Arrives as a query string; coerced so the service gets the number its
+  // filter type declares rather than "2".
+  vehicleClass: z.coerce.number().int().min(1).max(3).optional()
+    .transform((v) => v as 1 | 2 | 3 | undefined),
 });
 
 // GET /api/emissions/analytics — descriptive dashboard aggregates

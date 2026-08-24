@@ -100,6 +100,8 @@ export type EmissionsAnalyticsFilters = {
   months: "3" | "12" | "all";
   from?: string;
   to?: string;
+  /** 1, 2 or 3 to restrict every panel to one vehicle class; omitted means all. */
+  vehicleClass?: 1 | 2 | 3;
 };
 
 type EmissionsCacheEntry = { at: number; data: unknown };
@@ -155,22 +157,60 @@ export async function getEmissionsAnalyticsFromDb(filters: EmissionsAnalyticsFil
               .rows[0].hi;
     }
 
-    const params = [lo, hi];
-    const WHERE = `${LOCAL_DATE} BETWEEN $1 AND $2`;
+    // The class filter goes into the shared WHERE rather than being applied per
+    // query, so every panel on the tab narrows together — a KPI counting all
+    // three classes beside a chart showing one would be worse than no filter.
+    const params: (string | number)[] = [lo, hi];
+    // The measured air-quality panels read nlex_emissions, which has no vehicle
+    // class at all — a sensor reading is not attributable to one — so they take
+    // the dates only and are deliberately left unfiltered.
+    const dateParams = [lo, hi];
+    let CLASS_AND = "";
+    if (filters.vehicleClass) {
+      params.push(filters.vehicleClass);
+      CLASS_AND = ` AND vehicle_class = $${params.length}`;
+    }
+    const WHERE = `${LOCAL_DATE} BETWEEN $1 AND $2${CLASS_AND}`;
+    // The by-class query joins nlex_emission_factors, which carries a
+    // vehicle_class of its own, so an unqualified condition there is ambiguous
+    // and Postgres refuses it. Same predicate, table-qualified.
+    const WHERE_T = `t.timestamp_utc::date BETWEEN $1 AND $2${
+      filters.vehicleClass ? ` AND t.vehicle_class = $${params.length}` : ""
+    }`;
 
-    const [trend, heatmap, classes, kpi, aqiMonthly, aqiKpi] = await Promise.all([
+    // Hourly detail only for short windows, the same rule the traffic endpoint
+    // uses: a year of hourly rows is a payload nobody reads.
+    const spanDays = Math.round((Date.parse(hi) - Date.parse(lo)) / 86_400_000);
+    const includeHourly = spanDays <= 14;
+
+    const [trend, hourly, heatmap, classes, kpi, aqiMonthly, aqiKpi] = await Promise.all([
       // Daily CO2 (tonnes) by vehicle class and direction (client rolls up)
       db.query(
         `SELECT ${LOCAL_DATE}::text AS d,
-                ROUND((SUM(co2_grams) FILTER (WHERE vehicle_class = 1) / 1e6)::numeric, 2)::float AS c1,
-                ROUND((SUM(co2_grams) FILTER (WHERE vehicle_class = 2) / 1e6)::numeric, 2)::float AS c2,
-                ROUND((SUM(co2_grams) FILTER (WHERE vehicle_class = 3) / 1e6)::numeric, 2)::float AS c3,
+                ROUND((COALESCE(SUM(co2_grams) FILTER (WHERE vehicle_class = 1), 0) / 1e6)::numeric, 2)::float AS c1,
+                ROUND((COALESCE(SUM(co2_grams) FILTER (WHERE vehicle_class = 2), 0) / 1e6)::numeric, 2)::float AS c2,
+                ROUND((COALESCE(SUM(co2_grams) FILTER (WHERE vehicle_class = 3), 0) / 1e6)::numeric, 2)::float AS c3,
                 ROUND((COALESCE(SUM(co2_grams) FILTER (WHERE direction = 'NB'), 0) / 1e6)::numeric, 2)::float AS nb,
                 ROUND((COALESCE(SUM(co2_grams) FILTER (WHERE direction = 'SB'), 0) / 1e6)::numeric, 2)::float AS sb
          FROM nlex_theoretical_emissions WHERE ${WHERE}
          GROUP BY 1 ORDER BY 1`,
         params
       ),
+      // Hourly CO2 by class, for short ranges only.
+      includeHourly
+        ? db.query(
+            `SELECT ${LOCAL_DATE}::text AS d,
+                    EXTRACT(hour FROM timestamp_utc)::int AS hour,
+                    ROUND((COALESCE(SUM(co2_grams) FILTER (WHERE vehicle_class = 1), 0) / 1e6)::numeric, 3)::float AS c1,
+                    ROUND((COALESCE(SUM(co2_grams) FILTER (WHERE vehicle_class = 2), 0) / 1e6)::numeric, 3)::float AS c2,
+                    ROUND((COALESCE(SUM(co2_grams) FILTER (WHERE vehicle_class = 3), 0) / 1e6)::numeric, 3)::float AS c3,
+                    ROUND((COALESCE(SUM(co2_grams) FILTER (WHERE direction = 'NB'), 0) / 1e6)::numeric, 3)::float AS nb,
+                    ROUND((COALESCE(SUM(co2_grams) FILTER (WHERE direction = 'SB'), 0) / 1e6)::numeric, 3)::float AS sb
+             FROM nlex_theoretical_emissions WHERE ${WHERE}
+             GROUP BY 1, 2 ORDER BY 1, 2`,
+            params
+          )
+        : Promise.resolve(null),
       // CO2 tonnes per hour-of-day x day-of-week (client derives weekday/weekend profile)
       db.query(
         `SELECT EXTRACT(dow FROM ${LOCAL_DATE})::int AS dow, ${LOCAL_HOUR} AS hour,
@@ -189,7 +229,7 @@ export async function getEmissionsAnalyticsFromDb(filters: EmissionsAnalyticsFil
                 ROUND((SUM(t.no2_grams) / 1e3)::numeric, 1)::float AS no2_kg
          FROM nlex_theoretical_emissions t
          LEFT JOIN nlex_emission_factors f ON f.vehicle_class = t.vehicle_class
-         WHERE ${WHERE}
+         WHERE ${WHERE_T}
          GROUP BY 1 ORDER BY 1`,
         params
       ),
@@ -197,7 +237,7 @@ export async function getEmissionsAnalyticsFromDb(filters: EmissionsAnalyticsFil
       db.query(
         `SELECT
            ROUND((SUM(co2_grams) FILTER (WHERE ${WHERE}) / 1e6)::numeric, 1)::float AS cur_t,
-           ROUND((SUM(co2_grams) FILTER (WHERE ${LOCAL_DATE} >= $1::date - ($2::date - $1::date + 1) AND ${LOCAL_DATE} < $1::date) / 1e6)::numeric, 1)::float AS prev_t
+           ROUND((SUM(co2_grams) FILTER (WHERE ${LOCAL_DATE} >= $1::date - ($2::date - $1::date + 1) AND ${LOCAL_DATE} < $1::date${CLASS_AND}) / 1e6)::numeric, 1)::float AS prev_t
          FROM nlex_theoretical_emissions
          WHERE ${LOCAL_DATE} >= $1::date - ($2::date - $1::date + 1) AND ${LOCAL_DATE} <= $2`,
         params
@@ -212,7 +252,7 @@ export async function getEmissionsAnalyticsFromDb(filters: EmissionsAnalyticsFil
          FROM nlex_emissions
          WHERE (${AQI_LOCAL})::date BETWEEN $1 AND $2
          GROUP BY 1 ORDER BY 1`,
-        params
+        dateParams
       ),
       // Measured air quality KPI: avg AQI + sample count in range
       db.query(
@@ -220,13 +260,14 @@ export async function getEmissionsAnalyticsFromDb(filters: EmissionsAnalyticsFil
                 ROUND(AVG(pm2_5)::numeric, 1)::float AS avg_pm25
          FROM nlex_emissions
          WHERE (${AQI_LOCAL})::date BETWEEN $1 AND $2`,
-        params
+        dateParams
       ),
     ]);
 
     const data = {
       range: { from: lo, to: hi },
       meta: { minDate, maxDate },
+      hourlyTrend: hourly ? hourly.rows : null,
       kpis: {
         totalCo2T: kpi.rows[0].cur_t ?? 0,
         prevCo2T: kpi.rows[0].prev_t ?? 0,

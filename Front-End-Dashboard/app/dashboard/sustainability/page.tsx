@@ -35,12 +35,14 @@ type Analytics = {
     avgPm25: number | null;
   };
   dailyTrend: { d: string; c1: number; c2: number; c3: number; nb: number; sb: number }[];
+  /** Present only for ranges of 14 days or less; null otherwise. */
+  hourlyTrend: { d: string; hour: number; c1: number; c2: number; c3: number; nb: number; sb: number }[] | null;
   heatmap: { dow: number; hour: number; v: number }[];
   classes: { class: number; label: string; co2_g_per_km: number; volume: number; co2_t: number; pm25_kg: number; no2_kg: number }[];
   aqiMonthly: { m: string; good: number; moderate: number; poor: number; pm25: number | null }[];
 };
 
-type Granularity = "daily" | "weekly" | "monthly";
+type Granularity = "hourly" | "daily" | "weekly" | "monthly";
 type ClassFilter = "All" | "1" | "2" | "3";
 type RangeMode = "3" | "12" | "all" | "custom";
 type Detail = { title: string; subtitle?: string; rows: [string, string][]; note?: string };
@@ -109,6 +111,7 @@ export default function SustainabilityPage() {
     } else {
       qs.set("months", rangeMode);
     }
+    if (classSel !== "All") qs.set("vehicleClass", classSel);
     fetch(`${BACKEND}/api/emissions/analytics?${qs}`, { cache: "no-store" })
       .then((r) => r.json())
       .then((json) => {
@@ -121,13 +124,15 @@ export default function SustainabilityPage() {
     return () => {
       cancelled = true;
     };
-  }, [rangeMode, customFrom, customTo]);
+  }, [rangeMode, customFrom, customTo, classSel]);
 
   /* How long a window is on screen, and what that allows.
 
      Measured from the range the API resolved rather than the raw custom inputs,
      so the 3-month and 12-month presets are governed by the same rule. */
   const spanDays = rangeDays(data?.range.from, data?.range.to);
+  // The API decides: it omits the series entirely past 14 days.
+  const hourlyAvailable = Boolean(data?.hourlyTrend);
 
   // A grain that stops being possible is demoted rather than left selected: the
   // control disables it, so without this the chart would sit on an impossible
@@ -135,9 +140,9 @@ export default function SustainabilityPage() {
   useEffect(() => {
     if (spanDays == null) return;
     if (grainBlockedReason(grain, spanDays)) {
-      setGrain(bestGrainFor(spanDays, false) as typeof grain);
+      setGrain(bestGrainFor(spanDays, hourlyAvailable) as typeof grain);
     }
-  }, [spanDays, grain]);
+  }, [spanDays, grain, hourlyAvailable]);
 
   // ---------- Derived ----------
   const derived = useMemo(() => {
@@ -161,9 +166,24 @@ export default function SustainabilityPage() {
   type TrendRow = { label: string; c1: number; c2: number; c3: number; nb: number; sb: number; total: number };
   const trendRows = useMemo<TrendRow[]>(() => {
     if (!data) return [];
-    const keyOf = grain === "daily" ? (d: string) => d : grain === "weekly" ? weekStart : (d: string) => d.slice(0, 7);
+    // Hourly reads a different series entirely — the API only sends it for short
+    // ranges, so the control is disabled when it is absent.
+    const src =
+      grain === "hourly"
+        ? (data.hourlyTrend ?? []).map((r) => ({
+            ...r,
+            d: `${r.d} ${String(r.hour).padStart(2, "0")}:00`,
+          }))
+        : data.dailyTrend;
+
+    const keyOf =
+      grain === "hourly" || grain === "daily"
+        ? (d: string) => d
+        : grain === "weekly"
+          ? weekStart
+          : (d: string) => d.slice(0, 7);
     const acc = new Map<string, { c1: number; c2: number; c3: number; nb: number; sb: number; days: number }>();
-    for (const r of data.dailyTrend) {
+    for (const r of src) {
       const k = keyOf(r.d);
       const cur = acc.get(k) ?? { c1: 0, c2: 0, c3: 0, nb: 0, sb: 0, days: 0 };
       acc.set(k, { c1: cur.c1 + r.c1, c2: cur.c2 + r.c2, c3: cur.c3 + r.c3, nb: cur.nb + r.nb, sb: cur.sb + r.sb, days: cur.days + 1 });
@@ -173,7 +193,7 @@ export default function SustainabilityPage() {
       .map(([label, v]) => ({ label, ...v, total: v.c1 + v.c2 + v.c3 }));
     // A partial first/last bucket (a "month" holding 2 days) reads as a fake
     // collapse in a stacked trend — trim incomplete edge buckets for rolled-up grains.
-    if (grain !== "daily" && rows.length > 2) {
+    if (grain !== "daily" && grain !== "hourly" && rows.length > 2) {
       const expected = (label: string) =>
         grain === "weekly"
           ? 7
@@ -217,17 +237,11 @@ export default function SustainabilityPage() {
         },
       },
       legend: { show: true, bottom: 0, left: "center", itemWidth: 14, itemHeight: 8, itemGap: 18, padding: 0, textStyle: { fontSize: 11 } },
-      // The response carries c1, c2 and c3 per bucket, so choosing a class is a
-      // choice about what to draw rather than another query.
-      series: (
-        [
-          [CLASS_SHORT[0], "c1", RAMP[0], "1"],
-          [CLASS_SHORT[1], "c2", RAMP[1], "2"],
-          [CLASS_SHORT[2], "c3", RAMP[2], "3"],
-        ] as const
-      )
-        .filter(([, , , id]) => classSel === "All" || classSel === id)
-        .map(([name, key, color]) => mk(name, key, color)),
+      // The class filter is a query parameter now, so the response already holds
+      // only the chosen class and every panel on the tab narrows with it. Drawing
+      // all three series is correct: the two that were filtered out are zero.
+      series: [mk(CLASS_SHORT[0], "c1", RAMP[0]), mk(CLASS_SHORT[1], "c2", RAMP[1]), mk(CLASS_SHORT[2], "c3", RAMP[2])]
+        .filter((_, i) => classSel === "All" || classSel === String(i + 1)),
     };
   }, [trendRows, grain, classSel]);
 
@@ -808,12 +822,16 @@ export default function SustainabilityPage() {
           <div className={styles.heroFilterGroup}>
             <span className={styles.heroFilterLabel}>Granularity</span>
             <div className={styles.segmentedSmall}>
-              {(["daily", "weekly", "monthly"] as const).map((g) => (
+              {(["hourly", "daily", "weekly", "monthly"] as const).map((g) => (
                 <button
                   key={g}
                   className={grain === g ? "active" : ""}
-                  disabled={Boolean(grainBlockedReason(g, spanDays))}
-                  title={grainBlockedReason(g, spanDays) ?? undefined}
+                  disabled={(g === "hourly" && !hourlyAvailable) || Boolean(grainBlockedReason(g, spanDays))}
+                  title={
+                    g === "hourly" && !hourlyAvailable
+                      ? "Hourly detail is available for ranges up to 2 weeks"
+                      : grainBlockedReason(g, spanDays) ?? undefined
+                  }
                   onClick={() => setGrain(g)}
                 >
                   {grain === g && <svg width="10" height="10" viewBox="0 0 16 16" fill="none" style={{ marginRight: 4, marginBottom: -1 }}><path d="M3.5 8.5l3 3 6-7" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" /></svg>}

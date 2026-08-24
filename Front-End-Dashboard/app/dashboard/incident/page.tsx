@@ -1,23 +1,22 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import { attachCategoryClick } from "../../../lib/chart-click";
+import { useChartTheme, applyChartTheme, seriesRamp, seriesPair } from "../../../lib/chart-theme";
 import ReactECharts from "echarts-for-react";
 import type { EChartsOption } from "echarts";
-import { AlertTriangle } from "lucide-react";
+import { AlertTriangle, ArrowDownWideNarrow, ArrowUpNarrowWide, CloudRain, HeartPulse, MapPin, Timer } from "lucide-react";
 import DashboardChart from "../../../components/dashboard/DashboardChart";
+import ChartSkeleton, { KpiSkeleton } from "../../../components/dashboard/ChartSkeleton";
+import CustomSelect from "../../../components/dashboard/CustomSelect";
 import PageHeader from "../../../components/dashboard/PageHeader";
 import PredictiveIncidentChart from "../../../components/dashboard/PredictiveIncidentChart";
 import DateRangePicker from "../traffic/components/DateRangePicker";
+import { rangeDays, grainBlockedReason, bestGrainFor, axisLabelFor, bucketLabelFor } from "../../../lib/granularity";
 import styles from "../traffic/traffic.module.css";
 
 const BACKEND = process.env.NEXT_PUBLIC_BACKEND_URL ?? "http://localhost:4000";
 
-// Categorical hues — one per incident source, fixed assignment
-const BLUE = "#3e67ef"; // road crashes
-const PURPLE = "#7c3aed"; // motorcycle crashes
-const ORANGE = "#e06b47"; // stalled vehicles
-// Sequential ramp (magnitude: heatmap, hotspot bar)
-const SEQ = ["#eef2fb", "#8fa8ee", "#3e67ef", "#1d3aa8"];
 
 const DOW_LABELS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 const DOW_ORDER = [1, 2, 3, 4, 5, 6, 0];
@@ -57,6 +56,8 @@ type Analytics = {
 type Granularity = "daily" | "weekly" | "monthly";
 type RangeMode = "3" | "12" | "all" | "custom";
 type WeatherFilter = "all" | "dry" | "wet";
+/** Matches the source enum the incident endpoint validates against. */
+type SourceFilter = "all" | "road" | "moto" | "stalled";
 type Detail = { title: string; subtitle?: string; rows: [string, string][]; note?: string };
 
 // ---------- Formatting ----------
@@ -83,53 +84,29 @@ const prescriptiveResourceOption: EChartsOption = {
   series: [{ type: "bar", data: [3, 5, 8, 2], itemStyle: { color: "#4f7de5", borderRadius: [8, 8, 0, 0] } }],
 };
 
-const TABS = ["Descriptive", "Predictive", "Prescriptive"] as const;
-type Tab = (typeof TABS)[number];
-
 export default function IncidentPage() {
-  const [activeTab, setActiveTab] = useState<Tab>("Descriptive");
+  // Chart furniture follows the active theme; series hues stay fixed.
+  const chartTheme = useChartTheme();
+
+  /* This tab's colour family. The ramp is ordinal — lightest to darkest — and
+     both modes are selected steps validated against their own surface, not an
+     automatic flip. A pair of nominal series takes the outer two steps, which is
+     where the separation margin lives. See lib/chart-theme. */
+  const RAMP = seriesRamp("incident", chartTheme);
+  const [PAIR_A, PAIR_B] = seriesPair("incident", chartTheme);
+  const SEQ = [chartTheme.seqLightest, ...RAMP];
+  const [activeTab, setActiveTab] = useState<"Descriptive" | "Predictive" | "Prescriptive">("Descriptive");
 
   // Global filters
   const [rangeMode, setRangeMode] = useState<RangeMode>("12");
   const [customFrom, setCustomFrom] = useState("");
   const [customTo, setCustomTo] = useState("");
   const [weather, setWeather] = useState<WeatherFilter>("all");
-
-  // Restore the view the hourly drill-down was opened from: the tab, plus the
-  // Range and Weather it was filtered by. Without this, "Back to daily" lands
-  // on Descriptive with a default 12-month range, silently discarding whatever
-  // the user had set up before clicking a day.
-  //
-  // Read from window rather than useSearchParams(): that hook forces the whole
-  // page into a Suspense boundary at build time (the app is a static export),
-  // which is a large restructure for a few optional query params. Reading in an
-  // effect keeps it client-only and avoids a hydration mismatch, since window
-  // doesn't exist during SSR.
-  useEffect(() => {
-    const q = new URLSearchParams(window.location.search);
-
-    const t = q.get("tab");
-    if (t && (TABS as readonly string[]).includes(t)) setActiveTab(t as Tab);
-
-    const w = q.get("weather");
-    if (w === "all" || w === "dry" || w === "wet") setWeather(w);
-
-    // A custom range is identified by from/to being present, matching how the
-    // chart serialises it (months is sent as "all" alongside them).
-    const f = q.get("from");
-    const t2 = q.get("to");
-    if (f && t2) {
-      setCustomFrom(f);
-      setCustomTo(t2);
-      setRangeMode("custom");
-      return;
-    }
-
-    const m = q.get("months");
-    if (m === "3" || m === "12" || m === "all") setRangeMode(m);
-  }, []);
+  const [source, setSource] = useState<SourceFilter>("all");
 
   // Chart-local interactivity
+  const [hotspotSort, setHotspotSort] = useState<"desc" | "asc">("desc");
+  const [causeSort, setCauseSort] = useState<"desc" | "asc">("desc");
   const [grain, setGrain] = useState<Granularity>("monthly");
   const [timeView, setTimeView] = useState<"hour" | "dow">("hour");
   const [causeMode, setCauseMode] = useState<"Causes" | "Types">("Causes");
@@ -139,20 +116,6 @@ export default function IncidentPage() {
   const [data, setData] = useState<Analytics | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
-
-  // Earliest observed / latest forecast date reported by the predictive
-  // endpoint (not the descriptive one — the predictive series' upper bound
-  // reaches into the forecast horizon). Lifted from PredictiveIncidentChart's
-  // first response so the Range control's Custom date picker can be bounded
-  // by it. null until that first response lands.
-  const [predictiveDataBounds, setPredictiveDataBounds] = useState<{ minDate: string; maxDate: string } | null>(null);
-
-  // Whether the predictive endpoint's current Range has any scored rows for
-  // Weather to filter. Defaults true so the chips aren't disabled during the
-  // brief window before the first response lands (the default Range, 12mo,
-  // reliably has scored rows) — lifted from PredictiveIncidentChart the same
-  // way predictiveDataBounds is.
-  const [weatherApplicable, setWeatherApplicable] = useState(true);
 
   useEffect(() => {
     if (rangeMode === "custom" && (!customFrom || !customTo)) return;
@@ -167,6 +130,7 @@ export default function IncidentPage() {
       qs.set("months", rangeMode);
     }
     if (weather !== "all") qs.set("weather", weather);
+    if (source !== "all") qs.set("source", source);
     fetch(`${BACKEND}/api/incident/analytics?${qs}`, { cache: "no-store" })
       .then((r) => r.json())
       .then((json) => {
@@ -179,7 +143,23 @@ export default function IncidentPage() {
     return () => {
       cancelled = true;
     };
-  }, [rangeMode, customFrom, customTo, weather]);
+  }, [rangeMode, customFrom, customTo, weather, source]);
+
+  /* How long a window is on screen, and what that allows.
+
+     Measured from the range the API resolved rather than the raw custom inputs,
+     so the 3-month and 12-month presets are governed by the same rule. */
+  const spanDays = rangeDays(data?.range.from, data?.range.to);
+
+  // A grain that stops being possible is demoted rather than left selected: the
+  // control disables it, so without this the chart would sit on an impossible
+  // bucket with no way to change it.
+  useEffect(() => {
+    if (spanDays == null) return;
+    if (grainBlockedReason(grain, spanDays)) {
+      setGrain(bestGrainFor(spanDays, false) as typeof grain);
+    }
+  }, [spanDays, grain]);
 
   // ---------- Derived ----------
   const derived = useMemo(() => {
@@ -203,7 +183,7 @@ export default function IncidentPage() {
     return { deltaPct, topHotspot, hotspotTotal, wetRate, dryRate, rainMultiplier };
   }, [data]);
 
-  // ---------- Trend ----------
+    // ---------- Trend ----------
   type TrendRow = { label: string; road: number; moto: number; stalled: number; total: number };
   const trendRows = useMemo<TrendRow[]>(() => {
     if (!data) return [];
@@ -235,14 +215,14 @@ export default function IncidentPage() {
       lineStyle: { width: 2.5, color },
     });
 
-    const series = [mk("Road crashes", "road", BLUE), mk("Motorcycle crashes", "moto", PURPLE), mk("Stalled vehicles", "stalled", ORANGE)];
+    const series = [mk("Road crashes", "road", RAMP[2]), mk("Motorcycle crashes", "moto", RAMP[1]), mk("Stalled vehicles", "stalled", RAMP[0])];
 
     return {
-      grid: { left: 52, right: 16, top: 30, bottom: 22 },
-      xAxis: { type: "category", data: labels, axisLabel: { interval: labelInterval, fontSize: 10, hideOverlap: true }, axisTick: { show: false } },
+      grid: { left: 52, right: 16, top: 10, bottom: 52 },
+      xAxis: { type: "category", data: labels, axisLabel: { formatter: axisLabelFor(grain), interval: labelInterval, fontSize: 10, hideOverlap: true }, axisTick: { show: false } },
       yAxis: { type: "value", splitNumber: 3, axisLabel: { fontSize: 10 } },
-      tooltip: { trigger: "axis", valueFormatter: (v) => (v == null ? "—" : fmtInt(Number(v))) },
-      legend: { show: true, top: 0, right: 8, itemWidth: 14, textStyle: { fontSize: 11 } },
+      tooltip: { trigger: "axis", axisPointer: { label: { formatter: (o) => bucketLabelFor(grain)(String((o as { value: unknown }).value)) } }, valueFormatter: (v) => (v == null ? "—" : fmtInt(Number(v))) },
+      legend: { show: true, bottom: 0, left: "center", itemWidth: 14, itemHeight: 8, itemGap: 18, padding: 0, textStyle: { fontSize: 11 } },
       series,
     };
   }, [trendRows, grain]);
@@ -293,11 +273,11 @@ export default function IncidentPage() {
     if (timeView === "hour") {
       const peakIdx = timeProfile.weekday.indexOf(Math.max(...timeProfile.weekday));
       return {
-        grid: { left: 44, right: 16, top: 34, bottom: 24 },
+        grid: { left: 44, right: 16, top: 10, bottom: 54 },
         xAxis: { type: "category", boundaryGap: false, data: Array.from({ length: 24 }, (_, h) => fmtHour(h)), axisLabel: { interval: 3, fontSize: 10 }, axisTick: { show: false } },
         yAxis: { type: "value", name: "avg incidents / day", nameGap: 10, nameTextStyle: { fontSize: 9, align: "left" }, splitNumber: 3, axisLabel: { fontSize: 10 } },
         tooltip: { trigger: "axis", valueFormatter: (v) => (v == null ? "—" : `${fmt1(Number(v))} / day`) },
-        legend: { show: true, top: 0, right: 8, itemWidth: 14, textStyle: { fontSize: 11 } },
+        legend: { show: true, bottom: 0, left: "center", itemWidth: 14, itemHeight: 8, itemGap: 18, padding: 0, textStyle: { fontSize: 11 } },
         series: [
           {
             name: "Weekdays",
@@ -305,12 +285,12 @@ export default function IncidentPage() {
             data: timeProfile.weekday.map((v) => Number(v.toFixed(2))),
             symbol: "none",
             smooth: true,
-            itemStyle: { color: BLUE },
-            lineStyle: { width: 2.5, color: BLUE },
+            itemStyle: { color: RAMP[2] },
+            lineStyle: { width: 2.5, color: RAMP[2] },
             markPoint: {
               symbol: "circle",
               symbolSize: 8,
-              itemStyle: { color: BLUE, borderColor: "#fff", borderWidth: 2 },
+              itemStyle: { color: RAMP[2], borderColor: "#fff", borderWidth: 2 },
               label: { show: true, position: "top", fontSize: 10, color: "#475069", formatter: `Peak · ${fmtHour(peakIdx)}` },
               data: [{ name: "Peak", coord: [peakIdx, Number(timeProfile.weekday[peakIdx].toFixed(2))] }],
             },
@@ -321,8 +301,8 @@ export default function IncidentPage() {
             data: timeProfile.weekend.map((v) => Number(v.toFixed(2))),
             symbol: "none",
             smooth: true,
-            itemStyle: { color: ORANGE },
-            lineStyle: { width: 2.5, color: ORANGE },
+            itemStyle: { color: RAMP[0] },
+            lineStyle: { width: 2.5, color: RAMP[0] },
           },
         ],
       };
@@ -330,7 +310,7 @@ export default function IncidentPage() {
 
     const maxIdx = timeProfile.busiestDow;
     return {
-      grid: { left: 44, right: 16, top: 34, bottom: 24 },
+      grid: { left: 44, right: 16, top: 10, bottom: 54 },
       xAxis: { type: "category", data: DOW_LABELS, axisLabel: { interval: 0, fontSize: 10 }, axisTick: { show: false } },
       yAxis: { type: "value", name: "avg incidents / day", nameGap: 10, nameTextStyle: { fontSize: 9, align: "left" }, splitNumber: 3, axisLabel: { fontSize: 10 } },
       tooltip: {
@@ -344,7 +324,7 @@ export default function IncidentPage() {
           type: "bar",
           data: timeProfile.dowAvg.map((v, i) => ({
             value: Number(v.toFixed(2)),
-            itemStyle: { color: i === maxIdx ? BLUE : "#8fa8ee", borderRadius: [4, 4, 0, 0] },
+            itemStyle: { color: i === maxIdx ? RAMP[2] : RAMP[0], borderRadius: [4, 4, 0, 0] },
             label: i === maxIdx ? { show: true, position: "top", fontSize: 10, color: "#475069", formatter: () => fmt1(v) } : undefined,
           })),
           barMaxWidth: 26,
@@ -356,23 +336,26 @@ export default function IncidentPage() {
   const hotspotChart = useMemo<{ option: EChartsOption; rows: Analytics["hotspots"] } | null>(() => {
     if (!data || data.hotspots.length === 0) return null;
     const top = data.hotspots.slice(0, 10);
-    const display = [...top].reverse();
+    const display = hotspotSort === "desc" ? [...top].reverse() : [...top];
     const maxV = top[0]?.total ?? 1;
     return {
       rows: display,
       option: {
-        grid: { left: 84, right: 46, top: 2, bottom: 20 },
+        grid: { left: 84, right: 46, top: 8, bottom: 46 },
         xAxis: { type: "value", splitNumber: 3, axisLabel: { fontSize: 10 } },
         yAxis: { type: "category", data: display.map((r) => kmLabel(r.km_bin)), axisLabel: { interval: 0, fontSize: 10 }, axisTick: { show: false } },
         tooltip: {
+          axisPointer: { type: "shadow" },
           formatter: (p) => {
             const i = (p as { dataIndex: number }).dataIndex;
             const r = display[i];
             return `<b>${kmLabel(r.km_bin)}</b><br/>${fmtInt(r.total)} incidents · ${fmtInt(r.injuries)} injured · ${fmtInt(r.fatalities)} fatalities`;
           },
         },
+        legend: { show: true, bottom: 0, left: "center", itemWidth: 14, itemHeight: 8, itemGap: 18, padding: 0, textStyle: { fontSize: 11 } },
         series: [
           {
+            name: "Incidents by segment",
             type: "bar",
             data: display.map((r) => ({
               value: r.total,
@@ -384,38 +367,41 @@ export default function IncidentPage() {
         ],
       },
     };
-  }, [data]);
+  }, [data, hotspotSort]);
 
   const causeChart = useMemo<{ option: EChartsOption; rows: Analytics["causes"] } | null>(() => {
     if (!data) return null;
     const src = causeMode === "Causes" ? data.causes : data.types;
     if (src.length === 0) return null;
     const top = src.slice(0, 9);
-    const display = [...top].reverse();
+    const display = causeSort === "desc" ? [...top].reverse() : [...top];
     return {
       rows: display,
       option: {
-        grid: { left: 150, right: 42, top: 2, bottom: 20 },
+        grid: { left: 150, right: 42, top: 8, bottom: 46 },
         xAxis: { type: "value", splitNumber: 3, axisLabel: { fontSize: 10 } },
         yAxis: { type: "category", data: display.map((r) => (r.label.length > 24 ? `${r.label.slice(0, 24)}…` : r.label)), axisLabel: { interval: 0, fontSize: 10 }, axisTick: { show: false } },
         tooltip: {
+          axisPointer: { type: "shadow" },
           formatter: (p) => {
             const i = (p as { dataIndex: number }).dataIndex;
             const r = display[i];
             return `<b>${r.label}</b><br/>${fmtInt(r.total)} incidents · ${fmtInt(r.injuries)} injured · ${fmtInt(r.fatalities)} fatalities`;
           },
         },
+        legend: { show: true, bottom: 0, left: "center", itemWidth: 14, itemHeight: 8, itemGap: 18, padding: 0, textStyle: { fontSize: 11 } },
         series: [
           {
+            name: "Incidents",
             type: "bar",
-            data: display.map((r) => ({ value: r.total, itemStyle: { color: "#8fa8ee", borderRadius: [0, 3, 3, 0] } })),
+            data: display.map((r) => ({ value: r.total, itemStyle: { color: RAMP[0], borderRadius: [0, 3, 3, 0] } })),
             barMaxWidth: 12,
             barCategoryGap: "25%",
           },
         ],
       },
     };
-  }, [data, causeMode]);
+  }, [data, causeMode, causeSort]);
 
   const weatherChart = useMemo<EChartsOption | null>(() => {
     if (!data || !derived) return null;
@@ -427,7 +413,7 @@ export default function IncidentPage() {
     // hours compare fairly against abundant dry hours.
     const rate = (n: number, hours: number) => (hours > 0 ? Number(((n / hours) * 24).toFixed(1)) : 0);
     return {
-      grid: { left: 52, right: 16, top: 30, bottom: 40 },
+      grid: { left: 52, right: 16, top: 10, bottom: 68 },
       xAxis: { type: "category", data: [...cats], axisLabel: { fontSize: 10, interval: 0 }, axisTick: { show: false } },
       yAxis: { type: "value", name: "avg incidents / day", nameGap: 8, nameTextStyle: { fontSize: 9 }, splitNumber: 3, axisLabel: { fontSize: 10 } },
       tooltip: {
@@ -439,10 +425,10 @@ export default function IncidentPage() {
           return `<b>${cats[i]}</b><br/>Dry weather: ${items.find((x) => x.seriesName === "Dry weather")?.value} per day — ${fmtInt(w.incidents.dry[k])} incidents over ${fmtInt(w.dryHours)} dry hrs<br/>Wet weather: ${items.find((x) => x.seriesName === "Wet weather")?.value} per day — ${fmtInt(w.incidents.wet[k])} incidents over ${fmtInt(w.wetHours)} wet hrs`;
         },
       },
-      legend: { show: true, top: 0, right: 8, itemWidth: 14, textStyle: { fontSize: 11 } },
+      legend: { show: true, bottom: 0, left: "center", itemWidth: 14, itemHeight: 8, itemGap: 18, padding: 0, textStyle: { fontSize: 11 } },
       series: [
-        { name: "Dry weather", type: "bar", data: keys.map((k) => rate(w.incidents.dry[k], w.dryHours)), itemStyle: { color: BLUE, borderRadius: [3, 3, 0, 0] }, barMaxWidth: 26 },
-        { name: "Wet weather", type: "bar", data: keys.map((k) => rate(w.incidents.wet[k], w.wetHours)), itemStyle: { color: ORANGE, borderRadius: [3, 3, 0, 0] }, barMaxWidth: 26 },
+        { name: "Dry weather", type: "bar", data: keys.map((k) => rate(w.incidents.dry[k], w.dryHours)), itemStyle: { color: RAMP[2], borderRadius: [3, 3, 0, 0] }, barMaxWidth: 26 },
+        { name: "Wet weather", type: "bar", data: keys.map((k) => rate(w.incidents.wet[k], w.wetHours)), itemStyle: { color: RAMP[0], borderRadius: [3, 3, 0, 0] }, barMaxWidth: 26 },
       ],
     };
   }, [data, derived]);
@@ -570,86 +556,73 @@ export default function IncidentPage() {
   };
 
   const chartFrame = (option: EChartsOption | null, emptyNote: string, onClick?: (p: never) => void) => {
-    if (loading && !data) return <div className={styles.placeholder}>Loading…</div>;
+    if (loading && !data) return <ChartSkeleton />;
     if (error) return <div className={styles.placeholder}>Live data unavailable — is the backend running on port 4000?</div>;
     if (!option) return <div className={styles.placeholder}>{emptyNote}</div>;
     return (
       <ReactECharts
-        option={option}
+        option={applyChartTheme(option, chartTheme)}
         notMerge
         lazyUpdate
         style={{ width: "100%", height: "100%" }}
         opts={{ renderer: "canvas" }}
         onEvents={onClick ? { click: onClick as (p: unknown) => void } : undefined}
+        // Lines are drawn with symbol:"none", so they have no clickable points
+        // and ECharts' item click never fires with the right index. Resolve the
+        // category from the cursor position instead.
+        onChartReady={
+          onClick
+            ? (chart) => attachCategoryClick(chart as never, onClick as never)
+            : undefined
+        }
       />
     );
   };
 
-  const kpiValue = (v: string | null) => (loading && !data ? "…" : v ?? "—");
+  // A skeleton rather than an ellipsis: the tile keeps its height, so the KPI
+  // row does not resize under the cursor as the numbers arrive.
+  const kpiValue = (v: string | null) =>
+    loading && !data ? <KpiSkeleton /> : (v ?? "—");
 
   // ---------- Global filter controls ----------
   // Rendered on both the Descriptive shell and the Predictive one so the strip
-  // above the page means the same thing whichever tab is open. A function
-  // rather than a plain JSX const: Predictive needs to lock the Custom chip
-  // and bound the date picker until the predictive endpoint's dataBounds have
-  // loaded (undefined bounds = Descriptive, which has no such concept and is
-  // never locked; null = Predictive, not yet loaded; an object = loaded).
-  const renderRangeFilter = (bounds?: { minDate: string; maxDate: string } | null) => {
-    const customLocked = bounds === null;
-    return (
-      <div className={styles.filterGroup}>
-        <svg width="15" height="15" viewBox="0 0 16 16" fill="none" style={{ color: "var(--text-muted)" }}><rect x="2" y="2" width="12" height="12" rx="3" stroke="currentColor" strokeWidth="1.4" /><path d="M2 6h12" stroke="currentColor" strokeWidth="1.4" /><path d="M5.5 2V4M10.5 2V4" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" /></svg>
-        <span className={styles.filterLabel}>Range</span>
-        <div className={styles.segmented}>
-          {(["3", "12", "all", "custom"] as const).map((m) => (
-            <button
-              key={m}
-              className={rangeMode === m ? "active" : ""}
-              disabled={m === "custom" && customLocked}
-              title={m === "custom" && customLocked ? "Loading the available date range…" : undefined}
-              onClick={() => setRangeMode(m)}
-            >
-              {rangeMode === m && <svg width="12" height="12" viewBox="0 0 16 16" fill="none" style={{ marginRight: 4, marginBottom: -1 }}><path d="M3.5 8.5l3 3 6-7" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" /></svg>}
-              {m === "3" ? "3 mo" : m === "12" ? "12 mo" : m === "all" ? "All" : "Custom"}
-            </button>
-          ))}
-        </div>
-        {rangeMode === "custom" && (
-          <DateRangePicker
-            startDate={customFrom}
-            endDate={customTo}
-            minDate={bounds?.minDate}
-            maxDate={bounds?.maxDate}
-            onChange={(start, end) => {
-              setCustomFrom(start);
-              setCustomTo(end);
-            }}
-          />
-        )}
+  // above the page means the same thing whichever tab is open. Defined once
+  // rather than duplicated, so a change to Range or Weather can't drift between
+  // the two branches.
+  const rangeFilter = (
+    <div className={styles.filterGroup}>
+      <svg width="15" height="15" viewBox="0 0 16 16" fill="none" style={{ color: "var(--text-muted)" }}><rect x="2" y="2" width="12" height="12" rx="3" stroke="currentColor" strokeWidth="1.4" /><path d="M2 6h12" stroke="currentColor" strokeWidth="1.4" /><path d="M5.5 2V4M10.5 2V4" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" /></svg>
+      <span className={styles.filterLabel}>Range</span>
+      <div className={styles.segmented}>
+        {(["3", "12", "all", "custom"] as const).map((m) => (
+          <button key={m} className={rangeMode === m ? "active" : ""} onClick={() => setRangeMode(m)}>
+            {rangeMode === m && <svg width="12" height="12" viewBox="0 0 16 16" fill="none" style={{ marginRight: 4, marginBottom: -1 }}><path d="M3.5 8.5l3 3 6-7" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" /></svg>}
+            {m === "3" ? "3 mo" : m === "12" ? "12 mo" : m === "all" ? "All" : "Custom"}
+          </button>
+        ))}
       </div>
-    );
-  };
+      {rangeMode === "custom" && (
+        <DateRangePicker
+          startDate={customFrom}
+          minDate={data?.meta.minDate}
+          maxDate={data?.meta.maxDate}
+          endDate={customTo}
+          onChange={(start, end) => {
+            setCustomFrom(start);
+            setCustomTo(end);
+          }}
+        />
+      )}
+    </div>
+  );
 
-  // A function rather than a plain JSX const for the same reason
-  // renderRangeFilter is one: Predictive needs to disable the chips when the
-  // predictive endpoint reports weatherApplicable:false (zero validation rows
-  // in the current Range, so every model already fell back to its
-  // full-holdout numbers — Dry/Wet would refetch and land on the identical
-  // row every time). Descriptive has no such concept and calls this with no
-  // argument, so it stays enabled exactly as before.
-  const renderWeatherFilter = (applicable = true) => (
+  const weatherFilter = (
     <div className={styles.filterGroup}>
       <svg width="15" height="15" viewBox="0 0 16 16" fill="none" style={{ color: "var(--text-muted)" }}><path d="M4.5 11.5a3 3 0 1 1 .4-5.97 4 4 0 0 1 7.75 1.1A2.5 2.5 0 0 1 12 11.5H4.5z" stroke="currentColor" strokeWidth="1.4" strokeLinejoin="round" /><path d="M6 13.2v1M9 13.2v1M12 13.2v1" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" /></svg>
       <span className={styles.filterLabel}>Weather</span>
       <div className={styles.segmented}>
         {(["all", "dry", "wet"] as const).map((w) => (
-          <button
-            key={w}
-            className={weather === w ? "active" : ""}
-            disabled={!applicable}
-            title={applicable ? undefined : "No validation days fall in the selected Range — Weather has nothing to filter"}
-            onClick={() => setWeather(w)}
-          >
+          <button key={w} className={weather === w ? "active" : ""} onClick={() => setWeather(w)}>
             {weather === w && <svg width="12" height="12" viewBox="0 0 16 16" fill="none" style={{ marginRight: 4, marginBottom: -1 }}><path d="M3.5 8.5l3 3 6-7" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" /></svg>}
             {w === "all" ? "All" : w === "dry" ? "Dry" : "Wet"}
           </button>
@@ -661,19 +634,19 @@ export default function IncidentPage() {
   // ---------- Predictive / Prescriptive share the same shell ----------
   if (activeTab !== "Descriptive") {
     return (
-      <section className={styles.page}>
+      <section className={`${styles.page} viz-incident`}>
         <PageHeader icon={AlertTriangle} title="Incident Overview" subtitle="Road crashes, hazards, and response patterns across NLEX" />
         <div className={styles.filterRow}>
           {activeTab === "Predictive" && (
             <>
-              {renderRangeFilter(predictiveDataBounds)}
-              {renderWeatherFilter(weatherApplicable)}
+              {rangeFilter}
+              {weatherFilter}
             </>
           )}
           {activeTab === "Prescriptive" && <span className={styles.filterLabel}>Recommended resource allocation</span>}
           <span className={styles.spacer} />
           <div className={styles.modeTabs}>
-            {TABS.map((t) => (
+            {(["Descriptive", "Predictive", "Prescriptive"] as const).map((t) => (
               <button key={t} className={`${styles.modeTab} ${activeTab === t ? styles.modeTabActive : ""}`} onClick={() => setActiveTab(t)}>
                 {activeTab === t && <svg width="12" height="12" viewBox="0 0 16 16" fill="none" style={{ marginRight: 6, marginBottom: -1 }}><path d="M3.5 8.5l3 3 6-7" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" /></svg>}
                 {t}
@@ -682,15 +655,11 @@ export default function IncidentPage() {
           </div>
         </div>
         {activeTab === "Predictive" ? (
+          // Filters above are display-only on this tab for now — the chart keeps
+          // its original fixed window. Pass months/from/to/weather through to
+          // wire them up; the API and the component already accept them.
           <div className={styles.spanFull}>
-            <PredictiveIncidentChart
-              months={rangeMode === "custom" ? "all" : rangeMode}
-              from={rangeMode === "custom" ? customFrom : undefined}
-              to={rangeMode === "custom" ? customTo : undefined}
-              weather={weather}
-              onDataBoundsChange={setPredictiveDataBounds}
-              onWeatherApplicableChange={setWeatherApplicable}
-            />
+            <PredictiveIncidentChart />
           </div>
         ) : (
           <article className={`${styles.chartCard} ${styles.chart1}`}>
@@ -709,19 +678,19 @@ export default function IncidentPage() {
   }
 
   return (
-    <section className={styles.page}>
+    <section className={`${styles.page} viz-incident`}>
       <PageHeader icon={AlertTriangle} title="Incident Overview" subtitle="Road crashes, hazards, and response patterns across NLEX" />
 
       {/* Row A — global filters */}
       <div className={styles.filterRow}>
-        {renderRangeFilter()}
-        {renderWeatherFilter()}
+        {rangeFilter}
+        {weatherFilter}
 
         {loading && data && <span className={styles.updating}>Updating…</span>}
         <span className={styles.spacer} />
 
         <div className={styles.modeTabs}>
-          {TABS.map((t) => (
+          {(["Descriptive", "Predictive", "Prescriptive"] as const).map((t) => (
             <button key={t} className={`${styles.modeTab} ${activeTab === t ? styles.modeTabActive : ""}`} onClick={() => setActiveTab(t)}>
               {activeTab === t && <svg width="12" height="12" viewBox="0 0 16 16" fill="none" style={{ marginRight: 6, marginBottom: -1 }}><path d="M3.5 8.5l3 3 6-7" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" /></svg>}
               {t}
@@ -733,6 +702,7 @@ export default function IncidentPage() {
       {/* Row B — KPI tiles */}
       <div className={styles.kpiRow}>
         <article className={styles.kpiTile}>
+          <span className={styles.kpiIcon} aria-hidden="true"><AlertTriangle size={15} /></span>
           <h3>Total Incidents</h3>
           <div className={styles.kpiValue}>{kpiValue(data ? fmtInt(data.kpis.totalIncidents) : null)}</div>
           <p className={styles.kpiHint}>
@@ -743,16 +713,19 @@ export default function IncidentPage() {
           </p>
         </article>
         <article className={styles.kpiTile}>
+          <span className={styles.kpiIcon} aria-hidden="true"><HeartPulse size={15} /></span>
           <h3>Injuries</h3>
           <div className={styles.kpiValue}>{kpiValue(data ? fmtInt(data.kpis.injuries) : null)}</div>
           <p className={styles.kpiHint}>{data ? `${fmtInt(data.kpis.fatalities)} fatalities in range` : "—"}</p>
         </article>
         <article className={styles.kpiTile}>
+          <span className={styles.kpiIcon} aria-hidden="true"><Timer size={15} /></span>
           <h3>Avg Response Time</h3>
           <div className={styles.kpiValue}>{kpiValue(data?.kpis.avgResponseMin != null ? `${data.kpis.avgResponseMin} min` : null)}</div>
           <p className={styles.kpiHint}>reported → responder on scene</p>
         </article>
         <article className={styles.kpiTile}>
+          <span className={styles.kpiIcon} aria-hidden="true"><MapPin size={15} /></span>
           <h3>Top Hotspot</h3>
           <div className={styles.kpiValue}>{kpiValue(derived?.topHotspot ? kmLabel(derived.topHotspot.km_bin) : null)}</div>
           <p className={styles.kpiHint}>
@@ -762,6 +735,7 @@ export default function IncidentPage() {
           </p>
         </article>
         <article className={styles.kpiTile}>
+          <span className={styles.kpiIcon} aria-hidden="true"><CloudRain size={15} /></span>
           <h3>Crash Rate in Rain</h3>
           <div className={styles.kpiValue}>{kpiValue(derived?.rainMultiplier != null ? `${derived.rainMultiplier.toFixed(2)}×` : null)}</div>
           <p className={styles.kpiHint}>
@@ -779,10 +753,30 @@ export default function IncidentPage() {
         </div>
         <div className={styles.heroFilters}>
           <div className={styles.heroFilterGroup}>
+            <span className={styles.heroFilterLabel}>Incident type</span>
+            <CustomSelect
+              value={source}
+              onChange={(v) => setSource(v as SourceFilter)}
+              options={[
+                { label: "All types", value: "all" },
+                { label: "Road crashes", value: "road" },
+                { label: "Motorcycle crashes", value: "moto" },
+                { label: "Stalled vehicles", value: "stalled" },
+              ]}
+            />
+          </div>
+          <div className={styles.heroFilterDivider} />
+          <div className={styles.heroFilterGroup}>
             <span className={styles.heroFilterLabel}>Granularity</span>
             <div className={styles.segmentedSmall}>
               {(["daily", "weekly", "monthly"] as const).map((g) => (
-                <button key={g} className={grain === g ? "active" : ""} onClick={() => setGrain(g)}>
+                <button
+                  key={g}
+                  className={grain === g ? "active" : ""}
+                  disabled={Boolean(grainBlockedReason(g, spanDays))}
+                  title={grainBlockedReason(g, spanDays) ?? undefined}
+                  onClick={() => setGrain(g)}
+                >
                   {grain === g && <svg width="10" height="10" viewBox="0 0 16 16" fill="none" style={{ marginRight: 4, marginBottom: -1 }}><path d="M3.5 8.5l3 3 6-7" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" /></svg>}
                   {g.charAt(0).toUpperCase() + g.slice(1)}
                 </button>
@@ -817,6 +811,15 @@ export default function IncidentPage() {
           <div className={styles.headText}>
             <h3>Hotspots by Km Segment</h3>
           </div>
+          <button
+            type="button"
+            className={styles.sortBtn}
+            onClick={() => setHotspotSort(hotspotSort === "desc" ? "asc" : "desc")}
+            title={hotspotSort === "desc" ? "Sorted highest first — click for lowest first" : "Sorted lowest first — click for highest first"}
+            aria-label={`Sort order: ${hotspotSort === "desc" ? "highest first" : "lowest first"}. Activate to reverse.`}
+          >
+            {hotspotSort === "desc" ? <ArrowDownWideNarrow size={15} /> : <ArrowUpNarrowWide size={15} />}
+          </button>
           <button className={styles.secondaryButton} onClick={() => setAllHotspotsOpen(true)}>
             View all
             <svg width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M6 12l4-4-4-4" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" /></svg>
@@ -831,6 +834,15 @@ export default function IncidentPage() {
           <div className={styles.headText}>
             <h3>{causeMode === "Causes" ? "Top Incident Causes" : "Top Accident Types"}</h3>
           </div>
+          <button
+            type="button"
+            className={styles.sortBtn}
+            onClick={() => setCauseSort(causeSort === "desc" ? "asc" : "desc")}
+            title={causeSort === "desc" ? "Sorted highest first — click for lowest first" : "Sorted lowest first — click for highest first"}
+            aria-label={`Sort order: ${causeSort === "desc" ? "highest first" : "lowest first"}. Activate to reverse.`}
+          >
+            {causeSort === "desc" ? <ArrowDownWideNarrow size={15} /> : <ArrowUpNarrowWide size={15} />}
+          </button>
           <div className={styles.segmentedSmall}>
             {(["Causes", "Types"] as const).map((m) => (
               <button key={m} className={causeMode === m ? "active" : ""} onClick={() => setCauseMode(m)}>

@@ -113,6 +113,29 @@ export default function IncidentPage() {
   const [allHotspotsOpen, setAllHotspotsOpen] = useState(false);
   const [detail, setDetail] = useState<Detail | null>(null);
 
+  // Earliest observed / latest forecast date reported by the predictive
+  // endpoint. Lifted from PredictiveIncidentChart's first response so the
+  // Range control's Custom date picker can be bounded by it.
+  const [predictiveDataBounds, setPredictiveDataBounds] = useState<{ minDate: string; maxDate: string } | null>(null);
+
+  // Whether the predictive endpoint's current Range has any scored rows for
+  // Weather to filter.
+  const [weatherApplicable, setWeatherApplicable] = useState(true);
+
+  // Restore the view the hourly drill-down was opened from
+  useEffect(() => {
+    const q = new URLSearchParams(window.location.search);
+    const t = q.get("tab");
+    if (t && ["Descriptive", "Predictive", "Prescriptive"].includes(t)) setActiveTab(t as typeof activeTab);
+    const w = q.get("weather");
+    if (w === "all" || w === "dry" || w === "wet") setWeather(w);
+    const f = q.get("from");
+    const t2 = q.get("to");
+    if (f && t2) { setCustomFrom(f); setCustomTo(t2); setRangeMode("custom"); return; }
+    const m = q.get("months");
+    if (m === "3" || m === "12" || m === "all") setRangeMode(m);
+  }, []);
+
   const [data, setData] = useState<Analytics | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
@@ -637,6 +660,12 @@ export default function IncidentPage() {
       <section className={`${styles.page} viz-incident`}>
         <PageHeader icon={AlertTriangle} title="Incident Overview" subtitle="Road crashes, hazards, and response patterns across NLEX" />
         <div className={styles.filterRow}>
+          {activeTab === "Predictive" && (
+            <>
+              {rangeFilter}
+              {weatherFilter}
+            </>
+          )}
           {activeTab === "Prescriptive" && <span className={styles.filterLabel}>Recommended resource allocation</span>}
           <span className={styles.spacer} />
           <div className={styles.modeTabs}>
@@ -649,12 +678,15 @@ export default function IncidentPage() {
           </div>
         </div>
         {activeTab === "Predictive" ? (
-          // No range or weather control on this tab: the forecast chart runs on
-          // its own fixed window, so those filters were decorative here. If it
-          // ever accepts them, add them back — the API and the component both
-          // already take months, from, to and weather.
           <div className={styles.spanFull}>
-            <PredictiveIncidentChart />
+            <PredictiveIncidentChart
+              months={rangeMode === "custom" ? "all" : rangeMode}
+              from={rangeMode === "custom" ? customFrom : undefined}
+              to={rangeMode === "custom" ? customTo : undefined}
+              weather={weather}
+              onDataBoundsChange={setPredictiveDataBounds}
+              onWeatherApplicableChange={setWeatherApplicable}
+            />
           </div>
         ) : (
           <article className={`${styles.chartCard} ${styles.chart1}`}>

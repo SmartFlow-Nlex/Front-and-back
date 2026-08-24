@@ -11,7 +11,7 @@ import ChartSkeleton, { KpiSkeleton } from "../../../components/dashboard/ChartS
 import PageHeader from "../../../components/dashboard/PageHeader";
 import PredictiveEmissionChart from "../../../components/dashboard/PredictiveEmissionChart";
 import DateRangePicker from "../traffic/components/DateRangePicker";
-import { rangeDays, grainBlockedReason, bestGrainFor } from "../../../lib/granularity";
+import { rangeDays, grainBlockedReason, bestGrainFor, axisLabelFor, bucketLabelFor } from "../../../lib/granularity";
 import styles from "../traffic/traffic.module.css";
 
 const BACKEND = process.env.NEXT_PUBLIC_BACKEND_URL ?? "http://localhost:4000";
@@ -201,7 +201,7 @@ export default function SustainabilityPage() {
 
     return {
       grid: { left: 62, right: 16, top: 10, bottom: 52 },
-      xAxis: { type: "category", data: labels, axisLabel: { interval: labelInterval, fontSize: 10, hideOverlap: true }, axisTick: { show: false } },
+      xAxis: { type: "category", data: labels, axisLabel: { formatter: axisLabelFor(grain), interval: labelInterval, fontSize: 10, hideOverlap: true }, axisTick: { show: false } },
       yAxis: { type: "value", name: "tonnes CO₂", nameGap: 10, nameTextStyle: { fontSize: 9, align: "left" }, splitNumber: 3, axisLabel: { fontSize: 10, formatter: (v: number) => fmtCompact(v) } },
       tooltip: {
         trigger: "axis",
@@ -210,7 +210,7 @@ export default function SustainabilityPage() {
           const i = items[0].dataIndex;
           const r = trendRows[i];
           const rows = items.map((x) => `${x.marker} ${x.seriesName}: ${fmtInt(x.value)} t`).join("<br/>");
-          return `<b>${r.label}</b><br/>${rows}<br/>Total: <b>${fmtInt(r.total)} t</b>`;
+          return `<b>${bucketLabelFor(grain)(r.label)}</b><br/>${rows}<br/>Total: <b>${fmtInt(r.total)} t</b>`;
         },
       },
       legend: { show: true, bottom: 0, left: "center", itemWidth: 14, itemHeight: 8, itemGap: 18, padding: 0, textStyle: { fontSize: 11 } },

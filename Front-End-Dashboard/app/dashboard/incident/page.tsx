@@ -11,7 +11,7 @@ import ChartSkeleton, { KpiSkeleton } from "../../../components/dashboard/ChartS
 import PageHeader from "../../../components/dashboard/PageHeader";
 import PredictiveIncidentChart from "../../../components/dashboard/PredictiveIncidentChart";
 import DateRangePicker from "../traffic/components/DateRangePicker";
-import { rangeDays, grainBlockedReason, bestGrainFor } from "../../../lib/granularity";
+import { rangeDays, grainBlockedReason, bestGrainFor, axisLabelFor, bucketLabelFor } from "../../../lib/granularity";
 import styles from "../traffic/traffic.module.css";
 
 const BACKEND = process.env.NEXT_PUBLIC_BACKEND_URL ?? "http://localhost:4000";
@@ -214,9 +214,9 @@ export default function IncidentPage() {
 
     return {
       grid: { left: 52, right: 16, top: 10, bottom: 52 },
-      xAxis: { type: "category", data: labels, axisLabel: { interval: labelInterval, fontSize: 10, hideOverlap: true }, axisTick: { show: false } },
+      xAxis: { type: "category", data: labels, axisLabel: { formatter: axisLabelFor(grain), interval: labelInterval, fontSize: 10, hideOverlap: true }, axisTick: { show: false } },
       yAxis: { type: "value", splitNumber: 3, axisLabel: { fontSize: 10 } },
-      tooltip: { trigger: "axis", valueFormatter: (v) => (v == null ? "—" : fmtInt(Number(v))) },
+      tooltip: { trigger: "axis", axisPointer: { label: { formatter: (o) => bucketLabelFor(grain)(String((o as { value: unknown }).value)) } }, valueFormatter: (v) => (v == null ? "—" : fmtInt(Number(v))) },
       legend: { show: true, bottom: 0, left: "center", itemWidth: 14, itemHeight: 8, itemGap: 18, padding: 0, textStyle: { fontSize: 11 } },
       series,
     };

@@ -15,7 +15,7 @@ import PredictiveCongestionChart from "../../../components/dashboard/PredictiveC
 import PredictiveEventChart from "../../../components/dashboard/PredictiveEventChart";
 import styles from "./traffic.module.css";
 import DateRangePicker from "./components/DateRangePicker";
-import { rangeDays, grainBlockedReason, bestGrainFor } from "../../../lib/granularity";
+import { rangeDays, grainBlockedReason, bestGrainFor, axisLabelFor, bucketLabelFor } from "../../../lib/granularity";
 
 const BACKEND = process.env.NEXT_PUBLIC_BACKEND_URL ?? "http://localhost:4000";
 
@@ -310,12 +310,7 @@ export default function TrafficPage() {
       grain === "hourly" ? (l: string) => l.slice(0, 10) : grain === "monthly" ? (l: string) => l : (l: string) => l.slice(0, 7);
     const labelInterval = (index: number) =>
       index === 0 || boundaryKey(labels[index]) !== boundaryKey(labels[index - 1]);
-    const axisFmt =
-      grain === "hourly"
-        ? (v: string) => v.slice(5, 10)
-        : grain === "monthly"
-          ? (v: string) => v
-          : (v: string) => v.slice(0, 7);
+    const axisFmt = axisLabelFor(grain);
 
     // The raw series behind a moving average is context, not a second identity,
     // so it takes the ramp's lightest step rather than a hue of its own.
@@ -344,7 +339,7 @@ export default function TrafficPage() {
       },
       // scale:true so the weekly rhythm is visible instead of a flat line on a zero base
       yAxis: { type: "value", scale: true, splitNumber: 3, axisLabel: { formatter: (v: number) => fmtCompact(v), fontSize: 10 } },
-      tooltip: { trigger: "axis", valueFormatter: (v) => (v == null ? "—" : fmtInt(Number(v))) },
+      tooltip: { trigger: "axis", axisPointer: { label: { formatter: (o) => bucketLabelFor(grain)(String((o as { value: unknown }).value)) } }, valueFormatter: (v) => (v == null ? "—" : fmtInt(Number(v))) },
       // A legend whenever there is more than one line. The old condition hid it
       // precisely when the chart split into northbound and southbound — the case
       // that needs it most, since two lines with no key are unreadable.

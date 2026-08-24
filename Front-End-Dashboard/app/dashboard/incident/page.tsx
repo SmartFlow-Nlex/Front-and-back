@@ -582,6 +582,8 @@ export default function IncidentPage() {
       {rangeMode === "custom" && (
         <DateRangePicker
           startDate={customFrom}
+          minDate={data?.meta.minDate}
+          maxDate={data?.meta.maxDate}
           endDate={customTo}
           onChange={(start, end) => {
             setCustomFrom(start);

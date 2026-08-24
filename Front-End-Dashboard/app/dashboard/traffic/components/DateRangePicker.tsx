@@ -8,6 +8,10 @@ interface DateRangePickerProps {
   startDate: string;
   endDate: string;
   onChange: (start: string, end: string) => void;
+  /** Earliest date the warehouse holds, YYYY-MM-DD. Days before it are unpickable. */
+  minDate?: string;
+  /** Latest date the warehouse holds. Days after it are unpickable. */
+  maxDate?: string;
 }
 
 const MONTHS = [
@@ -25,7 +29,7 @@ function formatDate(d: Date): string {
   return `${y}-${m}-${dd}`;
 }
 
-export default function DateRangePicker({ startDate, endDate, onChange }: DateRangePickerProps) {
+export default function DateRangePicker({ startDate, endDate, onChange, minDate, maxDate }: DateRangePickerProps) {
   const [isOpen, setIsOpen] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
 
@@ -72,6 +76,46 @@ export default function DateRangePicker({ startDate, endDate, onChange }: DateRa
    * end is being chosen, so it cannot be picked rather than being picked and
    * rejected.
    */
+  /**
+   * The calendar is bounded by what the warehouse actually holds.
+   *
+   * Left open it offered every year the grid could render — 2030 and beyond —
+   * and picking one produced an empty chart with nothing to say why. Out-of-range
+   * days, months and years are disabled instead, so the range that can be asked
+   * for is the range that can be answered.
+   *
+   * Bounds are optional: with none supplied nothing is restricted, which keeps
+   * the picker usable before the first response lands.
+   */
+  const outOfBounds = (dayStr: string) =>
+    (minDate != null && dayStr < minDate) || (maxDate != null && dayStr > maxDate);
+
+  const minY = minDate ? Number(minDate.slice(0, 4)) : null;
+  const maxY = maxDate ? Number(maxDate.slice(0, 4)) : null;
+
+  /** A month is reachable if any of its days fall inside the bounds. */
+  const monthOutOfBounds = (year: number, month: number) => {
+    const first = formatDate(new Date(year, month, 1));
+    const last = formatDate(new Date(year, month + 1, 0));
+    return (minDate != null && last < minDate) || (maxDate != null && first > maxDate);
+  };
+
+  const canGoPrev =
+    viewMode === "years"
+      ? minY == null || Math.floor(currentYear / 10) * 10 - 1 > minY
+      : !monthOutOfBounds(
+          currentMonth === 0 ? currentYear - 1 : currentYear,
+          currentMonth === 0 ? 11 : currentMonth - 1,
+        );
+
+  const canGoNext =
+    viewMode === "years"
+      ? maxY == null || Math.floor(currentYear / 10) * 10 + 10 < maxY
+      : !monthOutOfBounds(
+          currentMonth === 11 ? currentYear + 1 : currentYear,
+          currentMonth === 11 ? 0 : currentMonth + 1,
+        );
+
   const handleDayClick = (dayStr: string) => {
     if (!selStart || (selStart && selEnd)) {
       // Start a fresh selection.
@@ -93,11 +137,17 @@ export default function DateRangePicker({ startDate, endDate, onChange }: DateRa
 
   const todayStr = formatDate(new Date());
 
+  /**
+   * Presets are counted back from the newest day the data holds, not from today.
+   * "Last 30 days" from a real clock would land past the end of the warehouse and
+   * return nothing.
+   */
   const applyPreset = (days: number) => {
-    const e = new Date();
-    const s = new Date();
-    s.setDate(e.getDate() - days);
-    onChange(formatDate(s), formatDate(e));
+    const end = maxDate ? new Date(`${maxDate}T00:00:00`) : new Date();
+    const start = new Date(end);
+    start.setDate(end.getDate() - days);
+    const startStr = formatDate(start);
+    onChange(minDate && startStr < minDate ? minDate : startStr, formatDate(end));
     setIsOpen(false);
   };
 
@@ -159,7 +209,12 @@ export default function DateRangePicker({ startDate, endDate, onChange }: DateRa
       {isOpen && (
         <div className={styles.popover}>
           <div className={styles.header}>
-            <button className={styles.navBtn} onClick={viewMode === "years" ? () => setCurrentYear(y => y - 10) : prevMonth}>
+            <button
+              className={styles.navBtn}
+              disabled={!canGoPrev}
+              aria-label="Previous"
+              onClick={viewMode === "years" ? () => setCurrentYear((y) => y - 10) : prevMonth}
+            >
               <ChevronLeft size={16} />
             </button>
             <div className={styles.headerMiddle}>
@@ -176,7 +231,12 @@ export default function DateRangePicker({ startDate, endDate, onChange }: DateRa
                 {currentYear}
               </button>
             </div>
-            <button className={styles.navBtn} onClick={viewMode === "years" ? () => setCurrentYear(y => y + 10) : nextMonth}>
+            <button
+              className={styles.navBtn}
+              disabled={!canGoNext}
+              aria-label="Next"
+              onClick={viewMode === "years" ? () => setCurrentYear((y) => y + 10) : nextMonth}
+            >
               <ChevronRight size={16} />
             </button>
           </div>
@@ -210,7 +270,9 @@ export default function DateRangePicker({ startDate, endDate, onChange }: DateRa
 
                 const d = new Date(dayStr);
                 // Same day as the start: not a range, so it is not selectable.
-                const blocked = awaitingEnd && dayStr === selStart;
+                // Same day as the start is not a range; outside the bounds there
+                // is no data to return.
+                const blocked = (awaitingEnd && dayStr === selStart) || outOfBounds(dayStr);
                 if (dayStr === todayStr) classes += ` ${styles.today}`;
                 return (
                   <button
@@ -218,7 +280,9 @@ export default function DateRangePicker({ startDate, endDate, onChange }: DateRa
                     className={classes}
                     disabled={blocked}
                     title={
-                      blocked
+                      outOfBounds(dayStr)
+                        ? "Outside the range the data covers"
+                        : blocked
                         ? "A range needs at least two days"
                         : awaitingEnd
                           ? "Set as end date"
@@ -241,6 +305,7 @@ export default function DateRangePicker({ startDate, endDate, onChange }: DateRa
                 <button
                   key={m}
                   className={`${styles.gridItemBtn} ${currentMonth === i ? styles.selected : ""}`}
+                  disabled={monthOutOfBounds(currentYear, i)}
                   onClick={() => { setCurrentMonth(i); setViewMode("days"); }}
                 >
                   {m.substring(0, 3)}
@@ -257,6 +322,7 @@ export default function DateRangePicker({ startDate, endDate, onChange }: DateRa
                   <button
                     key={y}
                     className={`${styles.gridItemBtn} ${currentYear === y ? styles.selected : ""}`}
+                    disabled={(minY != null && y < minY) || (maxY != null && y > maxY)}
                     onClick={() => { setCurrentYear(y); setViewMode("days"); }}
                   >
                     {y}

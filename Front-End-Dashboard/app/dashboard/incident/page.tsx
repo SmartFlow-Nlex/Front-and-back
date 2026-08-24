@@ -8,6 +8,7 @@ import type { EChartsOption } from "echarts";
 import { AlertTriangle, ArrowDownWideNarrow, ArrowUpNarrowWide, CloudRain, HeartPulse, MapPin, Timer } from "lucide-react";
 import DashboardChart from "../../../components/dashboard/DashboardChart";
 import ChartSkeleton, { KpiSkeleton } from "../../../components/dashboard/ChartSkeleton";
+import CustomSelect from "../../../components/dashboard/CustomSelect";
 import PageHeader from "../../../components/dashboard/PageHeader";
 import PredictiveIncidentChart from "../../../components/dashboard/PredictiveIncidentChart";
 import DateRangePicker from "../traffic/components/DateRangePicker";
@@ -55,6 +56,8 @@ type Analytics = {
 type Granularity = "daily" | "weekly" | "monthly";
 type RangeMode = "3" | "12" | "all" | "custom";
 type WeatherFilter = "all" | "dry" | "wet";
+/** Matches the source enum the incident endpoint validates against. */
+type SourceFilter = "all" | "road" | "moto" | "stalled";
 type Detail = { title: string; subtitle?: string; rows: [string, string][]; note?: string };
 
 // ---------- Formatting ----------
@@ -99,6 +102,7 @@ export default function IncidentPage() {
   const [customFrom, setCustomFrom] = useState("");
   const [customTo, setCustomTo] = useState("");
   const [weather, setWeather] = useState<WeatherFilter>("all");
+  const [source, setSource] = useState<SourceFilter>("all");
 
   // Chart-local interactivity
   const [hotspotSort, setHotspotSort] = useState<"desc" | "asc">("desc");
@@ -126,6 +130,7 @@ export default function IncidentPage() {
       qs.set("months", rangeMode);
     }
     if (weather !== "all") qs.set("weather", weather);
+    if (source !== "all") qs.set("source", source);
     fetch(`${BACKEND}/api/incident/analytics?${qs}`, { cache: "no-store" })
       .then((r) => r.json())
       .then((json) => {
@@ -138,7 +143,7 @@ export default function IncidentPage() {
     return () => {
       cancelled = true;
     };
-  }, [rangeMode, customFrom, customTo, weather]);
+  }, [rangeMode, customFrom, customTo, weather, source]);
 
   /* How long a window is on screen, and what that allows.
 
@@ -747,6 +752,20 @@ export default function IncidentPage() {
           </div>
         </div>
         <div className={styles.heroFilters}>
+          <div className={styles.heroFilterGroup}>
+            <span className={styles.heroFilterLabel}>Incident type</span>
+            <CustomSelect
+              value={source}
+              onChange={(v) => setSource(v as SourceFilter)}
+              options={[
+                { label: "All types", value: "all" },
+                { label: "Road crashes", value: "road" },
+                { label: "Motorcycle crashes", value: "moto" },
+                { label: "Stalled vehicles", value: "stalled" },
+              ]}
+            />
+          </div>
+          <div className={styles.heroFilterDivider} />
           <div className={styles.heroFilterGroup}>
             <span className={styles.heroFilterLabel}>Granularity</span>
             <div className={styles.segmentedSmall}>

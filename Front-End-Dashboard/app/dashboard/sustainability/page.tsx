@@ -8,6 +8,7 @@ import type { EChartsOption } from "echarts";
 import { CalendarClock, Clock, Leaf, Truck, Wind } from "lucide-react";
 import DashboardChart from "../../../components/dashboard/DashboardChart";
 import ChartSkeleton, { KpiSkeleton } from "../../../components/dashboard/ChartSkeleton";
+import CustomSelect from "../../../components/dashboard/CustomSelect";
 import PageHeader from "../../../components/dashboard/PageHeader";
 import PredictiveEmissionChart from "../../../components/dashboard/PredictiveEmissionChart";
 import DateRangePicker from "../traffic/components/DateRangePicker";
@@ -40,6 +41,7 @@ type Analytics = {
 };
 
 type Granularity = "daily" | "weekly" | "monthly";
+type ClassFilter = "All" | "1" | "2" | "3";
 type RangeMode = "3" | "12" | "all" | "custom";
 type Detail = { title: string; subtitle?: string; rows: [string, string][]; note?: string };
 
@@ -88,6 +90,7 @@ export default function SustainabilityPage() {
   // Chart-local interactivity
   const [grain, setGrain] = useState<Granularity>("monthly");
   const [timeView, setTimeView] = useState<"hour" | "dow">("hour");
+  const [classSel, setClassSel] = useState<ClassFilter>("All");
   const [detail, setDetail] = useState<Detail | null>(null);
 
   const [data, setData] = useState<Analytics | null>(null);
@@ -214,9 +217,19 @@ export default function SustainabilityPage() {
         },
       },
       legend: { show: true, bottom: 0, left: "center", itemWidth: 14, itemHeight: 8, itemGap: 18, padding: 0, textStyle: { fontSize: 11 } },
-      series: [mk(CLASS_SHORT[0], "c1", RAMP[0]), mk(CLASS_SHORT[1], "c2", RAMP[1]), mk(CLASS_SHORT[2], "c3", RAMP[2])],
+      // The response carries c1, c2 and c3 per bucket, so choosing a class is a
+      // choice about what to draw rather than another query.
+      series: (
+        [
+          [CLASS_SHORT[0], "c1", RAMP[0], "1"],
+          [CLASS_SHORT[1], "c2", RAMP[1], "2"],
+          [CLASS_SHORT[2], "c3", RAMP[2], "3"],
+        ] as const
+      )
+        .filter(([, , , id]) => classSel === "All" || classSel === id)
+        .map(([name, key, color]) => mk(name, key, color)),
     };
-  }, [trendRows, grain]);
+  }, [trendRows, grain, classSel]);
 
   // ---------- When emissions happen (weekday/weekend hourly profile) ----------
   const timeProfile = useMemo(() => {
@@ -778,6 +791,20 @@ export default function SustainabilityPage() {
           </div>
         </div>
         <div className={styles.heroFilters}>
+          <div className={styles.heroFilterGroup}>
+            <span className={styles.heroFilterLabel}>Class</span>
+            <CustomSelect
+              value={classSel}
+              onChange={(v) => setClassSel(v as ClassFilter)}
+              options={[
+                { label: "All classes", value: "All" },
+                { label: "Class 1 · Light", value: "1" },
+                { label: "Class 2 · Medium", value: "2" },
+                { label: "Class 3 · Heavy", value: "3" },
+              ]}
+            />
+          </div>
+          <div className={styles.heroFilterDivider} />
           <div className={styles.heroFilterGroup}>
             <span className={styles.heroFilterLabel}>Granularity</span>
             <div className={styles.segmentedSmall}>

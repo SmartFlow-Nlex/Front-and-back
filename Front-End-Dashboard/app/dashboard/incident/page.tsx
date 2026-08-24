@@ -637,12 +637,6 @@ export default function IncidentPage() {
       <section className={`${styles.page} viz-incident`}>
         <PageHeader icon={AlertTriangle} title="Incident Overview" subtitle="Road crashes, hazards, and response patterns across NLEX" />
         <div className={styles.filterRow}>
-          {activeTab === "Predictive" && (
-            <>
-              {rangeFilter}
-              {weatherFilter}
-            </>
-          )}
           {activeTab === "Prescriptive" && <span className={styles.filterLabel}>Recommended resource allocation</span>}
           <span className={styles.spacer} />
           <div className={styles.modeTabs}>
@@ -655,9 +649,10 @@ export default function IncidentPage() {
           </div>
         </div>
         {activeTab === "Predictive" ? (
-          // Filters above are display-only on this tab for now — the chart keeps
-          // its original fixed window. Pass months/from/to/weather through to
-          // wire them up; the API and the component already accept them.
+          // No range or weather control on this tab: the forecast chart runs on
+          // its own fixed window, so those filters were decorative here. If it
+          // ever accepts them, add them back — the API and the component both
+          // already take months, from, to and weather.
           <div className={styles.spanFull}>
             <PredictiveIncidentChart />
           </div>

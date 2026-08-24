@@ -34,7 +34,14 @@ export default function DateRangePicker({ startDate, endDate, onChange, minDate,
   const containerRef = useRef<HTMLDivElement>(null);
 
   // Parse initial or default to current month
-  const initialDate = startDate ? new Date(startDate) : new Date();
+  // Opens on the current selection if there is one, otherwise the newest month
+  // the data holds — not today, which on this warehouse is months past the end
+  // of the readings and shows a calendar with every day disabled.
+  const initialDate = startDate
+    ? new Date(startDate)
+    : maxDate
+      ? new Date(`${maxDate}T00:00:00`)
+      : new Date();
   const [currentMonth, setCurrentMonth] = useState(initialDate.getMonth());
   const [currentYear, setCurrentYear] = useState(initialDate.getFullYear());
 
@@ -93,6 +100,19 @@ export default function DateRangePicker({ startDate, endDate, onChange, minDate,
   const minY = minDate ? Number(minDate.slice(0, 4)) : null;
   const maxY = maxDate ? Number(maxDate.slice(0, 4)) : null;
 
+  /**
+   * The years to offer.
+   *
+   * Bounded, this is every year the data covers and nothing else — a grid of
+   * four with two of them greyed says less than a grid of four that are all
+   * real. Unbounded it falls back to a decade page, which is the only sensible
+   * thing to show when the coverage is not known yet.
+   */
+  const yearOptions =
+    minY != null && maxY != null
+      ? Array.from({ length: maxY - minY + 1 }, (_, i) => minY + i)
+      : Array.from({ length: 12 }, (_, i) => Math.floor(currentYear / 10) * 10 - 1 + i);
+
   /** A month is reachable if any of its days fall inside the bounds. */
   const monthOutOfBounds = (year: number, month: number) => {
     const first = formatDate(new Date(year, month, 1));
@@ -100,9 +120,12 @@ export default function DateRangePicker({ startDate, endDate, onChange, minDate,
     return (minDate != null && last < minDate) || (maxDate != null && first > maxDate);
   };
 
+  const bounded = minY != null && maxY != null;
+
   const canGoPrev =
     viewMode === "years"
-      ? minY == null || Math.floor(currentYear / 10) * 10 - 1 > minY
+      // With every available year on screen there is no earlier page to reach.
+      ? !bounded && true
       : !monthOutOfBounds(
           currentMonth === 0 ? currentYear - 1 : currentYear,
           currentMonth === 0 ? 11 : currentMonth - 1,
@@ -110,7 +133,7 @@ export default function DateRangePicker({ startDate, endDate, onChange, minDate,
 
   const canGoNext =
     viewMode === "years"
-      ? maxY == null || Math.floor(currentYear / 10) * 10 + 10 < maxY
+      ? !bounded && true
       : !monthOutOfBounds(
           currentMonth === 11 ? currentYear + 1 : currentYear,
           currentMonth === 11 ? 0 : currentMonth + 1,
@@ -131,6 +154,17 @@ export default function DateRangePicker({ startDate, endDate, onChange, minDate,
     }
     setIsOpen(false);
   };
+
+  useEffect(() => {
+    if (!minDate && !maxDate) return;
+    if (!monthOutOfBounds(currentYear, currentMonth)) return;
+    const fallback = startDate && !outOfBounds(startDate) ? startDate : (maxDate ?? minDate)!;
+    setCurrentYear(Number(fallback.slice(0, 4)));
+    setCurrentMonth(Number(fallback.slice(5, 7)) - 1);
+    // Only when the bounds themselves change: this pulls an out-of-range view
+    // back, it is not meant to fight the reader's own navigation.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [minDate, maxDate]);
 
   /** True while the picker is waiting for the second click. */
   const awaitingEnd = Boolean(selStart && !selEnd);
@@ -316,19 +350,15 @@ export default function DateRangePicker({ startDate, endDate, onChange, minDate,
 
           {viewMode === "years" && (
             <div className={styles.yearsGrid}>
-              {Array.from({ length: 12 }).map((_, i) => {
-                const y = Math.floor(currentYear / 10) * 10 - 1 + i;
-                return (
-                  <button
-                    key={y}
-                    className={`${styles.gridItemBtn} ${currentYear === y ? styles.selected : ""}`}
-                    disabled={(minY != null && y < minY) || (maxY != null && y > maxY)}
-                    onClick={() => { setCurrentYear(y); setViewMode("days"); }}
-                  >
-                    {y}
-                  </button>
-                );
-              })}
+              {yearOptions.map((y) => (
+                <button
+                  key={y}
+                  className={`${styles.gridItemBtn} ${currentYear === y ? styles.selected : ""}`}
+                  onClick={() => { setCurrentYear(y); setViewMode("days"); }}
+                >
+                  {y}
+                </button>
+              ))}
             </div>
           )}
 

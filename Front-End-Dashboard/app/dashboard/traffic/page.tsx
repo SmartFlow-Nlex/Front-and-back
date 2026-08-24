@@ -217,7 +217,6 @@ export default function TrafficPage() {
       qs.set("months", rangeMode);
     }
     if (plazaSel.length > 0) qs.set("plazas", plazaSel.join(","));
-    if (direction !== "Both") qs.set("direction", direction);
     if (vClass !== "All") qs.set("vehicleClass", vClass);
     if (weather !== "all") qs.set("weather", weather);
     fetch(`${BACKEND}/api/traffic/analytics?${qs}`, { cache: "no-store" })
@@ -232,7 +231,7 @@ export default function TrafficPage() {
     return () => {
       cancelled = true;
     };
-  }, [rangeMode, customFrom, customTo, plazaSel, direction, vClass, weather]);
+  }, [rangeMode, customFrom, customTo, plazaSel, vClass, weather]);
 
   // Hourly grain exists only when the server shipped hourly rows (spans <= ~3 months)
   const hourlyAvailable = !!data?.hourlyTrend;
@@ -304,11 +303,13 @@ export default function TrafficPage() {
     // The raw series behind a moving average is context, not a second identity,
     // so it takes the ramp's lightest step rather than a hue of its own.
     const FAINT = RAMP[0];
+    const nbLine = { name: "Northbound", type: "line" as const, data: rows.map((r) => r.nb), symbol: "none" as const, itemStyle: { color: PAIR_A }, lineStyle: { width: 2.5, color: PAIR_A }, endLabel: { show: true, formatter: "NB", color: PAIR_A, fontWeight: 700 } };
+    const sbLine = { name: "Southbound", type: "line" as const, data: rows.map((r) => r.sb), symbol: "none" as const, itemStyle: { color: PAIR_B }, lineStyle: { width: 2.5, color: PAIR_B }, endLabel: { show: true, formatter: "SB", color: PAIR_B, fontWeight: 700 } };
+
     const series: EChartsOption["series"] = splitDirection
-      ? [
-        { name: "Northbound", type: "line", data: rows.map((r) => r.nb), symbol: "none", itemStyle: { color: PAIR_A }, lineStyle: { width: 2.5, color: PAIR_A }, endLabel: { show: true, formatter: "NB", color: PAIR_A, fontWeight: 700 } },
-        { name: "Southbound", type: "line", data: rows.map((r) => r.sb), symbol: "none", itemStyle: { color: PAIR_B }, lineStyle: { width: 2.5, color: PAIR_B }, endLabel: { show: true, formatter: "SB", color: PAIR_B, fontWeight: 700 } },
-      ]
+      // Direction picks which carriageway to keep. Both data series are already
+      // in hand, so this is a choice about what to draw, not another request.
+      ? direction === "NB" ? [nbLine] : direction === "SB" ? [sbLine] : [nbLine, sbLine]
       : window > 0
         ? [
           { name: grain === "hourly" ? "Hourly volume" : "Daily volume", type: "line", data: rows.map((r) => r.total), symbol: "none", itemStyle: { color: FAINT }, lineStyle: { width: 1, color: FAINT } },
@@ -330,10 +331,12 @@ export default function TrafficPage() {
       // A legend whenever there is more than one line. The old condition hid it
       // precisely when the chart split into northbound and southbound — the case
       // that needs it most, since two lines with no key are unreadable.
-      legend: { show: splitDirection || window > 0, bottom: 0, left: "center", itemWidth: 14, itemHeight: 8, itemGap: 18, padding: 0, textStyle: { fontSize: 11 } },
+      // Split down to one carriageway leaves a single line, which its own end
+      // label already names — a one-item legend would just be furniture.
+      legend: { show: (splitDirection && direction === "Both") || window > 0, bottom: 0, left: "center", itemWidth: 14, itemHeight: 8, itemGap: 18, padding: 0, textStyle: { fontSize: 11 } },
       series,
     };
-  }, [data, grain, splitDirection, trendRows]);
+  }, [data, grain, splitDirection, direction, trendRows]);
 
   const heatmapOption = useMemo<EChartsOption | null>(() => {
     if (!data || data.hourDow.length === 0) return null;
@@ -551,7 +554,7 @@ export default function TrafficPage() {
   }, [derived]);
 
   // ---------- Click-to-inspect handlers ----------
-  const filtersNote = `Filters: ${plazaSel.length > 0 ? `${plazaSel.length} plaza(s)` : "all plazas"} · direction ${direction} · ${vClass === "All" ? "all classes" : vClass}${data ? ` · ${data.range.from} to ${data.range.to}` : ""}`;
+  const filtersNote = `Filters: ${plazaSel.length > 0 ? `${plazaSel.length} plaza(s)` : "all plazas"} · ${vClass === "All" ? "all classes" : vClass}${data ? ` · ${data.range.from} to ${data.range.to}` : ""}`;
 
   const onTrendClick = (p: { dataIndex: number }) => {
     const i = p.dataIndex;
@@ -991,15 +994,11 @@ export default function TrafficPage() {
                 <button
                   key={d}
                   className={direction === d ? "active" : ""}
-                  // Direction filters the query, so picking one zeroes the other
-                  // series. While the chart is split there is nothing to filter
-                  // to — both carriageways are the point.
-                  disabled={splitDirection && d !== "Both"}
-                  title={
-                    splitDirection && d !== "Both"
-                      ? "Turn off Split NB / SB to filter to one direction"
-                      : undefined
-                  }
+                  // Only meaningful once the chart is split: unsplit it draws a
+                  // single combined line, which is Both by definition and has no
+                  // carriageway to choose between.
+                  disabled={!splitDirection}
+                  title={!splitDirection ? "Turn on Split NB / SB to choose a direction" : undefined}
                   onClick={() => setDirection(d)}
                 >
                   {direction === d && <svg width="10" height="10" viewBox="0 0 16 16" fill="none" style={{ marginRight: 4, marginBottom: -1 }}><path d="M3.5 8.5l3 3 6-7" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" /></svg>}
@@ -1048,11 +1047,10 @@ export default function TrafficPage() {
                 onChange={(e) => {
                   const on = e.target.checked;
                   setSplitDirection(on);
-                  // Turning split on with a direction already chosen would draw
-                  // one real line and one flat zero, and the direction buttons
-                  // are disabled at that point — so there would be no way back
-                  // to a sensible chart except by turning split off again.
-                  if (on) setDirection("Both");
+                  // Turning split off returns the control to Both, so it is never
+                  // left disabled while holding NB or SB — a state the reader
+                  // could see but not change.
+                  if (!on) setDirection("Both");
                 }}
               />
               <span className={styles.heroToggleTrack}><span className={styles.heroToggleThumb} /></span>

@@ -15,6 +15,7 @@ import PredictiveCongestionChart from "../../../components/dashboard/PredictiveC
 import PredictiveEventChart from "../../../components/dashboard/PredictiveEventChart";
 import styles from "./traffic.module.css";
 import DateRangePicker from "./components/DateRangePicker";
+import { rangeDays, grainBlockedReason, bestGrainFor } from "../../../lib/granularity";
 
 const BACKEND = process.env.NEXT_PUBLIC_BACKEND_URL ?? "http://localhost:4000";
 
@@ -238,6 +239,22 @@ export default function TrafficPage() {
   useEffect(() => {
     if (grain === "hourly" && data && !data.hourlyTrend) setGrain("daily");
   }, [data, grain]);
+
+  /* How long a window is on screen, and what that allows.
+
+     Measured from the range the API resolved rather than the raw custom inputs,
+     so the 3-month and 12-month presets are governed by the same rule. */
+  const spanDays = rangeDays(data?.range.from, data?.range.to);
+
+  // A grain that stops being possible is demoted rather than left selected: the
+  // control disables it, so without this the chart would sit on an impossible
+  // bucket with no way to change it.
+  useEffect(() => {
+    if (spanDays == null) return;
+    if (grainBlockedReason(grain, spanDays)) {
+      setGrain(bestGrainFor(spanDays, hourlyAvailable) as typeof grain);
+    }
+  }, [spanDays, grain, hourlyAvailable]);
 
   // ---------- Derived values ----------
   const derived = useMemo(() => {
@@ -1033,8 +1050,12 @@ export default function TrafficPage() {
                 <button
                   key={g}
                   className={grain === g ? "active" : ""}
-                  disabled={g === "hourly" && !hourlyAvailable}
-                  title={g === "hourly" && !hourlyAvailable ? "Hourly detail is available for ranges up to 2 weeks" : undefined}
+                  disabled={(g === "hourly" && !hourlyAvailable) || Boolean(grainBlockedReason(g, spanDays))}
+                  title={
+                    g === "hourly" && !hourlyAvailable
+                      ? "Hourly detail is available for ranges up to 2 weeks"
+                      : grainBlockedReason(g, spanDays) ?? undefined
+                  }
                   onClick={() => setGrain(g)}
                 >
                   {grain === g && <svg width="10" height="10" viewBox="0 0 16 16" fill="none" style={{ marginRight: 4, marginBottom: -1 }}><path d="M3.5 8.5l3 3 6-7" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" /></svg>}

@@ -43,7 +43,15 @@ type Analytics = {
 };
 
 type Granularity = "hourly" | "daily" | "weekly" | "monthly";
-type ClassFilter = "All" | "1" | "2" | "3";
+/**
+ * Two controls, two jobs.
+ *
+ * `classView` lives on the hero chart and only decides which of its stacked
+ * series are drawn — it never refetches, so the rest of the tab is untouched.
+ * `classFilter` sits with the date range and narrows the query itself, so every
+ * panel reports that class.
+ */
+type ClassChoice = "All" | "1" | "2" | "3";
 type RangeMode = "3" | "12" | "all" | "custom";
 type Detail = { title: string; subtitle?: string; rows: [string, string][]; note?: string };
 
@@ -92,7 +100,8 @@ export default function SustainabilityPage() {
   // Chart-local interactivity
   const [grain, setGrain] = useState<Granularity>("monthly");
   const [timeView, setTimeView] = useState<"hour" | "dow">("hour");
-  const [classSel, setClassSel] = useState<ClassFilter>("All");
+  const [classView, setClassView] = useState<ClassChoice>("All");
+  const [classFilter, setClassFilter] = useState<ClassChoice>("All");
   const [detail, setDetail] = useState<Detail | null>(null);
 
   const [data, setData] = useState<Analytics | null>(null);
@@ -111,7 +120,7 @@ export default function SustainabilityPage() {
     } else {
       qs.set("months", rangeMode);
     }
-    if (classSel !== "All") qs.set("vehicleClass", classSel);
+    if (classFilter !== "All") qs.set("vehicleClass", classFilter);
     fetch(`${BACKEND}/api/emissions/analytics?${qs}`, { cache: "no-store" })
       .then((r) => r.json())
       .then((json) => {
@@ -124,7 +133,7 @@ export default function SustainabilityPage() {
     return () => {
       cancelled = true;
     };
-  }, [rangeMode, customFrom, customTo, classSel]);
+  }, [rangeMode, customFrom, customTo, classFilter]);
 
   /* How long a window is on screen, and what that allows.
 
@@ -237,13 +246,12 @@ export default function SustainabilityPage() {
         },
       },
       legend: { show: true, bottom: 0, left: "center", itemWidth: 14, itemHeight: 8, itemGap: 18, padding: 0, textStyle: { fontSize: 11 } },
-      // The class filter is a query parameter now, so the response already holds
-      // only the chosen class and every panel on the tab narrows with it. Drawing
-      // all three series is correct: the two that were filtered out are zero.
+      // Drawn from data already in hand: the response carries c1, c2 and c3 per
+      // bucket, so this hides series rather than asking for different numbers.
       series: [mk(CLASS_SHORT[0], "c1", RAMP[0]), mk(CLASS_SHORT[1], "c2", RAMP[1]), mk(CLASS_SHORT[2], "c3", RAMP[2])]
-        .filter((_, i) => classSel === "All" || classSel === String(i + 1)),
+        .filter((_, i) => classView === "All" || classView === String(i + 1)),
     };
-  }, [trendRows, grain, classSel]);
+  }, [trendRows, grain, classView]);
 
   // ---------- When emissions happen (weekday/weekend hourly profile) ----------
   const timeProfile = useMemo(() => {
@@ -731,6 +739,27 @@ export default function SustainabilityPage() {
           )}
         </div>
 
+        <div className={styles.filterGroup}>
+          {/* Narrows the query, so every panel on the tab reports this class.
+                Distinct from the hero chart's own Show control, which only hides
+                series in that one plot. */}
+          <span className={styles.filterLabel}>Class</span>
+            <CustomSelect
+              value={classFilter}
+              onChange={(v) => {
+                setClassFilter(v as ClassChoice);
+                // A local view of a class the tab no longer loads would be blank.
+                if (v !== "All") setClassView("All");
+              }}
+              options={[
+                { label: "All classes", value: "All" },
+                { label: CLASS_SHORT[0], value: "1" },
+                { label: CLASS_SHORT[1], value: "2" },
+                { label: CLASS_SHORT[2], value: "3" },
+              ]}
+            />
+          </div>
+
         {loading && data && <span className={styles.updating}>Updating…</span>}
         <span className={styles.spacer} />
 
@@ -806,15 +835,18 @@ export default function SustainabilityPage() {
         </div>
         <div className={styles.heroFilters}>
           <div className={styles.heroFilterGroup}>
-            <span className={styles.heroFilterLabel}>Class</span>
+            <span className={styles.heroFilterLabel}>Show</span>
             <CustomSelect
-              value={classSel}
-              onChange={(v) => setClassSel(v as ClassFilter)}
+              value={classView}
+              onChange={(v) => setClassView(v as ClassChoice)}
+              // Only what the loaded data can actually show. With the tab already
+              // filtered to one class the others hold nothing, so offering them
+              // here would draw an empty chart.
               options={[
                 { label: "All classes", value: "All" },
-                { label: "Class 1 · Light", value: "1" },
-                { label: "Class 2 · Medium", value: "2" },
-                { label: "Class 3 · Heavy", value: "3" },
+                ...(["1", "2", "3"] as const)
+                  .filter((c) => classFilter === "All" || classFilter === c)
+                  .map((c) => ({ label: CLASS_SHORT[Number(c) - 1], value: c })),
               ]}
             />
           </div>

@@ -171,6 +171,9 @@ export default function TrafficMapPanel({ title, subtitle, badge, endpoint, laye
        grey band with no state on it. The road is a fact about NLEX, not about
        one endpoint's payload, so it is built from geometry the client always
        has and the feed only colours it in. */
+    /** Stands in for "the feed said nothing about this stretch". */
+    const NO_READING = -1;
+
     const exitNames = [...FALLBACK_EXITS].sort((x, y) => x.km - y.km).map((e) => e.exit_name);
 
     const corridorBase: GeoJSON.FeatureCollection = {
@@ -197,9 +200,6 @@ export default function TrafficMapPanel({ title, subtitle, badge, endpoint, laye
         })),
       ),
     };
-
-    /** Stands in for "the feed said nothing about this stretch". */
-    const NO_READING = -1;
 
     /** Waze levels for a forecast's categorical state. */
     const FORECAST_LEVEL: Record<string, number> = { Low: 1, Medium: 3, High: 4, Severe: 5 };

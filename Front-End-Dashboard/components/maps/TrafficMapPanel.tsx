@@ -5,7 +5,7 @@ import mapboxgl, { GeoJSONSource } from "mapbox-gl";
 import type { Point } from "geojson";
 import { useEffect, useRef, useState } from "react";
 import nlexGeometry from "./nlex-geometry.json";
-import { sliceCorridor, type LngLat } from "../../lib/corridor-shape";
+import { corridorGuard, sliceCorridor, type LngLat } from "../../lib/corridor-shape";
 import { FALLBACK_EXITS } from "../../lib/nlex-exits";
 import { useChartTheme } from "../../lib/chart-theme";
 import { mapPalette } from "../../lib/map-palette";
@@ -69,9 +69,9 @@ export default function TrafficMapPanel({ title, subtitle, badge, endpoint, laye
     ];
     const OFFSET = [
       "interpolate", ["linear"], ["zoom"],
-      8, side(5.5),
-      12, side(10.5),
-      16, side(16),
+      8, side(3.6),
+      12, side(7),
+      16, side(11),
     ] as unknown as mapboxgl.ExpressionSpecification;
 
     mapboxgl.accessToken = token;
@@ -157,10 +157,10 @@ export default function TrafficMapPanel({ title, subtitle, badge, endpoint, laye
        feed says WHAT each segment is doing, the local geometry says WHERE it
        runs. Without this the ribbons cut corners across open country. */
     const corridorLine = (nlexGeometry as unknown as { coordinates: LngLat[] }).coordinates;
-    const corridorParts = sliceCorridor(
-      corridorLine,
-      [...FALLBACK_EXITS].sort((a, b) => a.km - b.km).map((e) => [e.longitude, e.latitude] as LngLat),
-    );
+    const corridorExits = [...FALLBACK_EXITS]
+      .sort((a, b) => a.km - b.km)
+      .map((e) => [e.longitude, e.latitude] as LngLat);
+    const corridorParts = sliceCorridor(corridorLine, corridorExits);
 
     /* The corridor as its own source: 19 segments x 2 directions, on the real
        alignment, built here rather than taken from the feed.
@@ -171,6 +171,11 @@ export default function TrafficMapPanel({ title, subtitle, badge, endpoint, laye
        grey band with no state on it. The road is a fact about NLEX, not about
        one endpoint's payload, so it is built from geometry the client always
        has and the feed only colours it in. */
+    // Shared with the page's stats, so the map and the counters agree on what
+    // counts as a report about NLEX. See lib/corridor-shape.ts.
+    const guard = corridorGuard(corridorLine, corridorExits);
+    const onlyOnCorridor = guard.filter;
+
     /** Stands in for "the feed said nothing about this stretch". */
     const NO_READING = -1;
 
@@ -243,7 +248,7 @@ export default function TrafficMapPanel({ title, subtitle, badge, endpoint, laye
 
     map.on("load", async () => {
       const response = await fetch(endpoint, { cache: "no-store" });
-      const data = await response.json();
+      const data = onlyOnCorridor(await response.json());
 
       const isRealtime = endpoint.includes("real-time");
 
@@ -286,7 +291,7 @@ export default function TrafficMapPanel({ title, subtitle, badge, endpoint, laye
         layout: { "line-join": "round", "line-cap": "round" },
         paint: {
           "line-color": PALETTE.halo,
-          "line-width": ["interpolate", ["exponential", 1.5], ["zoom"], 8, 20, 12, 38, 16, 56],
+          "line-width": ["interpolate", ["exponential", 1.5], ["zoom"], 8, 16, 12, 30, 16, 46],
           "line-opacity": PALETTE.haloOpacity,
           "line-blur": ["interpolate", ["linear"], ["zoom"], 8, 8, 16, 20],
         },
@@ -299,7 +304,7 @@ export default function TrafficMapPanel({ title, subtitle, badge, endpoint, laye
         layout: { "line-join": "round", "line-cap": "round" },
         paint: {
           "line-color": PALETTE.casing,
-          "line-width": ["interpolate", ["linear"], ["zoom"], 8, 11, 12, 20, 16, 30],
+          "line-width": ["interpolate", ["linear"], ["zoom"], 8, 8, 12, 15, 16, 23],
           "line-opacity": 1,
           "line-offset": OFFSET,
         },
@@ -323,7 +328,7 @@ export default function TrafficMapPanel({ title, subtitle, badge, endpoint, laye
             // nothing here, rather than implying a free flow it never saw.
             PALETTE.noData,
           ],
-          "line-width": ["interpolate", ["linear"], ["zoom"], 8, 7, 12, 14, 16, 22],
+          "line-width": ["interpolate", ["linear"], ["zoom"], 8, 5, 12, 10, 16, 16],
           "line-opacity": 1,
           "line-offset": OFFSET,
         },
@@ -370,8 +375,8 @@ export default function TrafficMapPanel({ title, subtitle, badge, endpoint, laye
             1, PALETTE.level[1], 2, PALETTE.level[2], 3, PALETTE.level[3],
             4, PALETTE.level[4], 5, PALETTE.level[5], PALETTE.level[0],
           ],
-          "line-width": ["interpolate", ["linear"], ["zoom"], 8, 16, 12, 28, 16, 40],
-          "line-opacity": isDark ? 0.3 : 0.22,
+          "line-width": ["interpolate", ["linear"], ["zoom"], 8, 12, 12, 22, 16, 32],
+          "line-opacity": isDark ? 0.28 : 0.2,
           "line-blur": ["interpolate", ["linear"], ["zoom"], 8, 6, 16, 16],
         },
         filter: ["==", ["get", "feature_type"], "jam"],
@@ -396,15 +401,8 @@ export default function TrafficMapPanel({ title, subtitle, badge, endpoint, laye
             5, PALETTE.level[5], // Standstill
             PALETTE.level[0]     // Fallback
           ],
-          "line-width": [
-            "interpolate",
-            ["linear"],
-            ["zoom"],
-            8, 5,
-            12, 10,
-            16, 14
-          ],
-          "line-opacity": 0.85,
+          "line-width": ["interpolate", ["linear"], ["zoom"], 8, 3.5, 12, 7, 16, 11],
+          "line-opacity": 0.95,
         },
         filter: ["==", ["get", "feature_type"], "jam"],
       });
@@ -665,50 +663,21 @@ export default function TrafficMapPanel({ title, subtitle, badge, endpoint, laye
         tollPlazas.forEach(toll => {
           const el = document.createElement("div");
           el.className = "custom-toll-marker";
+          /* The label used to sit under every pin permanently, and twenty of
+             them collided into an unreadable stack south of Pulilan. It is
+             revealed on hover instead, so the corridor stays legible and the
+             name is one pointer-move away. CSS does the showing -- see
+             .toll-pin-label in globals.css. */
           el.innerHTML = `
-            <div style="
-              display: flex;
-              flex-direction: column;
-              align-items: center;
-              justify-content: center;
-              cursor: pointer;
-            ">
-              <!-- Custom Toll Gate Icon -->
-              <div style="
-                width: 24px;
-                height: 24px;
-                border-radius: 6px;
-                background: linear-gradient(135deg, #0e7490 0%, #06b6d4 100%);
-                border: 2px solid #ffffff;
-                box-shadow: 0 4px 10px rgba(6, 182, 212, 0.4);
-                display: flex;
-                align-items: center;
-                justify-content: center;
-                color: white;
-              ">
-                <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
-                  <path d="M3 6h18v3H3z" fill="white" />
-                  <path d="M6 9v9M18 9v9" />
-                  <path d="M6 13h12" stroke="#eab308" stroke-width="3" />
+            <div class="toll-pin">
+              <div class="toll-pin-dot">
+                <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor"
+                     stroke-width="2.25" stroke-linecap="round" stroke-linejoin="round">
+                  <path d="M4 20V9.5a1 1 0 0 1 .55-.9l7-3.5a1 1 0 0 1 .9 0l7 3.5a1 1 0 0 1 .55.9V20" />
+                  <path d="M2 20h20M9 20v-5h6v5" />
                 </svg>
               </div>
-              <!-- Text label -->
-              <div style="
-                margin-top: 3px;
-                background: rgba(15, 23, 42, 0.85);
-                backdrop-filter: blur(4px);
-                color: white;
-                font-size: 8px;
-                font-weight: 700;
-                padding: 1px 4px;
-                border-radius: 3px;
-                white-space: nowrap;
-                border: 1px solid rgba(255, 255, 255, 0.15);
-                box-shadow: 0 2px 5px rgba(0,0,0,0.2);
-                letter-spacing: 0.5px;
-              ">
-                ${toll.shortName}
-              </div>
+              <div class="toll-pin-label">${toll.shortName}</div>
             </div>
           `;
 
@@ -916,7 +885,9 @@ export default function TrafficMapPanel({ title, subtitle, badge, endpoint, laye
       const source = map.getSource("traffic") as GeoJSONSource;
       const _pollingInterval = setInterval(async () => {
         try {
-          const fresh = await fetch(endpoint, { cache: "no-store" }).then((r) => r.json());
+          const fresh = onlyOnCorridor(
+            await fetch(endpoint, { cache: "no-store" }).then((r) => r.json()),
+          );
           source.setData(fresh);
           (map.getSource("nlex-corridor") as GeoJSONSource | undefined)?.setData(
             corridorWithState(fresh),

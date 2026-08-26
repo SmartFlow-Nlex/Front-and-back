@@ -25,12 +25,16 @@ export function mapPalette(isDark: boolean) {
        subject — far more than thickening the corridor could. */
     scrim: isDark ? "#070b14" : "#f1f5f9",
     scrimOpacity: isDark ? 0.55 : 0.6,
-    halo: isDark ? "#38bdf8" : "#0284c7",
-    haloOpacity: isDark ? 0.22 : 0.18,
+    /* A tint under the corridor rather than a coloured glow around it. The
+       bright halo competed with the congestion colours it was meant to frame. */
+    halo: isDark ? "#38bdf8" : "#0f172a",
+    haloOpacity: isDark ? 0.14 : 0.08,
     /* A stretch the feed said nothing about. Distinct from every congestion
        colour on purpose: "not reported" is not a traffic condition. */
     noData: isDark ? "#475569" : "#cbd5e1",
-    casing: isDark ? "#0b1220" : "#ffffff",
+    /* The roadway. White in light, near-black in dark: in both it separates
+       the two ribbons and holds them against the base map. */
+    casing: isDark ? "#0f172a" : "#ffffff",
     arrow: isDark ? "#e2e8f0" : "#ffffff",
     alert: isDark ? "#f87171" : "#dc2626",
     alertRing: isDark ? "#0b1220" : "#ffffff",

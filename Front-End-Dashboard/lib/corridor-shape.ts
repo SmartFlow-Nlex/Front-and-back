@@ -148,3 +148,81 @@ export function sliceCorridor(raw: LngLat[], exits: LngLat[]): LngLat[][] {
   }
   return out;
 }
+
+
+/* ---------------------------------------------------------------------------
+   Is a report actually on NLEX?
+
+   The Waze feed is polled over a bounding box, so it returns everything in the
+   area, and the backend matched alerts to the nearest exit within 3 km -- wide
+   enough to sweep in MacArthur Highway, Maysan Road, Quirino Highway and the
+   rest of the surrounding network. Measured against the corridor centreline,
+   all 22 alerts in a sample were off it, the nearest by 334 m, and three of
+   seven jams sat on Pulilan Regional Road up to 1.4 km away.
+
+   Distance is measured to the corridor itself rather than to an exit, because
+   an exit is a point and the road is 76 km long: anything within a few hundred
+   metres of an exit is near a junction, not necessarily near the highway.
+   ------------------------------------------------------------------------- */
+
+/** Covers the carriageways, their ramps and the service roads alongside. */
+export const CORRIDOR_TOLERANCE_M = 200;
+
+export type CorridorGuard = {
+  metresOff: (lngLat: number[]) => number;
+  onCorridor: (feature: { geometry?: { type?: string; coordinates?: unknown }; properties?: unknown }) => boolean;
+  /** Drops off-corridor jams and alerts. Everything else passes through. */
+  filter: <T extends { features?: unknown[] }>(fc: T) => T;
+};
+
+export function corridorGuard(raw: LngLat[], exits: LngLat[], toleranceM = CORRIDOR_TOLERANCE_M): CorridorGuard {
+  const pts = sliceCorridor(raw, exits).flat();
+  const xy = pts.map((c) => [c[0] * M_PER_DEG_LON, c[1] * M_PER_DEG_LAT] as const);
+
+  const metresOff = (lngLat: number[]): number => {
+    if (!xy.length || !lngLat || lngLat.length < 2) return Infinity;
+    const qx = lngLat[0] * M_PER_DEG_LON;
+    const qy = lngLat[1] * M_PER_DEG_LAT;
+    let best = Infinity;
+    for (let i = 1; i < xy.length; i++) {
+      const [ax, ay] = xy[i - 1];
+      const vx = xy[i][0] - ax;
+      const vy = xy[i][1] - ay;
+      const len2 = vx * vx + vy * vy;
+      if (len2 === 0) continue;
+      let t = ((qx - ax) * vx + (qy - ay) * vy) / len2;
+      t = t < 0 ? 0 : t > 1 ? 1 : t;
+      const d = Math.hypot(qx - ax - t * vx, qy - ay - t * vy);
+      if (d < best) best = d;
+    }
+    return best;
+  };
+
+  const onCorridor: CorridorGuard["onCorridor"] = (f) => {
+    const g = f?.geometry;
+    const coords =
+      g?.type === "Point" ? [g.coordinates as number[]]
+      : g?.type === "LineString" ? (g.coordinates as number[][])
+      : [];
+    if (!coords.length) return false;
+    /* The middle, not an endpoint: a jam that starts on NLEX and runs off down
+       a side road is a report about the side road. */
+    return metresOff(coords[Math.floor(coords.length / 2)]) <= toleranceM;
+  };
+
+  return {
+    metresOff,
+    onCorridor,
+    filter: (fc) => {
+      if (!fc?.features) return fc;
+      return {
+        ...fc,
+        features: (fc.features as { properties?: { feature_type?: string } }[]).filter((f) => {
+          const kind = f?.properties?.feature_type;
+          if (kind !== "jam" && kind !== "alert") return true;
+          return onCorridor(f as Parameters<CorridorGuard["onCorridor"]>[0]);
+        }),
+      };
+    },
+  };
+}

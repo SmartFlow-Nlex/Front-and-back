@@ -9,14 +9,24 @@ import PageHeader from "../../../components/dashboard/PageHeader";
 
 const BACKEND = process.env.NEXT_PUBLIC_BACKEND_URL ?? "http://localhost:4000";
 
-import { displayExitName, useNlexExits, type NlexExit } from "../../../lib/nlex-exits";
+import { displayExitName, FALLBACK_EXITS, useNlexExits, type NlexExit } from "../../../lib/nlex-exits";
+import { corridorGuard, type LngLat } from "../../../lib/corridor-shape";
+import nlexGeometry from "../../../components/maps/nlex-geometry.json";
+
+/* The same test the map uses, so the counters below cannot disagree with what
+   is drawn. Built once at module scope because it is derived from static
+   geometry and costs a few milliseconds. */
+const CORRIDOR = corridorGuard(
+  (nlexGeometry as unknown as { coordinates: LngLat[] }).coordinates,
+  [...FALLBACK_EXITS].sort((a, b) => a.km - b.km).map((e) => [e.longitude, e.latitude] as LngLat),
+);
 
 type ExitHit = NlexExit;
 
 export default function MapComparisonPage() {
   const [wazeMax, setWazeMax] = useState(false);
-  const [activeReports, setActiveReports] = useState(5);
-  const [avgSpeed, setAvgSpeed] = useState(45);
+  const [activeReports, setActiveReports] = useState<number | null>(null);
+  const [avgSpeed, setAvgSpeed] = useState<number | null>(null);
   const [timeStr, setTimeStr] = useState("");
 
   // Exit picker. The whole corridor is loaded once and shown as a dropdown in
@@ -69,20 +79,27 @@ export default function MapComparisonPage() {
         if (geojson && geojson.features) {
           const features = geojson.features as Feature[];
 
-          // Count Waze active alerts (points)
-          const alertCount = features.filter(
+          /* Only what is actually on NLEX. The feed is polled over a bounding
+             box, so counting it whole reported the surrounding road network as
+             corridor activity: every alert in a sample was off the corridor,
+             the nearest by 334 m, and three of seven jams sat on Pulilan
+             Regional Road up to 1.4 km away. */
+          const onNlex = features.filter((f: Feature) => CORRIDOR.onCorridor(f));
+
+          const alertCount = onNlex.filter(
             (f: Feature) => f.properties && f.properties.feature_type === "alert"
           ).length;
 
-          // Calculate average speed from jams
-          const jams = features.filter(
+          const jams = onNlex.filter(
             (f: Feature) =>
               f.properties &&
               f.properties.feature_type === "jam" &&
               Number(f.properties.speed) > 0
           );
           
-          let averageSpeed = 45; // default fallback if no jams are active
+          /* No jams means nothing to average, not 45 km/h. The old fallback
+             was an invented number sitting in a tile labelled as live. */
+          let averageSpeed: number | null = null;
           if (jams.length > 0) {
             const sumSpeed = jams.reduce(
               (sum: number, j: Feature) => sum + Number(j.properties?.speed || 0),
@@ -255,11 +272,11 @@ export default function MapComparisonPage() {
             </div>
             <div className="mc-stat-item">
               <span className="mc-stat-label">Active Reports</span>
-              <span className="mc-stat-value red">{activeReports}</span>
+              <span className="mc-stat-value red">{activeReports ?? "\u2014"}</span>
             </div>
             <div className="mc-stat-item">
               <span className="mc-stat-label">Avg Speed</span>
-              <span className="mc-stat-value orange">{avgSpeed} km/h</span>
+              <span className="mc-stat-value orange">{avgSpeed == null ? "\u2014" : `${avgSpeed} km/h`}</span>
             </div>
           </div>
         </div>

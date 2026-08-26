@@ -5461,3 +5461,64 @@ body {
   .wz-backdrop { animation: none; }
   .wz-spin { animation: none; }
 }
+
+
+/* ---------------------------------------------------------------------------
+   Live map markers.
+
+   Twenty exit pins with permanent labels collided into an unreadable stack
+   wherever the exits bunch up, which is most of the southern corridor. The pin
+   is now a small dot and the name appears on hover, so the road stays readable
+   and the label is still one pointer-move away.
+   ------------------------------------------------------------------------- */
+.toll-pin {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+
+.toll-pin-dot {
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: var(--bg-surface);
+  border: 2px solid #0e7490;
+  color: #0e7490;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 2px 6px rgba(15, 23, 42, 0.25);
+  transition: transform 0.14s ease, box-shadow 0.14s ease;
+}
+
+.toll-pin:hover .toll-pin-dot {
+  transform: scale(1.25);
+  box-shadow: 0 4px 12px rgba(14, 116, 144, 0.45);
+}
+
+.toll-pin-label {
+  position: absolute;
+  bottom: calc(100% + 6px);
+  left: 50%;
+  transform: translateX(-50%) translateY(3px);
+  padding: 3px 7px;
+  border-radius: 6px;
+  background: var(--bg-inverse, #0f172a);
+  color: #f8fafc;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.14s ease, transform 0.14s ease;
+  box-shadow: 0 4px 12px rgba(15, 23, 42, 0.35);
+  z-index: 5;
+}
+
+.toll-pin:hover .toll-pin-label {
+  opacity: 1;
+  transform: translateX(-50%) translateY(0);
+}

@@ -562,6 +562,13 @@ export default function PredictiveVolumeChart({ months = "all", from, to, weathe
   const drillIndex = drillDate ? isoDates.indexOf(drillDate) : -1;
   const drillLabel = drillIndex >= 0 ? dates[drillIndex] : drillDate ?? "";
 
+  // Holt-Winters and Holts Linear are univariate (no weather variant). Their line
+  // is identical whether Weather is on or off, so showing it while Weather is ON
+  // would falsely imply a weather-aware prediction — suppress it instead.
+  const visibleModels = showWeather
+    ? selected.filter((k) => k !== "HoltWinters" && k !== "HoltsLinear")
+    : selected;
+
   // Clicking a point (or its x-axis label) opens that day's hourly breakdown
   const openDay = (index: number) => {
     if (isAggregated) return; // a point is a period here, not a single day
@@ -764,7 +771,7 @@ export default function PredictiveVolumeChart({ months = "all", from, to, weathe
       data: [
         "Actual Volume",
         ...(smoothActual ? [SMOOTH_NAME] : []),
-        ...selected.map((k) => `${metricsMeta[k].label} Prediction`),
+        ...visibleModels.map((k) => `${metricsMeta[k].label} Prediction`),
         ...(showWeather ? ["Rainfall (mm)"] : []),
       ],
       bottom: 0,
@@ -918,7 +925,7 @@ export default function PredictiveVolumeChart({ months = "all", from, to, weathe
           ],
         },
       },
-      ...selected.map((key) => ({
+      ...visibleModels.map((key) => ({
         name: `${metricsMeta[key].label} Prediction`,
         type: "line" as const,
         yAxisIndex: 0,
@@ -937,7 +944,7 @@ export default function PredictiveVolumeChart({ months = "all", from, to, weathe
   };
 
   // ---------- Hourly drill-down ----------
-  const anyHourly = selected.map((k) => hourlyByModel[k]).find(Boolean);
+  const anyHourly = visibleModels.map((k) => hourlyByModel[k]).find(Boolean);
   const hourLabels = Array.from({ length: 24 }, (_, h) => fmtHour(h));
   const hasActualHours = Boolean(anyHourly?.hours.some((h) => h.actual != null));
 
@@ -996,7 +1003,7 @@ export default function PredictiveVolumeChart({ months = "all", from, to, weathe
         legend: {
           data: [
             ...(hasActualHours ? ["Actual Volume"] : []),
-            ...selected.filter((k) => hourlyByModel[k]?.hours.some((h) => h.predicted != null)).map((k) => `${metricsMeta[k].label} Prediction`),
+            ...visibleModels.filter((k) => hourlyByModel[k]?.hours.some((h) => h.predicted != null)).map((k) => `${metricsMeta[k].label} Prediction`),
             ...(showWeather ? ["Rainfall (mm)", "Temperature (\u00B0C)"] : []),
           ],
           bottom: 0,
@@ -1053,7 +1060,7 @@ export default function PredictiveVolumeChart({ months = "all", from, to, weathe
                 },
               ]
             : []),
-          ...selected
+          ...visibleModels
             .filter((k) => hourlyByModel[k]?.hours.some((h) => h.predicted != null))
             .map((k) => ({
               name: `${metricsMeta[k].label} Prediction`,
@@ -1158,7 +1165,7 @@ export default function PredictiveVolumeChart({ months = "all", from, to, weathe
               <div style={{ fontSize: "0.72rem", color: "var(--text-secondary)", textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: "4px" }}>Day Actual</div>
               <div style={{ fontSize: "1.1rem", fontWeight: 700, color: "var(--text-primary)" }}>{anyHourly.dayActual != null ? fmtVeh(anyHourly.dayActual) : "—"}</div>
             </div>
-            {selected.map((k) => {
+            {visibleModels.map((k) => {
               const h = hourlyByModel[k];
               return (
                 <div key={k} style={{ background: "var(--bg-surface-hover)", padding: "12px 14px", borderRadius: "8px", border: "1px solid #e2e8f0" }}>

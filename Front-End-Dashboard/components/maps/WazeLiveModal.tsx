@@ -1,6 +1,8 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { mapPalette } from "../../lib/map-palette";
+import { useChartTheme } from "../../lib/chart-theme";
 import {
   AlertCircle, AlertTriangle, CarFront, Clock, Cone, Gauge,
   RefreshCw, ShieldAlert, TrendingUp, X,
@@ -58,12 +60,13 @@ const agoText = (m: number | null) => (m == null ? "—" : m < 1 ? "Just now" : 
  * hand because the two live in different files. Level is a share of free-flow
  * speed: 1 is barely slowed, 5 is a blocked road.
  */
+/** Labels only — the colours come from the same palette the map paints with. */
 const LEVELS = [
-  { level: 1, label: "Light", color: "#10b981" },
-  { level: 2, label: "Moderate", color: "#f59e0b" },
-  { level: 3, label: "Heavy", color: "#f97316" },
-  { level: 4, label: "Severe", color: "#ef4444" },
-  { level: 5, label: "Standstill", color: "#b91c1c" },
+  { level: 1, label: "Light" },
+  { level: 2, label: "Moderate" },
+  { level: 3, label: "Heavy" },
+  { level: 4, label: "Severe" },
+  { level: 5, label: "Standstill" },
 ];
 
 /** Speed bands for the sidebar's own readouts, which have no level to hand. */
@@ -75,6 +78,8 @@ function band(kmh: number): { key: string; label: string } {
 }
 
 export default function WazeLiveModal({ open, onClose }: { open: boolean; onClose: () => void }) {
+  const { isDark } = useChartTheme();
+  const palette = mapPalette(isDark);
   const [data, setData] = useState<Overview | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(false);
@@ -164,7 +169,7 @@ export default function WazeLiveModal({ open, onClose }: { open: boolean; onClos
                     a legend beside a map has to describe that map. */}
                 {LEVELS.map((l) => (
                   <div key={l.level} className="wz-legend-row">
-                    <span className="wz-line" style={{ background: l.color }} /> {l.label}
+                    <span className="wz-line" style={{ background: palette.level[l.level as 1 | 2 | 3 | 4 | 5] }} /> {l.label}
                   </div>
                 ))}
                 <h4 className="wz-legend-gap">Waze reports</h4>

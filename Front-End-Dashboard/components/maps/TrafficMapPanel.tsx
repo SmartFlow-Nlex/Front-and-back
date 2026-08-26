@@ -8,6 +8,8 @@ import nlexGeometry from "./nlex-geometry.json";
 import { sliceCorridor, type LngLat } from "../../lib/corridor-shape";
 import { FALLBACK_EXITS } from "../../lib/nlex-exits";
 import nlexRamps from "./nlex-ramps.json";
+import { useChartTheme } from "../../lib/chart-theme";
+import { mapPalette } from "../../lib/map-palette";
 
 type Props = {
   title: string;
@@ -22,6 +24,8 @@ type Props = {
 };
 
 export default function TrafficMapPanel({ title, subtitle, badge, endpoint, layerColor, tone, children, chromeless = false }: Props) {
+  // Reuses the charts' theme hook, so the map switches with everything else.
+  const { isDark } = useChartTheme();
   const mapRef = useRef<mapboxgl.Map | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
   const activeMarkers = useRef<mapboxgl.Marker[]>([]);
@@ -47,12 +51,14 @@ export default function TrafficMapPanel({ title, subtitle, badge, endpoint, laye
       return;
     }
 
+    const PALETTE = mapPalette(isDark);
+
     mapboxgl.accessToken = token;
     let map: mapboxgl.Map;
     try {
       map = new mapboxgl.Map({
         container: containerRef.current,
-        style: "mapbox://styles/mapbox/light-v11", // Gray base map
+        style: PALETTE.style,
         center: [120.79, 14.94],
         zoom: 9.2,
         minZoom: 9.0, // Max zoom out restricted to this view
@@ -160,8 +166,6 @@ export default function TrafficMapPanel({ title, subtitle, badge, endpoint, laye
 
       const isRealtime = endpoint.includes("real-time");
 
-
-
       map.addSource("traffic", {
         type: "geojson",
         data,
@@ -195,6 +199,19 @@ export default function TrafficMapPanel({ title, subtitle, badge, endpoint, laye
         data: nlexRamps as GeoJSON.FeatureCollection,
       });
 
+      /* Push the base map back. A background layer added before ours sits over
+         every base layer, so the surrounding road network and labels fade and
+         the corridor drawn on top of it becomes the only thing at full
+         strength. */
+      map.addLayer({
+        id: "base-scrim",
+        type: "background",
+        paint: {
+          "background-color": PALETTE.scrim,
+          "background-opacity": PALETTE.scrimOpacity,
+        },
+      });
+
       /* Corridor emphasis. The base map shows every road in Central Luzon at
          much the same weight, so NLEX has to be lifted off it deliberately: a
          wide soft halo picks the corridor out at a glance from zoomed out, and
@@ -206,9 +223,9 @@ export default function TrafficMapPanel({ title, subtitle, badge, endpoint, laye
         source: "nlex-corridor",
         layout: { "line-join": "round", "line-cap": "round" },
         paint: {
-          "line-color": "#0ea5e9",
+          "line-color": PALETTE.halo,
           "line-width": ["interpolate", ["exponential", 1.5], ["zoom"], 8, 22, 12, 42, 16, 62],
-          "line-opacity": 0.16,
+          "line-opacity": PALETTE.haloOpacity,
           "line-blur": ["interpolate", ["linear"], ["zoom"], 8, 6, 16, 18],
         },
       });
@@ -219,7 +236,7 @@ export default function TrafficMapPanel({ title, subtitle, badge, endpoint, laye
         source: "nlex-corridor",
         layout: { "line-join": "round", "line-cap": "round" },
         paint: {
-          "line-color": "#334155", // slate — the road bed
+          "line-color": PALETTE.bed,
           "line-width": ["interpolate", ["exponential", 1.5], ["zoom"], 8, 14, 12, 27, 16, 39],
           "line-opacity": 0.85,
         },
@@ -235,7 +252,7 @@ export default function TrafficMapPanel({ title, subtitle, badge, endpoint, laye
         source: "nlex-corridor",
         layout: { "line-join": "round", "line-cap": "round" },
         paint: {
-          "line-color": "#64748b",
+          "line-color": PALETTE.asphalt,
           "line-width": ["interpolate", ["exponential", 1.5], ["zoom"], 8, 12, 12, 24, 16, 35],
           "line-opacity": 0.9,
         },
@@ -253,7 +270,7 @@ export default function TrafficMapPanel({ title, subtitle, badge, endpoint, laye
           "line-cap": "round",
         },
         paint: {
-          "line-color": "#475569",
+          "line-color": PALETTE.rampCasing,
           "line-width": ["interpolate", ["exponential", 1.5], ["zoom"], 8, 2, 12, 5, 16, 10],
           "line-opacity": 0.7,
         },
@@ -270,7 +287,7 @@ export default function TrafficMapPanel({ title, subtitle, badge, endpoint, laye
           "line-cap": "round",
         },
         paint: {
-          "line-color": "#94a3b8",
+          "line-color": PALETTE.ramp,
           "line-width": ["interpolate", ["exponential", 1.5], ["zoom"], 8, 1, 12, 2.8, 16, 6],
           "line-opacity": 0.85,
         },
@@ -288,7 +305,7 @@ export default function TrafficMapPanel({ title, subtitle, badge, endpoint, laye
         source: "traffic",
         layout: { "line-join": "round", "line-cap": "round" },
         paint: {
-          "line-color": "#ffffff",
+          "line-color": PALETTE.casing,
           "line-width": ["interpolate", ["linear"], ["zoom"], 8, 7, 12, 13, 16, 19],
           "line-opacity": 0.95,
           // Offset in screen pixels rather than in the geometry, so both ribbons
@@ -315,13 +332,13 @@ export default function TrafficMapPanel({ title, subtitle, badge, endpoint, laye
           "line-color": [
             "match",
             ["get", "level"],
-            0, "#10b981",  // no jam reported — flowing
-            1, "#10b981",
-            2, "#f59e0b",
-            3, "#f97316",
-            4, "#ef4444",
-            5, "#b91c1c",
-            "#10b981",
+            0, PALETTE.level[0],  // no jam reported — flowing
+            1, PALETTE.level[1],
+            2, PALETTE.level[2],
+            3, PALETTE.level[3],
+            4, PALETTE.level[4],
+            5, PALETTE.level[5],
+            PALETTE.level[0],
           ],
           "line-width": ["interpolate", ["linear"], ["zoom"], 8, 4.5, 12, 9, 16, 14],
           "line-opacity": 1,
@@ -360,14 +377,32 @@ export default function TrafficMapPanel({ title, subtitle, badge, endpoint, laye
           "text-keep-upright": false,
         },
         paint: {
-          "text-color": "#ffffff",
-          "text-halo-color": "rgba(0,0,0,0.35)",
+          "text-color": PALETTE.arrow,
+          "text-halo-color": PALETTE.arrowHalo,
           "text-halo-width": 1,
         },
         filter: ["==", ["get", "feature_type"], "carriageway"],
       });
 
       // Layer 3: Jam Lines Layer (Overlays on top for realtime)
+      map.addLayer({
+        id: "traffic-glow",
+        type: "line",
+        source: "traffic",
+        layout: { "line-join": "round", "line-cap": "round" },
+        paint: {
+          "line-color": [
+            "match", ["get", "level"],
+            1, PALETTE.level[1], 2, PALETTE.level[2], 3, PALETTE.level[3],
+            4, PALETTE.level[4], 5, PALETTE.level[5], PALETTE.level[0],
+          ],
+          "line-width": ["interpolate", ["linear"], ["zoom"], 8, 16, 12, 28, 16, 40],
+          "line-opacity": isDark ? 0.3 : 0.22,
+          "line-blur": ["interpolate", ["linear"], ["zoom"], 8, 6, 16, 16],
+        },
+        filter: ["==", ["get", "feature_type"], "jam"],
+      });
+
       map.addLayer({
         id: "traffic-line",
         type: "line",
@@ -380,12 +415,12 @@ export default function TrafficMapPanel({ title, subtitle, badge, endpoint, laye
           "line-color": [
             "match",
             ["get", "level"],
-            1, "#10b981", // Light (Green)
-            2, "#f59e0b", // Moderate (Yellow/Orange)
-            3, "#f97316", // Heavy (Orange)
-            4, "#ef4444", // Severe (Red)
-            5, "#b91c1c", // Standstill (Dark Red)
-            "#10b981"    // Fallback (Green)
+            1, PALETTE.level[1], // Light
+            2, PALETTE.level[2], // Moderate
+            3, PALETTE.level[3], // Heavy
+            4, PALETTE.level[4], // Severe
+            5, PALETTE.level[5], // Standstill
+            PALETTE.level[0]     // Fallback
           ],
           "line-width": [
             "interpolate",
@@ -407,10 +442,10 @@ export default function TrafficMapPanel({ title, subtitle, badge, endpoint, laye
         source: "traffic",
         paint: {
           "circle-radius": isRealtime ? 12 : 8,
-          "circle-color": "#ff0000",
-          "circle-stroke-color": "#ffffff",
-          "circle-stroke-width": 3,
-          "circle-opacity": 1,
+          "circle-color": PALETTE.alert,
+          "circle-stroke-color": PALETTE.alertRing,
+          "circle-stroke-width": 2.5,
+          "circle-opacity": 0.95,
         },
         filter: [
           "all",
@@ -418,8 +453,6 @@ export default function TrafficMapPanel({ title, subtitle, badge, endpoint, laye
           ["!=", ["get", "type"], "JAM"]
         ],
       });
-
-
 
 
       // Hover popup logic
@@ -936,7 +969,7 @@ export default function TrafficMapPanel({ title, subtitle, badge, endpoint, laye
       map.remove();
       mapRef.current = null;
     };
-  }, [endpoint, layerColor]);
+  }, [endpoint, layerColor, isDark]);
 
   return (
     <article className={`map-card${chromeless ? " chromeless" : ""}`}>

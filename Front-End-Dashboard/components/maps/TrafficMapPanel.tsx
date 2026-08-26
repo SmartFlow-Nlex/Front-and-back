@@ -55,10 +55,23 @@ export default function TrafficMapPanel({ title, subtitle, badge, endpoint, laye
     /* Both directions share one centreline and are separated in screen pixels,
        so each ribbon traces the identical real curve and the gap stays
        proportional at every zoom. Northbound takes the positive side, which is
-       the side traffic keeps here. */
-    const GAP = ["interpolate", ["linear"], ["zoom"], 8, 5.5, 12, 10.5, 16, 16];
+       the side traffic keeps here.
+
+       A "zoom" expression may only appear at the top level of a step or
+       interpolate, so the interpolate has to be the outer expression and the
+       per-direction case has to sit inside each stop. Nesting it the other way
+       round -- one case choosing between two interpolates -- reads naturally
+       but fails style validation, and Mapbox throws out of addLayer. That abort
+       skipped every layer after it, which is why the corridor rendered as a
+       bare band with no colours and no jams on it. */
+    const side = (px: number) => [
+      "case", ["==", ["get", "direction"], "NB"], px, -px,
+    ];
     const OFFSET = [
-      "case", ["==", ["get", "direction"], "NB"], GAP, ["*", -1, GAP],
+      "interpolate", ["linear"], ["zoom"],
+      8, side(5.5),
+      12, side(10.5),
+      16, side(16),
     ] as unknown as mapboxgl.ExpressionSpecification;
 
     mapboxgl.accessToken = token;
@@ -171,14 +184,22 @@ export default function TrafficMapPanel({ title, subtitle, badge, endpoint, laye
             segment_name: exitNames[i] + " to " + exitNames[i + 1],
             from_exit: exitNames[i],
             to_exit: exitNames[i + 1],
-            // null, not 0: "no reading" and "flowing freely" are different
-            // claims, and only the live feed can justify the second one.
-            level: null as number | null,
+            /* NO_READING, not 0: "nobody reported on this stretch" and "this
+               stretch is flowing freely" are different claims, and only the
+               live feed can justify the second one.
+
+               A sentinel rather than null because Mapbox expressions have no
+               null literal — comparing against one fails layer validation and
+               throws, which took the whole page down. */
+            level: NO_READING,
           },
           geometry: { type: "LineString" as const, coordinates: coords },
         })),
       ),
     };
+
+    /** Stands in for "the feed said nothing about this stretch". */
+    const NO_READING = -1;
 
     /** Waze levels for a forecast's categorical state. */
     const FORECAST_LEVEL: Record<string, number> = { Low: 1, Medium: 3, High: 4, Severe: 5 };
@@ -215,7 +236,7 @@ export default function TrafficMapPanel({ title, subtitle, badge, endpoint, laye
         features: corridorBase.features.map((f) => {
           const q = f.properties as { segment_order: number; direction: string };
           const lvl = bySegment.get(q.segment_order + ":" + q.direction);
-          return { ...f, properties: { ...f.properties, level: lvl ?? null } };
+          return { ...f, properties: { ...f.properties, level: lvl ?? NO_READING } };
         }),
       };
     };
@@ -291,20 +312,16 @@ export default function TrafficMapPanel({ title, subtitle, badge, endpoint, laye
         layout: { "line-join": "round", "line-cap": "round" },
         paint: {
           "line-color": [
-            "case",
-            // No reading for this stretch. Grey says so, rather than implying a
-            // free flow the data never actually reported.
-            ["==", ["get", "level"], null], PALETTE.noData,
-            [
-              "match", ["get", "level"],
-              0, PALETTE.level[0],
-              1, PALETTE.level[1],
-              2, PALETTE.level[2],
-              3, PALETTE.level[3],
-              4, PALETTE.level[4],
-              5, PALETTE.level[5],
-              PALETTE.noData,
-            ],
+            "match", ["get", "level"],
+            0, PALETTE.level[0],
+            1, PALETTE.level[1],
+            2, PALETTE.level[2],
+            3, PALETTE.level[3],
+            4, PALETTE.level[4],
+            5, PALETTE.level[5],
+            // Falls through for NO_READING. Grey says the feed reported
+            // nothing here, rather than implying a free flow it never saw.
+            PALETTE.noData,
           ],
           "line-width": ["interpolate", ["linear"], ["zoom"], 8, 7, 12, 14, 16, 22],
           "line-opacity": 1,

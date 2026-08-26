@@ -174,7 +174,27 @@ export default function TrafficMapPanel({ title, subtitle, badge, endpoint, laye
     // Shared with the page's stats, so the map and the counters agree on what
     // counts as a report about NLEX. See lib/corridor-shape.ts.
     const guard = corridorGuard(corridorLine, corridorExits);
-    const onlyOnCorridor = guard.filter;
+
+    /* Keeps only what is on NLEX, then puts each jam onto the corridor itself
+       rather than leaving it on the geometry Waze traced. See snap() in
+       lib/corridor-shape.ts for why. */
+    const onlyOnCorridor = (fc: GeoJSON.FeatureCollection): GeoJSON.FeatureCollection => {
+      const kept = guard.filter(fc);
+      return {
+        ...kept,
+        features: (kept.features ?? []).map((f) => {
+          const props = f.properties as { feature_type?: string } | null;
+          if (props?.feature_type !== "jam" || f.geometry?.type !== "LineString") return f;
+          const snapped = guard.snap(f.geometry.coordinates as number[][]);
+          if (!snapped) return f;
+          return {
+            ...f,
+            properties: { ...f.properties, direction: snapped.direction },
+            geometry: { type: "LineString", coordinates: snapped.coords } as GeoJSON.Geometry,
+          };
+        }),
+      };
+    };
 
     /** Stands in for "the feed said nothing about this stretch". */
     const NO_READING = -1;
@@ -377,6 +397,7 @@ export default function TrafficMapPanel({ title, subtitle, badge, endpoint, laye
           ],
           "line-width": ["interpolate", ["linear"], ["zoom"], 8, 12, 12, 22, 16, 32],
           "line-opacity": isDark ? 0.28 : 0.2,
+          "line-offset": OFFSET,
           "line-blur": ["interpolate", ["linear"], ["zoom"], 8, 6, 16, 16],
         },
         filter: ["==", ["get", "feature_type"], "jam"],
@@ -403,6 +424,9 @@ export default function TrafficMapPanel({ title, subtitle, badge, endpoint, laye
           ],
           "line-width": ["interpolate", ["linear"], ["zoom"], 8, 3.5, 12, 7, 16, 11],
           "line-opacity": 0.95,
+          // Same offset as the carriageways, so a jam sits on its own direction
+          // instead of straddling both.
+          "line-offset": OFFSET,
         },
         filter: ["==", ["get", "feature_type"], "jam"],
       });

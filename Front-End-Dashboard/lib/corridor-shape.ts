@@ -168,16 +168,27 @@ export function sliceCorridor(raw: LngLat[], exits: LngLat[]): LngLat[][] {
 /** Covers the carriageways, their ramps and the service roads alongside. */
 export const CORRIDOR_TOLERANCE_M = 200;
 
+export type SnappedJam = { coords: LngLat[]; direction: "NB" | "SB" };
+
 export type CorridorGuard = {
   metresOff: (lngLat: number[]) => number;
   onCorridor: (feature: { geometry?: { type?: string; coordinates?: unknown }; properties?: unknown }) => boolean;
   /** Drops off-corridor jams and alerts. Everything else passes through. */
   filter: <T extends { features?: unknown[] }>(fc: T) => T;
+  /** The rebuilt centreline, ordered south to north. */
+  centreline: LngLat[];
+  /** Puts a jam onto the corridor, and works out which way it runs. */
+  snap: (coords: number[][]) => SnappedJam | null;
 };
 
 export function corridorGuard(raw: LngLat[], exits: LngLat[], toleranceM = CORRIDOR_TOLERANCE_M): CorridorGuard {
-  const pts = sliceCorridor(raw, exits).flat();
-  const xy = pts.map((c) => [c[0] * M_PER_DEG_LON, c[1] * M_PER_DEG_LAT] as const);
+  // Parts repeat the previous part's last vertex, so drop it on the way in and
+  // the centreline stays a clean ordered path with no doubled points.
+  const centreline: LngLat[] = sliceCorridor(raw, exits).reduce<LngLat[]>(
+    (acc, part, i) => acc.concat(i === 0 ? part : part.slice(1)),
+    [],
+  );
+  const xy = centreline.map((c) => [c[0] * M_PER_DEG_LON, c[1] * M_PER_DEG_LAT] as const);
 
   const metresOff = (lngLat: number[]): number => {
     if (!xy.length || !lngLat || lngLat.length < 2) return Infinity;
@@ -205,14 +216,71 @@ export function corridorGuard(raw: LngLat[], exits: LngLat[], toleranceM = CORRI
       : g?.type === "LineString" ? (g.coordinates as number[][])
       : [];
     if (!coords.length) return false;
-    /* The middle, not an endpoint: a jam that starts on NLEX and runs off down
-       a side road is a report about the side road. */
-    return metresOff(coords[Math.floor(coords.length / 2)]) <= toleranceM;
+    /* Every vertex, not just the midpoint. Testing the middle alone admitted a
+       jam on the Tabang spur road whose geometry wandered 1.6 km off the
+       corridor while passing near it: snapped, that would have painted a long
+       stretch of mainline as jammed on the strength of a report about a spur.
+       Requiring the whole line to be on the corridor keeps ramps and service
+       roads, which run within the tolerance for their whole length, and
+       excludes anything that merely crosses it. */
+    return coords.every((c) => metresOff(c) <= toleranceM);
+  };
+
+  /** Index of the centreline vertex nearest a point. */
+  const nearestIndex = (lngLat: number[]): number => {
+    const qx = lngLat[0] * M_PER_DEG_LON;
+    const qy = lngLat[1] * M_PER_DEG_LAT;
+    let best = 0;
+    let bestD = Infinity;
+    for (let i = 0; i < xy.length; i++) {
+      const d = Math.hypot(qx - xy[i][0], qy - xy[i][1]);
+      if (d < bestD) {
+        bestD = d;
+        best = i;
+      }
+    }
+    return best;
+  };
+
+  /* Waze reports a jam with its own geometry, traced on whichever carriageway
+     the reporting drivers were on. Drawn as-is it runs alongside the corridor
+     we build rather than on it -- visibly parallel, sometimes a whole
+     carriageway's width off, and occasionally floating clear of the road. So a
+     jam is snapped: its endpoints are projected onto the centreline and the
+     stretch between them is taken from the centreline itself. The jam then lies
+     exactly on the ribbon, because it is made of the same points.
+
+     Direction comes from the jam's own bearing. NLEX runs roughly south to
+     north, and the centreline is ordered the same way, so a jam whose latitude
+     increases from start to end is northbound. */
+  const snap: CorridorGuard["snap"] = (coords) => {
+    if (!coords || coords.length < 2 || centreline.length < 2) return null;
+    const first = coords[0];
+    const last = coords[coords.length - 1];
+
+    const a = nearestIndex(first);
+    const b = nearestIndex(last);
+    let lo = Math.min(a, b);
+    let hi = Math.max(a, b);
+    // A jam shorter than the resampling interval collapses to one vertex;
+    // widen it so it still draws as a line rather than vanishing.
+    if (hi === lo) {
+      if (hi + 1 < centreline.length) hi += 1;
+      else if (lo > 0) lo -= 1;
+      else return null;
+    }
+
+    return {
+      coords: centreline.slice(lo, hi + 1),
+      direction: last[1] >= first[1] ? "NB" : "SB",
+    };
   };
 
   return {
     metresOff,
     onCorridor,
+    centreline,
+    snap,
     filter: (fc) => {
       if (!fc?.features) return fc;
       return {

@@ -86,8 +86,14 @@ export default function MapComparisonPage() {
              Regional Road up to 1.4 km away. */
           const onNlex = features.filter((f: Feature) => CORRIDOR.onCorridor(f));
 
+          /* Everything Waze is reporting on the corridor right now, which is
+             exactly what the map draws: jams and incident alerts together. It
+             counted alerts alone before, so the tile read 0 while four jams
+             were visibly drawn on the road. */
           const alertCount = onNlex.filter(
-            (f: Feature) => f.properties && f.properties.feature_type === "alert"
+            (f: Feature) =>
+              f.properties &&
+              (f.properties.feature_type === "alert" || f.properties.feature_type === "jam")
           ).length;
 
           const jams = onNlex.filter(

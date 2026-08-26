@@ -173,6 +173,9 @@ export type SnappedJam = {
   direction: "NB" | "SB";
   /** "street" when Waze named the direction, "bearing" when it was inferred. */
   directionSource: "street" | "bearing";
+  /** Where the jam sits on the centreline, so it can be mapped to segments. */
+  startIndex: number;
+  endIndex: number;
 };
 
 /* Waze names the carriageway on ramps and exits -- "NLEX N San Fernando Exit",
@@ -186,8 +189,9 @@ function directionFromStreet(street?: string | null): "NB" | "SB" | null {
   if (!street) return null;
   if (/\bnorth\s*bound\b/i.test(street)) return "NB";
   if (/\bsouth\s*bound\b/i.test(street)) return "SB";
-  // "NLEX N ...", "NLEX S ..." — the letter directly after the road name.
-  const m = /\bNLEX\s+([NS])\b/i.exec(street);
+  /* "NLEX N ...", "E1: North Luzon Expressway N", "NLEX S On-Ramp" — the
+     letter directly after the road name, spelled out or abbreviated. */
+  const m = /\b(?:NLEX|North\s+Luzon\s+Expressway)\s+([NS])\b/i.exec(street);
   if (m) return m[1].toUpperCase() === "N" ? "NB" : "SB";
   return null;
 }
@@ -300,6 +304,8 @@ export function corridorGuard(raw: LngLat[], exits: LngLat[], toleranceM = CORRI
       coords: centreline.slice(lo, hi + 1),
       direction: named ?? (last[1] >= first[1] ? "NB" : "SB"),
       directionSource: named ? "street" : "bearing",
+      startIndex: lo,
+      endIndex: hi,
     };
   };
 

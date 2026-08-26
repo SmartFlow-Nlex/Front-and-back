@@ -233,6 +233,22 @@ export default function TrafficMapPanel({ title, subtitle, badge, endpoint, laye
       ),
     };
 
+    /* Which segments a stretch of centreline covers. The parts are joined with
+       their shared vertex dropped, so each part after the first advances the
+       index by its length minus one. */
+    const segmentBounds: { order: number; from: number; to: number }[] = [];
+    {
+      let at = 0;
+      corridorParts.forEach((part, i) => {
+        const to = at + part.length - 1;
+        segmentBounds.push({ order: i + 1, from: at, to });
+        at = to;
+      });
+    }
+
+    const segmentsSpanned = (from: number, to: number): number[] =>
+      segmentBounds.filter((b) => b.to >= from && b.from <= to).map((b) => b.order);
+
     /** Waze levels for a forecast's categorical state. */
     const FORECAST_LEVEL: Record<string, number> = { Low: 1, Medium: 3, High: 4, Severe: 5 };
 
@@ -244,9 +260,33 @@ export default function TrafficMapPanel({ title, subtitle, badge, endpoint, laye
         const q = f.properties as Record<string, unknown> | null;
         if (!q) continue;
 
-        // Live: per segment and per direction, already carrying a Waze level.
-        if (q.feature_type === "carriageway" && q.segment_order != null) {
-          bySegment.set(String(q.segment_order) + ":" + String(q.direction), Number(q.level ?? 0));
+        /* Live: coloured from the jams actually drawn on the map, not from the
+           backend's carriageway levels.
+
+           Those levels came from the backend matching every jam it received to
+           the nearest segment, including the ones off the corridor -- a live
+           sample had it colouring seven segments using jams on M. Villarica
+           Road, Pulilan Regional Road, the Santa Ana-Mexico road and the Tabang
+           spur. It also took direction from each jam's bearing, which put the
+           level 4 jam on "NLEX N San Fernando Exit" onto the southbound ribbon.
+           So the road was painted from reports about other roads, on the wrong
+           carriageway, and disagreed with the jams drawn over it.
+
+           Deriving the colour here from the same filtered, snapped, correctly
+           directed jams means the ribbon and the jam on it can never tell two
+           different stories. */
+        if (q.feature_type === "jam" && f.geometry?.type === "LineString") {
+          const snapped = guard.snap(
+            f.geometry.coordinates as number[][],
+            q.street as string | undefined,
+          );
+          if (!snapped) continue;
+          const level = Number(q.level ?? 0);
+          for (const order of segmentsSpanned(snapped.startIndex, snapped.endIndex)) {
+            const key = order + ":" + snapped.direction;
+            // Worst condition wins where two jams overlap a segment.
+            bySegment.set(key, Math.max(bySegment.get(key) ?? 0, level));
+          }
         }
 
         // Forecast: named "X to Y", with no direction, so it colours both ways.

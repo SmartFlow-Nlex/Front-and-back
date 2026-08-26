@@ -42,6 +42,26 @@ type Props = {
   // weatherApplicable, so the page can disable the Weather chips when the
   // current Range has nothing for them to filter.
   onWeatherApplicableChange?: (applicable: boolean) => void;
+  // Fired alongside the others with the response's corridor breakdown, so the
+  // page can render PredictiveCorridorChart as its own card without this
+  // component fetching /api/incident/predictive a second time for the same
+  // Range/Weather-scoped data.
+  onCorridorForecastChange?: (corridor: {
+    corridorForecast: PredictiveData["corridorForecast"];
+    unclassifiedLocationShare: number | null;
+    forecastHorizon: number;
+    // Pretty label of whichever model corridorForecast was apportioned from
+    // (the Models toolbar's active pick, or the champion as a fallback) —
+    // null only alongside a null corridorForecast.
+    forecastModelLabel: string | null;
+    // The Volume/Weather toggle state this corridorForecast was apportioned
+    // under (the backend re-derives its total from the corresponding
+    // volume-free/weather-free series when either is off) — carried along so
+    // the corridor card can disclose which basis it's showing rather than
+    // silently agreeing or disagreeing with the chart above it.
+    showVolume: boolean;
+    showWeather: boolean;
+  }) => void;
 };
 
 const zoneLabel = (text: string, show: boolean) => ({
@@ -85,6 +105,7 @@ export default function PredictiveIncidentChart({
   weather,
   onDataBoundsChange,
   onWeatherApplicableChange,
+  onCorridorForecastChange,
 }: Props = {}) {
   const [data, setData] = useState<PredictiveData | null>(null);
   const [loading, setLoading] = useState(true);
@@ -101,8 +122,20 @@ export default function PredictiveIncidentChart({
   // forecast, and a second axis should be something the reader opts into rather
   // than something they have to clear away before they can read the lines.
   const [showVolume, setShowVolume] = useState(false);
+  // Rainfall overlay, on by default: this is the chart's original behavior
+  // (Rainfall always drawn), kept as the default so existing views don't
+  // change until the user opts out — mirrors showVolume's off-by-default in
+  // spirit, just with the opposite starting state since Rainfall used to be
+  // unconditional.
+  const [showWeather, setShowWeather] = useState(true);
   // Guards the one-time "open on the champion" default against filter refetches.
   const seededRef = useRef(false);
+  // `selected` is now a fetch dependency (below) so a user's model pick
+  // resyncs the corridor card. But the one-time champion seed also writes to
+  // `selected`, which would otherwise trigger a second, redundant fetch of
+  // the exact same data right after the first — this flags that specific
+  // transition so the effect can skip it without skipping a real user pick.
+  const skipNextFetchRef = useRef(false);
   const router = useRouter();
 
   const toggleModel = useCallback((key: ModelKey) => {
@@ -114,6 +147,11 @@ export default function PredictiveIncidentChart({
   }, []);
 
   useEffect(() => {
+    if (skipNextFetchRef.current) {
+      skipNextFetchRef.current = false;
+      return;
+    }
+
     // A half-filled custom range would query a nonsense window — wait until
     // both dates are picked. Mirrors the same gate on the traffic chart
     // (PredictiveVolumeChart): `from` only ever arrives set once Custom is
@@ -129,6 +167,23 @@ export default function PredictiveIncidentChart({
     if (weather) qs.set("weather", weather);
     if (from) qs.set("from", from);
     if (to) qs.set("to", to);
+    // Which trained variant (primary / volume-free / weather-free) the
+    // accuracy metrics table is scored against — must travel with the request
+    // so the table the API returns matches the lines this render is about to
+    // plot from d.models/modelsNoVolume/modelsNoWeather below. Omitted at the
+    // default ("on") so an unrelated caller's URL doesn't grow for no reason.
+    if (!showVolume) qs.set("volumeToggle", "off");
+    if (!showWeather) qs.set("weatherToggle", "off");
+    // Syncs the corridor card's total to the same Future window (1wk/2wk/1mo)
+    // this chart is currently drawing — null means "the whole published
+    // horizon", the same default the FUTURE_PRESETS control itself starts on.
+    if (futureDays != null) qs.set("futureDays", String(futureDays));
+    // Syncs the corridor card to the Models toolbar's active pick, the same
+    // way it already syncs to Volume/Weather/Future. `selected` starts empty
+    // (seeded to the champion only after the first response lands), so the
+    // very first request correctly sends nothing and the backend's own
+    // champion fallback applies.
+    if (selected.length > 0) qs.set("forecastModel", selected[0]);
     const url = qs.size > 0
       ? `${BACKEND}/api/incident/predictive?${qs}`
       : `${BACKEND}/api/incident/predictive`;
@@ -145,11 +200,35 @@ export default function PredictiveIncidentChart({
         setData(payload);
         onDataBoundsChange?.(payload.dataBounds);
         onWeatherApplicableChange?.(payload.weatherApplicable);
+        onCorridorForecastChange?.({
+          corridorForecast: payload.corridorForecast,
+          unclassifiedLocationShare: payload.unclassifiedLocationShare,
+          // The window corridorForecast was actually apportioned over — NOT
+          // modelInfo.forecastHorizon (the pipeline's full published horizon),
+          // so the card's "(next Nd)" label stays honest once Future is
+          // trimmed to less than that.
+          forecastHorizon: payload.corridorForecastDays,
+          // Pretty label for whichever model corridorForecast actually used
+          // (the toolbar's pick, or the champion as a fallback) — resolved
+          // here since this component already owns META/MODELS, rather than
+          // handing PredictiveCorridorChart a raw key to look up itself.
+          forecastModelLabel: payload.corridorForecastModel
+            ? (META[payload.corridorForecastModel as ModelKey]?.label ?? payload.corridorForecastModel)
+            : null,
+          showVolume,
+          showWeather,
+        });
         // Open on the champion so the default view matches the headline metrics,
         // but only on first load — re-seeding on every filter change would throw
         // away a model comparison the user had set up.
         if (!seededRef.current) {
           const champ = MODELS.find((m) => m.key === payload.summary.championModel)?.key;
+          // This response was already fetched without forecastModel, which
+          // the backend resolves to the champion anyway — so the fetch this
+          // seed is about to trigger (selected is now a dependency) would
+          // return identical data. Skip it rather than round-tripping for a
+          // response that can't have changed.
+          skipNextFetchRef.current = true;
           setSelected([champ ?? MODELS[0].key]);
           seededRef.current = true;
         }
@@ -164,7 +243,7 @@ export default function PredictiveIncidentChart({
     return () => {
       cancelled = true;
     };
-  }, [months, from, to, weather, onDataBoundsChange, onWeatherApplicableChange]);
+  }, [months, from, to, weather, showVolume, showWeather, futureDays, selected, onDataBoundsChange, onWeatherApplicableChange, onCorridorForecastChange]);
 
   // Only blank the card on the very first load. Changing Range or Weather
   // refetches, and swapping the whole chart out for a spinner each time made the
@@ -241,6 +320,9 @@ export default function PredictiveIncidentChart({
   // overlay alone and the caption below says so, rather than implying a change
   // to the lines that isn't happening.
   const hasVolumeFreeTwin = daily.some((d) => d.modelsNoVolume != null);
+  // Same idea for rain_mm: when the pipeline stored a weather-free twin, the
+  // Weather toggle can switch the forecast itself the same way Volume's does.
+  const hasWeatherFreeTwin = daily.some((d) => d.modelsNoWeather != null);
   const shown = selected.filter((k) => availableModels.some((m) => m.key === k));
   const activeModels = shown.length > 0 ? shown : availableModels.slice(0, 1).map((m) => m.key);
 
@@ -369,7 +451,12 @@ export default function PredictiveIncidentChart({
       },
     },
     legend: {
-      data: ["Actual Count", ...activeModels.map((k) => `${META[k].label} Prediction`), "Rainfall"],
+      data: [
+        "Actual Count",
+        ...activeModels.map((k) => `${META[k].label} Prediction`),
+        ...(showWeather ? ["Rainfall"] : []),
+        ...(showVolume ? ["Vehicle Volume"] : []),
+      ],
       bottom: 0,
       icon: "circle",
       itemGap: 16,
@@ -401,6 +488,7 @@ export default function PredictiveIncidentChart({
         nameGap: 40,
         min: 0,
         position: "right",
+        show: showWeather,
         axisLabel: { color: RAIN_COLOR },
         splitLine: { show: false },
       },
@@ -430,16 +518,23 @@ export default function PredictiveIncidentChart({
       },
     ],
     series: [
-      {
-        name: "Rainfall",
-        type: "bar",
-        yAxisIndex: 1,
-        data: daily.map((d) => d.rainfallMm),
-        barMaxWidth: 14,
-        itemStyle: { color: RAIN_COLOR, opacity: 0.35 },
-        emphasis: { itemStyle: { opacity: 0.6 } },
-        z: 1,
-      },
+      // Weather overlay, same pattern as Volume below: an empty array when
+      // off rather than a hidden series, so ECharts drops the bars and their
+      // axis space entirely instead of just visually hiding them.
+      ...(showWeather
+        ? [
+            {
+              name: "Rainfall",
+              type: "bar" as const,
+              yAxisIndex: 1,
+              data: daily.map((d) => d.rainfallMm),
+              barMaxWidth: 14,
+              itemStyle: { color: RAIN_COLOR, opacity: 0.35 },
+              emphasis: { itemStyle: { opacity: 0.6 } },
+              z: 1,
+            },
+          ]
+        : []),
       // Exposure. A line rather than a second bar set: rainfall already holds
       // the bars, and two bar series on one chart compete for the same visual
       // slot. Drawn under the incident lines (z:2) so it reads as context.
@@ -506,13 +601,24 @@ export default function PredictiveIncidentChart({
         // but validation and future rows. If in-sample rows are ever backfilled
         // to give the hourly drill-down past coverage, this keeps them out of
         // this chart instead of silently extending every line across history.
-        // Volume ON => the volume-aware fit; OFF => the volume-free twin, so the
-        // toggle changes the prediction rather than only the overlay — matching
-        // how the traffic forecast's Weather toggle behaves. Falls back to the
-        // primary series when no twin was stored.
+        // Picks which of a day's three stored series (primary / volume-free /
+        // weather-free) answers the current toggle state — the same rule the
+        // backend's pickPrediction applies when scoring modelMetrics (kept in
+        // sync by hand since one lives in SQL-column-space and the other in
+        // this response's field names), so the table underneath never
+        // disagrees with what this line is plotting. There's no
+        // jointly-ablated twin (a 4th trained variant per model), so with
+        // BOTH toggles off this falls back to the volume-free twin — volume
+        // is the far stronger feature (R2=0.518 alone vs 0.0016 for rain), so
+        // ablating it is the more meaningful single substitution. `?? d.models`
+        // on each branch also covers a table with no twin stored yet.
         data: daily.map((d) => {
           if (d.predictionType !== "validation" && d.predictionType !== "future") return null;
-          const source = showVolume || !hasVolumeFreeTwin ? d.models : (d.modelsNoVolume ?? d.models);
+          const source =
+            showVolume && showWeather ? d.models
+            : !showVolume && showWeather ? (d.modelsNoVolume ?? d.models)
+            : showVolume && !showWeather ? (d.modelsNoWeather ?? d.models)
+            : (d.modelsNoVolume ?? d.modelsNoWeather ?? d.models);
           return source?.[key] ?? null;
         }),
         smooth: true,
@@ -769,6 +875,39 @@ export default function PredictiveIncidentChart({
               />
             </svg>
             Volume
+          </button>
+          {/* Rainfall toggle — same pill, independent of Volume so the user can
+              show either, both, or neither. Like Volume, it switches the
+              forecast itself when the pipeline stored a weather-free twin
+              (has_weather_free_twin), not merely the rainfall overlay. */}
+          <button
+            onClick={() => setShowWeather(!showWeather)}
+            title={
+              hasWeatherFreeTwin
+                ? showWeather
+                  ? "Weather ON: forecasts fitted WITH rainfall, overlay shown. Click to switch to the weather-free models."
+                  : "Weather OFF: forecasts fitted WITHOUT rainfall. Click to use the weather-aware models and show the overlay."
+                : showWeather
+                  ? "Hide the rainfall overlay (this training run stored no weather-free models, so the forecast lines do not change)"
+                  : "Show the rainfall overlay (this training run stored no weather-free models, so the forecast lines do not change)"
+            }
+            style={{
+              display: "inline-flex", alignItems: "center", gap: "6px", padding: "5px 14px",
+              borderRadius: "999px", border: "1px solid #dce2ef",
+              fontSize: "0.76rem", fontWeight: 600, cursor: "pointer", transition: "all 0.15s",
+              background: showWeather ? `linear-gradient(135deg, ${RAIN_COLOR}, #0284c7)` : "var(--bg-surface, #fff)",
+              color: showWeather ? "var(--bg-surface, #fff)" : "var(--text-secondary, #4b5e7d)",
+              boxShadow: showWeather ? `0 1px 6px ${RAIN_COLOR}59` : "none",
+            }}
+          >
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none">
+              <path
+                d="M17 15.5a4 4 0 0 0-1.2-7.85 5.5 5.5 0 0 0-10.6 1.5A3.75 3.75 0 0 0 6.5 16.5"
+                stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"
+              />
+              <path d="M8 18.5l-1 2M12 18.5l-1 2M16 18.5l-1 2" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+            </svg>
+            Weather
           </button>
         </div>
       </div>

@@ -11,97 +11,97 @@
 
   [SELECTED] Poisson GLM
   ------------------------------------------------------------
-    MAE              =       6.1673
-    MSE              =      60.3354
-    RMSE             =       7.7676
-    MAPE             =      26.2262 %
-    sMAPE            =      22.1749 %
-    WMAPE            =      21.3483 %
-    Poisson_Deviance =       2.1440
-    MASE             =       0.7421
-    RMSSE            =       0.7395
-    R2               =       0.2925
-    Adjusted_R2      =       0.1374
+    MAE              =       6.3135
+    MSE              =      62.7045
+    RMSE             =       7.9186
+    MAPE             =      27.9752 %
+    sMAPE            =      22.7627 %
+    WMAPE            =      21.8543 %
+    Poisson_Deviance =       2.2350
+    MASE             =       0.7596
+    RMSSE            =       0.7539
+    R2               =       0.2647
+    Adjusted_R2      =       0.0911
     --- Split R2 (Adviser Diagnostic) ---
-    Train R2         =       0.3069
-    Val R2           =       0.2925
-    Gap              =       0.0145
+    Train R2         =       0.3207
+    Val R2           =       0.2647
+    Gap              =       0.0560
     DIAGNOSIS        = JUST RIGHT
 
   [RANK #2] Negative Binomial GLM
   ------------------------------------------------------------
-    MAE              =       6.1673
-    MSE              =      60.3354
-    RMSE             =       7.7676
-    MAPE             =      26.2262 %
-    sMAPE            =      22.1749 %
-    WMAPE            =      21.3483 %
-    Poisson_Deviance =       2.1440
-    MASE             =       0.7421
-    RMSSE            =       0.7395
-    R2               =       0.2925
-    Adjusted_R2      =       0.1374
+    MAE              =       6.3135
+    MSE              =      62.7045
+    RMSE             =       7.9186
+    MAPE             =      27.9752 %
+    sMAPE            =      22.7627 %
+    WMAPE            =      21.8543 %
+    Poisson_Deviance =       2.2350
+    MASE             =       0.7596
+    RMSSE            =       0.7539
+    R2               =       0.2647
+    Adjusted_R2      =       0.0911
     --- Split R2 (Adviser Diagnostic) ---
-    Train R2         =       0.3069
-    Val R2           =       0.2925
-    Gap              =       0.0145
+    Train R2         =       0.3207
+    Val R2           =       0.2647
+    Gap              =       0.0560
     DIAGNOSIS        = JUST RIGHT
 
-  [RANK #3] Random Forest
+  [RANK #3] SARIMAX
   ------------------------------------------------------------
-    MAE              =       6.6274
-    MSE              =      65.8688
-    RMSE             =       8.1160
-    MAPE             =      29.4135 %
-    sMAPE            =      23.8872 %
-    WMAPE            =      22.9412 %
-    Poisson_Deviance =       2.3564
-    MASE             =       0.7974
-    RMSSE            =       0.7727
-    R2               =       0.2276
-    Adjusted_R2      =       0.0583
+    MAE              =       6.4547
+    MSE              =      64.0753
+    RMSE             =       8.0047
+    MAPE             =      27.5110 %
+    sMAPE            =      23.1948 %
+    WMAPE            =      22.3431 %
+    Poisson_Deviance =       2.2690
+    MASE             =       0.7766
+    RMSSE            =       0.7621
+    R2               =       0.2486
+    Adjusted_R2      =       0.0712
     --- Split R2 (Adviser Diagnostic) ---
-    Train R2         =       0.6430
-    Val R2           =       0.2276
-    Gap              =       0.4154
+    Train R2         =       0.2369
+    Val R2           =       0.2486
+    Gap              =      -0.0118
+    DIAGNOSIS        = JUST RIGHT
+
+  [RANK #4] Random Forest
+  ------------------------------------------------------------
+    MAE              =       6.7205
+    MSE              =      69.2020
+    RMSE             =       8.3188
+    MAPE             =      30.6972 %
+    sMAPE            =      24.1916 %
+    WMAPE            =      23.2634 %
+    Poisson_Deviance =       2.4743
+    MASE             =       0.8086
+    RMSSE            =       0.7920
+    R2               =       0.1885
+    Adjusted_R2      =      -0.0031
+    --- Split R2 (Adviser Diagnostic) ---
+    Train R2         =       0.6798
+    Val R2           =       0.1885
+    Gap              =       0.4913
     DIAGNOSIS        = OVERFITTING
-
-  [RANK #4] SARIMAX
-  ------------------------------------------------------------
-    MAE              =       6.5586
-    MSE              =      67.4815
-    RMSE             =       8.2147
-    MAPE             =      26.4104 %
-    sMAPE            =      23.5734 %
-    WMAPE            =      22.7027 %
-    Poisson_Deviance =       2.3755
-    MASE             =       0.7891
-    RMSSE            =       0.7821
-    R2               =       0.2087
-    Adjusted_R2      =       0.0352
-    --- Split R2 (Adviser Diagnostic) ---
-    Train R2         =       0.2162
-    Val R2           =       0.2087
-    Gap              =       0.0075
-    DIAGNOSIS        = JUST RIGHT
 
   [RANK #5] XGBoost
   ------------------------------------------------------------
-    MAE              =       6.8239
-    MSE              =      71.2449
-    RMSE             =       8.4407
-    MAPE             =      30.6102 %
-    sMAPE            =      24.4700 %
-    WMAPE            =      23.6211 %
-    Poisson_Deviance =       2.5244
-    MASE             =       0.8211
-    RMSSE            =       0.8036
-    R2               =       0.1645
-    Adjusted_R2      =      -0.0186
+    MAE              =       6.8625
+    MSE              =      71.5195
+    RMSE             =       8.4569
+    MAPE             =      31.1125 %
+    sMAPE            =      24.6680 %
+    WMAPE            =      23.7547 %
+    Poisson_Deviance =       2.5504
+    MASE             =       0.8257
+    RMSSE            =       0.8051
+    R2               =       0.1613
+    Adjusted_R2      =      -0.0367
     --- Split R2 (Adviser Diagnostic) ---
-    Train R2         =       0.7270
-    Val R2           =       0.1645
-    Gap              =       0.5624
+    Train R2         =       0.7407
+    Val R2           =       0.1613
+    Gap              =       0.5794
     DIAGNOSIS        = OVERFITTING
 
   [RANK #6] LSTM

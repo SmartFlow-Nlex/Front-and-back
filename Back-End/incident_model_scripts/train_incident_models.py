@@ -993,6 +993,14 @@ PRED_COLUMN = {
 # toggle would be cosmetic, which is exactly the confusion they prevent.
 PRED_COLUMN_NV = {m: f"{c}_nv" for m, c in PRED_COLUMN.items()}
 
+# Weather-free twin, same reasoning as PRED_COLUMN_NV but with rain_mm dropped
+# instead of the volume columns — this is what the dashboard's own Weather
+# toggle now switches the forecast between. LSTM/GRU never saw rain_mm to begin
+# with (final_rnn_forecast is univariate on `total` alone), so their _nw values
+# come out identical to the primary column; that mirrors how their _nv columns
+# already behave and is not a bug.
+PRED_COLUMN_NW = {m: f"{c}_nw" for m, c in PRED_COLUMN.items()}
+
 
 def build_all_final_predictions(feat: pd.DataFrame, rain_by_date: dict) -> tuple[dict[str, dict], dict[str, list]]:
     """Refit every model on the full series so the dashboard can overlay any of
@@ -1079,6 +1087,21 @@ def ensure_schema(conn, commit: bool = True) -> None:
                 ADD COLUMN IF NOT EXISTS pred_negbinomial_glm_nv  DOUBLE PRECISION,
                 ADD COLUMN IF NOT EXISTS pred_sarimax_nv          DOUBLE PRECISION;
 
+            -- Weather-free twins. Same seven models refit on the same window with
+            -- rain_mm removed, so the dashboard's Weather toggle can switch the
+            -- forecast itself the same way the Volume toggle already does, rather
+            -- than only hiding the rainfall bars. Null on rows written by a
+            -- --no-weather run, where the primary columns are already the
+            -- weather-free series and a twin would duplicate them.
+            ALTER TABLE ml_predictive_incidents
+                ADD COLUMN IF NOT EXISTS pred_xgboost_nw          DOUBLE PRECISION,
+                ADD COLUMN IF NOT EXISTS pred_randomforest_nw     DOUBLE PRECISION,
+                ADD COLUMN IF NOT EXISTS pred_lstm_nw             DOUBLE PRECISION,
+                ADD COLUMN IF NOT EXISTS pred_gru_nw              DOUBLE PRECISION,
+                ADD COLUMN IF NOT EXISTS pred_poisson_glm_nw      DOUBLE PRECISION,
+                ADD COLUMN IF NOT EXISTS pred_negbinomial_glm_nw  DOUBLE PRECISION,
+                ADD COLUMN IF NOT EXISTS pred_sarimax_nw          DOUBLE PRECISION;
+
             -- Rain (mm) behind each date's forecast: the real hourly_weather total
             -- for validation dates and any future date hourly_weather already
             -- covers, an Open-Meteo forecast otherwise (see fetch_future_rain).
@@ -1095,7 +1118,8 @@ def ensure_schema(conn, commit: bool = True) -> None:
 
 def write_to_db(conn, daily: pd.DataFrame, feat: pd.DataFrame, champion: str,
                  by_model: dict[str, dict], metadata: dict, rain_by_date: dict,
-                 by_model_nv: dict[str, dict] | None = None, dry: bool = False) -> None:
+                 by_model_nv: dict[str, dict] | None = None,
+                 by_model_nw: dict[str, dict] | None = None, dry: bool = False) -> None:
     # dry: do every real query, then roll back. Proves the migration, the row
     # shape and the insert against the live schema without changing a shared
     # table that other people's dashboards read.
@@ -1106,11 +1130,14 @@ def write_to_db(conn, daily: pd.DataFrame, feat: pd.DataFrame, champion: str,
     val_dates = [d.date() for d in feat["d"].iloc[-VALIDATION_DAYS:]]
     future_dates = sorted(by_model[champion]["future"].keys())
     model_cols = [PRED_COLUMN[m] for m in MODEL_NAMES]
-    # Volume-free twins are written only when a second, volume-free pass was
-    # actually fitted. A --no-volume run has nothing to contrast against, so its
-    # twin columns stay NULL and the dashboard falls back to the primary series.
+    # Volume-free / weather-free twins are written only when that second pass
+    # was actually fitted. A --no-volume (resp. --no-weather) run has nothing
+    # to contrast against, so its twin columns stay NULL and the dashboard
+    # falls back to the primary series.
     nv = by_model_nv or {}
     nv_cols = [PRED_COLUMN_NV[m] for m in MODEL_NAMES]
+    nw = by_model_nw or {}
+    nw_cols = [PRED_COLUMN_NW[m] for m in MODEL_NAMES]
 
     def num(v):
         """Built-in float or None — psycopg2 cannot adapt numpy scalars."""
@@ -1122,8 +1149,9 @@ def write_to_db(conn, daily: pd.DataFrame, feat: pd.DataFrame, champion: str,
         # reader keeps working unchanged.
         champ = num(by_model[champion][kind].get(d))
         preds_nv = [num(nv[m][kind].get(d)) if m in nv else None for m in MODEL_NAMES]
+        preds_nw = [num(nw[m][kind].get(d)) if m in nw else None for m in MODEL_NAMES]
         return (d, kind, champ if champ is not None else 0.0, champion, num(yoy(d)),
-                *preds, num(rain_by_date.get(d)), *preds_nv)
+                *preds, num(rain_by_date.get(d)), *preds_nv, *preds_nw)
 
     with conn.cursor() as cur:
         cur.execute("DELETE FROM ml_daily_actuals")
@@ -1139,7 +1167,7 @@ def write_to_db(conn, daily: pd.DataFrame, feat: pd.DataFrame, champion: str,
             cur,
             "INSERT INTO ml_predictive_incidents (forecast_date, prediction_type, "
             "predicted_incident_count, champion_model, same_day_last_year, "
-            + ", ".join(model_cols) + ", rainfall_mm, " + ", ".join(nv_cols) + ") VALUES %s",
+            + ", ".join(model_cols) + ", rainfall_mm, " + ", ".join(nv_cols) + ", " + ", ".join(nw_cols) + ") VALUES %s",
             pred_rows,
         )
 
@@ -1341,6 +1369,22 @@ def main() -> None:
                 by_model_nv, _ = build_all_final_predictions(feat, rain_by_date)
             finally:
                 FEATURE_COLS, EXOG_COLS = saved_features, saved_exog
+
+        # Third pass: the same seven models with rain_mm removed, stored as the
+        # _nw columns — this is what the dashboard's Weather toggle switches to,
+        # mirroring the volume-free pass above. Skipped when this run had no
+        # weather to begin with (--no-weather), where the primary columns are
+        # already the weather-free series.
+        by_model_nw: dict[str, dict] = {}
+        if not args.no_weather:
+            saved_features, saved_exog = FEATURE_COLS, EXOG_COLS
+            FEATURE_COLS = [c for c in FEATURE_COLS if c != "rain_mm"]
+            EXOG_COLS = [c for c in EXOG_COLS if c != "rain_mm"]
+            print("Refitting the weather-free control set (drives the dashboard's Weather toggle)...")
+            try:
+                by_model_nw, _ = build_all_final_predictions(feat, rain_by_date)
+            finally:
+                FEATURE_COLS, EXOG_COLS = saved_features, saved_exog
         feature_importance = importances.get(champion, [])
         champion_row = next(r for r in comparison if r["model"] == champion)
 
@@ -1365,13 +1409,18 @@ def main() -> None:
             # feature the run never fitted with.
             "volume_features": [c for c in FEATURE_COLS if c in VOLUME_COLS],
             "has_volume_free_twin": bool(by_model_nv),
+            # Same pair of flags as the volume ones above, but for rain_mm — the
+            # dashboard reads this to decide whether its Weather toggle can
+            # switch the forecast or should only govern the rainfall overlay.
+            "uses_weather": not args.no_weather,
+            "has_weather_free_twin": bool(by_model_nw),
         }
         if degraded:
             metadata["warning"] = "No model beat the naive seasonal (MASE<=1.0) baseline; champion is a fallback pick."
 
         print("Writing ml_daily_actuals, ml_predictive_incidents, ml_training_metadata (one transaction)...")
         write_to_db(conn, daily, feat, champion, by_model, metadata, rain_by_date, by_model_nv,
-                    dry=args.dry_write and not args.write_db)
+                    by_model_nw, dry=args.dry_write and not args.write_db)
         print("Rolled back (dry write)." if (args.dry_write and not args.write_db) else "Committed.")
         print(f"Champion: {champion}   R2={champion_row['R2']}   MAE={champion_row['MAE']}   "
               f"models stored: {len(by_model)}/{len(MODEL_NAMES)}")

@@ -70,6 +70,13 @@ export type DailyPoint = {
    * nothing" and fall back to treating Volume as an overlay-only control.
    */
   modelsNoVolume?: Partial<Record<ModelKey, number | null>>;
+  /**
+   * The same models refit with rain_mm removed. Present only when the
+   * pipeline stored a weather-free twin, mirroring modelsNoVolume above —
+   * what lets the Weather toggle switch the forecast itself, not just the
+   * rainfall overlay.
+   */
+  modelsNoWeather?: Partial<Record<ModelKey, number | null>>;
 };
 
 export type ModelMetric = {
@@ -89,6 +96,15 @@ export type ModelMetric = {
   // pipeline's full-holdout figures instead.
   source: "window" | "holdout";
   n: number;
+};
+
+export type CorridorForecastPoint = {
+  exitId: number;
+  exitName: string;
+  km: number;
+  historicalCount: number;
+  historicalShare: number;
+  predictedIncidents: number;
 };
 
 export type PredictiveData = {
@@ -112,6 +128,20 @@ export type PredictiveData = {
     days: number;
     models: { model: string; MAE: number; RMSE: number; R2: number | null; isChampion: boolean }[];
   } | null;
+  /**
+   * Predicted incidents per exit/corridor — an apportionment of
+   * summary.totalPredictedNext7Days by each exit's historical share of
+   * incidents in the current Range, not a separately trained per-location
+   * model. Null when the corridor's exit list or location data wasn't
+   * available to build it.
+   */
+  corridorForecast: CorridorForecastPoint[] | null;
+  /** Fraction of the Range's incidents whose location matched no known exit. */
+  unclassifiedLocationShare: number | null;
+  /** How many published future days corridorForecast was apportioned over. */
+  corridorForecastDays: number;
+  /** Which model corridorForecast was apportioned from (toolbar pick, or the champion as a fallback). */
+  corridorForecastModel: string | null;
   scoringWindow: { start: string; end: string; n: number } | null;
   appliedFilters: {
     months: "3" | "12" | "all";

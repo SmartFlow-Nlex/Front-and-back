@@ -43,6 +43,19 @@ export function buildIncidentPredictiveQuerySchema(bounds: IncidentPredictiveDat
       from: isoDate.optional(),
       to: isoDate.optional(),
       weather: IncidentPredictiveWeatherSchema.optional().default("all"),
+      // Volume/Weather toggle state — which trained variant (primary /
+      // volume-free / weather-free) the chart and its metrics table are
+      // showing. Distinct from `weather` above (the wet/dry accuracy split).
+      volumeToggle: z.enum(["on", "off"]).optional().default("on"),
+      weatherToggle: z.enum(["on", "off"]).optional().default("on"),
+      // The chart's Future control (1wk/2wk/1mo) — syncs corridorForecast's
+      // total to the same window the chart itself is currently drawing.
+      // Absent means "the whole published horizon".
+      futureDays: z.coerce.number().int().positive().optional(),
+      // The Models toolbar's first active pill — which model corridorForecast
+      // apportions. Absent (or a model with no stored data) falls back to the
+      // champion, same as before this existed.
+      forecastModel: IncidentModelKeySchema.optional(),
     })
     .refine((q) => !q.from || !q.to || q.from < q.to, {
       message: "`from` must be earlier than `to`",
@@ -85,6 +98,12 @@ const IncidentPredictiveDailyPointSchema = z.object({
    * Volume toggle switch the forecast rather than only the overlay.
    */
   modelsNoVolume: z.record(z.string(), z.number().nullable()).optional(),
+  /**
+   * The same models refit without rain_mm. Present only when the pipeline
+   * stored a weather-free twin, which is what lets the dashboard's Weather
+   * toggle switch the forecast rather than only the rainfall overlay.
+   */
+  modelsNoWeather: z.record(z.string(), z.number().nullable()).optional(),
 });
 
 const IncidentModelMetricSchema = z.object({
@@ -140,6 +159,40 @@ export const IncidentPredictiveResponseSchema = z.object({
     scoredDays: z.number().nullable(),
   }),
   weatherMetrics: IncidentPredictiveWeatherMetricsSchema,
+  /**
+   * Predicted incidents per exit/corridor, for the "predicted incidents by
+   * exit" card. This is an APPORTIONMENT of summary.totalPredictedNext7Days
+   * by each exit's historical share of incidents in the current Range — there
+   * is no separately trained per-location model behind it. Null when the
+   * corridor's exit list or usable location data wasn't available to build it.
+   */
+  corridorForecast: z
+    .array(
+      z.object({
+        exitId: z.number().int(),
+        exitName: z.string(),
+        km: z.number(),
+        historicalCount: z.number().int().nonnegative(),
+        historicalShare: z.number().min(0).max(1),
+        predictedIncidents: z.number().nonnegative(),
+      })
+    )
+    .nullable(),
+  // Fraction of the Range's incidents whose location text matched neither a
+  // km figure nor a known exit name — so the corridor card can disclose its
+  // own coverage instead of silently pretending every incident was placed.
+  unclassifiedLocationShare: z.number().min(0).max(1).nullable(),
+  // How many of the published future days corridorForecast was apportioned
+  // over — echoes the request's futureDays (clamped to what's actually
+  // published), so the card can label its axis honestly even if the chart's
+  // Future control and this total were ever to disagree.
+  corridorForecastDays: z.number().int().nonnegative(),
+  // Which model corridorForecast was actually apportioned from — echoes a
+  // valid request's forecastModel, or the champion when that was absent/
+  // invalid/unavailable, so the card can label its basis honestly rather than
+  // assuming the toolbar's selection and this total agree. Null only when
+  // corridorForecast itself is null (nothing was computed).
+  corridorForecastModel: z.string().nullable(),
   // The row set every "window"-sourced row in modelMetrics was actually
   // scored against — for the metrics card's caption. Null exactly when every
   // model fell back to source:"holdout" (nothing to score against).

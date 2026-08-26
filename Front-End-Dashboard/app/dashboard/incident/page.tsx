@@ -11,6 +11,8 @@ import ChartSkeleton, { KpiSkeleton } from "../../../components/dashboard/ChartS
 import CustomSelect from "../../../components/dashboard/CustomSelect";
 import PageHeader from "../../../components/dashboard/PageHeader";
 import PredictiveIncidentChart from "../../../components/dashboard/PredictiveIncidentChart";
+import PredictiveCorridorChart from "../../../components/dashboard/PredictiveCorridorChart";
+import type { CorridorForecastPoint } from "../../../components/dashboard/incidentPredictive.shared";
 import DateRangePicker from "../traffic/components/DateRangePicker";
 import { rangeDays, grainBlockedReason, bestGrainFor, axisLabelFor, bucketLabelFor } from "../../../lib/granularity";
 import styles from "../traffic/traffic.module.css";
@@ -121,6 +123,17 @@ export default function IncidentPage() {
   // Whether the predictive endpoint's current Range has any scored rows for
   // Weather to filter.
   const [weatherApplicable, setWeatherApplicable] = useState(true);
+
+  // Lifted from PredictiveIncidentChart's same response so the corridor card
+  // below it doesn't refetch /api/incident/predictive on its own.
+  const [corridorData, setCorridorData] = useState<{
+    corridorForecast: CorridorForecastPoint[] | null;
+    unclassifiedLocationShare: number | null;
+    forecastHorizon: number;
+    forecastModelLabel: string | null;
+    showVolume: boolean;
+    showWeather: boolean;
+  } | null>(null);
 
   // Restore the view the hourly drill-down was opened from
   useEffect(() => {
@@ -644,12 +657,26 @@ export default function IncidentPage() {
       <svg width="15" height="15" viewBox="0 0 16 16" fill="none" style={{ color: "var(--text-muted)" }}><path d="M4.5 11.5a3 3 0 1 1 .4-5.97 4 4 0 0 1 7.75 1.1A2.5 2.5 0 0 1 12 11.5H4.5z" stroke="currentColor" strokeWidth="1.4" strokeLinejoin="round" /><path d="M6 13.2v1M9 13.2v1M12 13.2v1" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" /></svg>
       <span className={styles.filterLabel}>Weather</span>
       <div className={styles.segmented}>
-        {(["all", "dry", "wet"] as const).map((w) => (
-          <button key={w} className={weather === w ? "active" : ""} onClick={() => setWeather(w)}>
-            {weather === w && <svg width="12" height="12" viewBox="0 0 16 16" fill="none" style={{ marginRight: 4, marginBottom: -1 }}><path d="M3.5 8.5l3 3 6-7" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" /></svg>}
-            {w === "all" ? "All" : w === "dry" ? "Dry" : "Wet"}
-          </button>
-        ))}
+        {(["all", "dry", "wet"] as const).map((w) => {
+          // weatherApplicable comes from the Predictive chart's own response
+          // (scoringWindow !== null) — it has no meaning for the Descriptive
+          // tab's own weather split, which always has hourly data to filter,
+          // so only Dry/Wet on the Predictive tab can ever be disabled here.
+          // "All" stays enabled unconditionally: it never depends on scored days.
+          const disabled = activeTab === "Predictive" && w !== "all" && !weatherApplicable;
+          return (
+            <button
+              key={w}
+              className={weather === w ? "active" : ""}
+              onClick={() => setWeather(w)}
+              disabled={disabled}
+              title={disabled ? "No scored validation days in the current Range for this weather — pick a wider Range" : undefined}
+            >
+              {weather === w && <svg width="12" height="12" viewBox="0 0 16 16" fill="none" style={{ marginRight: 4, marginBottom: -1 }}><path d="M3.5 8.5l3 3 6-7" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" /></svg>}
+              {w === "all" ? "All" : w === "dry" ? "Dry" : "Wet"}
+            </button>
+          );
+        })}
       </div>
     </div>
   );
@@ -686,9 +713,24 @@ export default function IncidentPage() {
               weather={weather}
               onDataBoundsChange={setPredictiveDataBounds}
               onWeatherApplicableChange={setWeatherApplicable}
+              onCorridorForecastChange={setCorridorData}
             />
           </div>
-        ) : (
+        ) : null}
+        {activeTab === "Predictive" && (
+          <div className={styles.spanFull}>
+            <PredictiveCorridorChart
+              corridorForecast={corridorData?.corridorForecast ?? null}
+              unclassifiedLocationShare={corridorData?.unclassifiedLocationShare ?? null}
+              forecastHorizon={corridorData?.forecastHorizon ?? 0}
+              showVolume={corridorData?.showVolume ?? false}
+              showWeather={corridorData?.showWeather ?? true}
+              forecastModelLabel={corridorData?.forecastModelLabel ?? null}
+              loading={corridorData === null}
+            />
+          </div>
+        )}
+        {activeTab !== "Predictive" && (
           <article className={`${styles.chartCard} ${styles.chart1}`}>
             <div className={styles.chartHead}>
               <div className={styles.headText}>

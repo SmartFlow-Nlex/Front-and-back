@@ -4478,24 +4478,60 @@ body {
 .mc-dot.green { background: var(--color-success); box-shadow: 0 0 8px var(--color-success); }
 .mc-dot.purple { background: var(--color-purple); }
 
+/* The legend is a <details>. Open, it listed fourteen rows and covered half
+   the map in the side-by-side panels — the reference layout can afford that
+   because it is full-screen, this one cannot. Closed it is a chip, so the
+   reader chooses between the key and the corridor instead of losing the
+   corridor by default. */
 .mc-legend-card {
   position: absolute;
   bottom: 16px;
   left: 16px;
-  background: rgba(255, 255, 255, 0.95);
+  background: var(--bg-surface);
   backdrop-filter: blur(8px);
-  padding: 16px;
+  border: 1px solid var(--border-default);
   border-radius: var(--radius-md);
   box-shadow: var(--shadow-lg);
   z-index: 10;
-  min-width: 180px;
+  max-width: 250px;
+  max-height: calc(100% - 32px);
+  overflow-y: auto;
 }
 
-.mc-legend-section h4 {
-  font-size: 0.8rem;
+.mc-legend-card > summary {
+  list-style: none;
+  cursor: pointer;
+  padding: 8px 12px;
+  font-size: 0.75rem;
   font-weight: 700;
   color: var(--text-primary);
-  margin: 0 0 12px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  user-select: none;
+}
+.mc-legend-card > summary::-webkit-details-marker { display: none; }
+.mc-legend-card > summary::before {
+  content: "\25B8";
+  font-size: 0.7rem;
+  color: var(--text-secondary);
+  transition: transform 0.15s ease;
+}
+.mc-legend-card[open] > summary::before { transform: rotate(90deg); }
+.mc-legend-card[open] > summary { border-bottom: 1px solid var(--border-default); }
+.mc-legend-card > summary:hover { background: var(--bg-surface-hover); }
+
+/* Only the open card needs the padding; the chip would look bloated with it. */
+.mc-legend-card[open] > .mc-legend-section:first-of-type { padding-top: 10px; }
+.mc-legend-card > .mc-legend-section { padding: 0 12px 10px; }
+
+.mc-legend-section h4 {
+  font-size: 0.72rem;
+  font-weight: 700;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  margin: 0 0 6px;
   display: flex;
   align-items: center;
   gap: 6px;

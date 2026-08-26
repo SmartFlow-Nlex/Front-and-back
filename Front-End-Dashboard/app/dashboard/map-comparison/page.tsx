@@ -217,7 +217,8 @@ export default function MapComparisonPage() {
           >
 
             {/* Waze Legend Overlay */}
-            <div className="mc-legend-card waze-legend">
+            <details className="mc-legend-card waze-legend">
+              <summary>Legend</summary>
               <div className="mc-legend-section">
                 <h4>Traffic Density</h4>
                 <div className="mc-density-row"><span className="mc-density-line green"></span> Light</div>
@@ -243,7 +244,7 @@ export default function MapComparisonPage() {
                 <div className="mc-report-row"><span className="mc-icon-bg yellow"><AlertCircle size={12} /></span> Hazard</div>
                 <div className="mc-report-row"><span className="mc-icon-bg cyan" style={{ backgroundColor: "#06b6d4" }}><Milestone size={12} /></span> Toll Plaza</div>
               </div>
-            </div>
+            </details>
           </TrafficMapPanel>
 
           {/* Waze Footer Stats */}
@@ -290,7 +291,8 @@ export default function MapComparisonPage() {
             </div>
 
             {/* Forecast Legend Overlay */}
-            <div className="mc-legend-card forecast-legend">
+            <details className="mc-legend-card forecast-legend">
+              <summary>Legend</summary>
               <div className="mc-legend-section">
                 <h4><span className="mc-dot purple"></span> AI Prediction Layers</h4>
                 <p className="mc-sub-label">Travel Time Zones</p>
@@ -304,7 +306,7 @@ export default function MapComparisonPage() {
                 <div className="mc-density-row"><span className="mc-density-line p-med"></span> Medium</div>
                 <div className="mc-density-row"><span className="mc-density-line p-high"></span> High</div>
               </div>
-            </div>
+            </details>
           </TrafficMapPanel>
 
           {/* Forecast Footer Stats */}

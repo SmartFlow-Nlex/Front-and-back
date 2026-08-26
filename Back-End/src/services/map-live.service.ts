@@ -316,15 +316,17 @@ export async function getLiveMapGeoJson() {
  * segments and their geometry, so every segment is drawn whether or not it is
  * congested, and absence of a jam reads as clear rather than as missing road.
  *
- * The two carriageways are the same centreline offset to either side. The
- * geometry is one line per segment pair, not a divided highway, so the offset is
- * a drawing device: it makes direction legible, and lets a jam northbound colour
- * only the northbound ribbon.
+ * Both directions are returned on the same centreline. Separating them is the
+ * map's job, not the database's: Mapbox offsets each ribbon in screen pixels, so
+ * the gap stays readable at every zoom and both sides trace the identical curve.
+ * Offsetting here instead produced two subtly different lines and broke wherever
+ * a segment doubled back on itself.
  *
- * Segments carry only their endpoints, so the drawn road is a chain of straight
- * chords between exits rather than the true curve of the tarmac.
+ * Segments carry only their endpoints, so what this returns is a chain of
+ * straight chords between exits. The client replaces that geometry with the real
+ * OSM alignment before drawing — see lib/corridor-shape.ts. The value here is the
+ * per-segment STATE; the shape is a placeholder.
  */
-const CARRIAGEWAY_OFFSET_DEG = 0.0015;   // ~165 m at this latitude
 
 export async function getCorridorCarriagewaysGeoJson() {
   if (!db) return [];
@@ -371,9 +373,7 @@ export async function getCorridorCarriagewaysGeoJson() {
        FROM silver.dim_location l
        CROSS JOIN (VALUES ('NB'), ('SB')) AS d(direction)
      )
-     SELECT ST_AsGeoJSON(
-              ST_OffsetCurve(g.geom, CASE WHEN g.direction = 'NB' THEN -($1::float8) ELSE $1::float8 END)
-            )                       AS geojson,
+     SELECT ST_AsGeoJSON(g.geom)   AS geojson,
             g.segment_name,
             g.segment_order,
             g.direction,
@@ -384,7 +384,6 @@ export async function getCorridorCarriagewaysGeoJson() {
      LEFT JOIN state s
        ON s.segment_order = g.segment_order AND s.direction = g.direction
      ORDER BY g.segment_order, g.direction`,
-    [CARRIAGEWAY_OFFSET_DEG],
   );
 
   return rows

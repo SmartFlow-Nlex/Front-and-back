@@ -5,6 +5,8 @@ import mapboxgl, { GeoJSONSource } from "mapbox-gl";
 import type { Point } from "geojson";
 import { useEffect, useRef, useState } from "react";
 import nlexGeometry from "./nlex-geometry.json";
+import { sliceCorridor, type LngLat } from "../../lib/corridor-shape";
+import { FALLBACK_EXITS } from "../../lib/nlex-exits";
 import nlexRamps from "./nlex-ramps.json";
 
 type Props = {
@@ -122,10 +124,39 @@ export default function TrafficMapPanel({ title, subtitle, badge, endpoint, laye
     });
     resizeObserver.observe(containerRef.current);
 
+    /* The API reports each segment's state but can only draw it as a straight
+       chord between exits, because that is all silver.dim_location stores. The
+       real alignment is in nlex-geometry.json, so the two are joined here: the
+       feed says WHAT each segment is doing, the local geometry says WHERE it
+       runs. Without this the ribbons cut corners across open country. */
+    const corridorLine = (nlexGeometry as unknown as { coordinates: LngLat[] }).coordinates;
+    const corridorParts = sliceCorridor(
+      corridorLine,
+      [...FALLBACK_EXITS].sort((a, b) => a.km - b.km).map((e) => [e.longitude, e.latitude] as LngLat),
+    );
+
+    /* The same slices joined back into one line, for the layers that draw the
+       corridor as a whole. Each part repeats the previous part's last vertex, so
+       the shared point is dropped on the way in. */
+    const corridorCentreline: LngLat[] = corridorParts.reduce<LngLat[]>(
+      (acc, part, i) => acc.concat(i === 0 ? part : part.slice(1)),
+      [],
+    );
+
+    const withRealShape = (fc: GeoJSON.FeatureCollection): GeoJSON.FeatureCollection => ({
+      ...fc,
+      features: (fc.features ?? []).map((f) => {
+        const props = f.properties as { feature_type?: string; segment_order?: number } | null;
+        if (props?.feature_type !== "carriageway") return f;
+        const part = corridorParts[(props.segment_order ?? 0) - 1];
+        if (!part || part.length < 2) return f;
+        return { ...f, geometry: { type: "LineString", coordinates: part } as GeoJSON.Geometry };
+      }),
+    });
+
     map.on("load", async () => {
       const response = await fetch(endpoint, { cache: "no-store" });
-      const data = await response.json();
-      console.log("TRAFFIC DATA LOADED:", data);
+      const data = withRealShape(await response.json());
 
       const isRealtime = endpoint.includes("real-time");
 
@@ -145,7 +176,11 @@ export default function TrafficMapPanel({ title, subtitle, badge, endpoint, laye
             {
               type: "Feature",
               properties: {},
-              geometry: nlexGeometry as GeoJSON.Geometry,
+              /* The rebuilt centreline, not the raw import. nlex-geometry.json
+                 is both carriageways plus ramps concatenated out of order — 196
+                 km of a 76 km road — so drawing it directly showed the corridor
+                 doubling back on itself. See lib/corridor-shape.ts. */
+              geometry: { type: "LineString", coordinates: corridorCentreline } as GeoJSON.Geometry,
             },
           ],
         },
@@ -160,44 +195,48 @@ export default function TrafficMapPanel({ title, subtitle, badge, endpoint, laye
         data: nlexRamps as GeoJSON.FeatureCollection,
       });
 
-      // Layer 1: Base NLEX Casing
+      /* Corridor emphasis. The base map shows every road in Central Luzon at
+         much the same weight, so NLEX has to be lifted off it deliberately: a
+         wide soft halo picks the corridor out at a glance from zoomed out, and
+         the darker bed under it reads as the road surface once the coloured
+         carriageways are laid on top. */
+      map.addLayer({
+        id: "nlex-halo",
+        type: "line",
+        source: "nlex-corridor",
+        layout: { "line-join": "round", "line-cap": "round" },
+        paint: {
+          "line-color": "#0ea5e9",
+          "line-width": ["interpolate", ["exponential", 1.5], ["zoom"], 8, 22, 12, 42, 16, 62],
+          "line-opacity": 0.16,
+          "line-blur": ["interpolate", ["linear"], ["zoom"], 8, 6, 16, 18],
+        },
+      });
+
       map.addLayer({
         id: "nlex-casing",
         type: "line",
         source: "nlex-corridor",
-        layout: {
-          "line-join": "round",
-          "line-cap": "round",
-        },
+        layout: { "line-join": "round", "line-cap": "round" },
         paint: {
-          "line-color": "#475569", // Slate grey border
-          "line-width": [
-            "interpolate", ["exponential", 1.5], ["zoom"],
-            8,   3,
-            12,  7,
-            16,  16,
-          ],
-          "line-opacity": 0.8,
+          "line-color": "#334155", // slate — the road bed
+          "line-width": ["interpolate", ["exponential", 1.5], ["zoom"], 8, 14, 12, 27, 16, 39],
+          "line-opacity": 0.85,
         },
-      }); 
+      });
 
-      // Layer 2: Base NLEX Surface
+      /* Asphalt between the two carriageways. This used to be solid orange,
+         which fought the live colours now drawn on top and implied a congestion
+         level of its own; neutral, it just fills the gap the offset leaves. It
+         also means the corridor is still visible if the feed is empty. */
       map.addLayer({
         id: "nlex-surface",
         type: "line",
         source: "nlex-corridor",
-        layout: {
-          "line-join": "round",
-          "line-cap": "round",
-        },
+        layout: { "line-join": "round", "line-cap": "round" },
         paint: {
-          "line-color": "#f59e0b", // Solid Orange
-          "line-width": [
-            "interpolate", ["exponential", 1.5], ["zoom"],
-            8,   1.5,
-            12,  4.5,
-            16,  12,
-          ],
+          "line-color": "#64748b",
+          "line-width": ["interpolate", ["exponential", 1.5], ["zoom"], 8, 12, 12, 24, 16, 35],
           "line-opacity": 0.9,
         },
       });
@@ -214,14 +253,9 @@ export default function TrafficMapPanel({ title, subtitle, badge, endpoint, laye
           "line-cap": "round",
         },
         paint: {
-          "line-color": "#0f766e", // Deep teal border (keeps ramps reading as teal, not grey)
-          "line-width": [
-            "interpolate", ["exponential", 1.5], ["zoom"],
-            8,   3.5,
-            12,  8,
-            16,  18,
-          ],
-          "line-opacity": 1,
+          "line-color": "#475569",
+          "line-width": ["interpolate", ["exponential", 1.5], ["zoom"], 8, 2, 12, 5, 16, 10],
+          "line-opacity": 0.7,
         },
       });
 
@@ -236,14 +270,9 @@ export default function TrafficMapPanel({ title, subtitle, badge, endpoint, laye
           "line-cap": "round",
         },
         paint: {
-          "line-color": "#14b8a6", // Teal / Emerald — entrance & exit ramps
-          "line-width": [
-            "interpolate", ["exponential", 1.5], ["zoom"],
-            8,   1.6,
-            12,  4.8,
-            16,  12.5,
-          ],
-          "line-opacity": 1,
+          "line-color": "#94a3b8",
+          "line-width": ["interpolate", ["exponential", 1.5], ["zoom"], 8, 1, 12, 2.8, 16, 6],
+          "line-opacity": 0.85,
         },
       });
 
@@ -260,8 +289,18 @@ export default function TrafficMapPanel({ title, subtitle, badge, endpoint, laye
         layout: { "line-join": "round", "line-cap": "round" },
         paint: {
           "line-color": "#ffffff",
-          "line-width": ["interpolate", ["linear"], ["zoom"], 8, 6, 12, 11, 16, 16],
-          "line-opacity": 0.9,
+          "line-width": ["interpolate", ["linear"], ["zoom"], 8, 7, 12, 13, 16, 19],
+          "line-opacity": 0.95,
+          // Offset in screen pixels rather than in the geometry, so both ribbons
+          // follow the real curve instead of being separate approximations of
+          // it. It tracks the line widths, keeping the gap proportional as the
+          // reader zooms rather than closing up or gaping open.
+          "line-offset": [
+            "case",
+            ["==", ["get", "direction"], "NB"],
+            ["interpolate", ["linear"], ["zoom"], 8, 3.5, 12, 7, 16, 10],
+            ["*", -1, ["interpolate", ["linear"], ["zoom"], 8, 3.5, 12, 7, 16, 10]],
+          ],
         },
         filter: ["==", ["get", "feature_type"], "carriageway"],
       });
@@ -284,8 +323,14 @@ export default function TrafficMapPanel({ title, subtitle, badge, endpoint, laye
             5, "#b91c1c",
             "#10b981",
           ],
-          "line-width": ["interpolate", ["linear"], ["zoom"], 8, 3.5, 12, 7, 16, 11],
-          "line-opacity": 0.95,
+          "line-width": ["interpolate", ["linear"], ["zoom"], 8, 4.5, 12, 9, 16, 14],
+          "line-opacity": 1,
+          "line-offset": [
+            "case",
+            ["==", ["get", "direction"], "NB"],
+            ["interpolate", ["linear"], ["zoom"], 8, 3.5, 12, 7, 16, 10],
+            ["*", -1, ["interpolate", ["linear"], ["zoom"], 8, 3.5, 12, 7, 16, 10]],
+          ],
         },
         filter: ["==", ["get", "feature_type"], "carriageway"],
       });
@@ -299,7 +344,16 @@ export default function TrafficMapPanel({ title, subtitle, badge, endpoint, laye
         source: "traffic",
         layout: {
           "symbol-placement": "line",
-          "symbol-spacing": 90,
+          "symbol-spacing": 110,
+          // Symbol layers have no line-offset. Under line placement the y axis of
+          // text-offset runs across the line, so this puts each arrow on its own
+          // carriageway in ems rather than pixels.
+          "text-offset": [
+            "case",
+            ["==", ["get", "direction"], "NB"],
+            ["literal", [0, 0.45]],
+            ["literal", [0, -0.45]],
+          ],
           "text-field": ["case", ["==", ["get", "direction"], "NB"], "\u25B2", "\u25BC"],
           "text-size": 11,
           "text-allow-overlap": false,
@@ -855,7 +909,7 @@ export default function TrafficMapPanel({ title, subtitle, badge, endpoint, laye
       const source = map.getSource("traffic") as GeoJSONSource;
       const _pollingInterval = setInterval(async () => {
         try {
-          const fresh = await fetch(endpoint, { cache: "no-store" }).then((r) => r.json());
+          const fresh = withRealShape(await fetch(endpoint, { cache: "no-store" }).then((r) => r.json()));
           source.setData(fresh);
           if (isRealtime) {
             renderAlerts(fresh);

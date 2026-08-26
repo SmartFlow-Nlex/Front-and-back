@@ -247,6 +247,72 @@ export default function TrafficMapPanel({ title, subtitle, badge, endpoint, laye
         },
       });
 
+      /* The corridor itself, both carriageways.
+         Drawn before the jam fragments so those sit on top of it. Waze only
+         reports congestion, so a segment with no jam is flowing rather than
+         unknown — level 0 is therefore green, not grey. A casing line underneath
+         gives each ribbon an edge so the two directions stay distinct where they
+         run close together. */
+      map.addLayer({
+        id: "carriageway-casing",
+        type: "line",
+        source: "traffic",
+        layout: { "line-join": "round", "line-cap": "round" },
+        paint: {
+          "line-color": "#ffffff",
+          "line-width": ["interpolate", ["linear"], ["zoom"], 8, 6, 12, 11, 16, 16],
+          "line-opacity": 0.9,
+        },
+        filter: ["==", ["get", "feature_type"], "carriageway"],
+      });
+
+      map.addLayer({
+        id: "carriageway",
+        type: "line",
+        source: "traffic",
+        layout: { "line-join": "round", "line-cap": "round" },
+        paint: {
+          // Same levels and hues the legend lists.
+          "line-color": [
+            "match",
+            ["get", "level"],
+            0, "#10b981",  // no jam reported — flowing
+            1, "#10b981",
+            2, "#f59e0b",
+            3, "#f97316",
+            4, "#ef4444",
+            5, "#b91c1c",
+            "#10b981",
+          ],
+          "line-width": ["interpolate", ["linear"], ["zoom"], 8, 3.5, 12, 7, 16, 11],
+          "line-opacity": 0.95,
+        },
+        filter: ["==", ["get", "feature_type"], "carriageway"],
+      });
+
+      /* Direction of travel, as arrows riding the ribbon. Northbound and
+         southbound are offset to opposite sides, so the arrow tells the reader
+         which side is which without a second legend. */
+      map.addLayer({
+        id: "carriageway-arrows",
+        type: "symbol",
+        source: "traffic",
+        layout: {
+          "symbol-placement": "line",
+          "symbol-spacing": 90,
+          "text-field": ["case", ["==", ["get", "direction"], "NB"], "\u25B2", "\u25BC"],
+          "text-size": 11,
+          "text-allow-overlap": false,
+          "text-keep-upright": false,
+        },
+        paint: {
+          "text-color": "#ffffff",
+          "text-halo-color": "rgba(0,0,0,0.35)",
+          "text-halo-width": 1,
+        },
+        filter: ["==", ["get", "feature_type"], "carriageway"],
+      });
+
       // Layer 3: Jam Lines Layer (Overlays on top for realtime)
       map.addLayer({
         id: "traffic-line",

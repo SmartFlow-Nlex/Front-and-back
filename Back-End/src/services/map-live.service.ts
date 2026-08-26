@@ -270,7 +270,11 @@ export async function getLiveMapGeoJson() {
     ),
   ]);
 
+  // The corridor first, so the jam fragments and alert points draw on top of it.
+  const carriageways = await getCorridorCarriagewaysGeoJson();
+
   const features = [
+    ...carriageways,
     ...jams.rows.map((r) => ({
       type: "Feature" as const,
       geometry: JSON.parse(r.geojson),
@@ -300,4 +304,104 @@ export async function getLiveMapGeoJson() {
   ];
 
   return { type: "FeatureCollection" as const, features };
+}
+
+
+/**
+ * The corridor drawn as two carriageways, coloured by what is happening on each.
+ *
+ * Waze only emits a jam where there IS one, so drawing the feed alone leaves the
+ * road invisible between them — scattered coloured fragments over blank map. The
+ * corridor itself comes from silver.dim_location, which holds the 19 exit-to-exit
+ * segments and their geometry, so every segment is drawn whether or not it is
+ * congested, and absence of a jam reads as clear rather than as missing road.
+ *
+ * The two carriageways are the same centreline offset to either side. The
+ * geometry is one line per segment pair, not a divided highway, so the offset is
+ * a drawing device: it makes direction legible, and lets a jam northbound colour
+ * only the northbound ribbon.
+ *
+ * Segments carry only their endpoints, so the drawn road is a chain of straight
+ * chords between exits rather than the true curve of the tarmac.
+ */
+const CARRIAGEWAY_OFFSET_DEG = 0.0015;   // ~165 m at this latitude
+
+export async function getCorridorCarriagewaysGeoJson() {
+  if (!db) return [];
+
+  const { rows } = await db.query<{
+    geojson: string; segment_name: string; segment_order: number;
+    direction: "NB" | "SB"; level: number | null; speed: number | null; jams: number;
+  }>(
+    `WITH jam AS (
+       SELECT ST_LineMerge(geom) AS g, speed_kmh, level
+       FROM silver.fact_waze_jams
+       WHERE corridor_match IN ('ON_CORRIDOR', 'NEAR_CORRIDOR')
+         AND last_seen_at > NOW() - interval '${WINDOW_MINUTES} minutes'
+         AND geom IS NOT NULL
+     ),
+     -- Direction from the jam's own bearing: the feed has no direction field,
+     -- but a jam is a LINESTRING and NLEX runs roughly north-south.
+     jam_dir AS (
+       SELECT g, speed_kmh, level,
+              CASE WHEN DEGREES(ST_Azimuth(ST_StartPoint(g), ST_EndPoint(g))) < 90
+                     OR DEGREES(ST_Azimuth(ST_StartPoint(g), ST_EndPoint(g))) > 270
+                   THEN 'NB' ELSE 'SB' END AS direction
+       FROM jam WHERE GeometryType(g) = 'LINESTRING'
+     ),
+     -- Each jam colours the segment it is closest to.
+     matched AS (
+       SELECT d.segment_order, j.direction, j.level, j.speed_kmh
+       FROM jam_dir j
+       JOIN LATERAL (
+         SELECT segment_order FROM silver.dim_location
+         ORDER BY ST_Distance(geom, j.g) ASC LIMIT 1
+       ) d ON TRUE
+     ),
+     state AS (
+       SELECT segment_order, direction,
+              MAX(level)::int                            AS level,
+              ROUND(MIN(speed_kmh)::numeric, 1)::float   AS speed,
+              COUNT(*)::int                              AS jams
+       FROM matched GROUP BY 1, 2
+     ),
+     -- Every segment, both ways, so the whole corridor is drawn.
+     grid AS (
+       SELECT l.segment_order, l.segment_name, l.geom, d.direction
+       FROM silver.dim_location l
+       CROSS JOIN (VALUES ('NB'), ('SB')) AS d(direction)
+     )
+     SELECT ST_AsGeoJSON(
+              ST_OffsetCurve(g.geom, CASE WHEN g.direction = 'NB' THEN -($1::float8) ELSE $1::float8 END)
+            )                       AS geojson,
+            g.segment_name,
+            g.segment_order,
+            g.direction,
+            s.level,
+            s.speed,
+            COALESCE(s.jams, 0)     AS jams
+     FROM grid g
+     LEFT JOIN state s
+       ON s.segment_order = g.segment_order AND s.direction = g.direction
+     ORDER BY g.segment_order, g.direction`,
+    [CARRIAGEWAY_OFFSET_DEG],
+  );
+
+  return rows
+    .filter((r) => r.geojson)
+    .map((r) => ({
+      type: "Feature" as const,
+      geometry: JSON.parse(r.geojson),
+      properties: {
+        feature_type: "carriageway",
+        direction: r.direction,
+        segment_name: r.segment_name,
+        segment_order: r.segment_order,
+        // No jam on this stretch means it is flowing, not unknown — Waze reports
+        // congestion, so silence is the clear signal.
+        level: r.level ?? 0,
+        speed: r.speed,
+        jams: r.jams,
+      },
+    }));
 }

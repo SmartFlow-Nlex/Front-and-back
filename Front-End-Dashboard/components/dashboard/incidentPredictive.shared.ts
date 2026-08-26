@@ -17,7 +17,10 @@ export type ModelKey =
 
 export const MODELS: { key: ModelKey; label: string; color: string }[] = [
   { key: "XGBoost", label: "XGBoost", color: "#16a34a" },
-  { key: "RandomForest", label: "Random Forest", color: "#f59e0b" },
+  // Deep fuchsia, not the amber it used to be: VOLUME_COLOR below is #f59e0b,
+  // so the exposure overlay and this model line were drawn in the same hue and
+  // could not be told apart once both were on.
+  { key: "RandomForest", label: "Random Forest", color: "#a21caf" },
   { key: "Poisson_GLM", label: "Poisson GLM", color: "#8b5cf6" },
   { key: "NegBinomial_GLM", label: "Neg. Binomial GLM", color: "#0891b2" },
   { key: "SARIMAX", label: "SARIMAX", color: "#ef4444" },
@@ -32,6 +35,12 @@ export const META = Object.fromEntries(MODELS.map((m) => [m.key, m])) as Record<
 
 export const ACTUAL_COLOR = "#2563eb";
 export const RAIN_COLOR = "#38bdf8";
+/**
+ * Exposure overlay. Amber rather than another blue: rainfall already owns the
+ * cyan end of the palette and the incident lines own the blues, so volume needs
+ * a hue that cannot be mistaken for either at a glance.
+ */
+export const VOLUME_COLOR = "#f59e0b";
 
 export type DailyPoint = {
   date: string;
@@ -46,7 +55,21 @@ export type DailyPoint = {
   rainfallMm: number | null;
   /** Backend's own wet-day flag: mean hourly rainfall for the day > 0.3 mm. */
   isWet: boolean | null;
+  /**
+   * Daily vehicle volume — the exposure the incident count is generated from.
+   * Observed where the warehouse has it and the traffic module's own forecast
+   * across the Future band, so the overlay runs the full width of the chart.
+   * Null on uncovered days, which breaks the line rather than drawing a zero.
+   */
+  volume?: number | null;
   models: Partial<Record<ModelKey, number | null>>;
+  /**
+   * The same models refit with the volume features removed. Present only when
+   * the pipeline stored a volume-free twin; absent on older tables, which is
+   * what lets the chart tell "no twin exists" apart from "the twin predicted
+   * nothing" and fall back to treating Volume as an overlay-only control.
+   */
+  modelsNoVolume?: Partial<Record<ModelKey, number | null>>;
 };
 
 export type ModelMetric = {

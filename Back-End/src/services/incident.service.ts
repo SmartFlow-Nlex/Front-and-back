@@ -657,6 +657,12 @@ export const INCIDENT_MODELS = [
   { key: "SARIMAX", column: "pred_sarimax" },
 ] as const;
 
+// Volume-free twin of each column above, matching PRED_COLUMN_NV in the trainer.
+// Selected alongside the primary set so the dashboard's Volume toggle can switch
+// the forecast itself; null on tables written before the twins existed, which the
+// mapper below reports as an absent series rather than a zero.
+const INCIDENT_MODEL_COLUMNS_NV_SQL = INCIDENT_MODELS.map((m) => `${m.column}_nv`).join(", ");
+
 type PredictiveIncidentRow = {
   date: string;
   prediction_type: "train" | "validation" | "future";
@@ -719,6 +725,31 @@ const DAILY_WET_SQL = `
          SUM(avg_rain) AS rainfall_mm
   FROM hourly
   GROUP BY d
+`;
+
+// Daily vehicle volume for the incident forecast chart's exposure overlay.
+//
+// Read from gold.ml_predictive_volume because that one table spans both sides of
+// the chart: actual_volume covers observed history and the is_future rows carry
+// the traffic module's forecast, so the overlay continues across the Future band
+// instead of stopping dead at the last observed day. COALESCE walks the traffic
+// candidates in the same order the incident trainer does — pred_xgboost is NULL
+// across the future window even though it is populated historically, so naming a
+// single column would blank the forecast half.
+//
+// Same scale throughout, which matters: gold.daily_traffic_volume reports the
+// same series ~4.4x larger, and mixing the two would put a step change in the
+// middle of the line for no reason the reader could see.
+const DAILY_VOLUME_SQL = `
+  SELECT forecast_date::text AS date,
+         COALESCE(actual_volume, pred_lstm, pred_prophet, pred_sarimax,
+                  pred_holtwinters, pred_holts_linear, pred_xgboost)::float AS volume,
+         (actual_volume IS NULL) AS is_forecast
+  FROM gold.ml_predictive_volume
+  WHERE forecast_date >= $1::date AND forecast_date <= $2::date
+    AND COALESCE(actual_volume, pred_lstm, pred_prophet, pred_sarimax,
+                 pred_holtwinters, pred_holts_linear, pred_xgboost) IS NOT NULL
+  ORDER BY forecast_date ASC
 `;
 
 const MONTHS_TO_CONTEXT_DAYS: Record<"3" | "12", number> = { "3": 90, "12": 365 };
@@ -956,7 +987,11 @@ export function buildIncidentPredictiveResponse(
   // here without narrowing weatherMetrics' sample along with the chart — see
   // the doc comment on weatherMetrics below for why that would be wrong.
   holdoutActuals: DailyActualRow[],
-  holdoutPredictions: PredictiveIncidentRow[]
+  holdoutPredictions: PredictiveIncidentRow[],
+  // Daily vehicle volume, observed where recorded and the traffic module's
+  // forecast beyond that (see DAILY_VOLUME_SQL). Optional so existing callers
+  // and tests keep working — an absent map simply draws no exposure overlay.
+  volumeByDate: Map<string, number> = new Map()
 ): IncidentPredictiveResult {
   const actualByDate = new Map(actuals.map((r) => [r.date, Number(r.total)]));
   const predByDate = new Map(predictions.map((r) => [r.date, r]));
@@ -973,9 +1008,17 @@ export function buildIncidentPredictiveResponse(
   const fullDaily = allDates.map((date) => {
     const pred = predByDate.get(date);
     const models: Record<string, number | null> = {};
+    // Volume-free twin of the same series. Populated only when the pipeline
+    // fitted a second, volume-free pass (see has_volume_free_twin in the
+    // metadata); left empty on older tables so the chart can tell "no twin
+    // exists" apart from "the twin predicted nothing", and fall back to
+    // treating its Volume toggle as an overlay-only control.
+    const modelsNoVolume: Record<string, number | null> = {};
     for (const m of availableModels) {
       const v = pred?.[m.column];
       models[m.key] = v != null ? Number(v) : null;
+      const nv = pred?.[`${m.column}_nv` as keyof typeof pred];
+      if (nv != null) modelsNoVolume[m.key] = Number(nv);
     }
     return {
       date,
@@ -1004,7 +1047,12 @@ export function buildIncidentPredictiveResponse(
       // forecast horizon, so nothing is lost today.
       rainfallMm: rainByDate.get(date) ?? null,
       isWet: wetByDate.has(date) ? wetByDate.get(date)! : null,
+      // Exposure. Null on days the traffic warehouse does not cover, so the
+      // overlay breaks rather than drawing a zero — a zero here would read as
+      // "no traffic that day", which is never what a gap means.
+      volume: volumeByDate.get(date) ?? null,
       models,
+      modelsNoVolume: Object.keys(modelsNoVolume).length > 0 ? modelsNoVolume : undefined,
     };
   });
 
@@ -1240,7 +1288,7 @@ export async function getIncidentPredictiveFromDb(
         ? anchors.validationStart
         : historicalStart;
 
-    const [actualsRes, predsRes, wetRes, holdoutActualsRes, holdoutPredsRes] = await Promise.all([
+    const [actualsRes, predsRes, wetRes, volumeRes, holdoutActualsRes, holdoutPredsRes] = await Promise.all([
       // Range-bounded: this is what the chart draws. Pushed into SQL rather
       // than fetched whole and sliced in JS, so a narrow Range is a smaller
       // result set, not just a smaller rendered array.
@@ -1259,7 +1307,7 @@ export async function getIncidentPredictiveFromDb(
       isCustomRange
         ? db.query<PredictiveIncidentRow>(
             `SELECT forecast_date::text AS date, prediction_type, predicted_incident_count, champion_model,
-                    same_day_last_year, rainfall_mm, ${INCIDENT_MODEL_COLUMNS_SQL}
+                    same_day_last_year, rainfall_mm, ${INCIDENT_MODEL_COLUMNS_SQL}, ${INCIDENT_MODEL_COLUMNS_NV_SQL}
              FROM ml_predictive_incidents
              WHERE forecast_date BETWEEN $1::date AND $2::date
              ORDER BY forecast_date ASC`,
@@ -1267,7 +1315,7 @@ export async function getIncidentPredictiveFromDb(
           )
         : db.query<PredictiveIncidentRow>(
             `SELECT forecast_date::text AS date, prediction_type, predicted_incident_count, champion_model,
-                    same_day_last_year, rainfall_mm, ${INCIDENT_MODEL_COLUMNS_SQL}
+                    same_day_last_year, rainfall_mm, ${INCIDENT_MODEL_COLUMNS_SQL}, ${INCIDENT_MODEL_COLUMNS_NV_SQL}
              FROM ml_predictive_incidents
              WHERE prediction_type = 'future'
                 OR (forecast_date >= $1::date AND ($2::date IS NULL OR forecast_date <= $2::date))
@@ -1275,6 +1323,12 @@ export async function getIncidentPredictiveFromDb(
             [historicalStart, historicalEnd]
           ),
       db.query<{ date: string; is_wet: boolean; rainfall_mm: string | number | null }>(DAILY_WET_SQL, [
+        wetLowerBound,
+        anchors.maxForecastDate,
+      ]),
+      // Bounded by the same window as the rainfall lookup so the exposure
+      // overlay covers exactly the days the chart can draw.
+      db.query<{ date: string; volume: string | number | null; is_forecast: boolean }>(DAILY_VOLUME_SQL, [
         wetLowerBound,
         anchors.maxForecastDate,
       ]),
@@ -1290,7 +1344,7 @@ export async function getIncidentPredictiveFromDb(
         : Promise.resolve({ rows: [] as DailyActualRow[] }),
       db.query<PredictiveIncidentRow>(
         `SELECT forecast_date::text AS date, prediction_type, predicted_incident_count, champion_model,
-                same_day_last_year, rainfall_mm, ${INCIDENT_MODEL_COLUMNS_SQL}
+                same_day_last_year, rainfall_mm, ${INCIDENT_MODEL_COLUMNS_SQL}, ${INCIDENT_MODEL_COLUMNS_NV_SQL}
          FROM ml_predictive_incidents
          WHERE prediction_type = 'validation'
          ORDER BY forecast_date ASC`
@@ -1303,6 +1357,11 @@ export async function getIncidentPredictiveFromDb(
         .filter((r) => r.rainfall_mm != null)
         .map((r) => [r.date, Number(r.rainfall_mm)])
     );
+    const volumeByDate = new Map(
+      volumeRes.rows
+        .filter((r) => r.volume != null)
+        .map((r) => [r.date, Number(r.volume)])
+    );
     return buildIncidentPredictiveResponse(
       actualsRes.rows,
       predsRes.rows,
@@ -1314,7 +1373,8 @@ export async function getIncidentPredictiveFromDb(
       anchors,
       historicalStart,
       holdoutActualsRes.rows,
-      holdoutPredsRes.rows
+      holdoutPredsRes.rows,
+      volumeByDate
     );
   } catch (error) {
     console.error("Failed to fetch ML incident forecast:", error);

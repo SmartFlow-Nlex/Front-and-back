@@ -10,6 +10,7 @@ import {
   META,
   MODELS,
   RAIN_COLOR,
+  VOLUME_COLOR,
   fmtDate,
   fmtDateFull,
   fmtInt,
@@ -96,6 +97,10 @@ export default function PredictiveIncidentChart({
   // preset so a Range change never silently hides forecast days the previous
   // selection happened to be narrower than.
   const [futureDays, setFutureDays] = useState<number | null>(null);
+  // Exposure overlay, off by default: the chart's subject is the incident
+  // forecast, and a second axis should be something the reader opts into rather
+  // than something they have to clear away before they can read the lines.
+  const [showVolume, setShowVolume] = useState(false);
   // Guards the one-time "open on the champion" default against filter refetches.
   const seededRef = useRef(false);
   const router = useRouter();
@@ -228,6 +233,14 @@ export default function PredictiveIncidentChart({
 
   // Only offer toggles for models the pipeline actually stored a series for.
   const availableModels = MODELS.filter((m) => daily.some((d) => d.models?.[m.key] != null));
+
+  // Whether this table carries a volume-free twin. When it does, the Volume
+  // toggle switches the forecast itself — volume ON shows the volume-aware fit,
+  // OFF shows what the same models predict having never seen volume. When it
+  // does not (a table written before the twins existed), the toggle governs the
+  // overlay alone and the caption below says so, rather than implying a change
+  // to the lines that isn't happening.
+  const hasVolumeFreeTwin = daily.some((d) => d.modelsNoVolume != null);
   const shown = selected.filter((k) => availableModels.some((m) => m.key === k));
   const activeModels = shown.length > 0 ? shown : availableModels.slice(0, 1).map((m) => m.key);
 
@@ -344,7 +357,12 @@ export default function PredictiveIncidentChart({
         let tip = `<b>${items[0].name}</b><br/>`;
         items.forEach((p) => {
           if (p.value == null) return;
-          const val = p.seriesName === "Rainfall" ? `${fmtNum(Number(p.value), 1)} mm` : fmtInt(Number(p.value));
+          const val =
+            p.seriesName === "Rainfall"
+              ? `${fmtNum(Number(p.value), 1)} mm`
+              : p.seriesName === "Vehicle Volume"
+                ? `${fmtInt(Number(p.value))} vehicles`
+                : fmtInt(Number(p.value));
           tip += `${p.marker} ${p.seriesName}: <b>${val}</b><br/>`;
         });
         return tip;
@@ -386,6 +404,30 @@ export default function PredictiveIncidentChart({
         axisLabel: { color: RAIN_COLOR },
         splitLine: { show: false },
       },
+      // Volume rides its own axis because it is ~4 orders of magnitude above an
+      // incident count; sharing either existing axis would flatten one series
+      // into a straight line. Offset clears the rainfall axis, and the whole
+      // axis hides with the series so no orphaned scale is left behind when the
+      // overlay is off.
+      {
+        type: "value",
+        name: "Vehicle Volume",
+        nameLocation: "middle",
+        nameGap: 62,
+        position: "right",
+        offset: 58,
+        show: showVolume,
+        // scale:true, unlike the other two: volume never approaches zero, so a
+        // zero-based axis would compress every day into one flat band near the
+        // top and hide exactly the variation the overlay is there to show.
+        scale: true,
+        axisLabel: {
+          color: VOLUME_COLOR,
+          formatter: (v: number) => (v >= 1000 ? `${Math.round(v / 1000)}k` : `${v}`),
+        },
+        axisLine: { show: true, lineStyle: { color: VOLUME_COLOR } },
+        splitLine: { show: false },
+      },
     ],
     series: [
       {
@@ -398,6 +440,28 @@ export default function PredictiveIncidentChart({
         emphasis: { itemStyle: { opacity: 0.6 } },
         z: 1,
       },
+      // Exposure. A line rather than a second bar set: rainfall already holds
+      // the bars, and two bar series on one chart compete for the same visual
+      // slot. Drawn under the incident lines (z:2) so it reads as context.
+      // connectNulls stays FALSE deliberately — a gap in the warehouse should
+      // look like a gap, not like a straight line drawn through missing days.
+      ...(showVolume
+        ? [
+            {
+              name: "Vehicle Volume",
+              type: "line" as const,
+              yAxisIndex: 2,
+              data: daily.map((d) => d.volume ?? null),
+              smooth: true,
+              symbol: "none" as const,
+              connectNulls: false,
+              z: 2,
+              lineStyle: { width: 2, color: VOLUME_COLOR, type: "solid" as const },
+              itemStyle: { color: VOLUME_COLOR },
+              areaStyle: { color: VOLUME_COLOR, opacity: 0.08 },
+            },
+          ]
+        : []),
       {
         name: "Actual Count",
         type: "line",
@@ -442,9 +506,15 @@ export default function PredictiveIncidentChart({
         // but validation and future rows. If in-sample rows are ever backfilled
         // to give the hourly drill-down past coverage, this keeps them out of
         // this chart instead of silently extending every line across history.
-        data: daily.map((d) =>
-          d.predictionType === "validation" || d.predictionType === "future" ? (d.models?.[key] ?? null) : null
-        ),
+        // Volume ON => the volume-aware fit; OFF => the volume-free twin, so the
+        // toggle changes the prediction rather than only the overlay — matching
+        // how the traffic forecast's Weather toggle behaves. Falls back to the
+        // primary series when no twin was stored.
+        data: daily.map((d) => {
+          if (d.predictionType !== "validation" && d.predictionType !== "future") return null;
+          const source = showVolume || !hasVolumeFreeTwin ? d.models : (d.modelsNoVolume ?? d.models);
+          return source?.[key] ?? null;
+        }),
         smooth: true,
         connectNulls: true,
         symbol: "circle" as const,
@@ -527,7 +597,6 @@ export default function PredictiveIncidentChart({
         <h4 style={{ margin: 0, fontSize: "0.95rem", color: "#334155", fontWeight: 600 }}>
           Real-World ML Validation Metrics
         </h4>
-        <p style={{ margin: "4px 0 0 0", fontSize: "0.78rem", color: "#94a3b8" }}>{scoringCaption}</p>
       </div>
       <div style={{ overflowX: "auto" }}>
         <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "0.85rem", minWidth: "610px" }}>
@@ -539,7 +608,6 @@ export default function PredictiveIncidentChart({
               <th style={th}><MetricHint hint={metricHintFor("WMAPE")}>WMAPE</MetricHint></th>
               <th style={th}><MetricHint hint={metricHintFor("MASE")}>MASE</MetricHint></th>
               <th style={th}><MetricHint hint={metricHintFor("R² Score")}>R² Score</MetricHint></th>
-              <th style={th}><MetricHint hint={metricHintFor("N")}>N</MetricHint></th>
             </tr>
           </thead>
           <tbody>
@@ -574,9 +642,14 @@ export default function PredictiveIncidentChart({
                   <td style={td}>{fmtNum(m.MAE)}</td>
                   <td style={td}>{m.WMAPE == null ? "—" : `${m.WMAPE.toFixed(2)}%`}</td>
                   <td style={td}>{fmtNum(m.MASE)}</td>
-                  <td style={{ ...td, fontWeight: 700, color }}>{fmtNum(m.R2, 4)}</td>
-                  <td style={td} title={m.R2 == null && m.n < 30 ? "R² is hidden below 30 scored days" : undefined}>
-                    {m.n}
+                  <td
+                    style={{ ...td, fontWeight: 700, color }}
+                    // The scored-day count used to sit in its own column and
+                    // explain a blank R² on sight. With that column gone the
+                    // explanation moves here, so "—" still says why.
+                    title={m.R2 == null && m.n < 30 ? `R² is hidden below 30 scored days (${m.n} here)` : undefined}
+                  >
+                    {fmtNum(m.R2, 4)}
                   </td>
                 </tr>
               );
@@ -665,7 +738,39 @@ export default function PredictiveIncidentChart({
             Click any point to view that day&apos;s hourly breakdown
           </p>
         </div>
-        {modelToolbar}
+        <div style={{ display: "flex", alignItems: "center", gap: "12px", flexWrap: "wrap" }}>
+          {modelToolbar}
+          {/* Exposure overlay toggle — same pill the traffic forecast uses for
+              its Weather overlay, so the two charts are operated the same way. */}
+          <button
+            onClick={() => setShowVolume(!showVolume)}
+            title={
+              hasVolumeFreeTwin
+                ? showVolume
+                  ? "Volume ON: forecasts fitted WITH traffic volume, overlay shown. Click to switch to the volume-free models."
+                  : "Volume OFF: forecasts fitted WITHOUT traffic volume. Click to use the volume-aware models and show the overlay."
+                : showVolume
+                  ? "Hide the volume overlay (this training run stored no volume-free models, so the forecast lines do not change)"
+                  : "Show the volume overlay (this training run stored no volume-free models, so the forecast lines do not change)"
+            }
+            style={{
+              display: "inline-flex", alignItems: "center", gap: "6px", padding: "5px 14px",
+              borderRadius: "999px", border: "1px solid #dce2ef",
+              fontSize: "0.76rem", fontWeight: 600, cursor: "pointer", transition: "all 0.15s",
+              background: showVolume ? "linear-gradient(135deg, #fbbf24, #f59e0b)" : "var(--bg-surface, #fff)",
+              color: showVolume ? "var(--bg-surface, #fff)" : "var(--text-secondary, #4b5e7d)",
+              boxShadow: showVolume ? "0 1px 6px rgba(245,158,11,0.35)" : "none",
+            }}
+          >
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none">
+              <path
+                d="M3 17h2l1-4h12l1 4h2M6 13l1.5-5h9L18 13M7.5 17.5h.01M16.5 17.5h.01"
+                stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"
+              />
+            </svg>
+            Volume
+          </button>
+        </div>
       </div>
 
       {/* Forecast-horizon control. Hidden outright when the visible window has

@@ -72,7 +72,19 @@ const IncidentPredictiveDailyPointSchema = z.object({
   sameDayLastYear: z.number().nullable(),
   rainfallMm: z.number().nullable(),
   isWet: z.boolean().nullable(),
+  /**
+   * Daily vehicle volume — observed where the warehouse has it, the traffic
+   * module's forecast across the Future band. Null on uncovered days so the
+   * chart's exposure overlay breaks instead of drawing a misleading zero.
+   */
+  volume: z.number().nullable().optional(),
   models: z.record(z.string(), z.number().nullable()),
+  /**
+   * The same models refit without the volume features. Present only when the
+   * pipeline stored a volume-free twin, which is what lets the dashboard's
+   * Volume toggle switch the forecast rather than only the overlay.
+   */
+  modelsNoVolume: z.record(z.string(), z.number().nullable()).optional(),
 });
 
 const IncidentModelMetricSchema = z.object({

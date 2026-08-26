@@ -51,6 +51,36 @@ const MODELS: ModelMeta[] = [
 
 const META = Object.fromEntries(MODELS.map((m) => [m.key, m])) as Record<ModelType, ModelMeta>;
 const ACTUAL_COLOR = "#2563eb";
+
+/** Legend/series name for the smoothed actual. Kept in one place so the legend,
+ *  the series and the tooltip can never drift apart. */
+const SMOOTH_NAME = "Actual · 7-day average";
+
+/**
+ * Centred rolling mean, used ONLY as a display aid.
+ *
+ * At daily granularity the chart draws ~880 points across ~1400px, so the actual
+ * series renders as a noise band and the smooth 14-day-ahead forecast has nothing
+ * comparable to sit against — the eye reads "the model is wrong" when it is really
+ * being asked to compare a forecast against day-level noise no model predicts.
+ *
+ * This invents nothing. Every output is the arithmetic mean of real observed
+ * values from baseActual, and the raw daily series stays drawn underneath it.
+ * Centred rather than trailing, because a trailing mean shifts the curve ~3 days
+ * right and would misrepresent whether a forecast leads or lags.
+ */
+function centeredMean(vals: (number | null)[], window: number): (number | null)[] {
+  const half = Math.floor(window / 2);
+  return vals.map((_, i) => {
+    let sum = 0;
+    let n = 0;
+    for (let j = i - half; j <= i + half; j++) {
+      const v = vals[j];
+      if (j >= 0 && j < vals.length && v != null && isFinite(v)) { sum += v; n++; }
+    }
+    return n === 0 ? null : sum / n;
+  });
+}
 // Same pattern the other dashboard pages use. The literal URL was refactored out
 // of this file but the constant was never declared here, so every fetch threw a
 // ReferenceError, was swallowed by the catch, and the chart sat on "Loading…".
@@ -112,6 +142,19 @@ type ChartData = {
   futureStart: number;
   rainfall: (number | null)[];
   temperature: (number | null)[];
+  /** True split sizes over the WHOLE table. The rows above are trimmed to the
+   *  selected range, so holdoutStart is "past days drawn", not "days trained". */
+  split: SplitSummary | null;
+};
+
+type SplitSummary = {
+  trainDays: number;
+  holdoutDays: number;
+  futureDays: number;
+  trainStart: string | null;
+  trainEnd: string | null;
+  trainPct: number | null;
+  holdoutPct: number | null;
 };
 
 /** Reads the day's shape off whichever series exists — actuals when observed,
@@ -151,7 +194,7 @@ export default function PredictiveVolumeChart({ months = "all", from, to, weathe
   // narrowing PAST here can never change a metric.
   //
   // Granularity & zone window controls
-  const [granularity, setGranularity] = useState<"Hourly" | "Daily" | "Weekly" | "Monthly" | "Yearly">("Daily");
+  const [granularity, setGranularity] = useState<"Hourly" | "Daily" | "Weekly" | "Monthly" | "Yearly">("Weekly");
   // ECharts needs literal colours, so the CSS tokens are resolved at runtime.
   const T = useThemeTokens();
   const ZONE = zoneTints(T.isDark);
@@ -282,6 +325,7 @@ export default function PredictiveVolumeChart({ months = "all", from, to, weathe
             new Date(v.date).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })),
           isoDates: rows.map((v) => toIsoDate(v.date)),
           baseActual: rows.map((v) => v.actual_volume),
+          split: (json?.data?.split ?? null) as SplitSummary | null,
           models,
           modelsNoWeather,
           holdoutStart: holdoutStart === -1 ? rows.length : holdoutStart,
@@ -500,6 +544,16 @@ export default function PredictiveVolumeChart({ months = "all", from, to, weathe
   const dates = agg ? agg.dates : dailyDates;
   const isoDates = agg ? agg.isoDates : dailyIso;
   const baseActual = agg ? agg.baseActual : dailyActual;
+
+  // Weekly/Monthly buckets are already means, so smoothing them again would be
+  // double-averaging. Only the dense daily/hourly view needs the extra line.
+  const showSmooth = !agg && baseActual.length > 120;
+  const smoothActual = showSmooth ? centeredMean(baseActual, 7) : null;
+
+  // Rainfall bars are sky-blue and the actual line was also blue, so two unrelated
+  // quantities shared a hue. Actual moves to a neutral slate that reads as
+  // "observation" against the saturated model colours.
+  const actualColor = T.isDark ? "#cbd5e1" : "#334155";
   const rainfall = agg ? agg.rainfall : dailyRain;
   const models = agg ? agg.models : dailyModels;
   const holdoutStart = agg ? agg.holdoutStart : dailyHoldoutStart;
@@ -618,6 +672,21 @@ export default function PredictiveVolumeChart({ months = "all", from, to, weathe
     { max: 30, label: "Heavy", color: "rgba(2, 132, 199, 0.8)" },
     { max: Infinity, label: "Intense", color: "rgba(30, 64, 175, 0.9)" },
   ];
+  const smoothSeries: NonNullable<EChartsOption["series"]> = smoothActual ? [
+    {
+      name: SMOOTH_NAME,
+      type: "line",
+      yAxisIndex: 0,
+      data: smoothActual,
+      smooth: true,
+      connectNulls: true,
+      symbol: "none",
+      z: 4,
+      lineStyle: { width: 2.6, color: actualColor },
+      itemStyle: { color: actualColor },
+    },
+  ] : [];
+
   const rainBand = (mm: number) => RAIN_BANDS.find((b) => mm < b.max) ?? RAIN_BANDS[RAIN_BANDS.length - 1];
 
   const weatherSeries: NonNullable<EChartsOption["series"]> = showWeather ? [
@@ -694,6 +763,7 @@ export default function PredictiveVolumeChart({ months = "all", from, to, weathe
     legend: {
       data: [
         "Actual Volume",
+        ...(smoothActual ? [SMOOTH_NAME] : []),
         ...selected.map((k) => `${metricsMeta[k].label} Prediction`),
         ...(showWeather ? ["Rainfall (mm)"] : []),
       ],
@@ -755,7 +825,12 @@ export default function PredictiveVolumeChart({ months = "all", from, to, weathe
         axisLine: { show: showWeather, lineStyle: { color: T.isDark ? "#38bdf8" : "#0284c7" } },
         splitLine: { show: false },
         min: 0,
-        max: (value: { max: number }) => Math.ceil(value.max * 1.2) || 10,
+        // Headroom of 1.2 let the wettest day draw a bar across ~83% of the plot,
+        // so rainfall crossed straight through the volume lines and dominated a
+        // chart that is primarily about volume. At 4x the bars stay inside the
+        // bottom quarter and read as a weather strip under the series. The axis
+        // is still truthful — only the headroom changed, not the values.
+        max: (value: { max: number }) => Math.ceil(value.max * 4) || 10,
       },
     ],
     series: [
@@ -768,9 +843,13 @@ export default function PredictiveVolumeChart({ months = "all", from, to, weathe
         connectNulls: true,
         symbol: "circle",
         symbolSize: dates.length > 400 ? 0 : 5,
-        z: 3,
-        lineStyle: { width: dates.length > 400 ? 1 : 2.5, color: ACTUAL_COLOR },
-        itemStyle: { color: ACTUAL_COLOR },
+        z: showSmooth ? 2 : 3,
+        lineStyle: {
+          width: dates.length > 400 ? 1 : 2.5,
+          color: actualColor,
+          opacity: showSmooth ? 0.13 : 1,
+        },
+        itemStyle: { color: actualColor, opacity: showSmooth ? 0.13 : 1 },
         emphasis: { scale: 2.2 },
         markArea: {
           silent: true,
@@ -852,6 +931,7 @@ export default function PredictiveVolumeChart({ months = "all", from, to, weathe
         itemStyle: { color: metricsMeta[key].color },
         emphasis: { scale: 2.2 },
       })),
+      ...smoothSeries,
       ...weatherSeries,
     ],
   };
@@ -1198,6 +1278,20 @@ export default function PredictiveVolumeChart({ months = "all", from, to, weathe
         <span style={{ display: "inline-flex", alignItems: "center", gap: "8px" }}>
           <span style={{ width: 10, height: 10, borderRadius: 2, background: "rgba(37,99,235,0.25)" }} />
           <b style={{ color: "var(--text-primary)" }}>Past</b>
+          {/* Without this the band reads as "the 80%", when the selected range may
+              be drawing only its final weeks. State both numbers. */}
+          <span style={{ color: "var(--text-secondary)" }}>
+            {chartData.split
+              ? `${chartData.split.trainDays.toLocaleString()}d trained${
+                  chartData.split.trainPct != null ? ` · ${chartData.split.trainPct}%` : ""
+                }`
+              : `${chartData.holdoutStart}d shown`}
+            {chartData.split && chartData.holdoutStart < chartData.split.trainDays && (
+              <span style={{ color: "var(--color-warning)" }}>
+                {" · "}showing last {chartData.holdoutStart.toLocaleString()}d
+              </span>
+            )}
+          </span>
         </span>
 
         {/* Present */}
@@ -1205,7 +1299,8 @@ export default function PredictiveVolumeChart({ months = "all", from, to, weathe
           <span style={{ width: 10, height: 10, borderRadius: 2, background: "rgba(249,115,22,0.35)" }} />
           <b style={{ color: "var(--text-primary)" }}>Present</b>
           <span style={{ color: "var(--text-secondary)" }}>
-            {chartData.futureStart - chartData.holdoutStart}d scored · fixed by evaluation
+            {chartData.futureStart - chartData.holdoutStart}d scored
+            {chartData.split?.holdoutPct != null ? ` · ${chartData.split.holdoutPct}%` : ""} · fixed by evaluation
           </span>
         </span>
 

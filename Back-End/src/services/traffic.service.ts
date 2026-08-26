@@ -571,6 +571,51 @@ export async function getVehicleClassDistributionFromDb() {
 }
 
 // [ML-01] Get Predictive Volume (All Models) from Database
+/**
+ * True size of each split, counted over the WHOLE table.
+ *
+ * The chart trims history to the selected range (3 mo / 12 mo), so the blue
+ * "Past" band can be drawing 89 of 1,922 training days while still being
+ * labelled "Past" — which makes the 80/20 split look wrong on screen when it is
+ * actually correct. These counts come from the unwindowed table so the legend
+ * can state what was trained on versus what is currently visible.
+ *
+ * Percentages are over train+holdout only. Future days are projections with no
+ * actuals, so including them would understate the holdout share.
+ */
+export async function getSplitSummary() {
+  if (!db) return null;
+  try {
+    const { rows } = await db.query(`
+      SELECT
+        COUNT(DISTINCT forecast_date) FILTER (WHERE NOT is_holdout AND NOT is_future)::int AS train_days,
+        COUNT(DISTINCT forecast_date) FILTER (WHERE is_holdout)::int AS holdout_days,
+        COUNT(DISTINCT forecast_date) FILTER (WHERE is_future)::int AS future_days,
+        MIN(forecast_date) FILTER (WHERE NOT is_holdout AND NOT is_future)::text AS train_start,
+        MAX(forecast_date) FILTER (WHERE NOT is_holdout AND NOT is_future)::text AS train_end,
+        MIN(forecast_date) FILTER (WHERE is_holdout)::text AS holdout_start
+      FROM gold.ml_predictive_volume
+    `);
+    const r = rows[0];
+    if (!r) return null;
+    const scored = Number(r.train_days) + Number(r.holdout_days);
+    const pct = (n: number) => (scored ? Number(((n / scored) * 100).toFixed(2)) : null);
+    return {
+      trainDays: Number(r.train_days),
+      holdoutDays: Number(r.holdout_days),
+      futureDays: Number(r.future_days),
+      trainStart: r.train_start,
+      trainEnd: r.train_end,
+      holdoutStart: r.holdout_start,
+      trainPct: pct(Number(r.train_days)),
+      holdoutPct: pct(Number(r.holdout_days)),
+    };
+  } catch (error) {
+    console.error("Failed to fetch split summary:", error);
+    return null;
+  }
+}
+
 export type ForecastWindow = { months?: "3" | "12" | "all"; from?: string; to?: string };
 
 export async function getMLPredictiveVolume(window: ForecastWindow = {}) {

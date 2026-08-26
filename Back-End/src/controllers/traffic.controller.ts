@@ -1,6 +1,6 @@
 import type { Request, Response } from "express";
 import { TrafficQuerySchema, IncidentQuerySchema, ForecastQuerySchema, HourlyForecastQuerySchema, AnalyticsQuerySchema } from "../validators/traffic.validator.js";
-import { getTrafficVolumesFromDb, getDirectionalFlowFromDb, getVehicleClassDistributionFromDb, getTrafficAnalyticsFromDb, getMLPredictiveVolume, getMLPredictiveVolumeHourly, getMLPredictiveCongestion, getMLEventSurge, getMLModelMetrics, getWeatherEvidenceFromDb } from "../services/traffic.service.js";
+import { getTrafficVolumesFromDb, getDirectionalFlowFromDb, getVehicleClassDistributionFromDb, getTrafficAnalyticsFromDb, getMLPredictiveVolume, getMLPredictiveVolumeHourly, getMLPredictiveCongestion, getMLEventSurge, getMLModelMetrics, getWeatherEvidenceFromDb, getSplitSummary } from "../services/traffic.service.js";
 
 // GET /api/traffic/analytics — descriptive dashboard aggregates
 export const getTrafficAnalytics = async (req: Request, res: Response) => {
@@ -73,11 +73,14 @@ export const getForecast = async (req: Request, res: Response) => {
   const query = ForecastQuerySchema.parse(req.query);
   
   // Fetch real ML predictions from AWS PostgreSQL DB
-  const [volumes, congestion, events, modelMetrics] = await Promise.all([
+  const [volumes, congestion, events, modelMetrics, split] = await Promise.all([
     getMLPredictiveVolume({ months: query.months, from: query.from, to: query.to }),
     getMLPredictiveCongestion(),
     getMLEventSurge(),
-    getMLModelMetrics()
+    getMLModelMetrics(),
+    // Counted over the full table, NOT the windowed rows above, so the chart can
+    // distinguish "what was trained on" from "what is currently drawn".
+    getSplitSummary()
   ]);
 
   if (!volumes && !congestion && !events) {
@@ -97,6 +100,7 @@ export const getForecast = async (req: Request, res: Response) => {
       horizon: query.horizon,
       mlConfidence,
       championModel: champion?.model ?? null,
+      split: split ?? null,
       modelMetrics: modelMetrics ?? [],
       volumes: volumes || [],
       congestion: congestion || [],

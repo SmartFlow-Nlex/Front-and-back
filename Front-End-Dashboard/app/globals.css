@@ -4530,6 +4530,27 @@ body {
 .mc-density-line.yellow { background: #eab308; }
 .mc-density-line.orange { background: #f97316; }
 .mc-density-line.red { background: var(--color-danger); }
+.mc-dir-chip {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  border-radius: 4px;
+  background: var(--bg-surface-hover);
+  color: var(--text-secondary);
+  font-size: 9px;
+  transform: rotate(-90deg);
+}
+.mc-dir-chip.flip { transform: rotate(90deg); }
+
+/* "Not reported" — deliberately unlike every congestion colour, because it is
+   not a traffic condition. Matches PALETTE.noData in lib/map-palette.ts. */
+.mc-density-line.nodata { background: #cbd5e1; }
+:root[data-theme="dark"] .mc-density-line.nodata { background: #475569; }
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .mc-density-line.nodata { background: #475569; }
+}
 .mc-density-line.p-low { background: #e9d5ff; }
 .mc-density-line.p-med { background: #d8b4fe; }
 .mc-density-line.p-high { background: #a855f7; }

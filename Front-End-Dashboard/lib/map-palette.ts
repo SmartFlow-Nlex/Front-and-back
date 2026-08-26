@@ -27,13 +27,11 @@ export function mapPalette(isDark: boolean) {
     scrimOpacity: isDark ? 0.55 : 0.6,
     halo: isDark ? "#38bdf8" : "#0284c7",
     haloOpacity: isDark ? 0.22 : 0.18,
-    bed: isDark ? "#1e293b" : "#334155",
-    asphalt: isDark ? "#334155" : "#94a3b8",
+    /* A stretch the feed said nothing about. Distinct from every congestion
+       colour on purpose: "not reported" is not a traffic condition. */
+    noData: isDark ? "#475569" : "#cbd5e1",
     casing: isDark ? "#0b1220" : "#ffffff",
-    rampCasing: isDark ? "#1e293b" : "#cbd5e1",
-    ramp: isDark ? "#64748b" : "#94a3b8",
     arrow: isDark ? "#e2e8f0" : "#ffffff",
-    arrowHalo: isDark ? "rgba(2,6,23,0.75)" : "rgba(15,23,42,0.45)",
     alert: isDark ? "#f87171" : "#dc2626",
     alertRing: isDark ? "#0b1220" : "#ffffff",
     /* Congestion levels. Brighter in dark so they hold up against the wash,

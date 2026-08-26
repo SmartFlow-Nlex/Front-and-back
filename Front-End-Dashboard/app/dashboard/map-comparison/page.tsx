@@ -224,6 +224,15 @@ export default function MapComparisonPage() {
                 <div className="mc-density-row"><span className="mc-density-line yellow"></span> Moderate</div>
                 <div className="mc-density-row"><span className="mc-density-line orange"></span> Heavy</div>
                 <div className="mc-density-row"><span className="mc-density-line red"></span> Severe</div>
+                <div className="mc-density-row"><span className="mc-density-line nodata"></span> Not reported</div>
+              </div>
+              {/* Both directions are now drawn, so the reader needs to know
+                  which ribbon is which. The chevrons on the map say it too, but
+                  only once you are zoomed in far enough to read them. */}
+              <div className="mc-legend-section">
+                <h4>Direction</h4>
+                <div className="mc-density-row"><span className="mc-dir-chip">&#10095;</span> Northbound &middot; to Central Luzon</div>
+                <div className="mc-density-row"><span className="mc-dir-chip flip">&#10095;</span> Southbound &middot; to Metro Manila</div>
               </div>
               <div className="mc-legend-section">
                 <h4>Waze Reports</h4>
@@ -233,7 +242,6 @@ export default function MapComparisonPage() {
                 <div className="mc-report-row"><span className="mc-icon-bg darkred"><AlertTriangle size={12} /></span> Accident</div>
                 <div className="mc-report-row"><span className="mc-icon-bg yellow"><AlertCircle size={12} /></span> Hazard</div>
                 <div className="mc-report-row"><span className="mc-icon-bg cyan" style={{ backgroundColor: "#06b6d4" }}><Milestone size={12} /></span> Toll Plaza</div>
-                <div className="mc-report-row"><span className="mc-density-line" style={{ backgroundColor: "#14b8a6" }}></span> Entry / Exit Ramp</div>
               </div>
             </div>
           </TrafficMapPanel>

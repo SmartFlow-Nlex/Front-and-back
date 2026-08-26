@@ -7,7 +7,6 @@ import { useEffect, useRef, useState } from "react";
 import nlexGeometry from "./nlex-geometry.json";
 import { sliceCorridor, type LngLat } from "../../lib/corridor-shape";
 import { FALLBACK_EXITS } from "../../lib/nlex-exits";
-import nlexRamps from "./nlex-ramps.json";
 import { useChartTheme } from "../../lib/chart-theme";
 import { mapPalette } from "../../lib/map-palette";
 
@@ -52,6 +51,15 @@ export default function TrafficMapPanel({ title, subtitle, badge, endpoint, laye
     }
 
     const PALETTE = mapPalette(isDark);
+
+    /* Both directions share one centreline and are separated in screen pixels,
+       so each ribbon traces the identical real curve and the gap stays
+       proportional at every zoom. Northbound takes the positive side, which is
+       the side traffic keeps here. */
+    const GAP = ["interpolate", ["linear"], ["zoom"], 8, 5.5, 12, 10.5, 16, 16];
+    const OFFSET = [
+      "case", ["==", ["get", "direction"], "NB"], GAP, ["*", -1, GAP],
+    ] as unknown as mapboxgl.ExpressionSpecification;
 
     mapboxgl.accessToken = token;
     let map: mapboxgl.Map;
@@ -141,28 +149,80 @@ export default function TrafficMapPanel({ title, subtitle, badge, endpoint, laye
       [...FALLBACK_EXITS].sort((a, b) => a.km - b.km).map((e) => [e.longitude, e.latitude] as LngLat),
     );
 
-    /* The same slices joined back into one line, for the layers that draw the
-       corridor as a whole. Each part repeats the previous part's last vertex, so
-       the shared point is dropped on the way in. */
-    const corridorCentreline: LngLat[] = corridorParts.reduce<LngLat[]>(
-      (acc, part, i) => acc.concat(i === 0 ? part : part.slice(1)),
-      [],
-    );
+    /* The corridor as its own source: 19 segments x 2 directions, on the real
+       alignment, built here rather than taken from the feed.
 
-    const withRealShape = (fc: GeoJSON.FeatureCollection): GeoJSON.FeatureCollection => ({
-      ...fc,
-      features: (fc.features ?? []).map((f) => {
-        const props = f.properties as { feature_type?: string; segment_order?: number } | null;
-        if (props?.feature_type !== "carriageway") return f;
-        const part = corridorParts[(props.segment_order ?? 0) - 1];
-        if (!part || part.length < 2) return f;
-        return { ...f, geometry: { type: "LineString", coordinates: part } as GeoJSON.Geometry };
-      }),
-    });
+       It used to be drawn from whatever carriageway features the endpoint
+       returned, which meant the Forecast panel -- whose endpoint sends seven
+       named chords and no carriageways at all -- drew the corridor as a bare
+       grey band with no state on it. The road is a fact about NLEX, not about
+       one endpoint's payload, so it is built from geometry the client always
+       has and the feed only colours it in. */
+    const exitNames = [...FALLBACK_EXITS].sort((x, y) => x.km - y.km).map((e) => e.exit_name);
+
+    const corridorBase: GeoJSON.FeatureCollection = {
+      type: "FeatureCollection",
+      features: corridorParts.flatMap((coords, i) =>
+        (["NB", "SB"] as const).map((direction) => ({
+          type: "Feature" as const,
+          properties: {
+            segment_order: i + 1,
+            direction,
+            segment_name: exitNames[i] + " to " + exitNames[i + 1],
+            from_exit: exitNames[i],
+            to_exit: exitNames[i + 1],
+            // null, not 0: "no reading" and "flowing freely" are different
+            // claims, and only the live feed can justify the second one.
+            level: null as number | null,
+          },
+          geometry: { type: "LineString" as const, coordinates: coords },
+        })),
+      ),
+    };
+
+    /** Waze levels for a forecast's categorical state. */
+    const FORECAST_LEVEL: Record<string, number> = { Low: 1, Medium: 3, High: 4, Severe: 5 };
+
+    /** Colours the corridor from whichever shape of state the endpoint sends. */
+    const corridorWithState = (fc: GeoJSON.FeatureCollection): GeoJSON.FeatureCollection => {
+      const bySegment = new Map<string, number>();
+
+      for (const f of fc.features ?? []) {
+        const q = f.properties as Record<string, unknown> | null;
+        if (!q) continue;
+
+        // Live: per segment and per direction, already carrying a Waze level.
+        if (q.feature_type === "carriageway" && q.segment_order != null) {
+          bySegment.set(String(q.segment_order) + ":" + String(q.direction), Number(q.level ?? 0));
+        }
+
+        // Forecast: named "X to Y", with no direction, so it colours both ways.
+        if (q.feature_type === "forecast" && typeof q.corridor_segment === "string") {
+          const hit = corridorBase.features.find(
+            (c) => (c.properties as { segment_name: string }).segment_name === q.corridor_segment,
+          );
+          if (hit) {
+            const order = (hit.properties as { segment_order: number }).segment_order;
+            const lvl = FORECAST_LEVEL[String(q.congestion_state)] ?? 0;
+            bySegment.set(order + ":NB", lvl);
+            bySegment.set(order + ":SB", lvl);
+          }
+        }
+      }
+
+      return {
+        ...corridorBase,
+        features: corridorBase.features.map((f) => {
+          const q = f.properties as { segment_order: number; direction: string };
+          const lvl = bySegment.get(q.segment_order + ":" + q.direction);
+          return { ...f, properties: { ...f.properties, level: lvl ?? null } };
+        }),
+      };
+    };
 
     map.on("load", async () => {
       const response = await fetch(endpoint, { cache: "no-store" });
-      const data = withRealShape(await response.json());
+      const data = await response.json();
 
       const isRealtime = endpoint.includes("real-time");
 
@@ -171,32 +231,10 @@ export default function TrafficMapPanel({ title, subtitle, badge, endpoint, laye
         data,
       });
 
-      // Add the base NLEX corridor source
+      // The corridor, with whatever state this endpoint could supply.
       map.addSource("nlex-corridor", {
         type: "geojson",
-        data: {
-          type: "FeatureCollection",
-          features: [
-            {
-              type: "Feature",
-              properties: {},
-              /* The rebuilt centreline, not the raw import. nlex-geometry.json
-                 is both carriageways plus ramps concatenated out of order — 196
-                 km of a 76 km road — so drawing it directly showed the corridor
-                 doubling back on itself. See lib/corridor-shape.ts. */
-              geometry: { type: "LineString", coordinates: corridorCentreline } as GeoJSON.Geometry,
-            },
-          ],
-        },
-      });
-
-      // NLEX Entrance / Exit ramps (on- & off-ramps into and out of the corridor).
-      // Sourced from OSM motorway_link/motorway geometry, so they trace the real road centerlines.
-      // NOTE: the ramp layers themselves are added AFTER the mainline (further below) so that on
-      // entrance/exit sections the teal fully replaces the orange instead of the two overlapping.
-      map.addSource("nlex-ramps", {
-        type: "geojson",
-        data: nlexRamps as GeoJSON.FeatureCollection,
+        data: corridorWithState(data),
       });
 
       /* Push the base map back. A background layer added before ours sits over
@@ -212,11 +250,14 @@ export default function TrafficMapPanel({ title, subtitle, badge, endpoint, laye
         },
       });
 
-      /* Corridor emphasis. The base map shows every road in Central Luzon at
-         much the same weight, so NLEX has to be lifted off it deliberately: a
-         wide soft halo picks the corridor out at a glance from zoomed out, and
-         the darker bed under it reads as the road surface once the coloured
-         carriageways are laid on top. */
+      /* The corridor, drawn the way a navigation map draws a road: a soft glow
+         to lift it off the base, a white casing that reads as the roadway, and
+         two coloured ribbons inside it for the two directions.
+
+         The grey road bed and the 39 OSM ramp spurs that used to sit here are
+         both gone. The spurs were the stray lines wandering off the corridor --
+         18.5 km of on- and off-ramps drawn at near corridor weight, which read
+         as breakage rather than as detail. */
       map.addLayer({
         id: "nlex-halo",
         type: "line",
@@ -224,9 +265,9 @@ export default function TrafficMapPanel({ title, subtitle, badge, endpoint, laye
         layout: { "line-join": "round", "line-cap": "round" },
         paint: {
           "line-color": PALETTE.halo,
-          "line-width": ["interpolate", ["exponential", 1.5], ["zoom"], 8, 22, 12, 42, 16, 62],
+          "line-width": ["interpolate", ["exponential", 1.5], ["zoom"], 8, 20, 12, 38, 16, 56],
           "line-opacity": PALETTE.haloOpacity,
-          "line-blur": ["interpolate", ["linear"], ["zoom"], 8, 6, 16, 18],
+          "line-blur": ["interpolate", ["linear"], ["zoom"], 8, 8, 16, 20],
         },
       });
 
@@ -236,152 +277,68 @@ export default function TrafficMapPanel({ title, subtitle, badge, endpoint, laye
         source: "nlex-corridor",
         layout: { "line-join": "round", "line-cap": "round" },
         paint: {
-          "line-color": PALETTE.bed,
-          "line-width": ["interpolate", ["exponential", 1.5], ["zoom"], 8, 14, 12, 27, 16, 39],
-          "line-opacity": 0.85,
-        },
-      });
-
-      /* Asphalt between the two carriageways. This used to be solid orange,
-         which fought the live colours now drawn on top and implied a congestion
-         level of its own; neutral, it just fills the gap the offset leaves. It
-         also means the corridor is still visible if the feed is empty. */
-      map.addLayer({
-        id: "nlex-surface",
-        type: "line",
-        source: "nlex-corridor",
-        layout: { "line-join": "round", "line-cap": "round" },
-        paint: {
-          "line-color": PALETTE.asphalt,
-          "line-width": ["interpolate", ["exponential", 1.5], ["zoom"], 8, 12, 12, 24, 16, 35],
-          "line-opacity": 0.9,
-        },
-      });
-
-      // Entrance / Exit ramp casing — drawn ON TOP of the mainline and at least as wide as the
-      // corridor casing, so where a ramp coincides with the corridor the teal fully covers the
-      // orange (no orange/teal overlap on entrance & exit sections).
-      map.addLayer({
-        id: "nlex-ramp-casing",
-        type: "line",
-        source: "nlex-ramps",
-        layout: {
-          "line-join": "round",
-          "line-cap": "round",
-        },
-        paint: {
-          "line-color": PALETTE.rampCasing,
-          "line-width": ["interpolate", ["exponential", 1.5], ["zoom"], 8, 2, 12, 5, 16, 10],
-          "line-opacity": 0.7,
-        },
-      });
-
-      // Entrance / Exit ramp surface — teal fill, matches the corridor width so it reads as the
-      // same expressway while clearly marking the on/off ramps.
-      map.addLayer({
-        id: "nlex-ramp-surface",
-        type: "line",
-        source: "nlex-ramps",
-        layout: {
-          "line-join": "round",
-          "line-cap": "round",
-        },
-        paint: {
-          "line-color": PALETTE.ramp,
-          "line-width": ["interpolate", ["exponential", 1.5], ["zoom"], 8, 1, 12, 2.8, 16, 6],
-          "line-opacity": 0.85,
-        },
-      });
-
-      /* The corridor itself, both carriageways.
-         Drawn before the jam fragments so those sit on top of it. Waze only
-         reports congestion, so a segment with no jam is flowing rather than
-         unknown — level 0 is therefore green, not grey. A casing line underneath
-         gives each ribbon an edge so the two directions stay distinct where they
-         run close together. */
-      map.addLayer({
-        id: "carriageway-casing",
-        type: "line",
-        source: "traffic",
-        layout: { "line-join": "round", "line-cap": "round" },
-        paint: {
           "line-color": PALETTE.casing,
-          "line-width": ["interpolate", ["linear"], ["zoom"], 8, 7, 12, 13, 16, 19],
-          "line-opacity": 0.95,
-          // Offset in screen pixels rather than in the geometry, so both ribbons
-          // follow the real curve instead of being separate approximations of
-          // it. It tracks the line widths, keeping the gap proportional as the
-          // reader zooms rather than closing up or gaping open.
-          "line-offset": [
-            "case",
-            ["==", ["get", "direction"], "NB"],
-            ["interpolate", ["linear"], ["zoom"], 8, 3.5, 12, 7, 16, 10],
-            ["*", -1, ["interpolate", ["linear"], ["zoom"], 8, 3.5, 12, 7, 16, 10]],
-          ],
+          "line-width": ["interpolate", ["linear"], ["zoom"], 8, 11, 12, 20, 16, 30],
+          "line-opacity": 1,
+          "line-offset": OFFSET,
         },
-        filter: ["==", ["get", "feature_type"], "carriageway"],
       });
 
       map.addLayer({
         id: "carriageway",
         type: "line",
-        source: "traffic",
+        source: "nlex-corridor",
         layout: { "line-join": "round", "line-cap": "round" },
         paint: {
-          // Same levels and hues the legend lists.
           "line-color": [
-            "match",
-            ["get", "level"],
-            0, PALETTE.level[0],  // no jam reported — flowing
-            1, PALETTE.level[1],
-            2, PALETTE.level[2],
-            3, PALETTE.level[3],
-            4, PALETTE.level[4],
-            5, PALETTE.level[5],
-            PALETTE.level[0],
-          ],
-          "line-width": ["interpolate", ["linear"], ["zoom"], 8, 4.5, 12, 9, 16, 14],
-          "line-opacity": 1,
-          "line-offset": [
             "case",
-            ["==", ["get", "direction"], "NB"],
-            ["interpolate", ["linear"], ["zoom"], 8, 3.5, 12, 7, 16, 10],
-            ["*", -1, ["interpolate", ["linear"], ["zoom"], 8, 3.5, 12, 7, 16, 10]],
+            // No reading for this stretch. Grey says so, rather than implying a
+            // free flow the data never actually reported.
+            ["==", ["get", "level"], null], PALETTE.noData,
+            [
+              "match", ["get", "level"],
+              0, PALETTE.level[0],
+              1, PALETTE.level[1],
+              2, PALETTE.level[2],
+              3, PALETTE.level[3],
+              4, PALETTE.level[4],
+              5, PALETTE.level[5],
+              PALETTE.noData,
+            ],
           ],
+          "line-width": ["interpolate", ["linear"], ["zoom"], 8, 7, 12, 14, 16, 22],
+          "line-opacity": 1,
+          "line-offset": OFFSET,
         },
-        filter: ["==", ["get", "feature_type"], "carriageway"],
       });
 
-      /* Direction of travel, as arrows riding the ribbon. Northbound and
-         southbound are offset to opposite sides, so the arrow tells the reader
-         which side is which without a second legend. */
+      /* Direction of travel. Chevrons rather than triangles: under line
+         placement they rotate with the road, so each ribbon reads as flowing
+         even where the corridor bends. */
       map.addLayer({
         id: "carriageway-arrows",
         type: "symbol",
-        source: "traffic",
+        source: "nlex-corridor",
         layout: {
           "symbol-placement": "line",
-          "symbol-spacing": 110,
-          // Symbol layers have no line-offset. Under line placement the y axis of
-          // text-offset runs across the line, so this puts each arrow on its own
-          // carriageway in ems rather than pixels.
+          "symbol-spacing": ["interpolate", ["linear"], ["zoom"], 8, 34, 14, 60],
+          "text-field": "\u276F",
+          "text-rotate": ["case", ["==", ["get", "direction"], "NB"], -90, 90],
+          "text-size": ["interpolate", ["linear"], ["zoom"], 8, 9, 14, 13],
+          "text-allow-overlap": true,
+          "text-ignore-placement": true,
+          "text-keep-upright": false,
           "text-offset": [
             "case",
             ["==", ["get", "direction"], "NB"],
-            ["literal", [0, 0.45]],
-            ["literal", [0, -0.45]],
+            ["literal", [0, 0.5]],
+            ["literal", [0, -0.5]],
           ],
-          "text-field": ["case", ["==", ["get", "direction"], "NB"], "\u25B2", "\u25BC"],
-          "text-size": 11,
-          "text-allow-overlap": false,
-          "text-keep-upright": false,
         },
         paint: {
           "text-color": PALETTE.arrow,
-          "text-halo-color": PALETTE.arrowHalo,
-          "text-halo-width": 1,
+          "text-opacity": 0.85,
         },
-        filter: ["==", ["get", "feature_type"], "carriageway"],
       });
 
       // Layer 3: Jam Lines Layer (Overlays on top for realtime)
@@ -942,8 +899,11 @@ export default function TrafficMapPanel({ title, subtitle, badge, endpoint, laye
       const source = map.getSource("traffic") as GeoJSONSource;
       const _pollingInterval = setInterval(async () => {
         try {
-          const fresh = withRealShape(await fetch(endpoint, { cache: "no-store" }).then((r) => r.json()));
+          const fresh = await fetch(endpoint, { cache: "no-store" }).then((r) => r.json());
           source.setData(fresh);
+          (map.getSource("nlex-corridor") as GeoJSONSource | undefined)?.setData(
+            corridorWithState(fresh),
+          );
           if (isRealtime) {
             renderAlerts(fresh);
           }

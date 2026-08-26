@@ -9,6 +9,7 @@ import { corridorGuard, sliceCorridor, type LngLat } from "../../lib/corridor-sh
 import { FALLBACK_EXITS } from "../../lib/nlex-exits";
 import { useChartTheme } from "../../lib/chart-theme";
 import { mapPalette } from "../../lib/map-palette";
+import { isReportType } from "../../lib/waze-reports";
 
 type Props = {
   title: string;
@@ -173,6 +174,8 @@ export default function TrafficMapPanel({ title, subtitle, badge, endpoint, laye
        has and the feed only colours it in. */
     // Shared with the page's stats, so the map and the counters agree on what
     // counts as a report about NLEX. See lib/corridor-shape.ts.
+    const isRealtimeEndpoint = endpoint.includes("real-time");
+
     const guard = corridorGuard(corridorLine, corridorExits);
 
     /* Keeps only what is on NLEX, then puts each jam onto the corridor itself
@@ -182,7 +185,15 @@ export default function TrafficMapPanel({ title, subtitle, badge, endpoint, laye
       const kept = guard.filter(fc);
       return {
         ...kept,
-        features: (kept.features ?? []).map((f) => {
+        features: (kept.features ?? [])
+          /* Alerts are shown only for the categories the legend names, so the
+             map and the Active Reports tile cannot disagree about what a report
+             is. ROAD_CLOSED arrives in the feed and is dropped here. */
+          .filter((f) => {
+            const p = f.properties as { feature_type?: string; type?: unknown } | null;
+            return p?.feature_type !== "alert" || isReportType(p?.type);
+          })
+          .map((f) => {
           const props = f.properties as { feature_type?: string } | null;
           if (props?.feature_type !== "jam" || f.geometry?.type !== "LineString") return f;
           const snapped = guard.snap(
@@ -219,13 +230,10 @@ export default function TrafficMapPanel({ title, subtitle, badge, endpoint, laye
             segment_name: exitNames[i] + " to " + exitNames[i + 1],
             from_exit: exitNames[i],
             to_exit: exitNames[i + 1],
-            /* NO_READING, not 0: "nobody reported on this stretch" and "this
-               stretch is flowing freely" are different claims, and only the
-               live feed can justify the second one.
-
-               A sentinel rather than null because Mapbox expressions have no
+            /* A sentinel rather than null, because Mapbox expressions have no
                null literal — comparing against one fails layer validation and
-               throws, which took the whole page down. */
+               throws, which took the whole page down. It is replaced below with
+               a real level, or with free-flow where the source can justify it. */
             level: NO_READING,
           },
           geometry: { type: "LineString" as const, coordinates: coords },
@@ -303,12 +311,21 @@ export default function TrafficMapPanel({ title, subtitle, badge, endpoint, laye
         }
       }
 
+      /* What silence means depends on the source.
+
+         Waze only publishes congestion, so on the live feed a stretch with no
+         jam is a stretch that is moving: free flow, drawn green. The forecast
+         is the opposite — it covers seven of nineteen segments, and silence
+         there means nobody forecast it, which is not a claim that it will be
+         clear. Those stay grey. */
+      const unreported = isRealtimeEndpoint ? 0 : NO_READING;
+
       return {
         ...corridorBase,
         features: corridorBase.features.map((f) => {
           const q = f.properties as { segment_order: number; direction: string };
           const lvl = bySegment.get(q.segment_order + ":" + q.direction);
-          return { ...f, properties: { ...f.properties, level: lvl ?? NO_READING } };
+          return { ...f, properties: { ...f.properties, level: lvl ?? unreported } };
         }),
       };
     };
@@ -493,7 +510,6 @@ export default function TrafficMapPanel({ title, subtitle, badge, endpoint, laye
         filter: [
           "all",
           ["==", ["get", "feature_type"], "alert"],
-          ["!=", ["get", "type"], "JAM"]
         ],
       });
 

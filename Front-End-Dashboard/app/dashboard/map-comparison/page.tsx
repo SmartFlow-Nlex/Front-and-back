@@ -11,6 +11,7 @@ const BACKEND = process.env.NEXT_PUBLIC_BACKEND_URL ?? "http://localhost:4000";
 
 import { displayExitName, FALLBACK_EXITS, useNlexExits, type NlexExit } from "../../../lib/nlex-exits";
 import { corridorGuard, type LngLat } from "../../../lib/corridor-shape";
+import { isActiveReport } from "../../../lib/waze-reports";
 import nlexGeometry from "../../../components/maps/nlex-geometry.json";
 
 /* The same test the map uses, so the counters below cannot disagree with what
@@ -86,15 +87,12 @@ export default function MapComparisonPage() {
              Regional Road up to 1.4 km away. */
           const onNlex = features.filter((f: Feature) => CORRIDOR.onCorridor(f));
 
-          /* Everything Waze is reporting on the corridor right now, which is
-             exactly what the map draws: jams and incident alerts together. It
-             counted alerts alone before, so the tile read 0 while four jams
-             were visibly drawn on the road. */
-          const alertCount = onNlex.filter(
-            (f: Feature) =>
-              f.properties &&
-              (f.properties.feature_type === "alert" || f.properties.feature_type === "jam")
-          ).length;
+          /* Reports, not density. A jam line measures how fast the road is
+             moving and belongs to the colour of the corridor; an alert is
+             somebody reporting something. Counting both added two different
+             units together. Only the five categories the legend names count --
+             see lib/waze-reports.ts. */
+          const alertCount = onNlex.filter((f: Feature) => isActiveReport(f)).length;
 
           const jams = onNlex.filter(
             (f: Feature) =>

@@ -52,35 +52,6 @@ const MODELS: ModelMeta[] = [
 const META = Object.fromEntries(MODELS.map((m) => [m.key, m])) as Record<ModelType, ModelMeta>;
 const ACTUAL_COLOR = "#2563eb";
 
-/** Legend/series name for the smoothed actual. Kept in one place so the legend,
- *  the series and the tooltip can never drift apart. */
-const SMOOTH_NAME = "Actual · 7-day average";
-
-/**
- * Centred rolling mean, used ONLY as a display aid.
- *
- * At daily granularity the chart draws ~880 points across ~1400px, so the actual
- * series renders as a noise band and the smooth 14-day-ahead forecast has nothing
- * comparable to sit against — the eye reads "the model is wrong" when it is really
- * being asked to compare a forecast against day-level noise no model predicts.
- *
- * This invents nothing. Every output is the arithmetic mean of real observed
- * values from baseActual, and the raw daily series stays drawn underneath it.
- * Centred rather than trailing, because a trailing mean shifts the curve ~3 days
- * right and would misrepresent whether a forecast leads or lags.
- */
-function centeredMean(vals: (number | null)[], window: number): (number | null)[] {
-  const half = Math.floor(window / 2);
-  return vals.map((_, i) => {
-    let sum = 0;
-    let n = 0;
-    for (let j = i - half; j <= i + half; j++) {
-      const v = vals[j];
-      if (j >= 0 && j < vals.length && v != null && isFinite(v)) { sum += v; n++; }
-    }
-    return n === 0 ? null : sum / n;
-  });
-}
 // Same pattern the other dashboard pages use. The literal URL was refactored out
 // of this file but the constant was never declared here, so every fetch threw a
 // ReferenceError, was swallowed by the catch, and the chart sat on "Loading…".
@@ -545,11 +516,6 @@ export default function PredictiveVolumeChart({ months = "all", from, to, weathe
   const isoDates = agg ? agg.isoDates : dailyIso;
   const baseActual = agg ? agg.baseActual : dailyActual;
 
-  // Weekly/Monthly buckets are already means, so smoothing them again would be
-  // double-averaging. Only the dense daily/hourly view needs the extra line.
-  const showSmooth = !agg && baseActual.length > 120;
-  const smoothActual = showSmooth ? centeredMean(baseActual, 7) : null;
-
   // Rainfall bars are sky-blue and the actual line was also blue, so two unrelated
   // quantities shared a hue. Actual moves to a neutral slate that reads as
   // "observation" against the saturated model colours.
@@ -679,21 +645,6 @@ export default function PredictiveVolumeChart({ months = "all", from, to, weathe
     { max: 30, label: "Heavy", color: "rgba(2, 132, 199, 0.8)" },
     { max: Infinity, label: "Intense", color: "rgba(30, 64, 175, 0.9)" },
   ];
-  const smoothSeries: NonNullable<EChartsOption["series"]> = smoothActual ? [
-    {
-      name: SMOOTH_NAME,
-      type: "line",
-      yAxisIndex: 0,
-      data: smoothActual,
-      smooth: true,
-      connectNulls: true,
-      symbol: "none",
-      z: 4,
-      lineStyle: { width: 2.6, color: actualColor },
-      itemStyle: { color: actualColor },
-    },
-  ] : [];
-
   const rainBand = (mm: number) => RAIN_BANDS.find((b) => mm < b.max) ?? RAIN_BANDS[RAIN_BANDS.length - 1];
 
   const weatherSeries: NonNullable<EChartsOption["series"]> = showWeather ? [
@@ -770,7 +721,6 @@ export default function PredictiveVolumeChart({ months = "all", from, to, weathe
     legend: {
       data: [
         "Actual Volume",
-        ...(smoothActual ? [SMOOTH_NAME] : []),
         ...visibleModels.map((k) => `${metricsMeta[k].label} Prediction`),
         ...(showWeather ? ["Rainfall (mm)"] : []),
       ],
@@ -850,13 +800,12 @@ export default function PredictiveVolumeChart({ months = "all", from, to, weathe
         connectNulls: true,
         symbol: "circle",
         symbolSize: dates.length > 400 ? 0 : 5,
-        z: showSmooth ? 2 : 3,
-        lineStyle: {
-          width: dates.length > 400 ? 1 : 2.5,
-          color: actualColor,
-          opacity: showSmooth ? 0.13 : 1,
-        },
-        itemStyle: { color: actualColor, opacity: showSmooth ? 0.13 : 1 },
+        z: 3,
+        // Dark slate at full weight — this is the treatment that made the series
+        // legible. Still thinner at daily density, where ~880 points would
+        // otherwise fuse into a solid block.
+        lineStyle: { width: dates.length > 400 ? 1.6 : 2.6, color: actualColor },
+        itemStyle: { color: actualColor },
         emphasis: { scale: 2.2 },
         markArea: {
           silent: true,
@@ -938,7 +887,6 @@ export default function PredictiveVolumeChart({ months = "all", from, to, weathe
         itemStyle: { color: metricsMeta[key].color },
         emphasis: { scale: 2.2 },
       })),
-      ...smoothSeries,
       ...weatherSeries,
     ],
   };

@@ -168,7 +168,30 @@ export function sliceCorridor(raw: LngLat[], exits: LngLat[]): LngLat[][] {
 /** Covers the carriageways, their ramps and the service roads alongside. */
 export const CORRIDOR_TOLERANCE_M = 200;
 
-export type SnappedJam = { coords: LngLat[]; direction: "NB" | "SB" };
+export type SnappedJam = {
+  coords: LngLat[];
+  direction: "NB" | "SB";
+  /** "street" when Waze named the direction, "bearing" when it was inferred. */
+  directionSource: "street" | "bearing";
+};
+
+/* Waze names the carriageway on ramps and exits -- "NLEX N San Fernando Exit",
+   "E1: NLEX S On-Ramp" -- for roughly half the jams on the corridor. That is
+   reported data and beats anything geometry can infer, so it is read first.
+
+   It matters: a jam on "NLEX N San Fernando Exit" has a bearing of 115 deg,
+   because the slip road curves away east as it leaves the mainline. Inferring
+   from that bearing put a northbound jam on the southbound ribbon. */
+function directionFromStreet(street?: string | null): "NB" | "SB" | null {
+  if (!street) return null;
+  if (/\bnorth\s*bound\b/i.test(street)) return "NB";
+  if (/\bsouth\s*bound\b/i.test(street)) return "SB";
+  // "NLEX N ...", "NLEX S ..." — the letter directly after the road name.
+  const m = /\bNLEX\s+([NS])\b/i.exec(street);
+  if (m) return m[1].toUpperCase() === "N" ? "NB" : "SB";
+  return null;
+}
+
 
 export type CorridorGuard = {
   metresOff: (lngLat: number[]) => number;
@@ -178,7 +201,7 @@ export type CorridorGuard = {
   /** The rebuilt centreline, ordered south to north. */
   centreline: LngLat[];
   /** Puts a jam onto the corridor, and works out which way it runs. */
-  snap: (coords: number[][]) => SnappedJam | null;
+  snap: (coords: number[][], street?: string | null) => SnappedJam | null;
 };
 
 export function corridorGuard(raw: LngLat[], exits: LngLat[], toleranceM = CORRIDOR_TOLERANCE_M): CorridorGuard {
@@ -250,10 +273,12 @@ export function corridorGuard(raw: LngLat[], exits: LngLat[], toleranceM = CORRI
      stretch between them is taken from the centreline itself. The jam then lies
      exactly on the ribbon, because it is made of the same points.
 
-     Direction comes from the jam's own bearing. NLEX runs roughly south to
-     north, and the centreline is ordered the same way, so a jam whose latitude
-     increases from start to end is northbound. */
-  const snap: CorridorGuard["snap"] = (coords) => {
+     Direction is read from Waze's street name where it names one, and inferred
+     from bearing only where it does not. NLEX runs roughly south to north and
+     the centreline is ordered the same way, so a jam whose latitude increases
+     from start to end is northbound -- but that inference is unreliable exactly
+     where jams cluster, on the curving slip roads at exits and ramps. */
+  const snap: CorridorGuard["snap"] = (coords, street) => {
     if (!coords || coords.length < 2 || centreline.length < 2) return null;
     const first = coords[0];
     const last = coords[coords.length - 1];
@@ -270,9 +295,11 @@ export function corridorGuard(raw: LngLat[], exits: LngLat[], toleranceM = CORRI
       else return null;
     }
 
+    const named = directionFromStreet(street);
     return {
       coords: centreline.slice(lo, hi + 1),
-      direction: last[1] >= first[1] ? "NB" : "SB",
+      direction: named ?? (last[1] >= first[1] ? "NB" : "SB"),
+      directionSource: named ? "street" : "bearing",
     };
   };
 

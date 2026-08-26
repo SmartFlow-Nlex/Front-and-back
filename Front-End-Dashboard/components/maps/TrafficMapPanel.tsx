@@ -185,11 +185,18 @@ export default function TrafficMapPanel({ title, subtitle, badge, endpoint, laye
         features: (kept.features ?? []).map((f) => {
           const props = f.properties as { feature_type?: string } | null;
           if (props?.feature_type !== "jam" || f.geometry?.type !== "LineString") return f;
-          const snapped = guard.snap(f.geometry.coordinates as number[][]);
+          const snapped = guard.snap(
+            f.geometry.coordinates as number[][],
+            (f.properties as { street?: string })?.street,
+          );
           if (!snapped) return f;
           return {
             ...f,
-            properties: { ...f.properties, direction: snapped.direction },
+            properties: {
+              ...f.properties,
+              direction: snapped.direction,
+              direction_source: snapped.directionSource,
+            },
             geometry: { type: "LineString", coordinates: snapped.coords } as GeoJSON.Geometry,
           };
         }),

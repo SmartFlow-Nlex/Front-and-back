@@ -1,13 +1,10 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { 
-  CarFront, Cone, ShieldAlert, AlertTriangle, AlertCircle, 
-  Clock, ChevronDown, Navigation, ZoomIn, ZoomOut, Search,
-  Milestone, Map
-} from "lucide-react";
+import { AlertCircle, AlertTriangle, CarFront, ChevronDown, Clock, Cone, Map, Maximize2, Milestone, Navigation, Search, ShieldAlert, ZoomIn, ZoomOut } from "lucide-react";
 import type { Feature } from "geojson";
 import TrafficMapPanel from "../../../components/maps/TrafficMapPanel";
+import WazeLiveModal from "../../../components/maps/WazeLiveModal";
 import PageHeader from "../../../components/dashboard/PageHeader";
 
 const BACKEND = process.env.NEXT_PUBLIC_BACKEND_URL ?? "http://localhost:4000";
@@ -17,6 +14,7 @@ import { displayExitName, useNlexExits, type NlexExit } from "../../../lib/nlex-
 type ExitHit = NlexExit;
 
 export default function MapComparisonPage() {
+  const [wazeMax, setWazeMax] = useState(false);
   const [activeReports, setActiveReports] = useState(5);
   const [avgSpeed, setAvgSpeed] = useState(45);
   const [timeStr, setTimeStr] = useState("");
@@ -203,6 +201,14 @@ export default function MapComparisonPage() {
               <>
                 <i className="mc-dot green" style={{ display: "inline-block", marginRight: "6px", verticalAlign: "middle" }}></i>
                 LIVE | {timeStr || "Loading..."}
+                <button
+                  type="button"
+                  className="mc-maximise"
+                  style={{ marginLeft: 10 }}
+                  onClick={() => setWazeMax(true)}
+                >
+                  <Maximize2 size={13} /> Expand
+                </button>
               </>
             }
             endpoint={`${process.env.NEXT_PUBLIC_BACKEND_URL ?? "http://localhost:4000"}/api/map-comparison/real-time`}
@@ -311,6 +317,7 @@ export default function MapComparisonPage() {
         </div>
 
       </div>
+      <WazeLiveModal open={wazeMax} onClose={() => setWazeMax(false)} />
     </section>
   );
 }

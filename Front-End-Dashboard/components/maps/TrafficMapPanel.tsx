@@ -10,14 +10,16 @@ import nlexRamps from "./nlex-ramps.json";
 type Props = {
   title: string;
   subtitle: string;
-  badge: React.ReactNode;
+  badge?: React.ReactNode;
+  /** Hides the panel's own header — used when a parent supplies one. */
+  chromeless?: boolean;
   endpoint: string;
   layerColor: string;
   tone: "blue" | "purple";
   children?: React.ReactNode;
 };
 
-export default function TrafficMapPanel({ title, subtitle, badge, endpoint, layerColor, tone, children }: Props) {
+export default function TrafficMapPanel({ title, subtitle, badge, endpoint, layerColor, tone, children, chromeless = false }: Props) {
   const mapRef = useRef<mapboxgl.Map | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
   const activeMarkers = useRef<mapboxgl.Marker[]>([]);
@@ -817,14 +819,18 @@ export default function TrafficMapPanel({ title, subtitle, badge, endpoint, laye
   }, [endpoint, layerColor]);
 
   return (
-    <article className="map-card">
-      <header className={`map-head ${tone}`}>
-        <div>
-          <h3>{title}</h3>
-          <p>{subtitle}</p>
-        </div>
-        <span>{badge}</span>
-      </header>
+    <article className={`map-card${chromeless ? " chromeless" : ""}`}>
+      {/* The maximised view supplies its own header, so the panel's is dropped
+          there rather than stacking two title bars. */}
+      {!chromeless && (
+        <header className={`map-head ${tone}`}>
+          <div>
+            <h3>{title}</h3>
+            <p>{subtitle}</p>
+          </div>
+          <span>{badge}</span>
+        </header>
+      )}
       <div className="map-canvas-container">
         <div className="map-canvas mapbox" ref={containerRef} />
         {status !== "ok" && (

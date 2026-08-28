@@ -1,5 +1,5 @@
 import { Router } from "express";
-import { getIncidentList, getIncidentMetrics, getWeatherCorrelation, getIncidentAnalytics, getIncidentPredictive, getIncidentHourly } from "../controllers/incident.controller.js";
+import { getIncidentList, getIncidentMetrics, getWeatherCorrelation, getIncidentAnalytics, getIncidentPredictive, getIncidentHourly, getIncidentWeatherEvidence, getIncidentVolumeEvidence } from "../controllers/incident.controller.js";
 import { asyncHandler } from "../middleware/error.middleware.js";
 
 const router = Router();
@@ -14,5 +14,9 @@ router.get("/hourly", asyncHandler(getIncidentHourly));
 router.get("/list", asyncHandler(getIncidentList));
 router.get("/metrics", asyncHandler(getIncidentMetrics));
 router.get("/weather-correlation", asyncHandler(getWeatherCorrelation));
+// "Does weather/volume predict incidents?" evidence panels — mirrors
+// traffic's own GET /api/traffic/weather-evidence.
+router.get("/weather-evidence", asyncHandler(getIncidentWeatherEvidence));
+router.get("/volume-evidence", asyncHandler(getIncidentVolumeEvidence));
 
 export default router;

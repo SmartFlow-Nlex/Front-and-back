@@ -4,6 +4,7 @@ import {
   IncidentQuerySchema,
   buildIncidentPredictiveQuerySchema,
   IncidentPredictiveResponseSchema,
+  IncidentFeatureEvidenceResponseSchema,
 } from "../validators/incident.validator.js";
 import {
   getIncidentListFromDb,
@@ -13,6 +14,8 @@ import {
   getIncidentHourlyFromDb,
   getIncidentPredictiveFromDb,
   getIncidentPredictiveAnchors,
+  getIncidentWeatherEvidenceFromDb,
+  getIncidentVolumeEvidenceFromDb,
 } from "../services/incident.service.js";
 
 const IncidentAnalyticsQuerySchema = z.object({
@@ -140,4 +143,45 @@ export const getWeatherCorrelation = async (_req: Request, res: Response) => {
   }
 
   res.json({ success: true, source: "mock", data: { clear: 5, rain: 20 } });
+};
+
+// GET /api/incident/weather-evidence — "Does weather predict incidents?"
+// Mirrors traffic's GET /api/traffic/weather-evidence (see
+// getWeatherEvidenceFromDb in traffic.service.ts), applied to the incident
+// series instead of traffic volume.
+export const getIncidentWeatherEvidence = async (_req: Request, res: Response) => {
+  const data = await getIncidentWeatherEvidenceFromDb();
+  if (!data) {
+    return res.status(503).json({ success: false, message: "Weather evidence unavailable: database not reachable" });
+  }
+
+  let validated;
+  try {
+    validated = IncidentFeatureEvidenceResponseSchema.parse(data);
+  } catch (err) {
+    console.error("Incident weather evidence failed schema validation:", err);
+    return res.status(500).json({ success: false, message: "Weather evidence response was malformed" });
+  }
+
+  res.json({ success: true, source: "database", data: validated });
+};
+
+// GET /api/incident/volume-evidence — "Does traffic volume predict incidents?"
+// Same mechanism as weather-evidence above, ablating the volume feature
+// instead of the weather one.
+export const getIncidentVolumeEvidence = async (_req: Request, res: Response) => {
+  const data = await getIncidentVolumeEvidenceFromDb();
+  if (!data) {
+    return res.status(503).json({ success: false, message: "Volume evidence unavailable: database not reachable" });
+  }
+
+  let validated;
+  try {
+    validated = IncidentFeatureEvidenceResponseSchema.parse(data);
+  } catch (err) {
+    console.error("Incident volume evidence failed schema validation:", err);
+    return res.status(500).json({ success: false, message: "Volume evidence response was malformed" });
+  }
+
+  res.json({ success: true, source: "database", data: validated });
 };

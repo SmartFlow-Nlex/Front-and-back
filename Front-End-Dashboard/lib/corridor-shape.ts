@@ -320,7 +320,24 @@ export function corridorGuard(raw: LngLat[], exits: LngLat[], toleranceM = CORRI
         ...fc,
         features: (fc.features as { properties?: { feature_type?: string } }[]).filter((f) => {
           const kind = f?.properties?.feature_type;
-          if (kind !== "jam" && kind !== "alert") return true;
+          /* Jams only.
+
+             Alerts used to be geometry-tested here too, from when the API
+             returned everything within 3 km of an exit and something had to
+             throw out the neighbouring road network. The API now filters alerts
+             by street name — a stricter and more meaningful test than distance,
+             since it reads the road Waze itself named.
+
+             Testing them twice reintroduced a disagreement rather than
+             preventing one: the tolerance is 200 m, and a report on a road
+             labelled "North Luzon Expressway S" measured 214 m off the
+             centreline. The sidebar counted it, this dropped it, and the two
+             tiles differed by one. GPS scatter on a 60 m carriageway is not
+             evidence of a different road.
+
+             Jams keep the test. They are LineStrings that have to be snapped
+             onto the corridor to colour it, so their geometry has to be on it. */
+          if (kind !== "jam") return true;
           return onCorridor(f as Parameters<CorridorGuard["onCorridor"]>[0]);
         }),
       };

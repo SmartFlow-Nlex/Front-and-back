@@ -8,6 +8,7 @@ import {
   RefreshCw, ShieldAlert, TrendingUp, X,
 } from "lucide-react";
 import TrafficMapPanel from "./TrafficMapPanel";
+import { WAZE_REPORT_TYPES } from "../../lib/waze-reports";
 
 /**
  * Maximised view of the Waze panel.
@@ -36,6 +37,12 @@ type Overview = {
   alerts: {
     type: string; street: string | null; city: string | null;
     nearestExit: string; minutesAgo: number | null; reliability: number | null;
+    // Carried so a row can hand the map a position and the same record the pin
+    // shows. metresFromExit is named for the panel's "N m away" line.
+    uuid: string | null; lon: number | null; lat: number | null;
+    subtype: string | null; confidence: number | null; reportRating: number | null;
+    roadType: number | null; byMunicipality: boolean | null; heading: number | null;
+    metresFromExit: number | null; publishedAt: string | null;
   }[];
   timeline: { at: string; avgSpeedKmh: number; jams: number }[];
   feed: { jamsAgeMinutes: number | null; alertsAgeMinutes: number | null; stale: boolean };
@@ -173,7 +180,13 @@ export default function WazeLiveModal({ open, onClose }: { open: boolean; onClos
                   </div>
                 ))}
                 <h4 className="wz-legend-gap">Waze reports</h4>
-                {Object.entries(ALERT_LOOK).slice(0, 5).map(([k, v]) => {
+                {/* Driven by WAZE_REPORT_TYPES rather than the first five keys
+                    of ALERT_LOOK. The slice used to name "Traffic jam" — which
+                    is density, already covered by the levels above — while
+                    omitting Hazard, the single most common report on this
+                    corridor. The key now lists exactly what is drawn. */}
+                {WAZE_REPORT_TYPES.map((k) => {
+                  const v = lookOf(k);
                   const Icon = v.icon;
                   return (
                     <div key={k} className="wz-legend-row">
@@ -226,14 +239,50 @@ export default function WazeLiveModal({ open, onClose }: { open: boolean; onClos
                   {(data?.alerts ?? []).slice(0, 6).map((a, i) => {
                     const look = lookOf(a.type);
                     const Icon = look.icon;
+                    /* A row is a button, not decoration: it points at a real
+                       place on the map. The map owns both the camera and the
+                       detail panel, so the record travels to it on an event
+                       rather than being lifted into shared state here. */
+                    const locatable = a.lon != null && a.lat != null;
                     return (
-                      <li key={`${a.type}-${a.nearestExit}-${i}`}>
-                        <span className={`wz-chip ${look.tone}`}><Icon size={12} /></span>
-                        <span className="wz-alert-text">
-                          <b>{look.label}</b>
-                          <em>{a.street ?? a.city ?? a.nearestExit} · near {a.nearestExit}</em>
-                        </span>
-                        <span className="wz-alert-age">{agoText(a.minutesAgo)}</span>
+                      <li key={a.uuid ?? `${a.type}-${a.nearestExit}-${i}`}>
+                        <button
+                          type="button"
+                          className="wz-alert-row"
+                          disabled={!locatable}
+                          title={locatable ? "Show this report on the map" : "Waze gave no position for this report"}
+                          onClick={() => {
+                            window.dispatchEvent(
+                              new CustomEvent("nlex:showreport", {
+                                detail: {
+                                  type: a.type,
+                                  subtype: a.subtype,
+                                  street: a.street,
+                                  city: a.city,
+                                  nearest_exit: a.nearestExit,
+                                  exit_distance_m: a.metresFromExit,
+                                  reliability: a.reliability,
+                                  confidence: a.confidence,
+                                  report_rating: a.reportRating,
+                                  road_type: a.roadType,
+                                  by_municipality: a.byMunicipality,
+                                  heading: a.heading,
+                                  reported_at: a.publishedAt,
+                                  uuid: a.uuid,
+                                  lon: a.lon,
+                                  lat: a.lat,
+                                },
+                              }),
+                            );
+                          }}
+                        >
+                          <span className={`wz-chip ${look.tone}`}><Icon size={12} /></span>
+                          <span className="wz-alert-text">
+                            <b>{look.label}</b>
+                            <em>{a.street ?? a.city ?? a.nearestExit} · near {a.nearestExit}</em>
+                          </span>
+                          <span className="wz-alert-age">{agoText(a.minutesAgo)}</span>
+                        </button>
                       </li>
                     );
                   })}

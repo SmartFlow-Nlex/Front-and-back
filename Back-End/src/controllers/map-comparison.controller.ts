@@ -1,4 +1,5 @@
 import type { Request, Response } from "express";
+import { getLiveCorridorOverview, getLiveMapGeoJson } from "../services/map-live.service.js";
 import { z } from "zod";
 import { searchExitsInDb, getForecastCongestionFromDb } from "../services/map-comparison.service.js";
 import { ExitSearchSchema } from "../validators/map-comparison.validator.js";
@@ -103,9 +104,12 @@ function isNlexCorridor(street: string): boolean {
 
 // [DEV-01, DEV-03] GET /api/v1/map-comparison/real-time
 export const getMapRealtime = async (_req: Request, res: Response) => {
+  // The warehouse is the reliable source: the Redis keys authenticate but hold
+  // zero records, so anything served from them draws an empty corridor. Redis is
+  // still tried first in case the ingester starts filling it again.
   const redis = redisConfig();
   if (!redis) {
-    return res.json(fallbackRealtime);
+    return res.json(await getLiveMapGeoJson());
   }
 
   try {
@@ -193,13 +197,22 @@ export const getMapRealtime = async (_req: Request, res: Response) => {
       }
     }
 
+    // The jam lines are what makes this a traffic map, so the test is whether
+    // Redis produced any — not whether it produced anything at all. It currently
+    // returns a couple of alerts and no jams, which would draw two dots over a
+    // corridor that actually has fifty jams on it.
+    const redisJams = features.filter((f) => f?.properties?.feature_type === "jam").length;
+    if (redisJams === 0) {
+      return res.json(await getLiveMapGeoJson());
+    }
+
     res.json({
       type: "FeatureCollection",
       features,
     });
   } catch (error) {
     console.error("Failed to fetch Waze data from Upstash Redis in Backend:", error);
-    res.json(fallbackRealtime);
+    res.json(await getLiveMapGeoJson());
   }
 };
 
@@ -237,3 +250,19 @@ export const searchExits = async (req: Request, res: Response) => {
   res.status(503).json({ success: false, message: "Exit list unavailable: database not reachable" });
 };
 
+
+/**
+ * Live corridor overview for the Waze panel's sidebar.
+ *
+ * Reads the warehouse rather than Redis. The Redis path behind /real-time
+ * authenticates but its keys hold zero records, so anything built on it renders
+ * empty; the same feed is landing in silver.fact_waze_jams and
+ * bronze.waze_raw_alerts every few minutes.
+ */
+export async function getMapLiveOverview(_req: Request, res: Response) {
+  const data = await getLiveCorridorOverview();
+  if (!data) {
+    return res.status(503).json({ success: false, message: "Database is not configured" });
+  }
+  res.json({ success: true, data });
+}

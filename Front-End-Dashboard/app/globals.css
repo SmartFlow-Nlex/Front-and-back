@@ -4478,24 +4478,60 @@ body {
 .mc-dot.green { background: var(--color-success); box-shadow: 0 0 8px var(--color-success); }
 .mc-dot.purple { background: var(--color-purple); }
 
+/* The legend is a <details>. Open, it listed fourteen rows and covered half
+   the map in the side-by-side panels — the reference layout can afford that
+   because it is full-screen, this one cannot. Closed it is a chip, so the
+   reader chooses between the key and the corridor instead of losing the
+   corridor by default. */
 .mc-legend-card {
   position: absolute;
   bottom: 16px;
   left: 16px;
-  background: rgba(255, 255, 255, 0.95);
+  background: var(--bg-surface);
   backdrop-filter: blur(8px);
-  padding: 16px;
+  border: 1px solid var(--border-default);
   border-radius: var(--radius-md);
   box-shadow: var(--shadow-lg);
   z-index: 10;
-  min-width: 180px;
+  max-width: 250px;
+  max-height: calc(100% - 32px);
+  overflow-y: auto;
 }
 
-.mc-legend-section h4 {
-  font-size: 0.8rem;
+.mc-legend-card > summary {
+  list-style: none;
+  cursor: pointer;
+  padding: 8px 12px;
+  font-size: 0.75rem;
   font-weight: 700;
   color: var(--text-primary);
-  margin: 0 0 12px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  user-select: none;
+}
+.mc-legend-card > summary::-webkit-details-marker { display: none; }
+.mc-legend-card > summary::before {
+  content: "\25B8";
+  font-size: 0.7rem;
+  color: var(--text-secondary);
+  transition: transform 0.15s ease;
+}
+.mc-legend-card[open] > summary::before { transform: rotate(90deg); }
+.mc-legend-card[open] > summary { border-bottom: 1px solid var(--border-default); }
+.mc-legend-card > summary:hover { background: var(--bg-surface-hover); }
+
+/* Only the open card needs the padding; the chip would look bloated with it. */
+.mc-legend-card[open] > .mc-legend-section:first-of-type { padding-top: 10px; }
+.mc-legend-card > .mc-legend-section { padding: 0 12px 10px; }
+
+.mc-legend-section h4 {
+  font-size: 0.72rem;
+  font-weight: 700;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  margin: 0 0 6px;
   display: flex;
   align-items: center;
   gap: 6px;
@@ -4530,6 +4566,27 @@ body {
 .mc-density-line.yellow { background: #eab308; }
 .mc-density-line.orange { background: #f97316; }
 .mc-density-line.red { background: var(--color-danger); }
+.mc-dir-chip {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  border-radius: 4px;
+  background: var(--bg-surface-hover);
+  color: var(--text-secondary);
+  font-size: 9px;
+  transform: rotate(-90deg);
+}
+.mc-dir-chip.flip { transform: rotate(90deg); }
+
+/* "Not reported" — deliberately unlike every congestion colour, because it is
+   not a traffic condition. Matches PALETTE.noData in lib/map-palette.ts. */
+.mc-density-line.nodata { background: #cbd5e1; }
+:root[data-theme="dark"] .mc-density-line.nodata { background: #475569; }
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .mc-density-line.nodata { background: #475569; }
+}
 .mc-density-line.p-low { background: #e9d5ff; }
 .mc-density-line.p-med { background: #d8b4fe; }
 .mc-density-line.p-high { background: #a855f7; }
@@ -5093,3 +5150,375 @@ body {
 :root[data-theme="dark"] .viz-traffic   { --kpi-1: #5b8fe6; --kpi-2: #a8c8f8; --kpi-3: #2f5fba; }
 :root[data-theme="dark"] .viz-incident  { --kpi-1: #d18f18; --kpi-2: #f2c94c; --kpi-3: #9d5d0d; }
 :root[data-theme="dark"] .viz-emissions { --kpi-1: #23a55a; --kpi-2: #6ed99a; --kpi-3: #12703a; }
+
+/* ===========================================================================
+   WAZE LIVE — maximised view
+
+   Dark chrome around a full-bleed map, with the corridor overview beside it.
+   The header stays dark in both themes on purpose: it frames a map, not the page.
+   =========================================================================== */
+
+.wz-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 1200;
+  display: grid;
+  place-items: center;
+  padding: 18px;
+  background: rgba(4, 12, 28, 0.66);
+  backdrop-filter: blur(3px);
+  animation: wzIn 150ms ease-out;
+}
+@keyframes wzIn { from { opacity: 0; } to { opacity: 1; } }
+
+.wz-shell {
+  display: flex;
+  flex-direction: column;
+  width: min(1560px, 100%);
+  height: min(940px, 100%);
+  border-radius: 16px;
+  overflow: hidden;
+  background: var(--bg-surface);
+  box-shadow: 0 24px 70px rgba(2, 10, 26, 0.5);
+}
+
+/* --- header --------------------------------------------------------------- */
+.wz-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 12px 18px;
+  background: #0d1b34;
+  color: #fff;
+}
+.wz-brand { display: flex; align-items: center; gap: 12px; }
+.wz-mark {
+  display: grid;
+  place-items: center;
+  width: 36px;
+  height: 36px;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.12);
+  font-size: 1.1rem;
+}
+.wz-head h2 { margin: 0; font-size: 1.02rem; font-weight: 700; }
+.wz-head p { margin: 1px 0 0; font-size: 0.72rem; color: rgba(255, 255, 255, 0.6); }
+
+.wz-head-right { display: flex; align-items: center; gap: 8px; }
+.wz-live {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 6px 12px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.1);
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+}
+.wz-live i { width: 7px; height: 7px; border-radius: 50%; background: #35d07f; }
+.wz-live.stale i { background: var(--color-warning); }
+.wz-live b { font-weight: 600; color: rgba(255, 255, 255, 0.85); font-variant-numeric: tabular-nums; }
+
+.wz-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 13px;
+  border-radius: 9px;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  background: rgba(255, 255, 255, 0.08);
+  color: #fff;
+  font: inherit;
+  font-size: 0.76rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 140ms ease;
+}
+.wz-btn:hover:not(:disabled) { background: rgba(255, 255, 255, 0.16); }
+.wz-btn:disabled { opacity: 0.5; cursor: progress; }
+.wz-close { padding: 7px 9px; }
+.wz-spin { animation: wzSpin 900ms linear infinite; }
+@keyframes wzSpin { to { transform: rotate(360deg); } }
+
+/* --- body ----------------------------------------------------------------- */
+.wz-body {
+  flex: 1;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 372px;
+  min-height: 0;
+}
+.wz-map { position: relative; min-width: 0; }
+.wz-map .map-card.chromeless {
+  height: 100%;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+}
+.wz-map .map-canvas-container,
+.wz-map .map-canvas { height: 100%; }
+
+.wz-legend {
+  position: absolute;
+  top: 14px;
+  left: 14px;
+  z-index: 5;
+  padding: 12px 14px;
+  border-radius: 12px;
+  background: var(--bg-surface);
+  border: 1px solid var(--border-default);
+  box-shadow: var(--shadow-md);
+  font-size: 0.73rem;
+}
+.wz-legend h4 { margin: 0 0 7px; font-size: 0.72rem; font-weight: 700; color: var(--text-primary); }
+.wz-legend-gap { margin-top: 12px; }
+.wz-legend-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 2.5px 0;
+  color: var(--text-secondary);
+}
+
+/* Density hues are fixed: they mean the same thing in both themes. */
+.wz-line { width: 22px; height: 4px; border-radius: 2px; flex: none; }
+/* Colour is set inline from the shared LEVELS table so the legend cannot drift
+   from the Mapbox paint expression it describes. */
+
+.wz-chip {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  color: #fff;
+}
+.wz-chip.red { background: #ef4444; }
+.wz-chip.darkred { background: #b91c1c; }
+.wz-chip.orange { background: #f97316; }
+.wz-chip.blue { background: #3b82f6; }
+.wz-chip.yellow { background: #eab308; }
+
+/* --- sidebar -------------------------------------------------------------- */
+.wz-side {
+  border-left: 1px solid var(--border-default);
+  background: var(--bg-surface);
+  padding: 16px 18px 18px;
+  overflow-y: auto;
+}
+.wz-side-title { margin: 0 0 14px; font-size: 1rem; font-weight: 700; color: var(--text-primary); }
+
+.wz-kpis { display: grid; grid-template-columns: repeat(3, 1fr); gap: 9px; }
+.wz-kpi {
+  padding: 10px 11px;
+  border-radius: 11px;
+  border: 1px solid var(--border-default);
+  background: var(--bg-surface-hover);
+}
+.wz-kpi.speed { border-color: var(--color-success-border); background: var(--color-success-bg); }
+.wz-kpi.reports { border-color: var(--color-info-border); background: var(--color-info-bg); }
+.wz-kpi.delay { border-color: var(--color-warning-border); background: var(--color-warning-bg); }
+.wz-kpi-label {
+  display: block;
+  font-size: 0.63rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-muted);
+}
+.wz-kpi-value {
+  display: flex;
+  align-items: baseline;
+  gap: 5px;
+  margin-top: 4px;
+  font-size: 1.16rem;
+  font-weight: 800;
+  color: var(--text-primary);
+  font-variant-numeric: tabular-nums;
+}
+.wz-kpi-value em { font-size: 0.66rem; font-style: normal; font-weight: 600; color: var(--text-muted); }
+.wz-kpi-value svg { margin-left: auto; opacity: 0.55; }
+
+.wz-sec { margin: 16px 0 8px; font-size: 0.8rem; font-weight: 700; color: var(--text-primary); }
+
+.wz-density { position: relative; height: 9px; }
+.wz-density-bar {
+  display: block;
+  height: 9px;
+  border-radius: 999px;
+  background: linear-gradient(to right, #22c55e, #eab308, #f97316, #ef4444);
+}
+.wz-density-mark {
+  position: absolute;
+  top: -4px;
+  width: 3px;
+  height: 17px;
+  margin-left: -1.5px;
+  border-radius: 2px;
+  background: var(--text-primary);
+  box-shadow: 0 0 0 2px var(--bg-surface);
+}
+.wz-note { margin: 8px 0 0; font-size: 0.73rem; color: var(--text-muted); }
+
+.wz-alerts { list-style: none; margin: 0; padding: 0; }
+.wz-alerts li {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--border-default);
+}
+.wz-alerts li:last-child { border-bottom: 0; }
+.wz-alert-text { display: flex; flex-direction: column; min-width: 0; }
+.wz-alert-text b { font-size: 0.78rem; font-weight: 650; color: var(--text-primary); }
+.wz-alert-text em {
+  font-style: normal;
+  font-size: 0.7rem;
+  color: var(--text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.wz-alert-age {
+  margin-left: auto;
+  flex: none;
+  font-size: 0.68rem;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+.wz-empty-row,
+.wz-empty { font-size: 0.75rem; font-style: italic; color: var(--text-muted); }
+
+.wz-worst {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  margin-top: 14px;
+  padding: 11px 13px;
+  border: 1px solid var(--color-danger-border);
+  border-radius: 11px;
+  background: var(--color-danger-bg);
+}
+.wz-worst-head {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.68rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--color-danger);
+}
+.wz-worst b { font-size: 0.92rem; color: var(--text-primary); }
+.wz-worst-speed { font-size: 0.72rem; color: var(--text-muted); }
+
+.wz-updated { margin: 14px 0 0; font-size: 0.68rem; color: var(--text-muted); }
+
+/* --- timeline ------------------------------------------------------------- */
+.wz-timeline {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 10px 18px;
+  border-top: 1px solid var(--border-default);
+  background: var(--bg-surface-hover);
+}
+.wz-timeline-label { flex: none; font-size: 0.68rem; font-weight: 600; color: var(--text-muted); }
+.wz-spark { flex: 1; display: flex; align-items: flex-end; gap: 3px; height: 40px; }
+.wz-spark-bar { flex: 1; border-radius: 2px 2px 0 0; min-height: 4px; }
+.wz-spark-bar.light { background: #22c55e; }
+.wz-spark-bar.moderate { background: #eab308; }
+.wz-spark-bar.heavy { background: #f97316; }
+.wz-spark-bar.severe { background: #ef4444; }
+
+/* --- the trigger on the panel --------------------------------------------- */
+.mc-maximise {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 11px;
+  border: 1px solid rgba(255, 255, 255, 0.22);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.1);
+  color: #fff;
+  font: inherit;
+  font-size: 0.72rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 140ms ease;
+}
+.mc-maximise:hover { background: rgba(255, 255, 255, 0.2); }
+.mc-maximise:focus-visible { outline: 2px solid #fff; outline-offset: 2px; }
+
+@media (max-width: 1100px) {
+  .wz-body { grid-template-columns: 1fr; grid-template-rows: minmax(280px, 1fr) auto; }
+  .wz-side { border-left: 0; border-top: 1px solid var(--border-default); max-height: 44vh; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .wz-backdrop { animation: none; }
+  .wz-spin { animation: none; }
+}
+
+
+/* ---------------------------------------------------------------------------
+   Live map markers.
+
+   Twenty exit pins with permanent labels collided into an unreadable stack
+   wherever the exits bunch up, which is most of the southern corridor. The pin
+   is now a small dot and the name appears on hover, so the road stays readable
+   and the label is still one pointer-move away.
+   ------------------------------------------------------------------------- */
+.toll-pin {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+
+.toll-pin-dot {
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: var(--bg-surface);
+  border: 2px solid #0e7490;
+  color: #0e7490;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 2px 6px rgba(15, 23, 42, 0.25);
+  transition: transform 0.14s ease, box-shadow 0.14s ease;
+}
+
+.toll-pin:hover .toll-pin-dot {
+  transform: scale(1.25);
+  box-shadow: 0 4px 12px rgba(14, 116, 144, 0.45);
+}
+
+.toll-pin-label {
+  position: absolute;
+  bottom: calc(100% + 6px);
+  left: 50%;
+  transform: translateX(-50%) translateY(3px);
+  padding: 3px 7px;
+  border-radius: 6px;
+  background: var(--bg-inverse, #0f172a);
+  color: #f8fafc;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.14s ease, transform 0.14s ease;
+  box-shadow: 0 4px 12px rgba(15, 23, 42, 0.35);
+  z-index: 5;
+}
+
+.toll-pin:hover .toll-pin-label {
+  opacity: 1;
+  transform: translateX(-50%) translateY(0);
+}

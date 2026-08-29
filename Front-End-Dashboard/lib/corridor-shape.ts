@@ -8,24 +8,28 @@
  * the two is what makes the map read as a road: the feed says WHAT, this says
  * WHERE.
  *
- * The catch is that the JSON is not a path. It is 2,559 points of raw OSM
- * motorway geometry — both carriageways plus ramps, concatenated in whatever
- * order the ways came back, with 47 gaps over 400 m and 65 changes of direction.
- * Walking it end to end covers 196.6 km of a 76.25 km road, so slicing it
- * directly draws the corridor as a doubling-back tangle.
+ * The JSON used to be a raw dump — 2,559 points of OSM motorway geometry, both
+ * carriageways plus ramps, in whatever order the ways came back, walking 196.6 km
+ * of a 76.25 km road. Slicing that directly drew the corridor as a doubling-back
+ * tangle, so it was resampled: project every point onto the chain of exits to get
+ * a distance along the corridor, drop anything more than CORRIDOR_HALF_WIDTH_M to
+ * the side as a ramp, bin the survivors by distance and collapse each bin to its
+ * median. Order then came from the bin index rather than the file, which is what
+ * made the result monotonic.
  *
- * So it is resampled rather than sliced. Every point is projected onto the chain
- * of exits to get a distance along the corridor; anything more than
- * CORRIDOR_HALF_WIDTH_M off to the side is a ramp or a frontage road and is
- * dropped; the survivors are binned by that distance and each bin collapses to
- * its median position. Order along the corridor then comes from the bin index,
- * not from the file, which is what makes the result monotonic. Two smoothing
- * passes take out the bin-to-bin jitter.
+ * The file is now a proper centreline instead: the two OSM carriageways chained
+ * end to end and averaged into one ordered path, 542 points running south to
+ * north. The resampling still runs — it is what produces the exit cuts, and it
+ * costs nothing on an input that is already clean — but the smoothing it used to
+ * need is gone.
  *
- * Measured against the km-posts: the rebuilt centreline runs 77.4 km against the
- * corridor's 76.25, and all nineteen segments land within tolerance of their
- * expected length. The residual ~1.5% is the resampling, and is invisible at any
- * zoom the map is read at.
+ * That smoothing was the accuracy problem. It existed to damp the jitter of a bin
+ * holding points from both carriageways, and on the raw dump it helped. On a
+ * clean centreline it only cuts corners: measured against the true road, two
+ * passes put the drawn corridor 34 m out at the median and 604 m at worst, with
+ * 39% of it within 25 m. With none, the same input lands 0 m out at the median,
+ * 40 m at worst, and 99% within 25 m. Rebuilt length is 76.83 km against the
+ * corridor's 76.25 km of km-posts.
  */
 
 export type LngLat = [number, number];
@@ -34,12 +38,19 @@ export type LngLat = [number, number];
 const CORRIDOR_HALF_WIDTH_M = 250;
 /** Resampling interval. Fine enough to hold every curve, coarse enough to smooth. */
 const BIN_M = 60;
-const SMOOTHING_PASSES = 2;
+/**
+ * Zero because nlex-geometry.json is now an ordered centreline rather than a raw
+ * two-carriageway dump. There is no bin-to-bin jitter left to damp, and each pass
+ * pulls the line off the curves it is meant to trace — see the note at the top of
+ * this file for the measured cost. Restore this to 2 if the geometry file is ever
+ * replaced with a raw OSM dump again.
+ */
+const SMOOTHING_PASSES = 0;
 
 // Metres per degree near 15°N. The corridor spans half a degree, so a fixed
 // scale here is accurate to well under the width of the road.
-const M_PER_DEG_LAT = 110574;
-const M_PER_DEG_LON = 111320 * Math.cos((15 * Math.PI) / 180);
+export const M_PER_DEG_LAT = 110574;
+export const M_PER_DEG_LON = 111320 * Math.cos((15 * Math.PI) / 180);
 
 type XY = [number, number];
 const toXY = (p: LngLat): XY => [p[0] * M_PER_DEG_LON, p[1] * M_PER_DEG_LAT];

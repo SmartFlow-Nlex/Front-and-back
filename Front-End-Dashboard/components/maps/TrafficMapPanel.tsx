@@ -5,7 +5,8 @@ import mapboxgl, { GeoJSONSource } from "mapbox-gl";
 import type { Point } from "geojson";
 import { useEffect, useRef, useState } from "react";
 import nlexGeometry from "./nlex-geometry.json";
-import { corridorGuard, sliceCorridor, type LngLat } from "../../lib/corridor-shape";
+import interchangeGeometry from "./nlex-interchange.json";
+import { corridorGuard, sliceCorridor, M_PER_DEG_LAT, M_PER_DEG_LON, type LngLat } from "../../lib/corridor-shape";
 import { FALLBACK_EXITS } from "../../lib/nlex-exits";
 import { useChartTheme } from "../../lib/chart-theme";
 import { mapPalette } from "../../lib/map-palette";
@@ -396,6 +397,72 @@ export default function TrafficMapPanel({ title, subtitle, badge, endpoint, laye
       };
     };
 
+    /* Colour the interchange from the jams actually reported on it.
+
+       The junction has no segment in dim_location, so the corridor's own
+       colouring cannot reach it — which is why it was drawn flat grey. But the
+       feed does describe it: a live sample carried 14 jams within 120 m of this
+       geometry, on streets Waze names "E5: NLEX On-Ramp / Entry", "E5: NLEX East
+       Mindanao Ave Exit" and "NLEX Harbor Link Interchange Service Road".
+
+       Each ramp takes the worst level among the jams nearest it, matching how
+       the corridor resolves two jams overlapping one segment. A ramp with no jam
+       near it keeps NO_READING and stays grey: silence here is not a claim of
+       free flow, because unlike the mainline nothing sweeps these ramps
+       continuously. */
+    const INTERCHANGE_MATCH_M = 120;
+    const metresBetween = (a: number[], b: number[]) => {
+      const dx = (a[0] - b[0]) * M_PER_DEG_LON;
+      const dy = (a[1] - b[1]) * M_PER_DEG_LAT;
+      return Math.hypot(dx, dy);
+    };
+
+    /* Colour the junction the way the corridor colours itself.
+
+       Each ramp takes the worst level among the jams within
+       INTERCHANGE_MATCH_M of it — the same "worst wins" rule the corridor uses
+       where two jams overlap one segment.
+
+       A stretch with no jam near it is drawn as free flow, not as unknown, for
+       exactly the reason the corridor does the same: Waze only ever publishes
+       congestion, so on the live feed silence means the road is moving. The
+       forecast endpoint is the opposite — it covers a few segments and says
+       nothing about the rest — so there silence stays NO_READING and the
+       junction draws grey. */
+    const interchangeWithState = (fc: GeoJSON.FeatureCollection): GeoJSON.FeatureCollection => {
+      const base = interchangeGeometry as GeoJSON.FeatureCollection;
+      const unreported = isRealtimeEndpoint ? 0 : NO_READING;
+      const jamPoints: { at: number[]; level: number }[] = [];
+      for (const f of fc.features ?? []) {
+        const q = f.properties as Record<string, unknown> | null;
+        if (q?.feature_type !== "jam" || f.geometry?.type !== "LineString") continue;
+        const cs = f.geometry.coordinates as number[][];
+        if (!cs.length) continue;
+        jamPoints.push({ at: cs[Math.floor(cs.length / 2)], level: Number(q.level ?? 0) });
+      }
+
+      return {
+        ...base,
+        features: base.features.map((f) => {
+          let level = NO_READING;
+          if (f.geometry?.type === "LineString") {
+            const cs = f.geometry.coordinates as number[][];
+            for (const j of jamPoints) {
+              let closest = Infinity;
+              for (const c of cs) {
+                const d = metresBetween(c, j.at);
+                if (d < closest) closest = d;
+              }
+              if (closest <= INTERCHANGE_MATCH_M) {
+                level = level === NO_READING ? j.level : Math.max(level, j.level);
+              }
+            }
+          }
+          return { ...f, properties: { ...f.properties, level: level === NO_READING ? unreported : level } };
+        }),
+      };
+    };
+
     map.on("load", async () => {
       const response = await fetch(endpoint, { cache: "no-store" });
       const data = onlyOnCorridor(await response.json());
@@ -411,6 +478,28 @@ export default function TrafficMapPanel({ title, subtitle, badge, endpoint, laye
       map.addSource("nlex-corridor", {
         type: "geojson",
         data: corridorWithState(data),
+      });
+
+      /* The Smart Connect interchange, at km 1.83.
+
+         This is the cloverleaf where the NLEX mainline crosses E5 — Harbor Link
+         running west toward C3, the Mindanao Avenue Link running east. Our data
+         calls the junction "NLEX Harbor Link" and, until now, drew it as a plain
+         stretch of mainline with a toll marker on it: a crossroads rendered as a
+         straight line.
+
+         53 ways from OSM: 34 ramp links (the four loops and the direct
+         connectors) plus the crossing carriageways. The NLEX mainline itself is
+         excluded — it is already drawn from nlex-geometry.json, and including it
+         here would double its casing and fight the corridor's own colours.
+
+         Deliberately local. An earlier attempt drew the whole 8 km Harbor Link
+         branch across the map, which read as a second corridor competing with
+         the one the dashboard is about. This is the junction and its immediate
+         approaches, nothing more. */
+      map.addSource("nlex-interchange", {
+        type: "geojson",
+        data: interchangeWithState(data),
       });
 
       /* Push the base map back. A background layer added before ours sits over
@@ -484,6 +573,55 @@ export default function TrafficMapPanel({ title, subtitle, badge, endpoint, laye
         },
       });
 
+      /* Drawn only from zoom 11.5 up. At corridor zoom the whole interchange
+         is a few pixels across, where the loops collapse into a blot that reads
+         as a rendering fault; the fade-in means it appears exactly when there is
+         room for its shape to be read. Casing then roadway, the same idiom as
+         the mainline, so it belongs to the same map — but thinner, because a
+         ramp is not a carriageway and should not claim equal weight. */
+      map.addLayer({
+        id: "interchange-casing",
+        type: "line",
+        source: "nlex-interchange",
+        layout: { "line-join": "round", "line-cap": "round" },
+        paint: {
+          "line-color": PALETTE.casing,
+          "line-width": [
+            "interpolate", ["linear"], ["zoom"],
+            11.5, ["case", ["==", ["get", "kind"], "ramp"], 2.5, 4],
+            16, ["case", ["==", ["get", "kind"], "ramp"], 8, 12],
+          ],
+          "line-opacity": ["interpolate", ["linear"], ["zoom"], 11.5, 0, 12.2, 1],
+        },
+      });
+
+      map.addLayer({
+        id: "interchange-roadway",
+        type: "line",
+        source: "nlex-interchange",
+        layout: { "line-join": "round", "line-cap": "round" },
+        paint: {
+          // Same scale the corridor uses, so a red ramp and a red carriageway
+          // mean the same thing. NO_READING falls through to grey.
+          "line-color": [
+            "match", ["get", "level"],
+            0, PALETTE.level[0],
+            1, PALETTE.level[1],
+            2, PALETTE.level[2],
+            3, PALETTE.level[3],
+            4, PALETTE.level[4],
+            5, PALETTE.level[5],
+            PALETTE.noData,
+          ],
+          "line-width": [
+            "interpolate", ["linear"], ["zoom"],
+            11.5, ["case", ["==", ["get", "kind"], "ramp"], 1.2, 2.2],
+            16, ["case", ["==", ["get", "kind"], "ramp"], 4.5, 7],
+          ],
+          "line-opacity": ["interpolate", ["linear"], ["zoom"], 11.5, 0, 12.2, 1],
+        },
+      });
+
       /* Flow. A pale dash travelling along each ribbon, so the corridor reads
          as moving traffic rather than a static coloured band.
 
@@ -529,6 +667,38 @@ export default function TrafficMapPanel({ title, subtitle, badge, endpoint, laye
             },
           });
         }
+      }
+
+      /* Flow across the junction, so the ramps move like the road they join.
+
+         One layer per speed tier and no direction split, unlike the mainline.
+         The mainline needs two because both carriageways share one centreline
+         and are told apart by a line-offset; here every way is a separate
+         one-way piece of OSM geometry drawn where it really is, so a dash
+         marching forward along each way already runs the way its traffic does.
+
+         No line-offset for the same reason — these are the real carriageways,
+         not one line pretending to be two. */
+      for (const tier of FLOW_TIERS) {
+        map.addLayer({
+          id: `interchange-flow-${tier.id}`,
+          type: "line",
+          source: "nlex-interchange",
+          layout: { "line-join": "round", "line-cap": "butt" },
+          filter: ["in", ["get", "level"], ["literal", tier.levels]],
+          paint: {
+            "line-color": PALETTE.arrow,
+            "line-width": [
+              "interpolate", ["linear"], ["zoom"],
+              11.5, ["case", ["==", ["get", "kind"], "ramp"], 0.6, 1.1],
+              16, ["case", ["==", ["get", "kind"], "ramp"], 2.2, 3.4],
+            ],
+            // Fades in with the junction itself, so the dashes never appear over
+            // a road that has not been drawn yet.
+            "line-opacity": ["interpolate", ["linear"], ["zoom"], 11.5, 0, 12.2, tier.opacity],
+            "line-dasharray": [0, 4, 3],
+          },
+        });
       }
 
       /* Direction of travel. Chevrons rather than triangles: under line
@@ -1139,8 +1309,12 @@ export default function TrafficMapPanel({ title, subtitle, badge, endpoint, laye
           try {
             const nb = `carriageway-flow-nb-${tier.id}`;
             const sb = `carriageway-flow-sb-${tier.id}`;
+            const ic = `interchange-flow-${tier.id}`;
             if (map.getLayer(nb)) map.setPaintProperty(nb, "line-dasharray", forward);
             if (map.getLayer(sb)) map.setPaintProperty(sb, "line-dasharray", back);
+            // Forward: each ramp's geometry already points downstream, so it
+            // needs no counterpart the way the offset carriageways do.
+            if (map.getLayer(ic)) map.setPaintProperty(ic, "line-dasharray", forward);
           } catch {
             // Layer went away underneath us; the next frame will find it gone too.
           }
@@ -1161,6 +1335,12 @@ export default function TrafficMapPanel({ title, subtitle, badge, endpoint, laye
           source.setData(fresh);
           (map.getSource("nlex-corridor") as GeoJSONSource | undefined)?.setData(
             corridorWithState(fresh),
+          );
+          // The junction re-reads the same refreshed feed, so a ramp turning red
+          // and the corridor turning red happen in one tick rather than the two
+          // drifting apart between polls.
+          (map.getSource("nlex-interchange") as GeoJSONSource | undefined)?.setData(
+            interchangeWithState(fresh),
           );
           if (isRealtime) {
             renderAlerts(fresh);

@@ -5,25 +5,34 @@ import mapboxgl, { GeoJSONSource } from "mapbox-gl";
 import type { Point } from "geojson";
 import { useEffect, useRef, useState } from "react";
 import nlexGeometry from "./nlex-geometry.json";
-import nlexRamps from "./nlex-ramps.json";
+import { corridorGuard, sliceCorridor, type LngLat } from "../../lib/corridor-shape";
+import { FALLBACK_EXITS } from "../../lib/nlex-exits";
+import { useChartTheme } from "../../lib/chart-theme";
+import { mapPalette } from "../../lib/map-palette";
+import { isReportType } from "../../lib/waze-reports";
 
 type Props = {
   title: string;
   subtitle: string;
-  badge: React.ReactNode;
+  badge?: React.ReactNode;
+  /** Hides the panel's own header — used when a parent supplies one. */
+  chromeless?: boolean;
   endpoint: string;
   layerColor: string;
   tone: "blue" | "purple";
   children?: React.ReactNode;
 };
 
-export default function TrafficMapPanel({ title, subtitle, badge, endpoint, layerColor, tone, children }: Props) {
+export default function TrafficMapPanel({ title, subtitle, badge, endpoint, layerColor, tone, children, chromeless = false }: Props) {
+  // Reuses the charts' theme hook, so the map switches with everything else.
+  const { isDark } = useChartTheme();
   const mapRef = useRef<mapboxgl.Map | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
   const activeMarkers = useRef<mapboxgl.Marker[]>([]);
   const alertMarkersRef = useRef<mapboxgl.Marker[]>([]);
   const flyToHandlerRef = useRef<((e: Event) => void) | null>(null);
   const resetViewHandlerRef = useRef<(() => void) | null>(null);
+  const pollingRef = useRef<ReturnType<typeof setInterval> | null>(null);
   // "ok" once the map builds; otherwise show a graceful fallback instead of
   // letting Mapbox throw and take the whole page down.
   const [status, setStatus] = useState<"ok" | "no-token" | "error">("ok");
@@ -31,24 +40,40 @@ export default function TrafficMapPanel({ title, subtitle, badge, endpoint, laye
   useEffect(() => {
     if (!containerRef.current) return;
 
-    // A Mapbox public token always starts with "pk.". Checking only for a
-    // non-empty string is not enough: the committed .env ships a
-    // "YOUR_MAPBOX_PUBLIC_TOKEN_HERE" placeholder, which is truthy, so it slips
-    // past and Mapbox then fails at tile-fetch time with a 401. That failure is
-    // asynchronous, so the try/catch below never sees it and the panel sits
-    // blank with no explanation. Validate the shape up front instead.
-    const token = process.env.NEXT_PUBLIC_MAPBOX_TOKEN?.trim();
-    if (!token || !token.startsWith("pk.")) {
-      setStatus("no-token");
-      return;
-    }
+    const rawToken = process.env.NEXT_PUBLIC_MAPBOX_TOKEN?.trim();
+    const hasToken = Boolean(rawToken && rawToken.startsWith("pk."));
+    const token = hasToken ? rawToken! : "pk.eyJ1Ijoib3BlbiIsImEiOiJvcGVuIn0.open";
+
+    const PALETTE = mapPalette(isDark, hasToken);
+
+    /* Both directions share one centreline and are separated in screen pixels,
+       so each ribbon traces the identical real curve and the gap stays
+       proportional at every zoom. Northbound takes the positive side, which is
+       the side traffic keeps here.
+
+       A "zoom" expression may only appear at the top level of a step or
+       interpolate, so the interpolate has to be the outer expression and the
+       per-direction case has to sit inside each stop. Nesting it the other way
+       round -- one case choosing between two interpolates -- reads naturally
+       but fails style validation, and Mapbox throws out of addLayer. That abort
+       skipped every layer after it, which is why the corridor rendered as a
+       bare band with no colours and no jams on it. */
+    const side = (px: number) => [
+      "case", ["==", ["get", "direction"], "NB"], px, -px,
+    ];
+    const OFFSET = [
+      "interpolate", ["linear"], ["zoom"],
+      8, side(3.6),
+      12, side(7),
+      16, side(11),
+    ] as unknown as mapboxgl.ExpressionSpecification;
 
     mapboxgl.accessToken = token;
     let map: mapboxgl.Map;
     try {
       map = new mapboxgl.Map({
         container: containerRef.current,
-        style: "mapbox://styles/mapbox/light-v11", // Gray base map
+        style: PALETTE.style,
         center: [120.79, 14.94],
         zoom: 9.2,
         minZoom: 9.0, // Max zoom out restricted to this view
@@ -69,12 +94,10 @@ export default function TrafficMapPanel({ title, subtitle, badge, endpoint, laye
     setStatus("ok");
     mapRef.current = map;
 
-    // A syntactically valid but rejected token (revoked, wrong account, URL
-    // restriction not matching) only shows up here, as a 401 on the first tile
-    // or style request. Without this the panel would stay blank and silent.
+    // A syntactically valid but rejected token only shows up here
     map.on("error", (e: { error?: { status?: number; message?: string } }) => {
       const status = e?.error?.status;
-      if (status === 401 || status === 403) {
+      if (hasToken && (status === 401 || status === 403)) {
         console.error("Mapbox rejected the access token:", e.error?.message);
         setStatus("error");
       }
@@ -120,132 +143,321 @@ export default function TrafficMapPanel({ title, subtitle, badge, endpoint, laye
     });
     resizeObserver.observe(containerRef.current);
 
+    /* The API reports each segment's state but can only draw it as a straight
+       chord between exits, because that is all silver.dim_location stores. The
+       real alignment is in nlex-geometry.json, so the two are joined here: the
+       feed says WHAT each segment is doing, the local geometry says WHERE it
+       runs. Without this the ribbons cut corners across open country. */
+    const corridorLine = (nlexGeometry as unknown as { coordinates: LngLat[] }).coordinates;
+    const corridorExits = [...FALLBACK_EXITS]
+      .sort((a, b) => a.km - b.km)
+      .map((e) => [e.longitude, e.latitude] as LngLat);
+    const corridorParts = sliceCorridor(corridorLine, corridorExits);
+
+    /* The corridor as its own source: 19 segments x 2 directions, on the real
+       alignment, built here rather than taken from the feed.
+
+       It used to be drawn from whatever carriageway features the endpoint
+       returned, which meant the Forecast panel -- whose endpoint sends seven
+       named chords and no carriageways at all -- drew the corridor as a bare
+       grey band with no state on it. The road is a fact about NLEX, not about
+       one endpoint's payload, so it is built from geometry the client always
+       has and the feed only colours it in. */
+    // Shared with the page's stats, so the map and the counters agree on what
+    // counts as a report about NLEX. See lib/corridor-shape.ts.
+    const isRealtimeEndpoint = endpoint.includes("real-time");
+
+    const guard = corridorGuard(corridorLine, corridorExits);
+
+    /* Keeps only what is on NLEX, then puts each jam onto the corridor itself
+       rather than leaving it on the geometry Waze traced. See snap() in
+       lib/corridor-shape.ts for why. */
+    const onlyOnCorridor = (fc: GeoJSON.FeatureCollection): GeoJSON.FeatureCollection => {
+      const kept = guard.filter(fc);
+      return {
+        ...kept,
+        features: (kept.features ?? [])
+          /* Alerts are shown only for the categories the legend names, so the
+             map and the Active Reports tile cannot disagree about what a report
+             is. ROAD_CLOSED arrives in the feed and is dropped here. */
+          .filter((f) => {
+            const p = f.properties as { feature_type?: string; type?: unknown } | null;
+            return p?.feature_type !== "alert" || isReportType(p?.type);
+          })
+          .map((f) => {
+          const props = f.properties as { feature_type?: string } | null;
+          if (props?.feature_type !== "jam" || f.geometry?.type !== "LineString") return f;
+          const snapped = guard.snap(
+            f.geometry.coordinates as number[][],
+            (f.properties as { street?: string })?.street,
+          );
+          if (!snapped) return f;
+          return {
+            ...f,
+            properties: {
+              ...f.properties,
+              direction: snapped.direction,
+              direction_source: snapped.directionSource,
+            },
+            geometry: { type: "LineString", coordinates: snapped.coords } as GeoJSON.Geometry,
+          };
+        }),
+      };
+    };
+
+    /** Stands in for "the feed said nothing about this stretch". */
+    const NO_READING = -1;
+
+    const exitNames = [...FALLBACK_EXITS].sort((x, y) => x.km - y.km).map((e) => e.exit_name);
+
+    const corridorBase: GeoJSON.FeatureCollection = {
+      type: "FeatureCollection",
+      features: corridorParts.flatMap((coords, i) =>
+        (["NB", "SB"] as const).map((direction) => ({
+          type: "Feature" as const,
+          properties: {
+            segment_order: i + 1,
+            direction,
+            segment_name: exitNames[i] + " to " + exitNames[i + 1],
+            from_exit: exitNames[i],
+            to_exit: exitNames[i + 1],
+            /* A sentinel rather than null, because Mapbox expressions have no
+               null literal — comparing against one fails layer validation and
+               throws, which took the whole page down. It is replaced below with
+               a real level, or with free-flow where the source can justify it. */
+            level: NO_READING,
+          },
+          geometry: { type: "LineString" as const, coordinates: coords },
+        })),
+      ),
+    };
+
+    /* Which segments a stretch of centreline covers. The parts are joined with
+       their shared vertex dropped, so each part after the first advances the
+       index by its length minus one. */
+    const segmentBounds: { order: number; from: number; to: number }[] = [];
+    {
+      let at = 0;
+      corridorParts.forEach((part, i) => {
+        const to = at + part.length - 1;
+        segmentBounds.push({ order: i + 1, from: at, to });
+        at = to;
+      });
+    }
+
+    const segmentsSpanned = (from: number, to: number): number[] =>
+      segmentBounds.filter((b) => b.to >= from && b.from <= to).map((b) => b.order);
+
+    /** Waze levels for a forecast's categorical state. */
+    const FORECAST_LEVEL: Record<string, number> = { Low: 1, Medium: 3, High: 4, Severe: 5 };
+
+    /** Colours the corridor from whichever shape of state the endpoint sends. */
+    const corridorWithState = (fc: GeoJSON.FeatureCollection): GeoJSON.FeatureCollection => {
+      const bySegment = new Map<string, number>();
+
+      for (const f of fc.features ?? []) {
+        const q = f.properties as Record<string, unknown> | null;
+        if (!q) continue;
+
+        /* Live: coloured from the jams actually drawn on the map, not from the
+           backend's carriageway levels.
+
+           Those levels came from the backend matching every jam it received to
+           the nearest segment, including the ones off the corridor -- a live
+           sample had it colouring seven segments using jams on M. Villarica
+           Road, Pulilan Regional Road, the Santa Ana-Mexico road and the Tabang
+           spur. It also took direction from each jam's bearing, which put the
+           level 4 jam on "NLEX N San Fernando Exit" onto the southbound ribbon.
+           So the road was painted from reports about other roads, on the wrong
+           carriageway, and disagreed with the jams drawn over it.
+
+           Deriving the colour here from the same filtered, snapped, correctly
+           directed jams means the ribbon and the jam on it can never tell two
+           different stories. */
+        if (q.feature_type === "jam" && f.geometry?.type === "LineString") {
+          const snapped = guard.snap(
+            f.geometry.coordinates as number[][],
+            q.street as string | undefined,
+          );
+          if (!snapped) continue;
+          const level = Number(q.level ?? 0);
+          for (const order of segmentsSpanned(snapped.startIndex, snapped.endIndex)) {
+            const key = order + ":" + snapped.direction;
+            // Worst condition wins where two jams overlap a segment.
+            bySegment.set(key, Math.max(bySegment.get(key) ?? 0, level));
+          }
+        }
+
+        // Forecast: named "X to Y", with no direction, so it colours both ways.
+        if (q.feature_type === "forecast" && typeof q.corridor_segment === "string") {
+          const hit = corridorBase.features.find(
+            (c) => (c.properties as { segment_name: string }).segment_name === q.corridor_segment,
+          );
+          if (hit) {
+            const order = (hit.properties as { segment_order: number }).segment_order;
+            const lvl = FORECAST_LEVEL[String(q.congestion_state)] ?? 0;
+            bySegment.set(order + ":NB", lvl);
+            bySegment.set(order + ":SB", lvl);
+          }
+        }
+      }
+
+      /* What silence means depends on the source.
+
+         Waze only publishes congestion, so on the live feed a stretch with no
+         jam is a stretch that is moving: free flow, drawn green. The forecast
+         is the opposite — it covers seven of nineteen segments, and silence
+         there means nobody forecast it, which is not a claim that it will be
+         clear. Those stay grey. */
+      const unreported = isRealtimeEndpoint ? 0 : NO_READING;
+
+      return {
+        ...corridorBase,
+        features: corridorBase.features.map((f) => {
+          const q = f.properties as { segment_order: number; direction: string };
+          const lvl = bySegment.get(q.segment_order + ":" + q.direction);
+          return { ...f, properties: { ...f.properties, level: lvl ?? unreported } };
+        }),
+      };
+    };
+
     map.on("load", async () => {
       const response = await fetch(endpoint, { cache: "no-store" });
-      const data = await response.json();
-      console.log("TRAFFIC DATA LOADED:", data);
+      const data = onlyOnCorridor(await response.json());
 
       const isRealtime = endpoint.includes("real-time");
-
-
 
       map.addSource("traffic", {
         type: "geojson",
         data,
       });
 
-      // Add the base NLEX corridor source
+      // The corridor, with whatever state this endpoint could supply.
       map.addSource("nlex-corridor", {
         type: "geojson",
-        data: {
-          type: "FeatureCollection",
-          features: [
-            {
-              type: "Feature",
-              properties: {},
-              geometry: nlexGeometry as GeoJSON.Geometry,
-            },
-          ],
+        data: corridorWithState(data),
+      });
+
+      /* Push the base map back. A background layer added before ours sits over
+         every base layer, so the surrounding road network and labels fade and
+         the corridor drawn on top of it becomes the only thing at full
+         strength. */
+      map.addLayer({
+        id: "base-scrim",
+        type: "background",
+        paint: {
+          "background-color": PALETTE.scrim,
+          "background-opacity": PALETTE.scrimOpacity,
         },
       });
 
-      // NLEX Entrance / Exit ramps (on- & off-ramps into and out of the corridor).
-      // Sourced from OSM motorway_link/motorway geometry, so they trace the real road centerlines.
-      // NOTE: the ramp layers themselves are added AFTER the mainline (further below) so that on
-      // entrance/exit sections the teal fully replaces the orange instead of the two overlapping.
-      map.addSource("nlex-ramps", {
-        type: "geojson",
-        data: nlexRamps as GeoJSON.FeatureCollection,
+      /* The corridor, drawn the way a navigation map draws a road: a soft glow
+         to lift it off the base, a white casing that reads as the roadway, and
+         two coloured ribbons inside it for the two directions.
+
+         The grey road bed and the 39 OSM ramp spurs that used to sit here are
+         both gone. The spurs were the stray lines wandering off the corridor --
+         18.5 km of on- and off-ramps drawn at near corridor weight, which read
+         as breakage rather than as detail. */
+      map.addLayer({
+        id: "nlex-halo",
+        type: "line",
+        source: "nlex-corridor",
+        layout: { "line-join": "round", "line-cap": "round" },
+        paint: {
+          "line-color": PALETTE.halo,
+          "line-width": ["interpolate", ["exponential", 1.5], ["zoom"], 8, 16, 12, 30, 16, 46],
+          "line-opacity": PALETTE.haloOpacity,
+          "line-blur": ["interpolate", ["linear"], ["zoom"], 8, 8, 16, 20],
+        },
       });
 
-      // Layer 1: Base NLEX Casing
       map.addLayer({
         id: "nlex-casing",
         type: "line",
         source: "nlex-corridor",
-        layout: {
-          "line-join": "round",
-          "line-cap": "round",
-        },
+        layout: { "line-join": "round", "line-cap": "round" },
         paint: {
-          "line-color": "#475569", // Slate grey border
-          "line-width": [
-            "interpolate", ["exponential", 1.5], ["zoom"],
-            8,   3,
-            12,  7,
-            16,  16,
-          ],
-          "line-opacity": 0.8,
+          "line-color": PALETTE.casing,
+          "line-width": ["interpolate", ["linear"], ["zoom"], 8, 8, 12, 15, 16, 23],
+          "line-opacity": 1,
+          "line-offset": OFFSET,
         },
-      }); 
+      });
 
-      // Layer 2: Base NLEX Surface
       map.addLayer({
-        id: "nlex-surface",
+        id: "carriageway",
         type: "line",
         source: "nlex-corridor",
-        layout: {
-          "line-join": "round",
-          "line-cap": "round",
-        },
+        layout: { "line-join": "round", "line-cap": "round" },
         paint: {
-          "line-color": "#f59e0b", // Solid Orange
-          "line-width": [
-            "interpolate", ["exponential", 1.5], ["zoom"],
-            8,   1.5,
-            12,  4.5,
-            16,  12,
+          "line-color": [
+            "match", ["get", "level"],
+            0, PALETTE.level[0],
+            1, PALETTE.level[1],
+            2, PALETTE.level[2],
+            3, PALETTE.level[3],
+            4, PALETTE.level[4],
+            5, PALETTE.level[5],
+            // Falls through for NO_READING. Grey says the feed reported
+            // nothing here, rather than implying a free flow it never saw.
+            PALETTE.noData,
           ],
-          "line-opacity": 0.9,
+          "line-width": ["interpolate", ["linear"], ["zoom"], 8, 5, 12, 10, 16, 16],
+          "line-opacity": 1,
+          "line-offset": OFFSET,
         },
       });
 
-      // Entrance / Exit ramp casing — drawn ON TOP of the mainline and at least as wide as the
-      // corridor casing, so where a ramp coincides with the corridor the teal fully covers the
-      // orange (no orange/teal overlap on entrance & exit sections).
+      /* Direction of travel. Chevrons rather than triangles: under line
+         placement they rotate with the road, so each ribbon reads as flowing
+         even where the corridor bends. */
       map.addLayer({
-        id: "nlex-ramp-casing",
-        type: "line",
-        source: "nlex-ramps",
+        id: "carriageway-arrows",
+        type: "symbol",
+        source: "nlex-corridor",
         layout: {
-          "line-join": "round",
-          "line-cap": "round",
+          "symbol-placement": "line",
+          "symbol-spacing": ["interpolate", ["linear"], ["zoom"], 8, 34, 14, 60],
+          "text-field": "\u276F",
+          "text-rotate": ["case", ["==", ["get", "direction"], "NB"], -90, 90],
+          "text-size": ["interpolate", ["linear"], ["zoom"], 8, 9, 14, 13],
+          "text-allow-overlap": true,
+          "text-ignore-placement": true,
+          "text-keep-upright": false,
+          "text-offset": [
+            "case",
+            ["==", ["get", "direction"], "NB"],
+            ["literal", [0, 0.5]],
+            ["literal", [0, -0.5]],
+          ],
         },
         paint: {
-          "line-color": "#0f766e", // Deep teal border (keeps ramps reading as teal, not grey)
-          "line-width": [
-            "interpolate", ["exponential", 1.5], ["zoom"],
-            8,   3.5,
-            12,  8,
-            16,  18,
-          ],
-          "line-opacity": 1,
-        },
-      });
-
-      // Entrance / Exit ramp surface — teal fill, matches the corridor width so it reads as the
-      // same expressway while clearly marking the on/off ramps.
-      map.addLayer({
-        id: "nlex-ramp-surface",
-        type: "line",
-        source: "nlex-ramps",
-        layout: {
-          "line-join": "round",
-          "line-cap": "round",
-        },
-        paint: {
-          "line-color": "#14b8a6", // Teal / Emerald — entrance & exit ramps
-          "line-width": [
-            "interpolate", ["exponential", 1.5], ["zoom"],
-            8,   1.6,
-            12,  4.8,
-            16,  12.5,
-          ],
-          "line-opacity": 1,
+          "text-color": PALETTE.arrow,
+          "text-opacity": 0.85,
         },
       });
 
       // Layer 3: Jam Lines Layer (Overlays on top for realtime)
+      map.addLayer({
+        id: "traffic-glow",
+        type: "line",
+        source: "traffic",
+        layout: { "line-join": "round", "line-cap": "round" },
+        paint: {
+          "line-color": [
+            "match", ["get", "level"],
+            1, PALETTE.level[1], 2, PALETTE.level[2], 3, PALETTE.level[3],
+            4, PALETTE.level[4], 5, PALETTE.level[5], PALETTE.level[0],
+          ],
+          "line-width": ["interpolate", ["linear"], ["zoom"], 8, 12, 12, 22, 16, 32],
+          "line-opacity": isDark ? 0.28 : 0.2,
+          "line-offset": OFFSET,
+          "line-blur": ["interpolate", ["linear"], ["zoom"], 8, 6, 16, 16],
+        },
+        filter: ["==", ["get", "feature_type"], "jam"],
+      });
+
       map.addLayer({
         id: "traffic-line",
         type: "line",
@@ -258,22 +470,18 @@ export default function TrafficMapPanel({ title, subtitle, badge, endpoint, laye
           "line-color": [
             "match",
             ["get", "level"],
-            1, "#10b981", // Light (Green)
-            2, "#f59e0b", // Moderate (Yellow/Orange)
-            3, "#f97316", // Heavy (Orange)
-            4, "#ef4444", // Severe (Red)
-            5, "#b91c1c", // Standstill (Dark Red)
-            "#10b981"    // Fallback (Green)
+            1, PALETTE.level[1], // Light
+            2, PALETTE.level[2], // Moderate
+            3, PALETTE.level[3], // Heavy
+            4, PALETTE.level[4], // Severe
+            5, PALETTE.level[5], // Standstill
+            PALETTE.level[0]     // Fallback
           ],
-          "line-width": [
-            "interpolate",
-            ["linear"],
-            ["zoom"],
-            8, 5,
-            12, 10,
-            16, 14
-          ],
-          "line-opacity": 0.85,
+          "line-width": ["interpolate", ["linear"], ["zoom"], 8, 3.5, 12, 7, 16, 11],
+          "line-opacity": 0.95,
+          // Same offset as the carriageways, so a jam sits on its own direction
+          // instead of straddling both.
+          "line-offset": OFFSET,
         },
         filter: ["==", ["get", "feature_type"], "jam"],
       });
@@ -285,19 +493,16 @@ export default function TrafficMapPanel({ title, subtitle, badge, endpoint, laye
         source: "traffic",
         paint: {
           "circle-radius": isRealtime ? 12 : 8,
-          "circle-color": "#ff0000",
-          "circle-stroke-color": "#ffffff",
-          "circle-stroke-width": 3,
-          "circle-opacity": 1,
+          "circle-color": PALETTE.alert,
+          "circle-stroke-color": PALETTE.alertRing,
+          "circle-stroke-width": 2.5,
+          "circle-opacity": 0.95,
         },
         filter: [
           "all",
           ["==", ["get", "feature_type"], "alert"],
-          ["!=", ["get", "type"], "JAM"]
         ],
       });
-
-
 
 
       // Hover popup logic
@@ -536,50 +741,21 @@ export default function TrafficMapPanel({ title, subtitle, badge, endpoint, laye
         tollPlazas.forEach(toll => {
           const el = document.createElement("div");
           el.className = "custom-toll-marker";
+          /* The label used to sit under every pin permanently, and twenty of
+             them collided into an unreadable stack south of Pulilan. It is
+             revealed on hover instead, so the corridor stays legible and the
+             name is one pointer-move away. CSS does the showing -- see
+             .toll-pin-label in globals.css. */
           el.innerHTML = `
-            <div style="
-              display: flex;
-              flex-direction: column;
-              align-items: center;
-              justify-content: center;
-              cursor: pointer;
-            ">
-              <!-- Custom Toll Gate Icon -->
-              <div style="
-                width: 24px;
-                height: 24px;
-                border-radius: 6px;
-                background: linear-gradient(135deg, #0e7490 0%, #06b6d4 100%);
-                border: 2px solid #ffffff;
-                box-shadow: 0 4px 10px rgba(6, 182, 212, 0.4);
-                display: flex;
-                align-items: center;
-                justify-content: center;
-                color: white;
-              ">
-                <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
-                  <path d="M3 6h18v3H3z" fill="white" />
-                  <path d="M6 9v9M18 9v9" />
-                  <path d="M6 13h12" stroke="#eab308" stroke-width="3" />
+            <div class="toll-pin">
+              <div class="toll-pin-dot">
+                <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor"
+                     stroke-width="2.25" stroke-linecap="round" stroke-linejoin="round">
+                  <path d="M4 20V9.5a1 1 0 0 1 .55-.9l7-3.5a1 1 0 0 1 .9 0l7 3.5a1 1 0 0 1 .55.9V20" />
+                  <path d="M2 20h20M9 20v-5h6v5" />
                 </svg>
               </div>
-              <!-- Text label -->
-              <div style="
-                margin-top: 3px;
-                background: rgba(15, 23, 42, 0.85);
-                backdrop-filter: blur(4px);
-                color: white;
-                font-size: 8px;
-                font-weight: 700;
-                padding: 1px 4px;
-                border-radius: 3px;
-                white-space: nowrap;
-                border: 1px solid rgba(255, 255, 255, 0.15);
-                box-shadow: 0 2px 5px rgba(0,0,0,0.2);
-                letter-spacing: 0.5px;
-              ">
-                ${toll.shortName}
-              </div>
+              <div class="toll-pin-label">${toll.shortName}</div>
             </div>
           `;
 
@@ -787,8 +963,13 @@ export default function TrafficMapPanel({ title, subtitle, badge, endpoint, laye
       const source = map.getSource("traffic") as GeoJSONSource;
       const pollingInterval = setInterval(async () => {
         try {
-          const fresh = await fetch(endpoint, { cache: "no-store" }).then((r) => r.json());
+          const fresh = onlyOnCorridor(
+            await fetch(endpoint, { cache: "no-store" }).then((r) => r.json()),
+          );
           source.setData(fresh);
+          (map.getSource("nlex-corridor") as GeoJSONSource | undefined)?.setData(
+            corridorWithState(fresh),
+          );
           if (isRealtime) {
             renderAlerts(fresh);
           }
@@ -797,13 +978,14 @@ export default function TrafficMapPanel({ title, subtitle, badge, endpoint, laye
         }
       }, 15000);
 
-      mapRef.current = map;
-      return () => {
-        clearInterval(pollingInterval);
-      };
+      pollingRef.current = pollingInterval;
     });
 
     return () => {
+      if (pollingRef.current) {
+        clearInterval(pollingRef.current);
+        pollingRef.current = null;
+      }
       resizeObserver.disconnect();
       activeMarkers.current.forEach(m => m.remove());
       activeMarkers.current = [];
@@ -819,17 +1001,21 @@ export default function TrafficMapPanel({ title, subtitle, badge, endpoint, laye
       map.remove();
       mapRef.current = null;
     };
-  }, [endpoint, layerColor]);
+  }, [endpoint, layerColor, isDark]);
 
   return (
-    <article className="map-card">
-      <header className={`map-head ${tone}`}>
-        <div>
-          <h3>{title}</h3>
-          <p>{subtitle}</p>
-        </div>
-        <span>{badge}</span>
-      </header>
+    <article className={`map-card${chromeless ? " chromeless" : ""}`}>
+      {/* The maximised view supplies its own header, so the panel's is dropped
+          there rather than stacking two title bars. */}
+      {!chromeless && (
+        <header className={`map-head ${tone}`}>
+          <div>
+            <h3>{title}</h3>
+            <p>{subtitle}</p>
+          </div>
+          <span>{badge}</span>
+        </header>
+      )}
       <div className="map-canvas-container">
         <div className="map-canvas mapbox" ref={containerRef} />
         {status !== "ok" && (

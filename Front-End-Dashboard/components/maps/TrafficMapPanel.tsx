@@ -23,6 +23,51 @@ type Props = {
   children?: React.ReactNode;
 };
 
+/**
+ * Everything the report detail panel shows. Mirrors the alert properties the
+ * live endpoint now emits — every field comes straight from Waze's own payload,
+ * so a null here means Waze did not report it rather than that we lost it.
+ */
+type ReportDetail = {
+  type: string;
+  subtype: string | null;
+  street: string | null;
+  city: string | null;
+  nearest_exit: string | null;
+  exit_distance_m: number | null;
+  reliability: number | null;
+  confidence: number | null;
+  report_rating: number | null;
+  road_type: number | null;
+  by_municipality: boolean | null;
+  heading: number | null;
+  reported_at: string | null;
+  uuid: string | null;
+  lon: number | null;
+  lat: number | null;
+};
+
+/** Waze roadType codes, only the ones this corridor's feed actually emits. */
+const ROAD_TYPE_LABEL: Record<number, string> = {
+  1: "Street", 2: "Primary street", 3: "Freeway", 4: "Ramp", 6: "Major highway",
+  7: "Minor highway", 17: "Private road", 20: "Parking lot road",
+};
+
+/** Compass point for Waze's magvar, which is degrees clockwise from north. */
+const headingLabel = (deg: number) => {
+  const points = ["N", "NNE", "NE", "ENE", "E", "ESE", "SE", "SSE", "S", "SSW", "SW", "WSW", "W", "WNW", "NW", "NNW"];
+  return `${points[Math.round(((deg % 360) / 22.5)) % 16]} (${deg}°)`;
+};
+
+const sinceLabel = (iso: string) => {
+  const mins = Math.max(0, Math.round((Date.now() - new Date(iso).getTime()) / 60000));
+  if (mins < 1) return "Just now";
+  if (mins < 60) return `${mins} min ago`;
+  const h = Math.floor(mins / 60);
+  if (h < 24) return `${h}h ${mins % 60}m ago`;
+  return `${Math.floor(h / 24)}d ${h % 24}h ago`;
+};
+
 export default function TrafficMapPanel({ title, subtitle, badge, endpoint, layerColor, tone, children, chromeless = false }: Props) {
   // Reuses the charts' theme hook, so the map switches with everything else.
   const { isDark } = useChartTheme();
@@ -32,9 +77,15 @@ export default function TrafficMapPanel({ title, subtitle, badge, endpoint, laye
   const alertMarkersRef = useRef<mapboxgl.Marker[]>([]);
   const flyToHandlerRef = useRef<((e: Event) => void) | null>(null);
   const resetViewHandlerRef = useRef<(() => void) | null>(null);
+  const showReportHandlerRef = useRef<((e: Event) => void) | null>(null);
+  const flowFrameRef = useRef<number | null>(null);
   // "ok" once the map builds; otherwise show a graceful fallback instead of
   // letting Mapbox throw and take the whole page down.
   const [status, setStatus] = useState<"ok" | "no-token" | "error">("ok");
+  // The report a reader clicked, or null when the panel is closed. Held here
+  // rather than in a Mapbox popup because a popup is anchored to the pin and
+  // scrolls off with it; a panel stays put and has room for the full record.
+  const [selectedReport, setSelectedReport] = useState<ReportDetail | null>(null);
 
   useEffect(() => {
     if (!containerRef.current) return;
@@ -125,10 +176,25 @@ export default function TrafficMapPanel({ title, subtitle, badge, endpoint, laye
     const onResetView = () => {
       map.flyTo({ center: [120.79, 14.94], zoom: 9.2, duration: 900 });
     };
+    /* The Current alerts list asks for a report by dispatching this. The map
+       owns both the camera and the detail panel, so the sidebar hands over the
+       record it already has rather than the two components trying to share
+       state — same pattern as nlex:flyto above. */
+    const onShowReport = (e: Event) => {
+      const d = (e as CustomEvent<ReportDetail>).detail;
+      if (!d) return;
+      setSelectedReport(d);
+      if (d.lon != null && d.lat != null && Number.isFinite(d.lon) && Number.isFinite(d.lat)) {
+        map.flyTo({ center: [d.lon, d.lat], zoom: 13, duration: 900 });
+      }
+    };
+
     window.addEventListener("nlex:flyto", onFlyTo);
     window.addEventListener("nlex:resetview", onResetView);
+    window.addEventListener("nlex:showreport", onShowReport);
     flyToHandlerRef.current = onFlyTo;
     resetViewHandlerRef.current = onResetView;
+    showReportHandlerRef.current = onShowReport;
 
     // Hide all other roads from the base map so ONLY the NLEX corridor is visible
     map.on("style.load", () => {
@@ -417,6 +483,53 @@ export default function TrafficMapPanel({ title, subtitle, badge, endpoint, laye
           "line-offset": OFFSET,
         },
       });
+
+      /* Flow. A pale dash travelling along each ribbon, so the corridor reads
+         as moving traffic rather than a static coloured band.
+
+         Six layers: two carriageways x three speed tiers.
+
+         Two carriageways because line-dasharray is the one paint property
+         Mapbox will not drive from data, so a single layer could only ever
+         animate one way along the geometry. NB steps the dash sequence forward
+         and SB steps it back, sending light up the northbound ribbon and down
+         the southbound one.
+
+         Three tiers because the speed is the message. An earlier version varied
+         opacity instead and faded the jams out, which read as the animation
+         being broken on half the road rather than as traffic being stopped.
+         Every stretch now flows; a free one races and a standstill crawls, so
+         the eye reads rate the way it reads the colour. */
+      const FLOW_TIERS = [
+        { id: "fast", levels: [0, 1],  stepMs: 55,  opacity: 0.55 },
+        { id: "mid",  levels: [2, 3],  stepMs: 150, opacity: 0.48 },
+        { id: "slow", levels: [4, 5],  stepMs: 380, opacity: 0.42 },
+      ] as const;
+
+      for (const dir of ["NB", "SB"] as const) {
+        for (const tier of FLOW_TIERS) {
+          map.addLayer({
+            id: `carriageway-flow-${dir.toLowerCase()}-${tier.id}`,
+            type: "line",
+            source: "nlex-corridor",
+            layout: { "line-join": "round", "line-cap": "butt" },
+            // NO_READING (-1) matches no tier, so an unreported stretch stays
+            // still rather than claiming a flow nothing measured.
+            filter: [
+              "all",
+              ["==", ["get", "direction"], dir],
+              ["in", ["get", "level"], ["literal", tier.levels]],
+            ],
+            paint: {
+              "line-color": PALETTE.arrow,
+              "line-width": ["interpolate", ["linear"], ["zoom"], 8, 2.5, 12, 5, 16, 8],
+              "line-opacity": tier.opacity,
+              "line-offset": OFFSET,
+              "line-dasharray": [0, 4, 3],
+            },
+          });
+        }
+      }
 
       /* Direction of travel. Chevrons rather than triangles: under line
          placement they rotate with the road, so each ribbon reads as flowing
@@ -942,29 +1055,99 @@ export default function TrafficMapPanel({ title, subtitle, badge, endpoint, laye
             </div>
           `;
           
-          const popup = new mapboxgl.Popup({ offset: 15, closeButton: false }).setHTML(`
-            <div style="font-family: 'Inter', system-ui, -apple-system, sans-serif; padding: 10px; width: 220px; border-radius: 12px; background: white; box-shadow: 0 4px 20px rgba(0,0,0,0.08); color: #1e293b;">
-              <div style="font-weight: 700; font-size: 13px; text-transform: uppercase; display: flex; align-items: center; gap: 6px; color: ${color}; margin-bottom: 4px;">
-                <span>${iconEmoji}</span> ${typeLabel}
+          // Hover keeps a one-line identifier; the full record is a click away.
+          // Two affordances rather than one: the popup answers "what is this pin"
+          // while moving the mouse, the panel answers "tell me everything" only
+          // when the reader asks for it.
+          const popup = new mapboxgl.Popup({ offset: 15, closeButton: false, closeOnClick: false }).setHTML(`
+            <div style="font-family: 'Inter', system-ui, sans-serif; padding: 8px 10px; border-radius: 10px; color: #1e293b;">
+              <div style="font-weight: 700; font-size: 12px; text-transform: uppercase; display: flex; align-items: center; gap: 6px; color: ${color};">
+                <span>${iconEmoji}</span> ${typeLabel.replace(/_/g, " ")}
               </div>
-              <div style="font-size: 11px; font-weight: 600; color: var(--text-secondary); margin-bottom: 6px;">${props.street || "NLEX"} ${props.city ? `(${props.city})` : ""}</div>
-              ${props.report_description ? `<div style="font-size: 12px; line-height: 1.4; color: var(--text-secondary); margin-bottom: 8px;">"${props.report_description}"</div>` : ""}
-              <div style="display: flex; gap: 12px; font-size: 10px; color: #64748b; font-weight: 500;">
-                <div>Reliability: ${props.reliability || 0}/10</div>
-                <div>Confidence: ${props.confidence || 0}/10</div>
-              </div>
+              <div style="font-size: 11px; font-weight: 600; color: #64748b; margin-top: 3px;">${props.street || "NLEX"}${props.city ? ` · ${props.city}` : ""}</div>
+              <div style="font-size: 10px; color: #94a3b8; margin-top: 4px;">Click for full report</div>
             </div>
           `);
 
           const marker = new mapboxgl.Marker({ element: el, anchor: "center" })
             .setLngLat(coords as [number, number])
-            .setPopup(popup)
             .addTo(map);
-            
+
+          // Hover shows the summary; click opens the detail panel. setPopup is
+          // deliberately not used — it binds the popup to click, which would put
+          // the summary and the panel on the same gesture.
+          el.addEventListener("mouseenter", () => popup.setLngLat(coords as [number, number]).addTo(map));
+          el.addEventListener("mouseleave", () => popup.remove());
+          el.addEventListener("click", (ev) => {
+            // Without this the map's own click handler runs too and closes the
+            // panel in the same gesture that opened it.
+            ev.stopPropagation();
+            popup.remove();
+            setSelectedReport({
+              type: props.type ?? "ALERT",
+              subtype: props.subtype ?? null,
+              street: props.street ?? null,
+              city: props.city ?? null,
+              nearest_exit: props.nearest_exit ?? null,
+              exit_distance_m: props.exit_distance_m ?? null,
+              reliability: props.reliability ?? null,
+              confidence: props.confidence ?? null,
+              report_rating: props.report_rating ?? null,
+              road_type: props.road_type ?? null,
+              by_municipality: props.by_municipality ?? null,
+              heading: props.heading ?? null,
+              reported_at: props.reported_at ?? null,
+              uuid: props.uuid ?? null,
+              lon: Array.isArray(coords) ? Number(coords[0]) : null,
+              lat: Array.isArray(coords) ? Number(coords[1]) : null,
+            });
+            map.flyTo({ center: coords as [number, number], zoom: Math.max(map.getZoom(), 12), duration: 600 });
+          });
+
           alertMarkersRef.current.push(marker);
         });
       };
       
+      /* Drive the flow dashes.
+
+         The sequence is the standard Mapbox marching-ants set: each step shifts
+         the gap along a fixed 4-unit dash, and cycling them makes the dash
+         appear to travel. Stepping NB forward and SB backward through the same
+         sequence is what makes the two carriageways run opposite ways.
+
+         Each tier keeps its own clock, so the fast ribbon advances roughly
+         seven times for every one step of the standstill ribbon. One rAF loop
+         drives all of them rather than three timers, and it parks itself when
+         the tab is backgrounded instead of animating a map nobody is watching. */
+      const DASH_STEPS: [number, number, number][] = [
+        [0, 4, 3], [0.5, 4, 2.5], [1, 4, 2], [1.5, 4, 1.5],
+        [2, 4, 1], [2.5, 4, 0.5], [3, 4, 0],
+      ];
+      const tierClocks = FLOW_TIERS.map(() => ({ last: 0, step: 0 }));
+
+      const animateFlow = (now: number) => {
+        flowFrameRef.current = requestAnimationFrame(animateFlow);
+        FLOW_TIERS.forEach((tier, i) => {
+          const clock = tierClocks[i];
+          if (now - clock.last < tier.stepMs) return;
+          clock.last = now;
+          clock.step = (clock.step + 1) % DASH_STEPS.length;
+          const forward = DASH_STEPS[clock.step];
+          const back = DASH_STEPS[(DASH_STEPS.length - clock.step) % DASH_STEPS.length];
+          // Guarded: a style reload or unmount mid-frame would otherwise throw
+          // on a layer that no longer exists.
+          try {
+            const nb = `carriageway-flow-nb-${tier.id}`;
+            const sb = `carriageway-flow-sb-${tier.id}`;
+            if (map.getLayer(nb)) map.setPaintProperty(nb, "line-dasharray", forward);
+            if (map.getLayer(sb)) map.setPaintProperty(sb, "line-dasharray", back);
+          } catch {
+            // Layer went away underneath us; the next frame will find it gone too.
+          }
+        });
+      };
+      flowFrameRef.current = requestAnimationFrame(animateFlow);
+
       if (isRealtime) {
         renderAlerts(data);
       }
@@ -990,12 +1173,20 @@ export default function TrafficMapPanel({ title, subtitle, badge, endpoint, laye
 
     return () => {
       resizeObserver.disconnect();
+      if (flowFrameRef.current != null) {
+        cancelAnimationFrame(flowFrameRef.current);
+        flowFrameRef.current = null;
+      }
       activeMarkers.current.forEach(m => m.remove());
       activeMarkers.current = [];
 
       if (flyToHandlerRef.current) {
         window.removeEventListener("nlex:flyto", flyToHandlerRef.current);
         flyToHandlerRef.current = null;
+      }
+      if (showReportHandlerRef.current) {
+        window.removeEventListener("nlex:showreport", showReportHandlerRef.current);
+        showReportHandlerRef.current = null;
       }
       if (resetViewHandlerRef.current) {
         window.removeEventListener("nlex:resetview", resetViewHandlerRef.current);
@@ -1050,6 +1241,89 @@ export default function TrafficMapPanel({ title, subtitle, badge, endpoint, laye
           </div>
         )}
         {children}
+
+        {/* Report detail. Anchored inside the map container so it sits over the
+            canvas without leaving the panel, and every row is omitted rather
+            than zero-filled when Waze did not report that field. */}
+        {selectedReport && (
+          <div className="wz-report-detail" role="dialog" aria-label="Waze report detail">
+            <header>
+              <div>
+                <span className="wz-rd-type">{selectedReport.type.replace(/_/g, " ")}</span>
+                {selectedReport.subtype && (
+                  <span className="wz-rd-sub">{selectedReport.subtype.replace(/_/g, " ").toLowerCase()}</span>
+                )}
+              </div>
+              <button type="button" onClick={() => setSelectedReport(null)} aria-label="Close report detail">
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round">
+                  <path d="M18 6 6 18M6 6l12 12" />
+                </svg>
+              </button>
+            </header>
+
+            <p className="wz-rd-where">
+              {selectedReport.street ?? "NLEX"}
+              {selectedReport.city ? ` · ${selectedReport.city}` : ""}
+            </p>
+
+            {selectedReport.reported_at && (
+              <p className="wz-rd-when">
+                Reported {sinceLabel(selectedReport.reported_at)}
+                <span>{new Date(selectedReport.reported_at).toLocaleString()}</span>
+              </p>
+            )}
+
+            <dl className="wz-rd-grid">
+              {selectedReport.reliability != null && (
+                <div><dt>Reliability</dt><dd>{selectedReport.reliability}/10</dd></div>
+              )}
+              {selectedReport.confidence != null && (
+                <div><dt>Confidence</dt><dd>{selectedReport.confidence}/10</dd></div>
+              )}
+              {selectedReport.report_rating != null && (
+                <div><dt>Report rating</dt><dd>{selectedReport.report_rating}/5</dd></div>
+              )}
+              {selectedReport.nearest_exit && (
+                <div>
+                  <dt>Nearest exit</dt>
+                  <dd>
+                    {selectedReport.nearest_exit}
+                    {selectedReport.exit_distance_m != null && (
+                      <span className="wz-rd-note">
+                        {selectedReport.exit_distance_m < 1000
+                          ? ` ${selectedReport.exit_distance_m} m away`
+                          : ` ${(selectedReport.exit_distance_m / 1000).toFixed(1)} km away`}
+                      </span>
+                    )}
+                  </dd>
+                </div>
+              )}
+              {selectedReport.heading != null && (
+                <div><dt>Heading</dt><dd>{headingLabel(selectedReport.heading)}</dd></div>
+              )}
+              {selectedReport.road_type != null && (
+                <div>
+                  <dt>Road type</dt>
+                  <dd>{ROAD_TYPE_LABEL[selectedReport.road_type] ?? `Type ${selectedReport.road_type}`}</dd>
+                </div>
+              )}
+              {selectedReport.by_municipality != null && (
+                <div>
+                  <dt>Source</dt>
+                  <dd>{selectedReport.by_municipality ? "Municipality account" : "Waze driver"}</dd>
+                </div>
+              )}
+              {selectedReport.lat != null && selectedReport.lon != null && (
+                <div>
+                  <dt>Coordinates</dt>
+                  <dd>{selectedReport.lat.toFixed(5)}, {selectedReport.lon.toFixed(5)}</dd>
+                </div>
+              )}
+            </dl>
+
+            {selectedReport.uuid && <p className="wz-rd-id">Waze ID {selectedReport.uuid}</p>}
+          </div>
+        )}
       </div>
     </article>
   );

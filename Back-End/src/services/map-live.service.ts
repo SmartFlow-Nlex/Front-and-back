@@ -1,4 +1,5 @@
 import { db } from "../config/db.js";
+import { isNlexCorridorStreet, isWazeReportType } from "../lib/nlex-corridor.js";
 
 /**
  * Everything the Waze panel's overview sidebar shows, from the live feeds.
@@ -27,6 +28,19 @@ export type LiveAlert = {
   publishedAt: string | null;
   minutesAgo: number | null;
   reliability: number | null;
+  /* Everything below exists so a click on a sidebar row can do what a click on
+     the pin does: fly the map there and open the same detail panel. Without the
+     coordinates the list had no position to send, and without the rest the
+     panel would have shown less for a row than for the pin beside it. */
+  uuid: string | null;
+  lon: number | null;
+  lat: number | null;
+  subtype: string | null;
+  confidence: number | null;
+  reportRating: number | null;
+  roadType: number | null;
+  byMunicipality: boolean | null;
+  heading: number | null;
 };
 
 export async function getLiveCorridorOverview() {
@@ -74,6 +88,9 @@ export async function getLiveCorridorOverview() {
     db.query<{
       type: string; street: string | null; city: string | null;
       exit_name: string; metres: number; pub: string | null; reliability: number | null;
+      uuid: string | null; lon: number | null; lat: number | null; subtype: string | null;
+      confidence: number | null; report_rating: number | null; road_type: number | null;
+      by_municipality: string | null; heading: number | null;
     }>(
       `WITH latest AS (
          SELECT raw_data FROM bronze.waze_raw_alerts ORDER BY ingested_at DESC LIMIT 1
@@ -90,7 +107,15 @@ export async function getLiveCorridorOverview() {
               e.exit_name,
               ROUND(e.d)::int                 AS metres,
               a.x->>'pubDate'                 AS pub,
-              (a.x->>'reliability')::int      AS reliability
+              (a.x->>'reliability')::int      AS reliability,
+              a.x->>'uuid'                    AS uuid,
+              a.lon, a.lat,
+              NULLIF(a.x->>'subtype', '')     AS subtype,
+              (a.x->>'confidence')::int       AS confidence,
+              (a.x->>'reportRating')::int     AS report_rating,
+              (a.x->>'roadType')::int         AS road_type,
+              a.x->>'reportByMunicipalityUser' AS by_municipality,
+              (a.x->>'magvar')::int           AS heading
        FROM a
        JOIN LATERAL (
          SELECT exit_name,
@@ -123,7 +148,20 @@ export async function getLiveCorridorOverview() {
 
   const t = totals.rows[0];
 
-  const parsedAlerts: LiveAlert[] = alerts.rows.map((r) => {
+  /* Only the mainline, and only reports.
+
+     The SQL bounds alerts by distance to the nearest exit, which is necessary
+     but not sufficient: a service road runs within metres of the corridor, so
+     proximity alone pulled in MacArthur Hwy, Maysan Rd and West Service Rd. The
+     street test is what makes this "on NLEX" rather than "near NLEX", and the
+     type test drops jam points, which are density and are already drawn as the
+     coloured ribbon. Both are the same tests the map itself applies, so the
+     sidebar and the pins now count one thing. */
+  const corridorAlerts = alerts.rows.filter(
+    (r) => isNlexCorridorStreet(r.street) && isWazeReportType(r.type),
+  );
+
+  const parsedAlerts: LiveAlert[] = corridorAlerts.map((r) => {
     const at = r.pub ? new Date(r.pub) : null;
     const ok = at && !Number.isNaN(at.getTime());
     return {
@@ -135,6 +173,15 @@ export async function getLiveCorridorOverview() {
       publishedAt: ok ? at.toISOString() : null,
       minutesAgo: ok ? Math.max(0, Math.round((Date.now() - at.getTime()) / 60000)) : null,
       reliability: r.reliability,
+      uuid: r.uuid ?? null,
+      lon: r.lon ?? null,
+      lat: r.lat ?? null,
+      subtype: r.subtype ?? null,
+      confidence: r.confidence ?? null,
+      reportRating: r.report_rating ?? null,
+      roadType: r.road_type ?? null,
+      byMunicipality: r.by_municipality === "true",
+      heading: r.heading ?? null,
     };
   });
 
@@ -240,7 +287,13 @@ export async function getLiveMapGeoJson() {
          AND j.last_seen_at > NOW() - interval '${WINDOW_MINUTES} minutes'
          AND j.geom IS NOT NULL`,
     ),
-    db.query<{ lon: number; lat: number; type: string; street: string | null; city: string | null; reliability: number | null; confidence: number | null; exit_name: string }>(
+    db.query<{
+      lon: number; lat: number; type: string; street: string | null; city: string | null;
+      reliability: number | null; confidence: number | null; exit_name: string;
+      uuid: string | null; subtype: string | null; report_rating: number | null;
+      road_type: number | null; by_municipality: string | null; heading: number | null;
+      reported_at: Date | null; exit_distance_m: number | null;
+    }>(
       `WITH latest AS (
          SELECT raw_data FROM bronze.waze_raw_alerts ORDER BY ingested_at DESC LIMIT 1
        ), a AS (
@@ -256,7 +309,22 @@ export async function getLiveMapGeoJson() {
               NULLIF(a.x->>'city', '')   AS city,
               (a.x->>'reliability')::int AS reliability,
               (a.x->>'confidence')::int  AS confidence,
-              e.exit_name
+              e.exit_name,
+              -- Everything below backs the report detail panel on the live map.
+              -- All of it is already in the raw Waze payload; it was simply not
+              -- being selected, so a click had nothing beyond street and city to
+              -- show. Nothing here is derived or invented.
+              a.x->>'uuid'                       AS uuid,
+              NULLIF(a.x->>'subtype', '')        AS subtype,
+              (a.x->>'reportRating')::int        AS report_rating,
+              (a.x->>'roadType')::int            AS road_type,
+              a.x->>'reportByMunicipalityUser'   AS by_municipality,
+              (a.x->>'magvar')::int              AS heading,
+              -- pubDate is Waze's own "Wed Jun 17 15:47:00 +0000 2026" format.
+              -- Parsed here rather than in the browser so every consumer gets one
+              -- ISO instant, and NULLIF guards the rows where it is absent.
+              to_timestamp(NULLIF(a.x->>'pubDate', ''), 'Dy Mon DD HH24:MI:SS +0000 YYYY') AS reported_at,
+              ROUND(e.d)::int                    AS exit_distance_m
        FROM a
        JOIN LATERAL (
          SELECT exit_name,
@@ -288,7 +356,12 @@ export async function getLiveMapGeoJson() {
         nearest_exit: r.exit_name ?? "",
       },
     })),
-    ...alerts.rows.map((r) => ({
+    // Same two tests as the sidebar: mainline only, reports only. Without them
+    // the map emitted jam points (drawn as lines already) and alerts on parallel
+    // service roads, which the client then had to filter a second time.
+    ...alerts.rows
+      .filter((r) => isNlexCorridorStreet(r.street) && isWazeReportType(r.type))
+      .map((r) => ({
       type: "Feature" as const,
       geometry: { type: "Point" as const, coordinates: [r.lon, r.lat] },
       properties: {
@@ -299,6 +372,19 @@ export async function getLiveMapGeoJson() {
         reliability: r.reliability ?? 0,
         confidence: r.confidence ?? 0,
         nearest_exit: r.exit_name,
+        // Detail-panel fields. Null rather than a filler value where Waze did
+        // not report one, so the panel can omit a row instead of showing a zero
+        // that reads as a measurement.
+        uuid: r.uuid ?? null,
+        subtype: r.subtype ?? null,
+        report_rating: r.report_rating ?? null,
+        road_type: r.road_type ?? null,
+        by_municipality: r.by_municipality === "true",
+        heading: r.heading ?? null,
+        reported_at: r.reported_at ? new Date(r.reported_at).toISOString() : null,
+        exit_distance_m: r.exit_distance_m ?? null,
+        lon: r.lon,
+        lat: r.lat,
       },
     })),
   ];

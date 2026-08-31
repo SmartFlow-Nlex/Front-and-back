@@ -8,20 +8,28 @@
  * tile a mix of two units.
  *
  * The set below matches the legend exactly, so anything counted is also drawn
- * and named in the key.
+ * and named in the key. It also matches WAZE_REPORT_TYPES in the backend's
+ * lib/nlex-corridor.ts, which is what the Active Reports tile and the Current
+ * alerts list are now both filtered by — the two used to disagree.
  *
- * Note that the live feed also emits ROAD_CLOSED, which is not in this set and
- * is therefore neither counted nor drawn. That is a deliberate omission to keep
- * the tile and the legend in step, not a claim that road closures do not matter
- * — add it here and to the legend together if it should appear.
+ * Two corrections are baked in here:
+ *
+ *   JAM was counted but never drawn. Jam points are density: they are already
+ *   the coloured ribbon on the road and the Light..Standstill legend above.
+ *   Counting them made the tile a mix of two units and promised 25 pins that
+ *   did not exist.
+ *
+ *   ROAD_CLOSED was drawn in the legend but filtered out of the data, so the
+ *   key named a category the map never showed. It is a real point report and
+ *   now counts like the rest.
  */
 
 export const WAZE_REPORT_TYPES = [
-  "JAM",
-  "CONSTRUCTION",
-  "POLICE",
   "ACCIDENT",
   "HAZARD",
+  "CONSTRUCTION",
+  "ROAD_CLOSED",
+  "POLICE",
 ] as const;
 
 export type WazeReportType = (typeof WAZE_REPORT_TYPES)[number];

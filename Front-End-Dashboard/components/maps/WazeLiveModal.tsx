@@ -9,6 +9,7 @@ import { WAZE_REPORT_TYPES } from "../../lib/waze-reports";
 // Shared with the map markers and the collapsed legend, so all three
 // name and draw a report the same way.
 import { lookOf } from "../../lib/waze-report-look";
+import MapLegend from "./MapLegend";
 // The same reading of a Waze street name the map uses to put a jam on the
 // right carriageway, so a row and a ribbon never disagree about direction.
 import { directionFromStreet } from "../../lib/corridor-shape";
@@ -198,30 +199,10 @@ export default function WazeLiveModal({ open, onClose }: { open: boolean; onClos
               layerColor="#4a6ff2"
               tone="blue"
             >
+              {/* The same component the collapsed panel uses, so the key
+                  cannot describe one map in the panel and another here. */}
               <div className="wz-legend">
-                <h4>Traffic density</h4>
-                {/* Exactly the levels the map paints by, in the map's own hues —
-                    a legend beside a map has to describe that map. */}
-                {LEVELS.map((l) => (
-                  <div key={l.level} className="wz-legend-row">
-                    <span className="wz-line" style={{ background: palette.level[l.level as 1 | 2 | 3 | 4 | 5] }} /> {l.label}
-                  </div>
-                ))}
-                <h4 className="wz-legend-gap">Waze reports</h4>
-                {/* Driven by WAZE_REPORT_TYPES rather than the first five keys
-                    of ALERT_LOOK. The slice used to name "Traffic jam" — which
-                    is density, already covered by the levels above — while
-                    omitting Hazard, the single most common report on this
-                    corridor. The key now lists exactly what is drawn. */}
-                {WAZE_REPORT_TYPES.map((k) => {
-                  const v = lookOf(k);
-                  const Icon = v.icon;
-                  return (
-                    <div key={k} className="wz-legend-row">
-                      <span className={`wz-chip ${v.tone}`}><Icon size={11} /></span> {v.label}
-                    </div>
-                  );
-                })}
+                <MapLegend />
               </div>
             </TrafficMapPanel>
           </div>

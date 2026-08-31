@@ -5,6 +5,7 @@ import { ChevronDown, Clock, Map, Maximize2, Milestone, Navigation, Search, Zoom
 import type { Feature } from "geojson";
 import TrafficMapPanel from "../../../components/maps/TrafficMapPanel";
 import WazeLiveModal from "../../../components/maps/WazeLiveModal";
+import MapLegend from "../../../components/maps/MapLegend";
 import PageHeader from "../../../components/dashboard/PageHeader";
 
 const BACKEND = process.env.NEXT_PUBLIC_BACKEND_URL ?? "http://localhost:4000";
@@ -245,44 +246,13 @@ export default function MapComparisonPage() {
           >
 
             {/* Waze Legend Overlay */}
+            {/* One legend, shared with the maximised view — see
+                components/maps/MapLegend.tsx. This used to be written out by
+                hand here, with four densities in colours that were not the
+                map's and no Standstill at all. */}
             <details className="mc-legend-card waze-legend">
               <summary>Legend</summary>
-              <div className="mc-legend-section">
-                <h4>Traffic Density</h4>
-                <div className="mc-density-row"><span className="mc-density-line green"></span> Light</div>
-                <div className="mc-density-row"><span className="mc-density-line yellow"></span> Moderate</div>
-                <div className="mc-density-row"><span className="mc-density-line orange"></span> Heavy</div>
-                <div className="mc-density-row"><span className="mc-density-line red"></span> Severe</div>
-                <div className="mc-density-row"><span className="mc-density-line nodata"></span> Not reported</div>
-              </div>
-              {/* Both directions are now drawn, so the reader needs to know
-                  which ribbon is which. The chevrons on the map say it too, but
-                  only once you are zoomed in far enough to read them. */}
-              <div className="mc-legend-section">
-                <h4>Direction</h4>
-                <div className="mc-density-row"><span className="mc-dir-chip">&#10095;</span> Northbound &middot; to Central Luzon</div>
-                <div className="mc-density-row"><span className="mc-dir-chip flip">&#10095;</span> Southbound &middot; to Metro Manila</div>
-              </div>
-              <div className="mc-legend-section">
-                <h4>Waze Reports</h4>
-                {/* Generated from WAZE_REPORT_TYPES, the same list the tile
-                    counts and the map draws, so the key cannot describe a
-                    different map from the one beside it. Written out by hand it
-                    had gone stale in both directions: it advertised Traffic Jam,
-                    which stopped being a report when density and reports were
-                    separated, and omitted Road closed, which is 7 of the 16
-                    reports live on the corridor. */}
-                {WAZE_REPORT_TYPES.map((k) => {
-                  const v = lookOf(k);
-                  const Icon = v.icon;
-                  return (
-                    <div key={k} className="mc-report-row">
-                      <span className={`mc-icon-bg ${v.tone}`}><Icon size={12} /></span> {v.label}
-                    </div>
-                  );
-                })}
-                <div className="mc-report-row"><span className="mc-icon-bg cyan" style={{ backgroundColor: "#06b6d4" }}><Milestone size={12} /></span> Toll Plaza</div>
-              </div>
+              <MapLegend />
             </details>
           </TrafficMapPanel>
 

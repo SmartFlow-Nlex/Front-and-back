@@ -5806,3 +5806,70 @@ body {
   color: var(--text-muted);
   background: var(--bg-surface-hover);
 }
+
+/* ---------------------------------------------------------------------------
+   The shared map legend (components/maps/MapLegend.tsx).
+
+   Styled once so the key looks the same in the panel and in the maximised view.
+   Swatch colours are not set here — they come from the map's own palette, so a
+   change to what the map paints reaches the key without anyone remembering to
+   update it.
+   ------------------------------------------------------------------------- */
+.map-legend {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  font-size: 11.5px;
+  color: var(--text-primary);
+}
+
+.map-legend h4 {
+  margin: 0;
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+.map-legend h4:not(:first-child) { margin-top: 7px; }
+
+.map-legend-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  line-height: 1.3;
+}
+
+.map-legend-line {
+  flex: none;
+  width: 20px;
+  height: 4px;
+  border-radius: 999px;
+}
+
+.map-legend-chip {
+  flex: none;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #ffffff;
+}
+
+.map-legend-dir {
+  flex: none;
+  width: 18px;
+  height: 18px;
+  border-radius: 5px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--bg-surface-hover);
+  border: 1px solid var(--border-default);
+  color: var(--text-secondary);
+  font-size: 9px;
+  transform: rotate(-90deg);
+}
+.map-legend-dir.flip { transform: rotate(90deg); }

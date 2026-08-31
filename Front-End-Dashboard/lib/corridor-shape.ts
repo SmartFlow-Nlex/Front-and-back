@@ -43,16 +43,25 @@ export type LngLat = [number, number];
    reference is roughly road-shaped, the bins hold points that really are
    neighbours and the tolerance can close in.
 
-   Measured against the 2,059 OSM points that make up the mainline, refining
-   moves the fit from a median of 15.0 m and a worst case of 245 m to 6.1 m and
-   57 m. The passes below were chosen on those numbers: tightening further
-   lowers the median a little but lets the worst case climb again, and it is the
-   worst case that shows up as the road drawn somewhere it is not. */
+   The passes were settled by measuring against Mapbox's own motorway geometry
+   — the tarmac the reader sees under our ribbons — rather than against the OSM
+   file we build from, which cannot say whether the two agree. Sampling 14,860
+   basemap segments along the corridor, the line sits a median of 2.9 m from the
+   road, 15.9 m at the 95th percentile.
+
+   The last pass bins at 40 m with two smoothing passes rather than 25 m with
+   one. The finer version landed just as close but shivered: its heading changed
+   an average of 10.1 degrees per vertex against a motorway that turns
+   gradually, which read as a zigzag over smooth tarmac. Coarser bins and a
+   second pass halve that to 6.1 degrees and, unusually, fit slightly better
+   too — the jitter was noise, not detail. Smoothing harder keeps flattening the
+   wobble but starts cutting real curves: four passes reach 4.1 degrees at the
+   cost of pushing the worst case from 82 m to 117 m. */
 const PASSES = [
   { halfWidth: 250, bin: 60, smooth: 2 },  // reference: the chain of exits
   { halfWidth: 120, bin: 30, smooth: 1 },
   { halfWidth: 80, bin: 25, smooth: 1 },
-  { halfWidth: 60, bin: 25, smooth: 1 },
+  { halfWidth: 60, bin: 40, smooth: 2 },
 ];
 
 // Metres per degree near 15°N. The corridor spans half a degree, so a fixed

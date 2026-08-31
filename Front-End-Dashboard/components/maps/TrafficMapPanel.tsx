@@ -133,15 +133,25 @@ export default function TrafficMapPanel({ title, subtitle, badge, endpoint, laye
       "case", ["==", ["get", "direction"], "NB"], px, -px,
     ];
     const OFFSET = [
-      "interpolate", ["linear"], ["zoom"],
-      /* Held near the real carriageway separation at close zoom. A pixel is
-         about 2.3 m at z16, so the old 11 put the ribbons 50 m apart when NLEX
-         is nearer 25 — they sat either side of the road rather than on it. The
-         wider spread is kept at low zoom, where the two would otherwise merge
-         into one line before the reader can tell there are two. */
-      8, side(3.6),
-      12, side(6),
-      16, side(6),
+      "interpolate", ["exponential", 2], ["zoom"],
+      /* Offset is in screen pixels, and a pixel covers 151230 / 2^zoom metres
+         at this latitude — 37 m at z12, 2.3 m at z16. A fixed pixel offset
+         therefore means a wildly varying real one: the 6 px here put the two
+         ribbons 222 m apart at z12 and 14 m apart at z16, which is why the road
+         looked pinned to the tarmac when zoomed in and adrift when pulled back.
+
+         An exponential-2 curve holds a real distance instead, because the
+         metres a pixel covers halve with each zoom step while the interpolation
+         doubles. From z14 up this tracks roughly 14 m either side of the
+         centreline, which is about NLEX's carriageway separation.
+
+         Below z14 it holds a 2 px floor. Geographically that is too wide, but
+         the corridor is a hairline there and the two directions would otherwise
+         collapse into one before the reader can see there are two; 2 px of
+         error is invisible against a line drawn 9 px wide. */
+      9, side(2),
+      14, side(2),
+      18, side(25.6),
     ] as unknown as mapboxgl.ExpressionSpecification;
 
     mapboxgl.accessToken = token;
@@ -501,7 +511,7 @@ export default function TrafficMapPanel({ title, subtitle, badge, endpoint, laye
         layout: { "line-join": "round", "line-cap": "round" },
         paint: {
           "line-color": PALETTE.casing,
-          "line-width": ["interpolate", ["linear"], ["zoom"], 8, 8, 12, 15, 16, 23],
+          "line-width": ["interpolate", ["linear"], ["zoom"], 8, 8, 12, 15, 16, 15, 18, 26],
           "line-opacity": 1,
           "line-offset": OFFSET,
         },
@@ -525,7 +535,7 @@ export default function TrafficMapPanel({ title, subtitle, badge, endpoint, laye
             // nothing here, rather than implying a free flow it never saw.
             PALETTE.noData,
           ],
-          "line-width": ["interpolate", ["linear"], ["zoom"], 8, 5, 12, 10, 16, 16],
+          "line-width": ["interpolate", ["linear"], ["zoom"], 8, 5, 12, 10, 16, 10, 18, 18],
           "line-opacity": 1,
           "line-offset": OFFSET,
         },
@@ -659,7 +669,7 @@ export default function TrafficMapPanel({ title, subtitle, badge, endpoint, laye
             ],
             paint: {
               "line-pattern": id,
-              "line-width": ["interpolate", ["linear"], ["zoom"], 8, 2.5, 12, 5, 16, 8],
+              "line-width": ["interpolate", ["linear"], ["zoom"], 8, 2.5, 12, 5, 16, 5, 18, 9],
               "line-offset": OFFSET,
             },
           });

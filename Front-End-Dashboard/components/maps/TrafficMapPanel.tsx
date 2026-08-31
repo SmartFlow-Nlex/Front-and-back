@@ -960,7 +960,6 @@ export default function TrafficMapPanel({ title, subtitle, badge, endpoint, laye
                   </span>
                 </div>
                 <div class="nlex-pop-body">
-                  <span class="nlex-pop-tag">${toll.type}</span>
                   <p class="nlex-pop-note">${toll.description}</p>
                 </div>
                 <div class="nlex-pop-foot">Toll system &middot; ${toll.rates}</div>

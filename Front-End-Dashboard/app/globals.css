@@ -5799,19 +5799,6 @@ body {
   text-align: right;
 }
 
-.nlex-pop-tag {
-  align-self: flex-start;
-  font-size: 9.5px;
-  font-weight: 700;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-  padding: 2px 7px;
-  border-radius: 999px;
-  background: var(--bg-surface-hover);
-  border: 1px solid var(--border-default);
-  color: var(--text-secondary);
-}
-
 .nlex-pop-foot {
   padding: 7px 12px;
   border-top: 1px solid var(--border-default);

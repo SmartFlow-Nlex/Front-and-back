@@ -135,23 +135,24 @@ export default function TrafficMapPanel({ title, subtitle, badge, endpoint, laye
     const OFFSET = [
       "interpolate", ["exponential", 2], ["zoom"],
       /* Offset is in screen pixels, and a pixel covers 151230 / 2^zoom metres
-         at this latitude — 37 m at z12, 2.3 m at z16. A fixed pixel offset
-         therefore means a wildly varying real one: the 6 px here put the two
-         ribbons 222 m apart at z12 and 14 m apart at z16, which is why the road
-         looked pinned to the tarmac when zoomed in and adrift when pulled back.
+         at this latitude — 37 m at z12, 2.3 m at z16 — so a fixed pixel offset
+         means a wildly varying real one. Above z15 that matters and the
+         exponential-2 curve cancels it: the metres a pixel covers halve with
+         each zoom step while the interpolation doubles, holding roughly 15 m
+         either side of the centreline, which is about NLEX's separation.
 
-         An exponential-2 curve holds a real distance instead, because the
-         metres a pixel covers halve with each zoom step while the interpolation
-         doubles. From z14 up this tracks roughly 14 m either side of the
-         centreline, which is about NLEX's carriageway separation.
-
-         Below z14 it holds a 2 px floor. Geographically that is too wide, but
-         the corridor is a hairline there and the two directions would otherwise
-         collapse into one before the reader can see there are two; 2 px of
-         error is invisible against a line drawn 9 px wide. */
-      9, side(2),
-      14, side(2),
-      18, side(25.6),
+         Below z15 it cannot be honoured. Two ribbons 15 m apart are a fifth of
+         a pixel at z12, so drawing them faithfully would merge them into one
+         line — and an offset smaller than half the line width makes them
+         overlap into a single band with no roadbed showing between, which is
+         exactly what a 2 px floor did here. The floor is therefore set by the
+         drawing, not the geography: 7 px against a 9 px ribbon leaves 5 px of
+         casing visible down the middle. At that zoom the pair still sits well
+         inside the road's own drawn width, so it reads as a divided highway
+         rather than as two roads. */
+      9, side(7),
+      15, side(7),
+      18, side(24),
     ] as unknown as mapboxgl.ExpressionSpecification;
 
     mapboxgl.accessToken = token;
@@ -511,7 +512,7 @@ export default function TrafficMapPanel({ title, subtitle, badge, endpoint, laye
         layout: { "line-join": "round", "line-cap": "round" },
         paint: {
           "line-color": PALETTE.casing,
-          "line-width": ["interpolate", ["linear"], ["zoom"], 8, 8, 12, 15, 16, 15, 18, 26],
+          "line-width": ["interpolate", ["linear"], ["zoom"], 8, 8, 12, 15, 16, 17, 18, 28],
           "line-opacity": 1,
           "line-offset": OFFSET,
         },
@@ -535,7 +536,7 @@ export default function TrafficMapPanel({ title, subtitle, badge, endpoint, laye
             // nothing here, rather than implying a free flow it never saw.
             PALETTE.noData,
           ],
-          "line-width": ["interpolate", ["linear"], ["zoom"], 8, 5, 12, 10, 16, 10, 18, 18],
+          "line-width": ["interpolate", ["linear"], ["zoom"], 8, 5, 12, 9, 16, 11, 18, 18],
           "line-opacity": 1,
           "line-offset": OFFSET,
         },
@@ -669,7 +670,7 @@ export default function TrafficMapPanel({ title, subtitle, badge, endpoint, laye
             ],
             paint: {
               "line-pattern": id,
-              "line-width": ["interpolate", ["linear"], ["zoom"], 8, 2.5, 12, 5, 16, 5, 18, 9],
+              "line-width": ["interpolate", ["linear"], ["zoom"], 8, 2.5, 12, 4.5, 16, 5.5, 18, 9],
               "line-offset": OFFSET,
             },
           });
@@ -1115,11 +1116,12 @@ export default function TrafficMapPanel({ title, subtitle, badge, endpoint, laye
             </div>
           `);
 
-          /* Lifted clear of the carriageway. Reports land on the road, which is
-             exactly where the plaza pins are, so they sat on top of them and
-             took the hover. Anchored at the bottom and raised, a report points
-             at its spot without covering it. */
-          const marker = new mapboxgl.Marker({ element: el, anchor: "bottom", offset: [0, -6] })
+          /* Centred on the report's own position. Bottom-anchoring and lifting
+             it put the pin's centre about 20 px above the coordinates Waze gave
+             — nearly 200 m at z13 — so reports floated off the road they were
+             on. Overlap with the plaza pins is settled by stacking instead:
+             plazas sit above reports and stay hoverable. */
+          const marker = new mapboxgl.Marker({ element: el, anchor: "center" })
             .setLngLat(coords as [number, number])
             .addTo(map);
 

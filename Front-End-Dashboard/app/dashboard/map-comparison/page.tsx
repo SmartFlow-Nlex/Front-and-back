@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { AlertCircle, AlertTriangle, CarFront, ChevronDown, Clock, Cone, Map, Maximize2, Milestone, Navigation, Search, ShieldAlert, ZoomIn, ZoomOut } from "lucide-react";
+import { ChevronDown, Clock, Map, Maximize2, Milestone, Navigation, Search, ZoomIn, ZoomOut } from "lucide-react";
 import type { Feature } from "geojson";
 import TrafficMapPanel from "../../../components/maps/TrafficMapPanel";
 import WazeLiveModal from "../../../components/maps/WazeLiveModal";
@@ -11,7 +11,8 @@ const BACKEND = process.env.NEXT_PUBLIC_BACKEND_URL ?? "http://localhost:4000";
 
 import { displayExitName, FALLBACK_EXITS, useNlexExits, type NlexExit } from "../../../lib/nlex-exits";
 import { corridorGuard, type LngLat } from "../../../lib/corridor-shape";
-import { isActiveReport } from "../../../lib/waze-reports";
+import { isActiveReport, WAZE_REPORT_TYPES } from "../../../lib/waze-reports";
+import { lookOf } from "../../../lib/waze-report-look";
 import nlexGeometry from "../../../components/maps/nlex-geometry.json";
 
 /* The same test the map uses, so the counters below cannot disagree with what
@@ -240,6 +241,7 @@ export default function MapComparisonPage() {
             endpoint={`${process.env.NEXT_PUBLIC_BACKEND_URL ?? "http://localhost:4000"}/api/map-comparison/real-time`}
             layerColor="#4a6ff2"
             tone="blue"
+            paused={wazeMax}
           >
 
             {/* Waze Legend Overlay */}
@@ -263,11 +265,22 @@ export default function MapComparisonPage() {
               </div>
               <div className="mc-legend-section">
                 <h4>Waze Reports</h4>
-                <div className="mc-report-row"><span className="mc-icon-bg red"><CarFront size={12} /></span> Traffic Jam</div>
-                <div className="mc-report-row"><span className="mc-icon-bg orange"><Cone size={12} /></span> Construction</div>
-                <div className="mc-report-row"><span className="mc-icon-bg blue"><ShieldAlert size={12} /></span> Police</div>
-                <div className="mc-report-row"><span className="mc-icon-bg darkred"><AlertTriangle size={12} /></span> Accident</div>
-                <div className="mc-report-row"><span className="mc-icon-bg yellow"><AlertCircle size={12} /></span> Hazard</div>
+                {/* Generated from WAZE_REPORT_TYPES, the same list the tile
+                    counts and the map draws, so the key cannot describe a
+                    different map from the one beside it. Written out by hand it
+                    had gone stale in both directions: it advertised Traffic Jam,
+                    which stopped being a report when density and reports were
+                    separated, and omitted Road closed, which is 7 of the 16
+                    reports live on the corridor. */}
+                {WAZE_REPORT_TYPES.map((k) => {
+                  const v = lookOf(k);
+                  const Icon = v.icon;
+                  return (
+                    <div key={k} className="mc-report-row">
+                      <span className={`mc-icon-bg ${v.tone}`}><Icon size={12} /></span> {v.label}
+                    </div>
+                  );
+                })}
                 <div className="mc-report-row"><span className="mc-icon-bg cyan" style={{ backgroundColor: "#06b6d4" }}><Milestone size={12} /></span> Toll Plaza</div>
               </div>
             </details>

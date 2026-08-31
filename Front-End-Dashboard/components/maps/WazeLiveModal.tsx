@@ -3,12 +3,12 @@
 import { useEffect, useState } from "react";
 import { mapPalette } from "../../lib/map-palette";
 import { useChartTheme } from "../../lib/chart-theme";
-import {
-  AlertCircle, AlertTriangle, CarFront, Clock, Cone, Gauge,
-  RefreshCw, ShieldAlert, TrendingUp, X,
-} from "lucide-react";
+import { AlertCircle, Clock, Gauge, RefreshCw, TrendingUp, X } from "lucide-react";
 import TrafficMapPanel from "./TrafficMapPanel";
 import { WAZE_REPORT_TYPES } from "../../lib/waze-reports";
+// Shared with the map markers and the collapsed legend, so all three
+// name and draw a report the same way.
+import { lookOf } from "../../lib/waze-report-look";
 
 /**
  * Maximised view of the Waze panel.
@@ -49,16 +49,6 @@ type Overview = {
 };
 
 /** Waze alert types, mapped to the icon and tone the legend uses. */
-const ALERT_LOOK: Record<string, { icon: typeof CarFront; tone: string; label: string }> = {
-  JAM: { icon: CarFront, tone: "red", label: "Traffic jam" },
-  ACCIDENT: { icon: AlertTriangle, tone: "darkred", label: "Accident" },
-  CONSTRUCTION: { icon: Cone, tone: "orange", label: "Road construction" },
-  ROAD_CLOSED: { icon: Cone, tone: "orange", label: "Road closed" },
-  POLICE: { icon: ShieldAlert, tone: "blue", label: "Police activity" },
-  HAZARD: { icon: AlertCircle, tone: "yellow", label: "Hazard on road" },
-  WEATHERHAZARD: { icon: AlertCircle, tone: "yellow", label: "Weather hazard" },
-};
-const lookOf = (t: string) => ALERT_LOOK[t] ?? { icon: AlertCircle, tone: "yellow", label: t.replace(/_/g, " ").toLowerCase() };
 
 const agoText = (m: number | null) => (m == null ? "—" : m < 1 ? "Just now" : m < 60 ? `${m} min ago` : `${Math.floor(m / 60)}h ${m % 60}m ago`);
 
@@ -234,9 +224,15 @@ export default function WazeLiveModal({ open, onClose }: { open: boolean; onClos
                     : "No jams reported on the corridor"}
                 </p>
 
-                <h4 className="wz-sec">Current alerts</h4>
+                {/* Every report, not the first six. The tile counted them all while
+                    the list showed six, so the two disagreed by however many
+                    were hidden — the list is the thing people read to find out
+                    what the number means. It scrolls instead of truncating. */}
+                <h4 className="wz-sec">
+                  Current alerts{data?.alerts?.length ? ` (${data.alerts.length})` : ""}
+                </h4>
                 <ul className="wz-alerts">
-                  {(data?.alerts ?? []).slice(0, 6).map((a, i) => {
+                  {(data?.alerts ?? []).map((a, i) => {
                     const look = lookOf(a.type);
                     const Icon = look.icon;
                     /* A row is a button, not decoration: it points at a real
@@ -245,7 +241,7 @@ export default function WazeLiveModal({ open, onClose }: { open: boolean; onClos
                        rather than being lifted into shared state here. */
                     const locatable = a.lon != null && a.lat != null;
                     return (
-                      <li key={a.uuid ?? `${a.type}-${a.nearestExit}-${i}`}>
+                      <li key={`${a.uuid ?? a.type}-${i}`}>
                         <button
                           type="button"
                           className="wz-alert-row"

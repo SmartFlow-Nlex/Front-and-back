@@ -94,12 +94,30 @@ export async function getLiveCorridorOverview() {
     }>(
       `WITH latest AS (
          SELECT raw_data FROM bronze.waze_raw_alerts ORDER BY ingested_at DESC LIMIT 1
-       ), a AS (
+       ), expanded AS (
          SELECT x,
                 (x->'location'->>'x')::float AS lon,
                 (x->'location'->>'y')::float AS lat
          FROM latest, LATERAL jsonb_array_elements(raw_data::jsonb) AS x
          WHERE x->'location' IS NOT NULL
+       ), a AS (
+         /* One row per report.
+
+            A single Waze snapshot repeats the same alert: in a live sample one
+            uuid appeared three times and another twice, so fourteen rows were
+            eleven reports. That inflated the Active Reports tile and stacked
+            duplicate pins on the same spot, which is invisible on the map but
+            counted. Keeping the highest-rated copy of each uuid means the row
+            that survives is the best-attested one.
+
+            Rows with no uuid cannot be compared, so they are left alone rather
+            than being collapsed into a single nameless report. */
+         SELECT DISTINCT ON (COALESCE(x->>'uuid', gen_random_uuid()::text))
+                x, lon, lat
+         FROM expanded
+         ORDER BY COALESCE(x->>'uuid', gen_random_uuid()::text),
+                  (x->>'reportRating')::int DESC NULLS LAST,
+                  (x->>'reliability')::int  DESC NULLS LAST
        )
        SELECT a.x->>'type'                    AS type,
               NULLIF(a.x->>'street', '')      AS street,
@@ -296,12 +314,30 @@ export async function getLiveMapGeoJson() {
     }>(
       `WITH latest AS (
          SELECT raw_data FROM bronze.waze_raw_alerts ORDER BY ingested_at DESC LIMIT 1
-       ), a AS (
+       ), expanded AS (
          SELECT x,
                 (x->'location'->>'x')::float AS lon,
                 (x->'location'->>'y')::float AS lat
          FROM latest, LATERAL jsonb_array_elements(raw_data::jsonb) AS x
          WHERE x->'location' IS NOT NULL
+       ), a AS (
+         /* One row per report.
+
+            A single Waze snapshot repeats the same alert: in a live sample one
+            uuid appeared three times and another twice, so fourteen rows were
+            eleven reports. That inflated the Active Reports tile and stacked
+            duplicate pins on the same spot, which is invisible on the map but
+            counted. Keeping the highest-rated copy of each uuid means the row
+            that survives is the best-attested one.
+
+            Rows with no uuid cannot be compared, so they are left alone rather
+            than being collapsed into a single nameless report. */
+         SELECT DISTINCT ON (COALESCE(x->>'uuid', gen_random_uuid()::text))
+                x, lon, lat
+         FROM expanded
+         ORDER BY COALESCE(x->>'uuid', gen_random_uuid()::text),
+                  (x->>'reportRating')::int DESC NULLS LAST,
+                  (x->>'reliability')::int  DESC NULLS LAST
        )
        SELECT a.lon, a.lat,
               a.x->>'type'               AS type,

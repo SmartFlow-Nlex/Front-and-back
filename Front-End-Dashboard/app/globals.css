@@ -5665,3 +5665,7 @@ body {
   color: var(--text-muted, #94a3b8);
   word-break: break-all;
 }
+
+/* The alerts list holds every report now, so it scrolls rather than growing
+   the sidebar past the viewport. */
+.wz-alerts { max-height: 320px; overflow-y: auto; }

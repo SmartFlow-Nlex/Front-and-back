@@ -10,6 +10,7 @@ import { FALLBACK_EXITS } from "../../lib/nlex-exits";
 import { useChartTheme } from "../../lib/chart-theme";
 import { mapPalette } from "../../lib/map-palette";
 import { isReportType } from "../../lib/waze-reports";
+import { lookOf } from "../../lib/waze-report-look";
 
 type Props = {
   title: string;
@@ -17,6 +18,9 @@ type Props = {
   badge?: React.ReactNode;
   /** Hides the panel's own header — used when a parent supplies one. */
   chromeless?: boolean;
+  /** Stops the flow animation while the panel is covered, e.g. by the
+      maximised view. The map stays mounted so reopening is instant. */
+  paused?: boolean;
   endpoint: string;
   layerColor: string;
   tone: "blue" | "purple";
@@ -68,7 +72,7 @@ const sinceLabel = (iso: string) => {
   return `${Math.floor(h / 24)}d ${h % 24}h ago`;
 };
 
-export default function TrafficMapPanel({ title, subtitle, badge, endpoint, layerColor, tone, children, chromeless = false }: Props) {
+export default function TrafficMapPanel({ title, subtitle, badge, endpoint, layerColor, tone, children, chromeless = false, paused = false }: Props) {
   // Reuses the charts' theme hook, so the map switches with everything else.
   const { isDark } = useChartTheme();
   const mapRef = useRef<mapboxgl.Map | null>(null);
@@ -79,6 +83,12 @@ export default function TrafficMapPanel({ title, subtitle, badge, endpoint, laye
   const resetViewHandlerRef = useRef<(() => void) | null>(null);
   const showReportHandlerRef = useRef<((e: Event) => void) | null>(null);
   const flowFrameRef = useRef<number | null>(null);
+  /* Read inside the animation frame rather than closed over, so pausing does
+     not have to tear the map down and rebuild it. */
+  const pausedRef = useRef(paused);
+  useEffect(() => {
+    pausedRef.current = paused;
+  }, [paused]);
   // "ok" once the map builds; otherwise show a graceful fallback instead of
   // letting Mapbox throw and take the whole page down.
   const [status, setStatus] = useState<"ok" | "no-token" | "error">("ok");
@@ -241,6 +251,15 @@ export default function TrafficMapPanel({ title, subtitle, badge, endpoint, laye
     // Shared with the page's stats, so the map and the counters agree on what
     // counts as a report about NLEX. See lib/corridor-shape.ts.
     const isRealtimeEndpoint = endpoint.includes("real-time");
+
+    /* map.on("load") is asynchronous, so a theme switch or an unmount can tear
+       the effect down before it fires. Everything started in there — the
+       animation frame and the poll — has to check this, or it runs on a map
+       that has already been removed. Each toggle used to leave another rAF loop
+       and another 15-second poll behind, all of them writing dash values to the
+       same six layers, which is what made the flow stutter and jump. */
+    let disposed = false;
+    let pollTimer: ReturnType<typeof setInterval> | null = null;
 
     const guard = corridorGuard(corridorLine, corridorExits);
 
@@ -983,47 +1002,15 @@ export default function TrafficMapPanel({ title, subtitle, badge, endpoint, laye
           const coords = feature.geometry.coordinates;
           const props = feature.properties;
           const typeLabel = props.type || "Alert";
-          const iconEmoji = props.type === "ACCIDENT" ? "🚗💥" : props.type === "POLICE" ? "👮" : props.type === "CONSTRUCTION" ? "🚧" : props.type === "JAM" ? "🛑" : "⚠️";
-          
-          let color = "#eab308"; // Hazard/Fallback (Yellow)
-          let iconSvg = "";
-          
-          if (props.type === "ACCIDENT") {
-            color = "#991b1b"; // Dark red
-            iconSvg = `
-              <svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round">
-                <path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z"/>
-                <line x1="12" y1="9" x2="12" y2="13"/>
-                <line x1="12" y1="17" x2="12.01" y2="17"/>
-              </svg>
-            `;
-          } else if (props.type === "POLICE") {
-            color = "#2563eb"; // Blue
-            iconSvg = `
-              <svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round">
-                <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
-              </svg>
-            `;
-          } else if (props.type === "CONSTRUCTION") {
-            color = "#ea580c"; // Orange
-            iconSvg = `
-              <svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round">
-                <path d="m6 21 6-18 6 18"/>
-                <path d="M4.5 21h15"/>
-                <path d="M8 15h8"/>
-                <path d="M9 11h6"/>
-              </svg>
-            `;
-          } else {
-            color = "#eab308"; // Yellow (Hazard / Default)
-            iconSvg = `
-              <svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round">
-                <circle cx="12" cy="12" r="10"/>
-                <line x1="12" y1="8" x2="12" y2="12"/>
-                <line x1="12" y1="16" x2="12.01" y2="16"/>
-              </svg>
-            `;
-          }
+          /* One shared definition of how a report looks — see
+             lib/waze-report-look.tsx. This was an if/else chain that knew about
+             ACCIDENT, POLICE and CONSTRUCTION and sent everything else to the
+             generic hazard pin, so all 7 live ROAD_CLOSED reports drew as
+             hazards. */
+          const look = lookOf(props.type);
+          const iconEmoji = look.label;
+          const color = look.colour;
+          const iconSvg = look.svg;
 
           const el = document.createElement("div");
           el.className = "waze-alert-marker";
@@ -1119,23 +1106,54 @@ export default function TrafficMapPanel({ title, subtitle, badge, endpoint, laye
          seven times for every one step of the standstill ribbon. One rAF loop
          drives all of them rather than three timers, and it parks itself when
          the tab is backgrounded instead of animating a map nobody is watching. */
-      const DASH_STEPS: [number, number, number][] = [
-        [0, 4, 3], [0.5, 4, 2.5], [1, 4, 2], [1.5, 4, 1.5],
-        [2, 4, 1], [2.5, 4, 0.5], [3, 4, 0],
-      ];
-      const tierClocks = FLOW_TIERS.map(() => ({ last: 0, step: 0 }));
+      /* Phase is computed from the clock rather than counted up, and the dash
+         is built from it rather than picked out of a table.
+
+         The old version stepped through seven fixed dasharrays on a per-tier
+         timer: the fast ribbon changed 18 times a second but only had 7 places
+         to be, so it visibly hopped, and the slow ribbon redrew 2.6 times a
+         second, which reads as stuttering rather than as crawling. Deriving the
+         dash from elapsed time gives as many intermediate positions as there
+         are frames, and missed frames stop mattering because nothing
+         accumulates — a late frame lands where it should have been rather than
+         one step behind.
+
+         Updates are capped at ~30fps because line-dasharray is not
+         interpolatable: every change rebuilds the layer's entry in Mapbox's
+         dash atlas, and doing that 60 times a second on six layers was most of
+         the cost. At this phase resolution 30fps is indistinguishable from 60. */
+      const DASH_PERIOD = 7;      // pattern length, in line-width units
+      const PHASE_STEPS = 28;     // quantised so the atlas caches a bounded set
+      const FRAME_MS = 33;
+
+      const dashAt = (phase: number): [number, number, number] => {
+        // A gap, then the lit segment, then the rest of the gap. Total is always
+        // DASH_PERIOD, so the pattern slides instead of stretching.
+        const lead = (phase / PHASE_STEPS) * (DASH_PERIOD - 4);
+        return [lead, 4, DASH_PERIOD - 4 - lead];
+      };
+
+      let lastFrame = 0;
+      const lastPhase = FLOW_TIERS.map(() => -1);
 
       const animateFlow = (now: number) => {
         flowFrameRef.current = requestAnimationFrame(animateFlow);
+        // Behind the maximised view there is nothing to see, and two maps
+        // repainting six dashed layers each was most of the cost of opening it.
+        if (pausedRef.current) return;
+        if (now - lastFrame < FRAME_MS) return;
+        lastFrame = now;
+
         FLOW_TIERS.forEach((tier, i) => {
-          const clock = tierClocks[i];
-          if (now - clock.last < tier.stepMs) return;
-          clock.last = now;
-          clock.step = (clock.step + 1) % DASH_STEPS.length;
-          const forward = DASH_STEPS[clock.step];
-          const back = DASH_STEPS[(DASH_STEPS.length - clock.step) % DASH_STEPS.length];
-          // Guarded: a style reload or unmount mid-frame would otherwise throw
-          // on a layer that no longer exists.
+          // One full pattern per stepMs * PHASE_STEPS, so the tiers keep the
+          // same relative speeds they had before.
+          const cycle = tier.stepMs * 7;
+          const phase = Math.floor(((now % cycle) / cycle) * PHASE_STEPS);
+          if (phase === lastPhase[i]) return;   // nothing to repaint
+          lastPhase[i] = phase;
+
+          const forward = dashAt(phase);
+          const back = dashAt(PHASE_STEPS - phase);
           try {
             const nb = `carriageway-flow-nb-${tier.id}`;
             const sb = `carriageway-flow-sb-${tier.id}`;
@@ -1146,14 +1164,15 @@ export default function TrafficMapPanel({ title, subtitle, badge, endpoint, laye
           }
         });
       };
-      flowFrameRef.current = requestAnimationFrame(animateFlow);
+      if (!disposed) flowFrameRef.current = requestAnimationFrame(animateFlow);
 
       if (isRealtime) {
         renderAlerts(data);
       }
 
       const source = map.getSource("traffic") as GeoJSONSource;
-      const _pollingInterval = setInterval(async () => {
+      pollTimer = setInterval(async () => {
+        if (disposed) return;
         try {
           const fresh = onlyOnCorridor(
             await fetch(endpoint, { cache: "no-store" }).then((r) => r.json()),
@@ -1172,6 +1191,13 @@ export default function TrafficMapPanel({ title, subtitle, badge, endpoint, laye
     });
 
     return () => {
+      disposed = true;
+      if (pollTimer != null) {
+        // Was assigned to an unused local and never cleared, so every rebuild
+        // left a live 15-second fetch running against a removed map.
+        clearInterval(pollTimer);
+        pollTimer = null;
+      }
       resizeObserver.disconnect();
       if (flowFrameRef.current != null) {
         cancelAnimationFrame(flowFrameRef.current);

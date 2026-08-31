@@ -15,9 +15,6 @@ import { WAZE_REPORT_TYPES } from "../../lib/waze-reports";
  * needs explaining, and it drew its densities in colours that were not even the
  * map's.
  *
- * The two groups sit side by side rather than stacked: as one column the key
- * ran the full height of the panel and crowded the map it was explaining.
- *
  * Nothing here is written by hand. The densities come from the map's own
  * palette and the reports from WAZE_REPORT_TYPES, which is also the list the
  * map draws and the Active Reports tile counts, so the key cannot describe a
@@ -32,42 +29,32 @@ const DENSITY = [
   { level: 5 as const, label: "Standstill" },
 ];
 
-export default function MapLegend({ showNotReported = false }: { showNotReported?: boolean }) {
+export default function MapLegend() {
   const { isDark } = useChartTheme();
   const palette = mapPalette(isDark);
 
   return (
     <div className="map-legend">
-      <section>
-        <h4>Traffic density</h4>
-        {DENSITY.map((d) => (
-          <div key={d.level} className="wz-legend-row">
-            <span className="wz-line" style={{ background: palette.level[d.level] }} /> {d.label}
-          </div>
-        ))}
+      <h4>Traffic density</h4>
+      {DENSITY.map((d) => (
+        <div key={d.level} className="wz-legend-row">
+          <span className="wz-line" style={{ background: palette.level[d.level] }} /> {d.label}
+        </div>
+      ))}
 
       {/* Only where it can appear. On the live map an unreported stretch is
           drawn as free flow, so grey never shows; on the forecast, which covers
           seven segments of nineteen, it is most of the road. */}
-        {showNotReported && (
-          <div className="wz-legend-row">
-            <span className="wz-line" style={{ background: palette.noData }} /> Not forecast
+      <h4 className="wz-legend-gap">Waze reports</h4>
+      {WAZE_REPORT_TYPES.map((k) => {
+        const v = lookOf(k);
+        const Icon = v.icon;
+        return (
+          <div key={k} className="wz-legend-row">
+            <span className={`wz-chip ${v.tone}`}><Icon size={11} /></span> {v.label}
           </div>
-        )}
-      </section>
-
-      <section>
-        <h4>Waze reports</h4>
-        {WAZE_REPORT_TYPES.map((k) => {
-          const v = lookOf(k);
-          const Icon = v.icon;
-          return (
-            <div key={k} className="wz-legend-row">
-              <span className={`wz-chip ${v.tone}`}><Icon size={11} /></span> {v.label}
-            </div>
-          );
-        })}
-      </section>
+        );
+      })}
     </div>
   );
 }

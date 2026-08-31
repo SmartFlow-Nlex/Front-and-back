@@ -4502,8 +4502,8 @@ body {
 .mc-legend-card > summary {
   list-style: none;
   cursor: pointer;
-  padding: 7px 14px;
-  font-size: 0.7rem;
+  padding: 8px 12px;
+  font-size: 0.75rem;
   font-weight: 700;
   color: var(--text-primary);
   display: flex;
@@ -5815,37 +5815,10 @@ body {
    .wz-legend-row / .wz-line / .wz-chip, which are global, so the key looks the
    same in the panel as in the maximised view; only the heading and the base
    size need setting for the panel, where .wz-legend does not wrap it. */
-.map-legend {
-  /* Side by side, collapsing to one column only when there is genuinely no
-     room. Stacked, the key ran the full height of the panel. */
-  display: grid;
-  /* Two explicit columns, not auto-fit: the card is absolutely positioned and
-     shrink-wraps its content, so an auto-fit track has no width to fit into and
-     silently collapses back to a single column. */
-  grid-template-columns: auto auto;
-  gap: 4px 22px;
-  align-items: start;
-  font-size: 0.73rem;
-  color: var(--text-secondary);
-}
-
+.map-legend { font-size: 0.73rem; color: var(--text-secondary); }
 .map-legend h4 {
-  margin: 0 0 6px;
-  font-size: 0.63rem;
+  margin: 0 0 7px;
+  font-size: 0.72rem;
   font-weight: 700;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-  color: var(--text-muted);
-  white-space: nowrap;
+  color: var(--text-primary);
 }
-
-/* Rows of a fixed height read as a list rather than as loose text, and the
-   label never wraps under its own swatch. */
-.map-legend .wz-legend-row {
-  padding: 0;
-  min-height: 21px;
-  gap: 7px;
-  white-space: nowrap;
-}
-.map-legend .wz-chip { width: 17px; height: 17px; }
-.map-legend .wz-line { width: 18px; height: 3.5px; }

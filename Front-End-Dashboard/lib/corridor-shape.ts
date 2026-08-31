@@ -168,6 +168,33 @@ export function sliceCorridor(raw: LngLat[], exits: LngLat[]): LngLat[][] {
 /** Covers the carriageways, their ramps and the service roads alongside. */
 export const CORRIDOR_TOLERANCE_M = 200;
 
+/**
+ * Is this Waze street name the NLEX corridor itself?
+ *
+ * Being within the tolerance is not enough to be the expressway. Service roads,
+ * frontage roads and the local roads that cross NLEX run within metres of it for
+ * long stretches, so geometry alone let a jam on "East Service Rd" and one on
+ * "Santa Ana - Mexico - San Luis - San Simon Rd" paint mainline ribbons red.
+ *
+ * Ramps and exits are kept deliberately: "E1: NLEX N On-Ramp" and "NLEX Mexico
+ * Exit" are NLEX, and traffic backing onto a ramp is traffic on the corridor.
+ * Matching "expressway" alone would leak in SLEX and Skyway, so the name has to
+ * say NLEX or North Luzon.
+ *
+ * Mirrors isNlexCorridorStreet in the backend's lib/nlex-corridor.ts, which
+ * applies the same test to the alerts.
+ */
+export function isNlexStreet(street: string | null | undefined): boolean {
+  const s = (street || "").toLowerCase();
+  if (!s) return true; // Waze named no road; geometry is all there is to go on.
+  const isNlex = s.includes("nlex") || s.includes("north luzon");
+  const isNeighbour =
+    s.includes("service") || s.includes("crossing") || s.includes("exit rd") ||
+    s.includes("slex") || s.includes("skyway") || s.includes("sctex") ||
+    s.includes("tplex") || s.includes("cavitex");
+  return isNlex && !isNeighbour;
+}
+
 export type SnappedJam = {
   coords: LngLat[];
   direction: "NB" | "SB";
@@ -348,7 +375,7 @@ export function corridorGuard(raw: LngLat[], exits: LngLat[], toleranceM = CORRI
       if (!fc?.features) return fc;
       return {
         ...fc,
-        features: (fc.features as { properties?: { feature_type?: string } }[]).filter((f) => {
+        features: (fc.features as { properties?: { feature_type?: string; street?: string } }[]).filter((f) => {
           const kind = f?.properties?.feature_type;
           /* Jams only.
 
@@ -366,8 +393,15 @@ export function corridorGuard(raw: LngLat[], exits: LngLat[], toleranceM = CORRI
              evidence of a different road.
 
              Jams keep the test. They are LineStrings that have to be snapped
-             onto the corridor to colour it, so their geometry has to be on it. */
+             onto the corridor to colour it, so their geometry has to be on it.
+
+             They are also tested by name, because a jam paints the road. Being
+             within the tolerance is not enough: service roads, frontage roads
+             and the local roads crossing NLEX run within metres of it, and a
+             jam on "East Service Rd" and one on "Santa Ana - Mexico - San Luis
+             - San Simon Rd" were colouring mainline ribbons red. */
           if (kind !== "jam") return true;
+          if (!isNlexStreet(f?.properties?.street)) return false;
           return onCorridor(f as Parameters<CorridorGuard["onCorridor"]>[0]);
         }),
       };

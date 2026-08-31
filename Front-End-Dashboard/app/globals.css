@@ -5502,23 +5502,32 @@ body {
   cursor: pointer;
 }
 
+/* Bigger and higher contrast than it was. At 20px with a 2px ring it read as
+   one more dot among the report pins; a plaza is a fixed landmark on the road
+   and wants to be picked out from the live reports at a glance, so it is larger,
+   solid, and ringed in white so it separates from whatever it sits on. */
 .toll-pin-dot {
-  width: 20px;
-  height: 20px;
+  width: 26px;
+  height: 26px;
   border-radius: 50%;
-  background: var(--bg-surface);
-  border: 2px solid #0e7490;
-  color: #0e7490;
+  background: #0e7490;
+  border: 2.5px solid #ffffff;
+  color: #ffffff;
   display: flex;
   align-items: center;
   justify-content: center;
-  box-shadow: 0 2px 6px rgba(15, 23, 42, 0.25);
+  box-shadow: 0 2px 8px rgba(15, 23, 42, 0.4);
   transition: transform 0.14s ease, box-shadow 0.14s ease;
 }
 
+:root[data-theme="dark"] .toll-pin-dot { border-color: #0b1220; }
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .toll-pin-dot { border-color: #0b1220; }
+}
+
 .toll-pin:hover .toll-pin-dot {
-  transform: scale(1.25);
-  box-shadow: 0 4px 12px rgba(14, 116, 144, 0.45);
+  transform: scale(1.22);
+  box-shadow: 0 4px 14px rgba(14, 116, 144, 0.6);
 }
 
 .toll-pin-label {

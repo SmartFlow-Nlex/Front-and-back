@@ -690,72 +690,21 @@ export default function TrafficMapPanel({ title, subtitle, badge, endpoint, laye
         },
       });
 
-      // Layer 3: Jam Lines Layer (Overlays on top for realtime)
-      map.addLayer({
-        id: "traffic-glow",
-        type: "line",
-        source: "traffic",
-        layout: { "line-join": "round", "line-cap": "round" },
-        paint: {
-          "line-color": [
-            "match", ["get", "level"],
-            1, PALETTE.level[1], 2, PALETTE.level[2], 3, PALETTE.level[3],
-            4, PALETTE.level[4], 5, PALETTE.level[5], PALETTE.level[0],
-          ],
-          "line-width": ["interpolate", ["linear"], ["zoom"], 8, 12, 12, 22, 16, 32],
-          "line-opacity": isDark ? 0.28 : 0.2,
-          "line-offset": OFFSET,
-          "line-blur": ["interpolate", ["linear"], ["zoom"], 8, 6, 16, 16],
-        },
-        filter: ["==", ["get", "feature_type"], "jam"],
-      });
+      /* The jam overlay and the alert circle layer are both gone.
 
-      map.addLayer({
-        id: "traffic-line",
-        type: "line",
-        source: "traffic",
-        layout: {
-          "line-join": "round",
-          "line-cap": "round",
-        },
-        paint: {
-          "line-color": [
-            "match",
-            ["get", "level"],
-            1, PALETTE.level[1], // Light
-            2, PALETTE.level[2], // Moderate
-            3, PALETTE.level[3], // Heavy
-            4, PALETTE.level[4], // Severe
-            5, PALETTE.level[5], // Standstill
-            PALETTE.level[0]     // Fallback
-          ],
-          "line-width": ["interpolate", ["linear"], ["zoom"], 8, 3.5, 12, 7, 16, 11],
-          "line-opacity": 0.95,
-          // Same offset as the carriageways, so a jam sits on its own direction
-          // instead of straddling both.
-          "line-offset": OFFSET,
-        },
-        filter: ["==", ["get", "feature_type"], "jam"],
-      });
+         Waze's jam lines were drawn over the corridor as separate coloured
+         fragments with their own hover card. They were the loose lines lying
+         beside and across the road: the same congestion the ribbon already
+         shows, drawn a second time from geometry that is not quite the
+         corridor's, so the two disagreed wherever they overlapped. The ribbon's
+         colour is derived from exactly these jams -- filtered to the corridor,
+         snapped onto it, and given the direction Waze names -- so dropping the
+         overlay loses no information. It leaves one statement about congestion
+         rather than two competing ones.
 
-      // Incident / Alert Points Layer — native Mapbox circle (always pixel-perfect)
-      map.addLayer({
-        id: "traffic-points",
-        type: "circle",
-        source: "traffic",
-        paint: {
-          "circle-radius": isRealtime ? 12 : 8,
-          "circle-color": PALETTE.alert,
-          "circle-stroke-color": PALETTE.alertRing,
-          "circle-stroke-width": 2.5,
-          "circle-opacity": 0.95,
-        },
-        filter: [
-          "all",
-          ["==", ["get", "feature_type"], "alert"],
-        ],
-      });
-
+         The circle layer under the reports went with it. Reports are drawn as
+         HTML markers further down, which carry the icons and the click-through,
+         so every report had a plain dot sitting under its own pin. */
 
       // Hover popup logic
       const popup = new mapboxgl.Popup({
@@ -764,46 +713,7 @@ export default function TrafficMapPanel({ title, subtitle, badge, endpoint, laye
       });
 
       // Point Hover
-      map.on("mouseenter", "traffic-points", (e) => {
-        map.getCanvas().style.cursor = "pointer";
-        const features = map.queryRenderedFeatures(e.point, { layers: ["traffic-points"] });
-        if (!features.length) return;
 
-        const feature = features[0];
-        const geom = feature.geometry as Point;
-        const coordinates = [...geom.coordinates] as [number, number];
-        const props = feature.properties;
-        if (!props) return;
-
-        while (Math.abs(e.lngLat.lng - coordinates[0]) > 180) {
-          coordinates[0] += e.lngLat.lng > coordinates[0] ? 360 : -360;
-        }
-
-        // Same shared look as the pins, so the hover card and the marker it
-        // describes cannot name the same report two different ways.
-        const hoverLook = lookOf(props.type);
-
-        const description = `
-          <div style="font-family: 'Inter', system-ui, -apple-system, sans-serif; padding: 10px; width: 220px; border-radius: 12px; background: var(--bg-surface); box-shadow: 0 4px 20px rgba(0,0,0,0.18); color: var(--text-primary);">
-            <div style="font-weight: 700; font-size: 13px; text-transform: uppercase; display: flex; align-items: center; gap: 6px; color: ${hoverLook.colour}; margin-bottom: 4px;">
-              <span style="display:flex;">${hoverLook.svg}</span> ${hoverLook.label}
-            </div>
-            <div style="font-size: 11px; font-weight: 600; color: var(--text-secondary); margin-bottom: 6px;">${props.street || "NLEX"} ${props.city ? `(${props.city})` : ""}</div>
-            ${props.report_description ? `<div style="font-size: 11px; color: var(--text-secondary); line-height: 1.4; background: var(--bg-surface-hover); padding: 6px; border-radius: 6px; margin-bottom: 6px;">"${props.report_description}"</div>` : ""}
-            <div style="font-size: 10px; color: var(--text-muted); border-top: 1px solid var(--border-default); padding-top: 6px; display: flex; justify-content: space-between;">
-              <span>Reliability: <strong>${props.reliability || 0}/10</strong></span>
-              <span>Confidence: <strong>${props.confidence || 0}/5</strong></span>
-            </div>
-          </div>
-        `;
-
-        popup.setLngLat(coordinates).setHTML(description).addTo(map);
-      });
-
-      map.on("mouseleave", "traffic-points", () => {
-        map.getCanvas().style.cursor = "";
-        popup.remove();
-      });
 
       // Toll Plaza HTML Markers — All 20 NLEX exits with exact coordinates from official data
       if (isRealtime) {
@@ -990,6 +900,10 @@ export default function TrafficMapPanel({ title, subtitle, badge, endpoint, laye
           },
         ];
 
+        /* Kept so the pins can be thinned out when they overlap; see
+           declutterPlazas below. */
+        const plazaPins: { el: HTMLElement; lngLat: [number, number]; name: string }[] = [];
+
         tollPlazas.forEach(toll => {
           const el = document.createElement("div");
           el.className = "custom-toll-marker";
@@ -1001,8 +915,8 @@ export default function TrafficMapPanel({ title, subtitle, badge, endpoint, laye
           el.innerHTML = `
             <div class="toll-pin">
               <div class="toll-pin-dot">
-                <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor"
-                     stroke-width="2.25" stroke-linecap="round" stroke-linejoin="round">
+                <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor"
+                     stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round">
                   <path d="M4 20V9.5a1 1 0 0 1 .55-.9l7-3.5a1 1 0 0 1 .9 0l7 3.5a1 1 0 0 1 .55.9V20" />
                   <path d="M2 20h20M9 20v-5h6v5" />
                 </svg>
@@ -1011,9 +925,16 @@ export default function TrafficMapPanel({ title, subtitle, badge, endpoint, laye
             </div>
           `;
 
+          /* Above the report pins. A report lands on the carriageway, which is
+             where the plaza sits, so when the two coincided the report took the
+             hover and the plaza underneath could not be reached. */
+          el.style.zIndex = "6";
+
           const marker = new mapboxgl.Marker({ element: el })
             .setLngLat(toll.coordinates as [number, number])
             .addTo(map);
+
+          plazaPins.push({ el, lngLat: toll.coordinates as [number, number], name: toll.shortName });
 
           el.addEventListener("mouseenter", () => {
             const description = `
@@ -1040,60 +961,40 @@ export default function TrafficMapPanel({ title, subtitle, badge, endpoint, laye
 
           activeMarkers.current.push(marker);
         });
+
+        /* Twenty plazas on a corridor this long means several of them land on
+           the same few pixels when zoomed out — Bocaue Barrier, Bocaue
+           Interchange, Tambubong and CDV/PH Arena sit inside about two
+           kilometres. Stacked, they read as one smudge and only the topmost can
+           be hovered.
+
+           So the pins are thinned by what is actually on screen rather than by
+           a zoom threshold: walking south to north, a pin is kept if it is far
+           enough from the last one kept, and hidden otherwise. Zooming in
+           spreads them out and the hidden ones come back on their own. Nothing
+           is removed from the map — only hidden — so this never changes what
+           the corridor contains, just how much of it is legible at once. */
+        const PIN_GAP_PX = 26;
+
+        const declutterPlazas = () => {
+          const kept: { x: number; y: number }[] = [];
+          for (const pin of plazaPins) {
+            const q = map.project(pin.lngLat);
+            const clash = kept.some(
+              (k) => Math.abs(k.x - q.x) < PIN_GAP_PX && Math.abs(k.y - q.y) < PIN_GAP_PX,
+            );
+            pin.el.style.display = clash ? "none" : "";
+            if (!clash) kept.push({ x: q.x, y: q.y });
+          }
+        };
+
+        declutterPlazas();
+        map.on("zoom", declutterPlazas);
+        map.on("move", declutterPlazas);
       }
 
       // Line Hover
-      map.on("mouseenter", "traffic-line", (e) => {
-        map.getCanvas().style.cursor = "pointer";
-        const features = map.queryRenderedFeatures(e.point, { layers: ["traffic-line"] });
-        if (!features.length) return;
 
-        const feature = features[0];
-        const props = feature.properties;
-        if (!props) return;
-
-        let description = "";
-
-        if (isRealtime) {
-          const severity = props.level === 4 ? "Severe" : props.level === 3 ? "Heavy" : props.level === 2 ? "Moderate" : "Light";
-          const severityColor = props.level === 4 ? "#ef4444" : props.level === 3 ? "#f97316" : props.level === 2 ? "#f59e0b" : "#10b981";
-
-          description = `
-            <div style="font-family: 'Inter', system-ui, -apple-system, sans-serif; padding: 10px; width: 180px; border-radius: 12px; background: white; box-shadow: 0 4px 20px rgba(0,0,0,0.08); color: #1e293b;">
-              <div style="font-weight: 700; font-size: 13px; color: ${severityColor}; margin-bottom: 4px; display: flex; align-items: center; gap: 6px;">
-                🚗 ${severity} Jam
-              </div>
-              <div style="font-size: 11px; font-weight: 600; color: var(--text-secondary); margin-bottom: 6px;">${props.street || "NLEX Corridor"} ${props.city ? `(${props.city})` : ""}</div>
-              <div style="font-size: 11px; color: var(--text-secondary); line-height: 1.5; border-top: 1px solid var(--border-default); padding-top: 6px;">
-                Avg Speed: <strong>${props.speed || 0} km/h</strong><br/>
-                Delay: <strong>${Math.round((props.delay_seconds || 0) / 60)} min</strong>
-              </div>
-            </div>
-          `;
-        } else {
-          // Forecast map
-          const score = Math.round((props.congestion_score || 0) * 100);
-          description = `
-            <div style="font-family: 'Inter', system-ui, -apple-system, sans-serif; padding: 10px; width: 180px; border-radius: 12px; background: white; box-shadow: 0 4px 20px rgba(0,0,0,0.08); color: #1e293b;">
-              <div style="font-weight: 700; font-size: 13px; color: #a855f7; margin-bottom: 4px; display: flex; align-items: center; gap: 6px;">
-                🔮 Predicted Traffic
-              </div>
-              <div style="font-size: 11px; font-weight: 600; color: var(--text-secondary); margin-bottom: 6px;">Segment: ${props.segment_id || "NLEX"}</div>
-              <div style="font-size: 11px; color: var(--text-secondary); line-height: 1.5; border-top: 1px solid var(--border-default); padding-top: 6px;">
-                Congestion Index: <strong>${score}%</strong><br/>
-                Horizon: <strong>${props.horizon || "2h"}</strong>
-              </div>
-            </div>
-          `;
-        }
-
-        popup.setLngLat(e.lngLat).setHTML(description).addTo(map);
-      });
-
-      map.on("mouseleave", "traffic-line", () => {
-        map.getCanvas().style.cursor = "";
-        popup.remove();
-      });
 
       // Render alerts as HTML markers to ensure they are highly visible and don't rely on Mapbox GL circle layer filtering,
       // but remove CSS transitions so they don't drift during zoom.
@@ -1128,6 +1029,7 @@ export default function TrafficMapPanel({ title, subtitle, badge, endpoint, laye
 
           const el = document.createElement("div");
           el.className = "waze-alert-marker";
+          el.style.zIndex = "5";
           el.style.display = "flex";
           el.style.alignItems = "center";
           el.style.justifyContent = "center";
@@ -1170,7 +1072,11 @@ export default function TrafficMapPanel({ title, subtitle, badge, endpoint, laye
             </div>
           `);
 
-          const marker = new mapboxgl.Marker({ element: el, anchor: "center" })
+          /* Lifted clear of the carriageway. Reports land on the road, which is
+             exactly where the plaza pins are, so they sat on top of them and
+             took the hover. Anchored at the bottom and raised, a report points
+             at its spot without covering it. */
+          const marker = new mapboxgl.Marker({ element: el, anchor: "bottom", offset: [0, -6] })
             .setLngLat(coords as [number, number])
             .addTo(map);
 

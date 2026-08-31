@@ -5678,3 +5678,144 @@ body {
 /* The alerts list holds every report now, so it scrolls rather than growing
    the sidebar past the viewport. */
 .wz-alerts { max-height: 320px; overflow-y: auto; }
+
+
+/* ---------------------------------------------------------------------------
+   Map hover cards.
+
+   The popups drew their own white, rounded, shadowed box inside Mapbox's
+   default white, rounded, shadowed box: two backgrounds, two radii that did not
+   match, padding twice, and a tip that stayed white while the card behind it
+   went dark. They also mixed hardcoded hex with theme tokens, so half the text
+   followed the theme and half did not.
+
+   The container is styled once, here, and the cards inside carry no chrome of
+   their own.
+   ------------------------------------------------------------------------- */
+/* Above the pins. Markers carry their own stacking (plazas 6, reports 5) so an
+   open card was being drawn underneath every other pin around it — the reason a
+   report could obscure the plaza card that had just opened. */
+.mapboxgl-popup { z-index: 12; }
+
+.mapboxgl-popup-content {
+  padding: 0;
+  border-radius: 12px;
+  background: var(--bg-surface);
+  color: var(--text-primary);
+  border: 1px solid var(--border-default);
+  box-shadow: 0 12px 32px rgba(15, 23, 42, 0.18);
+  overflow: hidden;
+}
+
+/* The tip is a CSS triangle, so which border carries the colour depends on
+   which side the card opened. All of them have to follow the surface. */
+.mapboxgl-popup-tip { border-color: transparent; }
+.mapboxgl-popup-anchor-top .mapboxgl-popup-tip,
+.mapboxgl-popup-anchor-top-left .mapboxgl-popup-tip,
+.mapboxgl-popup-anchor-top-right .mapboxgl-popup-tip { border-bottom-color: var(--bg-surface); }
+.mapboxgl-popup-anchor-bottom .mapboxgl-popup-tip,
+.mapboxgl-popup-anchor-bottom-left .mapboxgl-popup-tip,
+.mapboxgl-popup-anchor-bottom-right .mapboxgl-popup-tip { border-top-color: var(--bg-surface); }
+.mapboxgl-popup-anchor-left .mapboxgl-popup-tip { border-right-color: var(--bg-surface); }
+.mapboxgl-popup-anchor-right .mapboxgl-popup-tip { border-left-color: var(--bg-surface); }
+
+.nlex-pop {
+  width: 236px;
+  font-family: Inter, system-ui, -apple-system, sans-serif;
+}
+
+/* A tinted header carrying the mark and the name, so the card says what kind of
+   thing it is before it is read. --pop-accent is set per card. */
+.nlex-pop-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--border-default);
+  border-left: 3px solid var(--pop-accent, #06b6d4);
+  background: var(--bg-surface-hover);
+}
+
+.nlex-pop-mark {
+  flex: none;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--pop-accent, #06b6d4);
+  color: #ffffff;
+}
+
+.nlex-pop-name {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+.nlex-pop-title {
+  font-size: 12.5px;
+  font-weight: 700;
+  line-height: 1.25;
+  color: var(--text-primary);
+}
+.nlex-pop-sub {
+  font-size: 10.5px;
+  font-weight: 500;
+  color: var(--text-secondary);
+  line-height: 1.3;
+}
+
+.nlex-pop-body {
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.nlex-pop-note {
+  font-size: 11px;
+  line-height: 1.45;
+  color: var(--text-secondary);
+}
+
+/* Label on the left, value on the right — the shape a reader scans for. */
+.nlex-pop-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  font-size: 11px;
+}
+.nlex-pop-row dt {
+  color: var(--text-muted);
+  font-weight: 500;
+  white-space: nowrap;
+}
+.nlex-pop-row dd {
+  margin: 0;
+  color: var(--text-primary);
+  font-weight: 600;
+  text-align: right;
+}
+
+.nlex-pop-tag {
+  align-self: flex-start;
+  font-size: 9.5px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  padding: 2px 7px;
+  border-radius: 999px;
+  background: var(--bg-surface-hover);
+  border: 1px solid var(--border-default);
+  color: var(--text-secondary);
+}
+
+.nlex-pop-foot {
+  padding: 7px 12px;
+  border-top: 1px solid var(--border-default);
+  font-size: 10px;
+  color: var(--text-muted);
+  background: var(--bg-surface-hover);
+}

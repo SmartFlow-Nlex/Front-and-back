@@ -706,10 +706,15 @@ export default function TrafficMapPanel({ title, subtitle, badge, endpoint, laye
          HTML markers further down, which carry the icons and the click-through,
          so every report had a plain dot sitting under its own pin. */
 
-      // Hover popup logic
+      /* The plaza hover card. Offset and anchored below the pin so the card
+         opens clear of it — it used to open centred on the marker, so the pin
+         and its label sat on top of the card and covered the location line. */
       const popup = new mapboxgl.Popup({
         closeButton: false,
         closeOnClick: false,
+        // Offset only: letting Mapbox choose the side means the card flips
+        // rather than running off the top of the panel near Sta. Ines.
+        offset: 20,
       });
 
       // Point Hover
@@ -907,11 +912,11 @@ export default function TrafficMapPanel({ title, subtitle, badge, endpoint, laye
         tollPlazas.forEach(toll => {
           const el = document.createElement("div");
           el.className = "custom-toll-marker";
-          /* The label used to sit under every pin permanently, and twenty of
-             them collided into an unreadable stack south of Pulilan. It is
-             revealed on hover instead, so the corridor stays legible and the
-             name is one pointer-move away. CSS does the showing -- see
-             .toll-pin-label in globals.css. */
+          /* No label on the pin. It used to sit under every pin permanently,
+             collided into an unreadable stack south of Pulilan, and was moved to
+             hover — but hovering also opens the card, which names the plaza
+             properly, so the label was a second copy of the name floating over
+             the card that had just replaced it. */
           el.innerHTML = `
             <div class="toll-pin">
               <div class="toll-pin-dot">
@@ -921,7 +926,6 @@ export default function TrafficMapPanel({ title, subtitle, badge, endpoint, laye
                   <path d="M2 20h20M9 20v-5h6v5" />
                 </svg>
               </div>
-              <div class="toll-pin-label">${toll.shortName}</div>
             </div>
           `;
 
@@ -937,19 +941,29 @@ export default function TrafficMapPanel({ title, subtitle, badge, endpoint, laye
           plazaPins.push({ el, lngLat: toll.coordinates as [number, number], name: toll.shortName });
 
           el.addEventListener("mouseenter", () => {
+            /* No inline chrome: the container is styled in globals.css, so
+               this is only content. The road mark replaces an emoji, matching
+               the pin the reader just hovered. */
             const description = `
-              <div style="font-family: 'Inter', system-ui, -apple-system, sans-serif; padding: 12px; width: 240px; border-radius: 12px; background: white; box-shadow: 0 4px 20px rgba(0,0,0,0.08); color: #1e293b; border-left: 4px solid #06b6d4;">
-                <div style="font-weight: 700; font-size: 13px; display: flex; align-items: center; gap: 6px; color: #0891b2; margin-bottom: 4px;">
-                  <span>🛣️</span> ${toll.name}
+              <div class="nlex-pop" style="--pop-accent:#0e7490">
+                <div class="nlex-pop-head">
+                  <span class="nlex-pop-mark">
+                    <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor"
+                         stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round">
+                      <path d="M4 20V9.5a1 1 0 0 1 .55-.9l7-3.5a1 1 0 0 1 .9 0l7 3.5a1 1 0 0 1 .55.9V20" />
+                      <path d="M2 20h20M9 20v-5h6v5" />
+                    </svg>
+                  </span>
+                  <span class="nlex-pop-name">
+                    <span class="nlex-pop-title">${toll.name}</span>
+                    <span class="nlex-pop-sub">${toll.location}</span>
+                  </span>
                 </div>
-                <div style="font-size: 11px; font-weight: 600; color: var(--text-secondary); margin-bottom: 4px;">${toll.location}</div>
-                <div style="display: inline-block; font-size: 9px; font-weight: 700; padding: 2px 6px; border-radius: 4px; background: #ecfeff; color: #0e7490; margin-bottom: 6px; letter-spacing: 0.3px;">${toll.type}</div>
-                <div style="font-size: 11px; color: var(--text-secondary); line-height: 1.4; background: var(--bg-surface-hover); padding: 8px; border-radius: 6px; margin-bottom: 6px; font-weight: 500;">
-                  ${toll.description}
+                <div class="nlex-pop-body">
+                  <span class="nlex-pop-tag">${toll.type}</span>
+                  <p class="nlex-pop-note">${toll.description}</p>
                 </div>
-                <div style="font-size: 10px; color: #0891b2; border-top: 1px solid #e2e8f0; padding-top: 6px;">
-                  <strong>Toll System:</strong> <span style="color: var(--text-secondary);">${toll.rates}</span>
-                </div>
+                <div class="nlex-pop-foot">Toll system &middot; ${toll.rates}</div>
               </div>
             `;
             popup.setLngLat(toll.coordinates as [number, number]).setHTML(description).addTo(map);
@@ -1062,13 +1076,28 @@ export default function TrafficMapPanel({ title, subtitle, badge, endpoint, laye
           // Two affordances rather than one: the popup answers "what is this pin"
           // while moving the mouse, the panel answers "tell me everything" only
           // when the reader asks for it.
+          /* Where, not just what. The street is the same 76 km road for every
+             report on this corridor, so on its own it does not distinguish one
+             card from the next; the exit and the distance to it do. Same
+             reasoning as the sidebar rows. */
+          const exitText = props.nearest_exit
+            ? Number.isFinite(Number(props.exit_distance_m))
+              ? `${Number(props.exit_distance_m) < 950
+                  ? `${Math.round(Number(props.exit_distance_m) / 10) * 10} m`
+                  : `${(Number(props.exit_distance_m) / 1000).toFixed(1)} km`} from ${props.nearest_exit}`
+              : `near ${props.nearest_exit}`
+            : (props.street ?? "On the corridor");
+
           const popup = new mapboxgl.Popup({ offset: 15, closeButton: false, closeOnClick: false }).setHTML(`
-            <div style="font-family: 'Inter', system-ui, sans-serif; padding: 8px 10px; border-radius: 10px; color: #1e293b;">
-              <div style="font-weight: 700; font-size: 12px; text-transform: uppercase; display: flex; align-items: center; gap: 6px; color: ${color};">
-                <span style="display:flex;color:${color};">${look.svg}</span> ${look.label}
+            <div class="nlex-pop" style="--pop-accent:${color}">
+              <div class="nlex-pop-head">
+                <span class="nlex-pop-mark">${look.svg}</span>
+                <span class="nlex-pop-name">
+                  <span class="nlex-pop-title">${look.label}</span>
+                  <span class="nlex-pop-sub">${exitText}</span>
+                </span>
               </div>
-              <div style="font-size: 11px; font-weight: 600; color: #64748b; margin-top: 3px;">${props.street || "NLEX"}${props.city ? ` · ${props.city}` : ""}</div>
-              <div style="font-size: 10px; color: #94a3b8; margin-top: 4px;">Click for full report</div>
+              <div class="nlex-pop-foot">Click for the full report</div>
             </div>
           `);
 

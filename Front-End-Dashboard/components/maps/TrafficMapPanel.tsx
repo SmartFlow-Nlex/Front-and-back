@@ -88,6 +88,9 @@ export default function TrafficMapPanel({ title, subtitle, badge, endpoint, laye
   const pausedRef = useRef(paused);
   useEffect(() => {
     pausedRef.current = paused;
+    // The flow images keep themselves animating by requesting repaints. Paused,
+    // they stop asking and the map goes idle, so coming back needs one nudge.
+    if (!paused) mapRef.current?.triggerRepaint();
   }, [paused]);
   // "ok" once the map builds; otherwise show a graceful fallback instead of
   // letting Mapbox throw and take the whole page down.
@@ -570,8 +573,9 @@ export default function TrafficMapPanel({ title, subtitle, badge, endpoint, laye
         return k * k * (3 - 2 * k);   // smoothstep, so it has no hard shoulders
       };
 
-      const flowImage = (phase: number, opacity: number) => {
-        const data = new Uint8Array(PW * PH * 4);
+      /* Written into an existing buffer rather than allocating one, because
+         this runs on every animated frame for every ribbon. */
+      const writePulse = (data: Uint8Array, phase: number, opacity: number) => {
         for (let x = 0; x < PW; x++) {
           const a = Math.round(pulse(x / PW + phase) * opacity * 255);
           for (let y = 0; y < PH; y++) {
@@ -582,32 +586,59 @@ export default function TrafficMapPanel({ title, subtitle, badge, endpoint, laye
             data[i + 3] = a;
           }
         }
-        return { width: PW, height: PH, data };
       };
 
       const flowImageId = (dir: string, tier: string) => `flow-${dir.toLowerCase()}-${tier}`;
 
-      /* Which tiers any segment currently falls into. Most of the corridor sits
-         at level 0, so the mid and slow images usually back no visible line at
-         all — rewriting and re-uploading them every frame was work with nothing
-         on screen to show for it. Recomputed whenever the corridor data
-         changes, which is the only thing that can change the answer. */
-      const activeTiers = new Set<string>();
-      const refreshActiveTiers = (fc: GeoJSON.FeatureCollection) => {
-        activeTiers.clear();
-        for (const f of fc.features ?? []) {
-          const lvl = Number((f.properties as { level?: number } | null)?.level ?? -1);
-          const tier = FLOW_TIERS.find((x) => (x.levels as readonly number[]).includes(lvl));
-          if (tier) activeTiers.add(tier.id);
-        }
-      };
-
-      refreshActiveTiers(corridorAtLoad);
-
       for (const dir of ["NB", "SB"] as const) {
         for (const tier of FLOW_TIERS) {
           const id = flowImageId(dir, tier.id);
-          if (!map.hasImage(id)) map.addImage(id, flowImage(0, tier.opacity));
+
+          /* An animated StyleImage, which is how Mapbox actually drives a
+             moving pattern: it calls render() once per frame for every image a
+             visible layer is using, and repaints when render() returns true.
+
+             Rewriting the bytes with map.updateImage() from our own animation
+             frame did nothing at all — the data changed but nothing asked the
+             map to redraw, so the pulses sat frozen on the ribbons. Owning the
+             clock here also means Mapbox skips the work when no layer is using
+             the image, which is most of them for most of the day: almost every
+             segment sits at level 0, so the mid and slow images back nothing. */
+          const sign = dir === "NB" ? -1 : 1;
+          const data = new Uint8Array(PW * PH * 4);
+          writePulse(data, 0, tier.opacity);
+          let lastWrite = 0;
+
+          const image = {
+            width: PW,
+            height: PH,
+            data,
+            render() {
+              // Behind the maximised view there is nothing to see. Returning
+              // without asking for another frame lets the map go idle; the
+              // paused effect below kicks it again on the way back.
+              if (pausedRef.current) return false;
+
+              /* render() only runs as part of a repaint, so an animated image
+                 has to ask for the next one or the map settles and never calls
+                 it again. This is why the pulses sat frozen: the bytes were
+                 being rewritten, but nothing was drawing them. */
+              map.triggerRepaint();
+
+              const now = performance.now();
+              // 30fps is indistinguishable here and halves the texture uploads.
+              // Returning false only says the pixels are unchanged; the repaint
+              // above keeps the loop alive.
+              if (now - lastWrite < 33) return false;
+              lastWrite = now;
+              writePulse(data, sign * ((now % tier.cycleMs) / tier.cycleMs), tier.opacity);
+              return true;
+            },
+          };
+
+          if (!map.hasImage(id)) {
+            map.addImage(id, image as unknown as Parameters<typeof map.addImage>[1]);
+          }
 
           map.addLayer({
             id: `carriageway-flow-${dir.toLowerCase()}-${tier.id}`,
@@ -1196,39 +1227,6 @@ export default function TrafficMapPanel({ title, subtitle, badge, endpoint, laye
 
          The corridor runs south to north and so does the pattern's x axis, so
          northbound scrolls one way and southbound the other. */
-      let lastFlowFrame = 0;
-
-      const animateFlow = (now: number) => {
-        /* Checked before rescheduling, not just before starting. flowFrameRef is
-           one ref shared by every run of this effect, so if two maps are ever
-           alive at once — a fast refresh, a theme switch mid-load — it holds
-           only the newest frame id and cancelling it strands the older loop,
-           which then runs forever. Letting each loop stop itself does not
-           depend on the ref pointing at the right frame. */
-        if (disposed) return;
-        flowFrameRef.current = requestAnimationFrame(animateFlow);
-        // Behind the maximised view there is nothing to see, and two maps
-        // repainting six layers each was most of the cost of opening it.
-        if (pausedRef.current) return;
-        if (now - lastFlowFrame < 33) return;
-        lastFlowFrame = now;
-
-        for (const dir of ["NB", "SB"] as const) {
-          const sign = dir === "NB" ? -1 : 1;
-          for (const tier of FLOW_TIERS) {
-            if (!activeTiers.has(tier.id)) continue;
-            const phase = sign * ((now % tier.cycleMs) / tier.cycleMs);
-            try {
-              const id = flowImageId(dir, tier.id);
-              if (map.hasImage(id)) map.updateImage(id, flowImage(phase, tier.opacity));
-            } catch {
-              // Style went away underneath us; the next frame will find it gone too.
-            }
-          }
-        }
-      };
-
-      if (!disposed) flowFrameRef.current = requestAnimationFrame(animateFlow);
 
       if (isRealtime) {
         renderAlerts(data);
@@ -1255,8 +1253,10 @@ export default function TrafficMapPanel({ title, subtitle, badge, endpoint, laye
           const corridorSig = signature(corridorNow);
           if (corridorSig !== lastCorridorSig) {
             lastCorridorSig = corridorSig;
+            /* Which tiers are on screen no longer needs tracking here: Mapbox
+               calls render() only for images a visible layer is using, so a
+               tier with no segments costs nothing on its own. */
             (map.getSource("nlex-corridor") as GeoJSONSource | undefined)?.setData(corridorNow);
-            refreshActiveTiers(corridorNow);
           }
         } catch {
           // No-op polling fallback

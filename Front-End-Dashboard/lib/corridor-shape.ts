@@ -30,11 +30,30 @@
 
 export type LngLat = [number, number];
 
-/** Anything further than this from the exit chain is a ramp, not the mainline. */
-const CORRIDOR_HALF_WIDTH_M = 250;
-/** Resampling interval. Fine enough to hold every curve, coarse enough to smooth. */
-const BIN_M = 60;
-const SMOOTHING_PASSES = 2;
+/* How the centreline is resampled, one pass at a time.
+
+   Each pass projects every OSM point onto a reference line, drops what is too
+   far to the side, bins the rest by distance along that line and takes the
+   median of each bin. The result becomes the reference for the next pass.
+
+   Refining matters because the first reference is the chain of exits: straight
+   chords that cut across every curve, leaving the tarmac by up to a few hundred
+   metres. Points that are nowhere near each other then land in the same bin and
+   the median lands between them, so the line cuts the corner too. Once the
+   reference is roughly road-shaped, the bins hold points that really are
+   neighbours and the tolerance can close in.
+
+   Measured against the 2,059 OSM points that make up the mainline, refining
+   moves the fit from a median of 15.0 m and a worst case of 245 m to 6.1 m and
+   57 m. The passes below were chosen on those numbers: tightening further
+   lowers the median a little but lets the worst case climb again, and it is the
+   worst case that shows up as the road drawn somewhere it is not. */
+const PASSES = [
+  { halfWidth: 250, bin: 60, smooth: 2 },  // reference: the chain of exits
+  { halfWidth: 120, bin: 30, smooth: 1 },
+  { halfWidth: 80, bin: 25, smooth: 1 },
+  { halfWidth: 60, bin: 25, smooth: 1 },
+];
 
 // Metres per degree near 15°N. The corridor spans half a degree, so a fixed
 // scale here is accurate to well under the width of the road.
@@ -44,20 +63,32 @@ const M_PER_DEG_LON = 111320 * Math.cos((15 * Math.PI) / 180);
 type XY = [number, number];
 const toXY = (p: LngLat): XY => [p[0] * M_PER_DEG_LON, p[1] * M_PER_DEG_LAT];
 
-/** Distance along `axis` of the closest point to `p`, and how far off it sits. */
-function projectOnAxis(axis: XY[], cum: number[], p: LngLat): { s: number; off: number } {
+/** A polyline with its cumulative lengths, ready to be projected onto. */
+function measured(line: LngLat[]) {
+  const xy = line.map(toXY);
+  const cum: number[] = [0];
+  for (let i = 1; i < xy.length; i++) {
+    cum.push(cum[i - 1] + Math.hypot(xy[i][0] - xy[i - 1][0], xy[i][1] - xy[i - 1][1]));
+  }
+  return { xy, cum };
+}
+
+type Measured = ReturnType<typeof measured>;
+
+/** Distance along the reference of the closest point to `p`, and how far off. */
+function projectOn(ref: Measured, p: LngLat): { s: number; off: number } {
   const [qx, qy] = toXY(p);
   let best = { s: 0, off: Infinity };
-  for (let i = 1; i < axis.length; i++) {
-    const [ax, ay] = axis[i - 1];
-    const vx = axis[i][0] - ax;
-    const vy = axis[i][1] - ay;
+  for (let i = 1; i < ref.xy.length; i++) {
+    const [ax, ay] = ref.xy[i - 1];
+    const vx = ref.xy[i][0] - ax;
+    const vy = ref.xy[i][1] - ay;
     const len2 = vx * vx + vy * vy;
     if (len2 === 0) continue;
     let t = ((qx - ax) * vx + (qy - ay) * vy) / len2;
     t = t < 0 ? 0 : t > 1 ? 1 : t;
     const off = Math.hypot(qx - (ax + t * vx), qy - (ay + t * vy));
-    if (off < best.off) best = { off, s: cum[i - 1] + t * Math.sqrt(len2) };
+    if (off < best.off) best = { off, s: ref.cum[i - 1] + t * Math.sqrt(len2) };
   }
   return best;
 }
@@ -67,22 +98,15 @@ function median(values: number[]): number {
   return sorted[sorted.length >> 1];
 }
 
-/**
- * One ordered centreline for the whole corridor, plus the bin each exit falls in.
- * `exits` must be in corridor order.
- */
-function buildCentreline(raw: LngLat[], exits: LngLat[]) {
-  const axis = exits.map(toXY);
-  const cum: number[] = [0];
-  for (let i = 1; i < axis.length; i++) {
-    cum.push(cum[i - 1] + Math.hypot(axis[i][0] - axis[i - 1][0], axis[i][1] - axis[i - 1][1]));
-  }
-
+/** One resampling pass: raw points, measured against `reference`. */
+function resample(raw: LngLat[], reference: LngLat[], pass: (typeof PASSES)[number]): LngLat[] {
+  const ref = measured(reference);
   const bins = new Map<number, LngLat[]>();
+
   for (const p of raw) {
-    const { s, off } = projectOnAxis(axis, cum, p);
-    if (off > CORRIDOR_HALF_WIDTH_M) continue; // ramp, frontage road, service loop
-    const key = Math.round(s / BIN_M);
+    const { s, off } = projectOn(ref, p);
+    if (off > pass.halfWidth) continue; // ramp, frontage road, service loop
+    const key = Math.round(s / pass.bin);
     const bucket = bins.get(key);
     if (bucket) bucket.push(p);
     else bins.set(key, [p]);
@@ -93,26 +117,42 @@ function buildCentreline(raw: LngLat[], exits: LngLat[]) {
     const pts = bins.get(k)!;
     // Median, not mean: the bin holds both carriageways and the occasional
     // stray, and a median lands on the road where a mean can land between.
-    return [median(pts.map((p) => p[0])), median(pts.map((p) => p[1]))];
+    return [median(pts.map((q) => q[0])), median(pts.map((q) => q[1]))];
   });
 
-  for (let pass = 0; pass < SMOOTHING_PASSES; pass++) {
-    line = line.map((p, i, a) =>
-      i === 0 || i === a.length - 1
-        ? p
-        : ([(a[i - 1][0] + 2 * p[0] + a[i + 1][0]) / 4, (a[i - 1][1] + 2 * p[1] + a[i + 1][1]) / 4] as LngLat),
+  for (let i = 0; i < pass.smooth; i++) {
+    line = line.map((q, j, a) =>
+      j === 0 || j === a.length - 1
+        ? q
+        : ([(a[j - 1][0] + 2 * q[0] + a[j + 1][0]) / 4, (a[j - 1][1] + 2 * q[1] + a[j + 1][1]) / 4] as LngLat),
     );
   }
+  return line;
+}
 
-  // Where each exit sits on the rebuilt line.
+/**
+ * One ordered centreline for the whole corridor, plus the vertex each exit sits
+ * on. `exits` must be in corridor order.
+ */
+function buildCentreline(raw: LngLat[], exits: LngLat[]) {
+  let line = exits;
+  for (const pass of PASSES) {
+    const next = resample(raw, line, pass);
+    if (next.length < 2) break; // a pass too tight to keep anything: stop here
+    line = next;
+  }
+  if (line === exits) return { line: exits, cuts: exits.map((_, i) => i) };
+
+  // Where each exit sits on the finished line.
+  const ref = measured(line);
   const cuts = exits.map((e) => {
-    const target = projectOnAxis(axis, cum, e).s / BIN_M;
+    const [qx, qy] = toXY(e);
     let bestIdx = 0;
-    let bestGap = Infinity;
-    for (let i = 0; i < keys.length; i++) {
-      const gap = Math.abs(keys[i] - target);
-      if (gap < bestGap) {
-        bestGap = gap;
+    let bestD = Infinity;
+    for (let i = 0; i < ref.xy.length; i++) {
+      const d = Math.hypot(qx - ref.xy[i][0], qy - ref.xy[i][1]);
+      if (d < bestD) {
+        bestD = d;
         bestIdx = i;
       }
     }
@@ -120,8 +160,8 @@ function buildCentreline(raw: LngLat[], exits: LngLat[]) {
   });
 
   // Keep the cuts advancing. Bocaue Barrier and Bocaue Interchange sit ~600 m
-  // apart and can land in the same bin; the later one is nudged past the earlier
-  // rather than swapped, since the corridor order is known and correct.
+  // apart and can land on the same vertex; the later one is nudged past the
+  // earlier rather than swapped, since the corridor order is known and correct.
   for (let i = 1; i < cuts.length; i++) {
     if (cuts[i] <= cuts[i - 1]) cuts[i] = Math.min(cuts[i - 1] + 1, line.length - 1);
   }

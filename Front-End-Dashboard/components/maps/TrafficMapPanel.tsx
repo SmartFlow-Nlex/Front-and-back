@@ -134,9 +134,14 @@ export default function TrafficMapPanel({ title, subtitle, badge, endpoint, laye
     ];
     const OFFSET = [
       "interpolate", ["linear"], ["zoom"],
+      /* Held near the real carriageway separation at close zoom. A pixel is
+         about 2.3 m at z16, so the old 11 put the ribbons 50 m apart when NLEX
+         is nearer 25 — they sat either side of the road rather than on it. The
+         wider spread is kept at low zoom, where the two would otherwise merge
+         into one line before the reader can tell there are two. */
       8, side(3.6),
-      12, side(7),
-      16, side(11),
+      12, side(6),
+      16, side(6),
     ] as unknown as mapboxgl.ExpressionSpecification;
 
     mapboxgl.accessToken = token;

@@ -300,21 +300,15 @@ export default function MapComparisonPage() {
             </div>
 
             {/* Forecast Legend Overlay */}
+            {/* The same key as the live panel. This used to list "Travel
+                Time Zones" of 15, 30 and 60 minutes and a Low/Medium/High
+                congestion scale — none of which this map draws. It paints the
+                corridor with the same density colours, from forecast states
+                mapped onto Waze levels, and leaves the segments with no
+                forecast grey. */}
             <details className="mc-legend-card forecast-legend">
               <summary>Legend</summary>
-              <div className="mc-legend-section">
-                <h4><span className="mc-dot purple"></span> AI Prediction Layers</h4>
-                <p className="mc-sub-label">Travel Time Zones</p>
-                <div className="mc-density-row"><span className="mc-density-box p-15"></span> 15 min</div>
-                <div className="mc-density-row"><span className="mc-density-box p-30"></span> 30 min</div>
-                <div className="mc-density-row"><span className="mc-density-box p-60"></span> 60 min</div>
-              </div>
-              <div className="mc-legend-section mt-3">
-                <p className="mc-sub-label">Predicted Congestion</p>
-                <div className="mc-density-row"><span className="mc-density-line p-low"></span> Low</div>
-                <div className="mc-density-row"><span className="mc-density-line p-med"></span> Medium</div>
-                <div className="mc-density-row"><span className="mc-density-line p-high"></span> High</div>
-              </div>
+              <MapLegend showNotReported />
             </details>
           </TrafficMapPanel>
 

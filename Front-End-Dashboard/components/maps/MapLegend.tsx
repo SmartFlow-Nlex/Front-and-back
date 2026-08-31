@@ -29,7 +29,7 @@ const DENSITY = [
   { level: 5 as const, label: "Standstill" },
 ];
 
-export default function MapLegend() {
+export default function MapLegend({ showNotReported = false }: { showNotReported?: boolean }) {
   const { isDark } = useChartTheme();
   const palette = mapPalette(isDark);
 
@@ -41,6 +41,15 @@ export default function MapLegend() {
           <span className="wz-line" style={{ background: palette.level[d.level] }} /> {d.label}
         </div>
       ))}
+
+      {/* Only where it can appear. On the live map an unreported stretch is
+          drawn as free flow, so grey never shows; on the forecast, which covers
+          seven segments of nineteen, it is most of the road. */}
+      {showNotReported && (
+        <div className="wz-legend-row">
+          <span className="wz-line" style={{ background: palette.noData }} /> Not forecast
+        </div>
+      )}
 
       <h4 className="wz-legend-gap">Waze reports</h4>
       {WAZE_REPORT_TYPES.map((k) => {

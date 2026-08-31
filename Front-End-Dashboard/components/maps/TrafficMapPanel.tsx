@@ -1331,11 +1331,15 @@ export default function TrafficMapPanel({ title, subtitle, badge, endpoint, laye
               {selectedReport.confidence != null && (
                 <div><dt>Confidence</dt><dd>{selectedReport.confidence}/10</dd></div>
               )}
+              {/* "Rating", not "Report rating": the longer label wrapped onto two
+                  lines in a third-width column and pushed its value out of line
+                  with the two beside it. Next to Reliability and Confidence it
+                  is unambiguous. */}
               {selectedReport.report_rating != null && (
-                <div><dt>Report rating</dt><dd>{selectedReport.report_rating}/5</dd></div>
+                <div><dt>Rating</dt><dd>{selectedReport.report_rating}/5</dd></div>
               )}
               {selectedReport.nearest_exit && (
-                <div>
+                <div className="wz-rd-wide">
                   <dt>Nearest exit</dt>
                   <dd>
                     {selectedReport.nearest_exit}
@@ -1365,7 +1369,7 @@ export default function TrafficMapPanel({ title, subtitle, badge, endpoint, laye
                 </div>
               )}
               {selectedReport.lat != null && selectedReport.lon != null && (
-                <div>
+                <div className="wz-rd-wide">
                   <dt>Coordinates</dt>
                   <dd>{selectedReport.lat.toFixed(5)}, {selectedReport.lon.toFixed(5)}</dd>
                 </div>

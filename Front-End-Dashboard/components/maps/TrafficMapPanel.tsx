@@ -427,9 +427,29 @@ export default function TrafficMapPanel({ title, subtitle, badge, endpoint, laye
       });
 
       // The corridor, with whatever state this endpoint could supply.
+      /* Traffic changes far more slowly than the fifteen-second poll. Handing
+         Mapbox an identical FeatureCollection still costs a full re-tessellation
+         of 38 offset ribbons and the six pattern layers over them, which lands
+         as a hitch in the animation on a fifteen-second beat — the thing that
+         reads as the flow stuttering. So the corridor and the feed are only
+         pushed when something they show actually differs. */
+      const signature = (fc: GeoJSON.FeatureCollection) =>
+        (fc.features ?? [])
+          .map((f) => {
+            const q = f.properties as Record<string, unknown> | null;
+            return `${q?.feature_type ?? ""}:${q?.segment_order ?? q?.uuid ?? ""}:${q?.direction ?? ""}:${q?.level ?? ""}`;
+          })
+          .join("|");
+
+      let lastCorridorSig = "";
+      let lastFeedSig = "";
+
+      const corridorAtLoad = corridorWithState(data);
+      lastCorridorSig = signature(corridorAtLoad);
+      lastFeedSig = signature(data);
       map.addSource("nlex-corridor", {
         type: "geojson",
-        data: corridorWithState(data),
+        data: corridorAtLoad,
       });
 
       /* Push the base map back. A background layer added before ours sits over
@@ -503,30 +523,92 @@ export default function TrafficMapPanel({ title, subtitle, badge, endpoint, laye
         },
       });
 
-      /* Flow. A pale dash travelling along each ribbon, so the corridor reads
+      /* Flow. A pale pulse travelling along each ribbon, so the corridor reads
          as moving traffic rather than a static coloured band.
 
-         Six layers: two carriageways x three speed tiers.
+         Drawn with a scrolling line-pattern rather than an animated
+         line-dasharray. Dashes cannot loop smoothly: with a pattern
+         [lead, gap, rest] of constant period, the lit block slides by
+         (period - gap) and then jumps back by the gap. Here that was a 4-unit
+         jump in a 7-unit period, so the light crawled forward and snapped back
+         57% of the way, every cycle, on every ribbon. That snap is what read as
+         glitching, and it cannot be tuned out — the jump *is* the gap, so it
+         only shrinks by making the line almost solid, at which point there is
+         no dash left to travel.
 
-         Two carriageways because line-dasharray is the one paint property
-         Mapbox will not drive from data, so a single layer could only ever
-         animate one way along the geometry. NB steps the dash sequence forward
-         and SB steps it back, sending light up the northbound ribbon and down
-         the southbound one.
+         A pattern image has no such seam. The pulse fades to nothing at both
+         edges of the image, so however far it is scrolled the tiles still meet
+         at zero and the motion is continuous. Scrolling is done by rewriting
+         the image, which is 2 KB, rather than by re-evaluating a paint property
+         on six layers.
 
-         Three tiers because the speed is the message. An earlier version varied
-         opacity instead and faded the jams out, which read as the animation
-         being broken on half the road rather than as traffic being stopped.
-         Every stretch now flows; a free one races and a standstill crawls, so
-         the eye reads rate the way it reads the colour. */
+         Six images: two carriageways x three speed tiers. Two carriageways
+         because the pulse has to travel north on one and south on the other.
+         Three tiers because the speed is the message — a free stretch races and
+         a standstill crawls, so the eye reads rate the way it reads colour. */
       const FLOW_TIERS = [
-        { id: "fast", levels: [0, 1],  stepMs: 55,  opacity: 0.55 },
-        { id: "mid",  levels: [2, 3],  stepMs: 150, opacity: 0.48 },
-        { id: "slow", levels: [4, 5],  stepMs: 380, opacity: 0.42 },
+        { id: "fast", levels: [0, 1], cycleMs: 1100, opacity: 0.55 },
+        { id: "mid",  levels: [2, 3], cycleMs: 2600, opacity: 0.5 },
+        { id: "slow", levels: [4, 5], cycleMs: 6000, opacity: 0.45 },
       ] as const;
+
+      const PW = 32;   // pattern length in texels; repeat is scaled to line width
+      const PH = 8;
+
+      const rgb = ((hex: string) => {
+        const h = hex.replace("#", "");
+        const v = h.length === 3 ? h.split("").map((c) => c + c).join("") : h;
+        return [parseInt(v.slice(0, 2), 16), parseInt(v.slice(2, 4), 16), parseInt(v.slice(4, 6), 16)];
+      })(PALETTE.arrow.startsWith("#") ? PALETTE.arrow : "#ffffff");
+
+      /* A soft band that reaches zero well before the edges of the image, which
+         is what makes the tiling seam invisible at any scroll offset. */
+      const pulse = (u: number) => {
+        const w = ((u % 1) + 1) % 1;
+        const d = Math.abs(w - 0.5);
+        const k = Math.max(0, 1 - d / 0.22);
+        return k * k * (3 - 2 * k);   // smoothstep, so it has no hard shoulders
+      };
+
+      const flowImage = (phase: number, opacity: number) => {
+        const data = new Uint8Array(PW * PH * 4);
+        for (let x = 0; x < PW; x++) {
+          const a = Math.round(pulse(x / PW + phase) * opacity * 255);
+          for (let y = 0; y < PH; y++) {
+            const i = (y * PW + x) * 4;
+            data[i] = rgb[0];
+            data[i + 1] = rgb[1];
+            data[i + 2] = rgb[2];
+            data[i + 3] = a;
+          }
+        }
+        return { width: PW, height: PH, data };
+      };
+
+      const flowImageId = (dir: string, tier: string) => `flow-${dir.toLowerCase()}-${tier}`;
+
+      /* Which tiers any segment currently falls into. Most of the corridor sits
+         at level 0, so the mid and slow images usually back no visible line at
+         all — rewriting and re-uploading them every frame was work with nothing
+         on screen to show for it. Recomputed whenever the corridor data
+         changes, which is the only thing that can change the answer. */
+      const activeTiers = new Set<string>();
+      const refreshActiveTiers = (fc: GeoJSON.FeatureCollection) => {
+        activeTiers.clear();
+        for (const f of fc.features ?? []) {
+          const lvl = Number((f.properties as { level?: number } | null)?.level ?? -1);
+          const tier = FLOW_TIERS.find((x) => (x.levels as readonly number[]).includes(lvl));
+          if (tier) activeTiers.add(tier.id);
+        }
+      };
+
+      refreshActiveTiers(corridorAtLoad);
 
       for (const dir of ["NB", "SB"] as const) {
         for (const tier of FLOW_TIERS) {
+          const id = flowImageId(dir, tier.id);
+          if (!map.hasImage(id)) map.addImage(id, flowImage(0, tier.opacity));
+
           map.addLayer({
             id: `carriageway-flow-${dir.toLowerCase()}-${tier.id}`,
             type: "line",
@@ -540,11 +622,9 @@ export default function TrafficMapPanel({ title, subtitle, badge, endpoint, laye
               ["in", ["get", "level"], ["literal", tier.levels]],
             ],
             paint: {
-              "line-color": PALETTE.arrow,
+              "line-pattern": id,
               "line-width": ["interpolate", ["linear"], ["zoom"], 8, 2.5, 12, 5, 16, 8],
-              "line-opacity": tier.opacity,
               "line-offset": OFFSET,
-              "line-dasharray": [0, 4, 3],
             },
           });
         }
@@ -668,14 +748,14 @@ export default function TrafficMapPanel({ title, subtitle, badge, endpoint, laye
           coordinates[0] += e.lngLat.lng > coordinates[0] ? 360 : -360;
         }
 
-        const typeLabel = props.type || "Alert";
-        const iconEmoji = props.type === "ACCIDENT" ? "🚗💥" : props.type === "POLICE" ? "👮" : props.type === "CONSTRUCTION" ? "🚧" : props.type === "JAM" ? "🛑" : "⚠️";
+        // Same shared look as the pins, so the hover card and the marker it
+        // describes cannot name the same report two different ways.
+        const hoverLook = lookOf(props.type);
 
         const description = `
           <div style="font-family: 'Inter', system-ui, -apple-system, sans-serif; padding: 10px; width: 220px; border-radius: 12px; background: var(--bg-surface); box-shadow: 0 4px 20px rgba(0,0,0,0.18); color: var(--text-primary);">
-            <div style="font-weight: 700; font-size: 13px; text-transform: uppercase; display: flex; align-items: center; gap: 6px; color: ${props.type === "ACCIDENT" ? "#b91c1c" : props.type === "POLICE" ? "#3b82f6" : props.type === "CONSTRUCTION" ? "#f97316" : "#eab308"
-          }; margin-bottom: 4px;">
-              <span>${iconEmoji}</span> ${typeLabel}
+            <div style="font-weight: 700; font-size: 13px; text-transform: uppercase; display: flex; align-items: center; gap: 6px; color: ${hoverLook.colour}; margin-bottom: 4px;">
+              <span style="display:flex;">${hoverLook.svg}</span> ${hoverLook.label}
             </div>
             <div style="font-size: 11px; font-weight: 600; color: var(--text-secondary); margin-bottom: 6px;">${props.street || "NLEX"} ${props.city ? `(${props.city})` : ""}</div>
             ${props.report_description ? `<div style="font-size: 11px; color: var(--text-secondary); line-height: 1.4; background: var(--bg-surface-hover); padding: 6px; border-radius: 6px; margin-bottom: 6px;">"${props.report_description}"</div>` : ""}
@@ -1001,14 +1081,17 @@ export default function TrafficMapPanel({ title, subtitle, badge, endpoint, laye
           
           const coords = feature.geometry.coordinates;
           const props = feature.properties;
-          const typeLabel = props.type || "Alert";
+          /* One title, from the shared look. This printed the label and then
+             the raw type beside it — "Hazard on road HAZARD", "Road closed
+             ROAD CLOSED" — because the variable holding the label was still
+             named after the emoji it replaced and the raw type was never
+             dropped from the markup. */
           /* One shared definition of how a report looks — see
              lib/waze-report-look.tsx. This was an if/else chain that knew about
              ACCIDENT, POLICE and CONSTRUCTION and sent everything else to the
              generic hazard pin, so all 7 live ROAD_CLOSED reports drew as
              hazards. */
           const look = lookOf(props.type);
-          const iconEmoji = look.label;
           const color = look.colour;
           const iconSvg = look.svg;
 
@@ -1049,7 +1132,7 @@ export default function TrafficMapPanel({ title, subtitle, badge, endpoint, laye
           const popup = new mapboxgl.Popup({ offset: 15, closeButton: false, closeOnClick: false }).setHTML(`
             <div style="font-family: 'Inter', system-ui, sans-serif; padding: 8px 10px; border-radius: 10px; color: #1e293b;">
               <div style="font-weight: 700; font-size: 12px; text-transform: uppercase; display: flex; align-items: center; gap: 6px; color: ${color};">
-                <span>${iconEmoji}</span> ${typeLabel.replace(/_/g, " ")}
+                <span style="display:flex;color:${color};">${look.svg}</span> ${look.label}
               </div>
               <div style="font-size: 11px; font-weight: 600; color: #64748b; margin-top: 3px;">${props.street || "NLEX"}${props.city ? ` · ${props.city}` : ""}</div>
               <div style="font-size: 10px; color: #94a3b8; margin-top: 4px;">Click for full report</div>
@@ -1106,64 +1189,45 @@ export default function TrafficMapPanel({ title, subtitle, badge, endpoint, laye
          seven times for every one step of the standstill ribbon. One rAF loop
          drives all of them rather than three timers, and it parks itself when
          the tab is backgrounded instead of animating a map nobody is watching. */
-      /* Phase is computed from the clock rather than counted up, and the dash
-         is built from it rather than picked out of a table.
+      /* Scrolling the pattern is a texture rewrite, so phase is a continuous
+         float and every frame lands exactly where the clock says. Nothing is
+         quantised and nothing accumulates, so a dropped frame costs a frame of
+         motion rather than putting the ribbons out of step with each other.
 
-         The old version stepped through seven fixed dasharrays on a per-tier
-         timer: the fast ribbon changed 18 times a second but only had 7 places
-         to be, so it visibly hopped, and the slow ribbon redrew 2.6 times a
-         second, which reads as stuttering rather than as crawling. Deriving the
-         dash from elapsed time gives as many intermediate positions as there
-         are frames, and missed frames stop mattering because nothing
-         accumulates — a late frame lands where it should have been rather than
-         one step behind.
-
-         Updates are capped at ~30fps because line-dasharray is not
-         interpolatable: every change rebuilds the layer's entry in Mapbox's
-         dash atlas, and doing that 60 times a second on six layers was most of
-         the cost. At this phase resolution 30fps is indistinguishable from 60. */
-      const DASH_PERIOD = 7;      // pattern length, in line-width units
-      const PHASE_STEPS = 28;     // quantised so the atlas caches a bounded set
-      const FRAME_MS = 33;
-
-      const dashAt = (phase: number): [number, number, number] => {
-        // A gap, then the lit segment, then the rest of the gap. Total is always
-        // DASH_PERIOD, so the pattern slides instead of stretching.
-        const lead = (phase / PHASE_STEPS) * (DASH_PERIOD - 4);
-        return [lead, 4, DASH_PERIOD - 4 - lead];
-      };
-
-      let lastFrame = 0;
-      const lastPhase = FLOW_TIERS.map(() => -1);
+         The corridor runs south to north and so does the pattern's x axis, so
+         northbound scrolls one way and southbound the other. */
+      let lastFlowFrame = 0;
 
       const animateFlow = (now: number) => {
+        /* Checked before rescheduling, not just before starting. flowFrameRef is
+           one ref shared by every run of this effect, so if two maps are ever
+           alive at once — a fast refresh, a theme switch mid-load — it holds
+           only the newest frame id and cancelling it strands the older loop,
+           which then runs forever. Letting each loop stop itself does not
+           depend on the ref pointing at the right frame. */
+        if (disposed) return;
         flowFrameRef.current = requestAnimationFrame(animateFlow);
         // Behind the maximised view there is nothing to see, and two maps
-        // repainting six dashed layers each was most of the cost of opening it.
+        // repainting six layers each was most of the cost of opening it.
         if (pausedRef.current) return;
-        if (now - lastFrame < FRAME_MS) return;
-        lastFrame = now;
+        if (now - lastFlowFrame < 33) return;
+        lastFlowFrame = now;
 
-        FLOW_TIERS.forEach((tier, i) => {
-          // One full pattern per stepMs * PHASE_STEPS, so the tiers keep the
-          // same relative speeds they had before.
-          const cycle = tier.stepMs * 7;
-          const phase = Math.floor(((now % cycle) / cycle) * PHASE_STEPS);
-          if (phase === lastPhase[i]) return;   // nothing to repaint
-          lastPhase[i] = phase;
-
-          const forward = dashAt(phase);
-          const back = dashAt(PHASE_STEPS - phase);
-          try {
-            const nb = `carriageway-flow-nb-${tier.id}`;
-            const sb = `carriageway-flow-sb-${tier.id}`;
-            if (map.getLayer(nb)) map.setPaintProperty(nb, "line-dasharray", forward);
-            if (map.getLayer(sb)) map.setPaintProperty(sb, "line-dasharray", back);
-          } catch {
-            // Layer went away underneath us; the next frame will find it gone too.
+        for (const dir of ["NB", "SB"] as const) {
+          const sign = dir === "NB" ? -1 : 1;
+          for (const tier of FLOW_TIERS) {
+            if (!activeTiers.has(tier.id)) continue;
+            const phase = sign * ((now % tier.cycleMs) / tier.cycleMs);
+            try {
+              const id = flowImageId(dir, tier.id);
+              if (map.hasImage(id)) map.updateImage(id, flowImage(phase, tier.opacity));
+            } catch {
+              // Style went away underneath us; the next frame will find it gone too.
+            }
           }
-        });
+        }
       };
+
       if (!disposed) flowFrameRef.current = requestAnimationFrame(animateFlow);
 
       if (isRealtime) {
@@ -1177,12 +1241,22 @@ export default function TrafficMapPanel({ title, subtitle, badge, endpoint, laye
           const fresh = onlyOnCorridor(
             await fetch(endpoint, { cache: "no-store" }).then((r) => r.json()),
           );
-          source.setData(fresh);
-          (map.getSource("nlex-corridor") as GeoJSONSource | undefined)?.setData(
-            corridorWithState(fresh),
-          );
-          if (isRealtime) {
-            renderAlerts(fresh);
+
+          const feedSig = signature(fresh);
+          if (feedSig !== lastFeedSig) {
+            lastFeedSig = feedSig;
+            source.setData(fresh);
+            // Markers are torn down and rebuilt, so they only move when the
+            // reports do.
+            if (isRealtime) renderAlerts(fresh);
+          }
+
+          const corridorNow = corridorWithState(fresh);
+          const corridorSig = signature(corridorNow);
+          if (corridorSig !== lastCorridorSig) {
+            lastCorridorSig = corridorSig;
+            (map.getSource("nlex-corridor") as GeoJSONSource | undefined)?.setData(corridorNow);
+            refreshActiveTiers(corridorNow);
           }
         } catch {
           // No-op polling fallback

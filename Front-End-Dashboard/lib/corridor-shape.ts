@@ -217,12 +217,41 @@ export function corridorGuard(raw: LngLat[], exits: LngLat[], toleranceM = CORRI
   );
   const xy = centreline.map((c) => [c[0] * M_PER_DEG_LON, c[1] * M_PER_DEG_LAT] as const);
 
+  /* The corridor is ordered south to north, so latitude is a usable index into
+     it: a point's nearest stretch of road is always near the vertex at the same
+     latitude. Binary searching that and scanning a window either side replaces
+     a sweep of all ~500 segments per query.
+
+     It is worth the trouble because these run per vertex, per feature, on every
+     poll: fifty jams of ten points each was a quarter of a million distance
+     tests every fifteen seconds, on the main thread, which showed up as a hitch
+     in the flow animation on a fifteen-second beat.
+
+     The window is generous rather than tight — the alignment wanders east and
+     west enough that the nearest vertex is not always the one at the matching
+     latitude — and is checked against the exhaustive sweep in the scratch
+     harness before being relied on. */
+  const WINDOW = 48;
+  const lats = centreline.map((c) => c[1]);
+
+  const windowAround = (lat: number): [number, number] => {
+    let lo = 0;
+    let hi = lats.length - 1;
+    while (lo < hi) {
+      const mid = (lo + hi) >> 1;
+      if (lats[mid] < lat) lo = mid + 1;
+      else hi = mid;
+    }
+    return [Math.max(1, lo - WINDOW), Math.min(xy.length - 1, lo + WINDOW)];
+  };
+
   const metresOff = (lngLat: number[]): number => {
     if (!xy.length || !lngLat || lngLat.length < 2) return Infinity;
     const qx = lngLat[0] * M_PER_DEG_LON;
     const qy = lngLat[1] * M_PER_DEG_LAT;
     let best = Infinity;
-    for (let i = 1; i < xy.length; i++) {
+    const [from, to] = windowAround(lngLat[1]);
+    for (let i = from; i <= to; i++) {
       const [ax, ay] = xy[i - 1];
       const vx = xy[i][0] - ax;
       const vy = xy[i][1] - ay;
@@ -259,7 +288,8 @@ export function corridorGuard(raw: LngLat[], exits: LngLat[], toleranceM = CORRI
     const qy = lngLat[1] * M_PER_DEG_LAT;
     let best = 0;
     let bestD = Infinity;
-    for (let i = 0; i < xy.length; i++) {
+    const [from, to] = windowAround(lngLat[1]);
+    for (let i = from - 1 < 0 ? 0 : from - 1; i <= to; i++) {
       const d = Math.hypot(qx - xy[i][0], qy - xy[i][1]);
       if (d < bestD) {
         bestD = d;

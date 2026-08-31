@@ -9,6 +9,9 @@ import { WAZE_REPORT_TYPES } from "../../lib/waze-reports";
 // Shared with the map markers and the collapsed legend, so all three
 // name and draw a report the same way.
 import { lookOf } from "../../lib/waze-report-look";
+// The same reading of a Waze street name the map uses to put a jam on the
+// right carriageway, so a row and a ribbon never disagree about direction.
+import { directionFromStreet } from "../../lib/corridor-shape";
 
 /**
  * Maximised view of the Waze panel.
@@ -49,6 +52,41 @@ type Overview = {
 };
 
 /** Waze alert types, mapped to the icon and tone the legend uses. */
+
+
+/**
+ * Where a report is, in words that actually distinguish it.
+ *
+ * The row used to read "{street} · near {exit}", and on this corridor the street
+ * is the same 76 km road for every report — "E1: North Luzon Expressway N" — so
+ * the only thing separating two rows was the timestamp. Reports 2 and 3.7 km
+ * apart rendered as identical lines and read as duplicates of each other. They
+ * were not: distinct uuids, distinct positions, distinct distances from their
+ * nearest exit.
+ *
+ * Naming the carriageway and the distance from the exit puts the difference on
+ * screen, and is what someone would need to find the thing anyway.
+ */
+function whereText(a: { street?: string | null; nearestExit?: string | null; metresFromExit?: number | null; city?: string | null }): string {
+  const dir = directionFromStreet(a.street);
+  const side = dir === "NB" ? "Northbound" : dir === "SB" ? "Southbound" : null;
+
+  const m = a.metresFromExit;
+  const distance =
+    m == null || !Number.isFinite(m)
+      ? null
+      : m < 950
+        ? `${Math.round(m / 10) * 10} m`
+        : `${(m / 1000).toFixed(1)} km`;
+
+  const place = a.nearestExit
+    ? distance
+      ? `${distance} from ${a.nearestExit}`
+      : `near ${a.nearestExit}`
+    : (a.street ?? a.city ?? "on the corridor");
+
+  return side ? `${side} · ${place}` : place;
+}
 
 const agoText = (m: number | null) => (m == null ? "—" : m < 1 ? "Just now" : m < 60 ? `${m} min ago` : `${Math.floor(m / 60)}h ${m % 60}m ago`);
 
@@ -275,7 +313,7 @@ export default function WazeLiveModal({ open, onClose }: { open: boolean; onClos
                           <span className={`wz-chip ${look.tone}`}><Icon size={12} /></span>
                           <span className="wz-alert-text">
                             <b>{look.label}</b>
-                            <em>{a.street ?? a.city ?? a.nearestExit} · near {a.nearestExit}</em>
+                            <em>{whereText(a)}</em>
                           </span>
                           <span className="wz-alert-age">{agoText(a.minutesAgo)}</span>
                         </button>

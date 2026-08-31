@@ -185,7 +185,7 @@ export type SnappedJam = {
    It matters: a jam on "NLEX N San Fernando Exit" has a bearing of 115 deg,
    because the slip road curves away east as it leaves the mainline. Inferring
    from that bearing put a northbound jam on the southbound ribbon. */
-function directionFromStreet(street?: string | null): "NB" | "SB" | null {
+export function directionFromStreet(street?: string | null): "NB" | "SB" | null {
   if (!street) return null;
   if (/\bnorth\s*bound\b/i.test(street)) return "NB";
   if (/\bsouth\s*bound\b/i.test(street)) return "SB";

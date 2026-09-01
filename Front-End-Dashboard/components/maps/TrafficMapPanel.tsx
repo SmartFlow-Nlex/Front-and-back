@@ -9,7 +9,7 @@ import { corridorGuard, directionLabel, sliceCorridor, type LngLat } from "../..
 import { FALLBACK_EXITS } from "../../lib/nlex-exits";
 import { useChartTheme } from "../../lib/chart-theme";
 import { mapPalette } from "../../lib/map-palette";
-import { isReportType } from "../../lib/waze-reports";
+import { isDisputedReport, isReportType, isUnconfirmedReport } from "../../lib/waze-reports";
 import { lookOf } from "../../lib/waze-report-look";
 
 type Props = {
@@ -294,8 +294,11 @@ export default function TrafficMapPanel({ title, subtitle, badge, endpoint, laye
              map and the Active Reports tile cannot disagree about what a report
              is. ROAD_CLOSED arrives in the feed and is dropped here. */
           .filter((f) => {
-            const p = f.properties as { feature_type?: string; type?: unknown } | null;
-            return p?.feature_type !== "alert" || isReportType(p?.type);
+            const p = f.properties as Record<string, unknown> | null;
+            if (p?.feature_type !== "alert") return true;
+            // Disputed reports are dropped; merely uncorroborated ones are kept
+            // and drawn faintly, because that is what a new report looks like.
+            return isReportType(p?.type) && !isDisputedReport(p);
           })
           .map((f) => {
           const props = f.properties as { feature_type?: string } | null;
@@ -1076,8 +1079,14 @@ export default function TrafficMapPanel({ title, subtitle, badge, endpoint, laye
           const color = look.colour;
           const iconSvg = look.svg;
 
+          /* Nobody has corroborated this one yet. The ring is set here rather
+             than in the stylesheet because the core carries an inline
+             "border: ... !important", and an inline !important outranks an
+             author rule, so a CSS border-style never applied. */
+          const unconfirmed = isUnconfirmedReport(props);
+
           const el = document.createElement("div");
-          el.className = "waze-alert-marker";
+          el.className = `waze-alert-marker${unconfirmed ? " unconfirmed" : ""}`;
           el.style.zIndex = "5";
           el.style.display = "flex";
           el.style.alignItems = "center";
@@ -1093,7 +1102,7 @@ export default function TrafficMapPanel({ title, subtitle, badge, endpoint, laye
                 width: 20px !important;
                 height: 20px !important;
                 border-radius: 50% !important;
-                border: 2px solid #ffffff !important;
+                border: 2px ${unconfirmed ? "dashed" : "solid"} #ffffff !important;
                 box-shadow: 0 2px 6px rgba(0,0,0,0.3) !important;
                 background-color: ${color} !important;
                 display: flex !important;

@@ -5834,3 +5834,28 @@ body {
   font-weight: 700;
   color: var(--text-primary);
 }
+
+/* ---------------------------------------------------------------------------
+   Reports nobody has corroborated yet.
+
+   Waze starts every report at reliability 5, confidence 0 — "reported, no
+   reactions". Over 46 NLEX reports that was 20% of them, and a report thirty
+   seconds old necessarily looks like this, so hiding them would hide the
+   freshest incidents on a live map. They are drawn as provisional instead: a
+   little softer, with a dashed ring instead of a solid one. Disputed reports —
+   the ones an editor or two drivers marked "not there" — are the ones actually
+   removed, in lib/waze-reports.ts.
+   ------------------------------------------------------------------------- */
+/* The dashed ring is applied where the border is written, in the marker markup:
+   the core carries an inline "border: ... !important" and an inline !important
+   outranks an author rule, so setting border-style here did nothing. */
+.waze-alert-marker.unconfirmed .pulsing-marker-core { opacity: 0.72; }
+.waze-alert-marker.unconfirmed .pulsing-marker-glow { opacity: 0.4; }
+.waze-alert-marker.unconfirmed:hover .pulsing-marker-core { opacity: 1; }
+
+/* The same distinction in the maximised view's list. */
+.wz-chip.unconfirmed {
+  opacity: 0.72;
+  outline: 1.5px dashed currentColor;
+  outline-offset: 1px;
+}

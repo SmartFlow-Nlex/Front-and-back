@@ -9,6 +9,7 @@ import { WAZE_REPORT_TYPES } from "../../lib/waze-reports";
 // Shared with the map markers and the collapsed legend, so all three
 // name and draw a report the same way.
 import { lookOf } from "../../lib/waze-report-look";
+import { isDisputedReport, isUnconfirmedReport } from "../../lib/waze-reports";
 import MapLegend from "./MapLegend";
 // The same reading of a Waze street name the map uses to put a jam on the
 // right carriageway, so a row and a ribbon never disagree about direction.
@@ -26,6 +27,11 @@ const CORRIDOR = corridorGuard(
 
 const onCorridor = (a: { lat?: number | null; lon?: number | null }) =>
   a.lat == null || a.lon == null ? true : CORRIDOR.metresOff([a.lon, a.lat]) <= 200;
+
+/* Same credibility rule as the map: only disputed reports are dropped, so
+   this list and the pins cannot differ on which reports exist. */
+const notDisputed = (a: { reliability?: number | null; confidence?: number | null }) =>
+  !isDisputedReport(a as unknown as Record<string, unknown>);
 
 /**
  * Maximised view of the Waze panel.
@@ -131,7 +137,7 @@ export default function WazeLiveModal({ open, onClose }: { open: boolean; onClos
   const { isDark } = useChartTheme();
   const palette = mapPalette(isDark);
   const [data, setData] = useState<Overview | null>(null);
-  const corridorAlerts = (data?.alerts ?? []).filter(onCorridor);
+  const corridorAlerts = (data?.alerts ?? []).filter(onCorridor).filter(notDisputed);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(false);
   const [clock, setClock] = useState("");
@@ -310,7 +316,7 @@ export default function WazeLiveModal({ open, onClose }: { open: boolean; onClos
                             );
                           }}
                         >
-                          <span className={`wz-chip ${look.tone}`}><Icon size={12} /></span>
+                          <span className={`wz-chip ${look.tone}${isUnconfirmedReport(a as unknown as Record<string, unknown>) ? " unconfirmed" : ""}`}><Icon size={12} /></span>
                           <span className="wz-alert-text">
                             <b>{look.label}</b>
                             <em>{whereText(a)}</em>

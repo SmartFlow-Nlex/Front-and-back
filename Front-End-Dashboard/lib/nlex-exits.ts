@@ -138,29 +138,6 @@ export function displayExitName(name: string): string {
   return DISPLAY_NAMES[name.toLowerCase().trim()] ?? name;
 }
 
-/**
- * A shorter form for places that have to fit in a chart axis.
- *
- * "Paso De Blas Valenzuela" and "Sta. Rita Guiguinto" are the names the
- * warehouse uses and are right in a report, but a bar chart labels a range with
- * two of them at once and the axis then takes more width than the bars. The
- * municipality is the part a reader can drop: nobody looking at an NLEX chart
- * needs telling that Tabang is in Guiguinto.
- */
-const SHORT_NAMES: Record<string, string> = {
-  "paso de blas valenzuela": "Paso de Blas",
-  "sta. rita guiguinto": "Sta. Rita",
-  "tabang guiguinto": "Tabang",
-  "bocaue interchange": "Bocaue",
-  "nlex harbor link": "Harbor Link",
-};
-
-/** Display name, shortened where the full one is too long for a chart. */
-export function shortExitName(name: string): string {
-  const key = name.toLowerCase().trim();
-  return SHORT_NAMES[key] ?? displayExitName(name);
-}
-
 /** Nearest exit to a km-post — used to label a position on the corridor. */
 export function exitNearestKm(exits: NlexExit[], km: number): NlexExit | null {
   if (exits.length === 0) return null;

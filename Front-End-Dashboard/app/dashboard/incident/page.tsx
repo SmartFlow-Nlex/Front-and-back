@@ -16,7 +16,6 @@ import type { CorridorForecastPoint } from "../../../components/dashboard/incide
 import DateRangePicker from "../traffic/components/DateRangePicker";
 import { rangeDays, grainBlockedReason, bestGrainFor, axisLabelFor, bucketLabelFor } from "../../../lib/granularity";
 import styles from "../traffic/traffic.module.css";
-import { FALLBACK_EXITS, shortExitName } from "../../../lib/nlex-exits";
 
 const BACKEND = process.env.NEXT_PUBLIC_BACKEND_URL ?? "http://localhost:4000";
 
@@ -68,37 +67,7 @@ const fmtInt = (n: number) => Math.round(n).toLocaleString("en-US");
 const fmt1 = (n: number) => n.toLocaleString("en-US", { minimumFractionDigits: 1, maximumFractionDigits: 1 });
 const fmtHour = (h: number) => (h === 0 ? "12 AM" : h < 12 ? `${h} AM` : h === 12 ? "12 PM" : `${h - 12} PM`);
 const fmtPct = (p: number) => `${p >= 0 ? "+" : ""}${p.toFixed(1)}%`;
-/* A km-post is a number on a road nobody drives by numbers.
- *
- * "Km 15–19" says nothing to a reader who knows the corridor as a sequence of
- * exits, and it was the y-axis of the hotspots chart, the KPI, the tooltip and
- * the table. Each five-kilometre bucket is named after the exits inside it
- * instead: "Bocaue Barrier – Tambubong". Buckets with no exit in them — there
- * are three, in the long gaps north of Pulilan — are named for the two exits
- * they sit between, which keeps every label distinct.
- *
- * The km range is kept wherever there is room for it, because it is what the
- * data is actually keyed by and someone will want to check.
- */
-const kmRange = (bin: number) => `km ${bin}–${bin + 4}`;
-
-const kmPlace = (bin: number): string => {
-  const ordered = [...FALLBACK_EXITS].sort((a, b) => a.km - b.km);
-  const inside = ordered.filter((e) => e.km >= bin && e.km < bin + 5);
-
-  if (inside.length === 1) return shortExitName(inside[0].exit_name);
-  if (inside.length > 1) {
-    return `${shortExitName(inside[0].exit_name)} – ${shortExitName(inside[inside.length - 1].exit_name)}`;
-  }
-
-  const before = [...ordered].filter((e) => e.km < bin).pop();
-  const after = ordered.find((e) => e.km >= bin + 5);
-  if (before && after) return `${shortExitName(before.exit_name)} – ${shortExitName(after.exit_name)}`;
-  return kmRange(bin);
-};
-
-/** Place first, km second — for tooltips, tables and anywhere with room. */
-const kmLabel = (bin: number) => `${kmPlace(bin)} · ${kmRange(bin)}`;
+const kmLabel = (bin: number) => `Km ${bin}–${bin + 4}`;
 const weekdayOf = (dateStr: string) =>
   new Date(`${dateStr}T00:00:00`).toLocaleDateString("en-US", { weekday: "long" });
 
@@ -408,16 +377,9 @@ export default function IncidentPage() {
     return {
       rows: display,
       option: {
-        grid: { left: 104, right: 46, top: 8, bottom: 46 },
+        grid: { left: 84, right: 46, top: 8, bottom: 46 },
         xAxis: { type: "value", splitNumber: 3, axisLabel: { fontSize: 10 } },
-        yAxis: {
-          type: "category",
-          data: display.map((r) => kmPlace(r.km_bin)),
-          // Two exits on one line would need more axis than the bars get, so a
-          // range breaks at its dash.
-          axisLabel: { interval: 0, fontSize: 10, formatter: (v: string) => v.replace(" – ", "\n– ") },
-          axisTick: { show: false },
-        },
+        yAxis: { type: "category", data: display.map((r) => kmLabel(r.km_bin)), axisLabel: { interval: 0, fontSize: 10 }, axisTick: { show: false } },
         tooltip: {
           axisPointer: { type: "shadow" },
           formatter: (p) => {
@@ -820,7 +782,7 @@ export default function IncidentPage() {
         <article className={styles.kpiTile}>
           <span className={styles.kpiIcon} aria-hidden="true"><MapPin size={15} /></span>
           <h3>Top Hotspot</h3>
-          <div className={styles.kpiValue}>{kpiValue(derived?.topHotspot ? kmPlace(derived.topHotspot.km_bin) : null)}</div>
+          <div className={styles.kpiValue}>{kpiValue(derived?.topHotspot ? kmLabel(derived.topHotspot.km_bin) : null)}</div>
           <p className={styles.kpiHint}>
             {derived?.topHotspot && derived.hotspotTotal > 0
               ? `${((derived.topHotspot.total / derived.hotspotTotal) * 100).toFixed(1)}% of located incidents`
@@ -902,7 +864,7 @@ export default function IncidentPage() {
       <article className={`${styles.chartCard} ${styles.chart3}`}>
         <div className={styles.chartHead}>
           <div className={styles.headText}>
-            <h3>Hotspots by Corridor Section</h3>
+            <h3>Hotspots by Km Segment</h3>
           </div>
           <button
             type="button"

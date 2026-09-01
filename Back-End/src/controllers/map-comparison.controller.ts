@@ -1,7 +1,7 @@
 import type { Request, Response } from "express";
 import { getLiveCorridorOverview, getLiveMapGeoJson } from "../services/map-live.service.js";
 import { z } from "zod";
-import { searchExitsInDb, getForecastCongestionFromDb } from "../services/map-comparison.service.js";
+import { searchExitsInDb, getForecastCongestionFromDb, getForecastModelInfo } from "../services/map-comparison.service.js";
 import { ExitSearchSchema } from "../validators/map-comparison.validator.js";
 import { env } from "../config/env.js";
 
@@ -224,7 +224,10 @@ export const getMapForecast = async (req: Request, res: Response) => {
     return res.status(400).json({ success: false, message: "hours must be an integer between 1 and 12" });
   }
 
-  const features = await getForecastCongestionFromDb(parsed.data.hours);
+  const [features, model] = await Promise.all([
+    getForecastCongestionFromDb(parsed.data.hours),
+    getForecastModelInfo(),
+  ]);
 
   // Only fall back when the database is unreachable. An empty result is a real
   // answer — the pipeline has no prediction for that horizon — and must not be
@@ -233,7 +236,10 @@ export const getMapForecast = async (req: Request, res: Response) => {
     return res.json(fallbackForecast);
   }
 
-  res.json({ type: "FeatureCollection", features });
+  /* The model travels with its predictions. A forecast panel that cannot name
+     what produced it, or say how well it scored, is asking to be taken on
+     faith; GeoJSON allows foreign members, so it rides along. */
+  res.json({ type: "FeatureCollection", features, model });
 };
 
 // [DEV-04] GET /api/v1/map-comparison/exits

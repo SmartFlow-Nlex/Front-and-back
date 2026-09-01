@@ -5859,3 +5859,48 @@ body {
   outline: 1.5px dashed currentColor;
   outline-offset: 1px;
 }
+
+
+/* The forecast panel's model card. Replaces a decorative "+30 minutes" select
+   with what actually produced the colours on the road. */
+.mc-model-card {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 9px 12px;
+  border-radius: var(--radius-md);
+  background: var(--bg-surface);
+  border: 1px solid var(--border-default);
+  box-shadow: var(--shadow-md);
+  min-width: 168px;
+}
+.mc-model-head {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+.mc-model-name {
+  display: flex;
+  align-items: baseline;
+  gap: 7px;
+  font-size: 0.95rem;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+.mc-model-name em {
+  font-style: normal;
+  font-size: 0.7rem;
+  font-weight: 600;
+  color: #a855f7;
+}
+.mc-model-note {
+  font-size: 0.68rem;
+  font-weight: 500;
+  color: var(--text-secondary);
+  line-height: 1.35;
+}

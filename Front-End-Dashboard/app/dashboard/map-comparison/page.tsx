@@ -28,6 +28,18 @@ type ExitHit = NlexExit;
 
 export default function MapComparisonPage() {
   const [wazeMax, setWazeMax] = useState(false);
+  /* What produced the forecast, fetched with it. The panel drew model output
+     but said nothing about the model, so a reader had no way to tell a
+     prediction from a decoration. */
+  const [forecastModel, setForecastModel] = useState<{
+    name: string | null;
+    accuracy: number | null;
+    trainedAt: string | null;
+    rejectedCount: number;
+    horizonVaries: boolean;
+    horizons: number;
+  } | null>(null);
+
   const [activeReports, setActiveReports] = useState<number | null>(null);
   const [avgSpeed, setAvgSpeed] = useState<number | null>(null);
   const [timeStr, setTimeStr] = useState("");
@@ -71,6 +83,15 @@ export default function MapComparisonPage() {
     updateClock();
     const interval = setInterval(updateClock, 1000);
     return () => clearInterval(interval);
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    fetch(`${BACKEND}/api/map-comparison/forecast?hours=1`, { cache: "no-store" })
+      .then((r) => r.json())
+      .then((j) => { if (!cancelled && j?.model) setForecastModel(j.model); })
+      .catch(() => {/* the panel simply says nothing about the model */});
+    return () => { cancelled = true; };
   }, []);
 
   // Poll real-time Waze data to update stats
@@ -283,12 +304,41 @@ export default function MapComparisonPage() {
           >
             {/* Forecast Controls Overlay */}
             <div className="mc-forecast-controls">
-              <div className="mc-control-dropdown">
-                <Clock size={14} className="mc-purple-text" /> Forecast Time
-                <div className="mc-select-wrapper">
-                  <select><option>+30 minutes</option></select>
-                  <ChevronDown size={14} />
-                </div>
+              {/* This was a select offering "+30 minutes" — one hardcoded
+                  option, no handler, wired to nothing. Worse than useless: the
+                  predictions do not vary by horizon either, so even a working
+                  control would have moved nothing on the map. What a reader
+                  actually needs is what produced the colours, which is real and
+                  was not being shown. */}
+              <div className="mc-model-card">
+                <span className="mc-model-head">
+                  <Clock size={13} className="mc-purple-text" /> Forecast model
+                </span>
+                {forecastModel?.name ? (
+                  <>
+                    <span className="mc-model-name">
+                      {forecastModel.name}
+                      {forecastModel.accuracy != null && (
+                        <em>{Math.round(forecastModel.accuracy * 100)}% accurate</em>
+                      )}
+                    </span>
+                    <span className="mc-model-note">
+                      {forecastModel.trainedAt
+                        ? `Trained ${new Date(forecastModel.trainedAt).toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" })}`
+                        : "Training date unknown"}
+                      {forecastModel.rejectedCount > 0 && ` · beat ${forecastModel.rejectedCount} others`}
+                    </span>
+                    {/* Said plainly rather than implied by a control that
+                        cannot change anything. */}
+                    <span className="mc-model-note">
+                      {forecastModel.horizonVaries
+                        ? `Varies across ${forecastModel.horizons} h ahead`
+                        : "Same outlook for every hour ahead"}
+                    </span>
+                  </>
+                ) : (
+                  <span className="mc-model-note">Model details unavailable</span>
+                )}
               </div>
               <button className="mc-icon-btn"><Navigation size={18} className="mc-purple-text" /></button>
               <div className="mc-zoom-group">

@@ -101,6 +101,75 @@ export async function searchExitsInDb(query: string) {
   }
 }
 
+
+/**
+ * Which model produced the forecast, and whether it varies with the horizon.
+ *
+ * The panel draws real model output, but a reader cannot tell that from a
+ * coloured line — and two things about this particular model need saying.
+ *
+ * It is the accepted classifier for target 'Congestion' in gold.ml_model_metrics,
+ * which the training pipeline writes along with the competitors it rejected and
+ * why. Naming it, and its score, is the difference between "the map says" and
+ * "a model with this accuracy, trained on this date, says".
+ *
+ * The horizon check is the more important one. gold.ml_predictive_congestion
+ * holds twelve rows per segment, one per hour ahead, but every row for a given
+ * segment currently carries the same state and the same probability: the +1h
+ * outlook is byte-identical to the +12h one. So the table has a horizon column
+ * that the model does not actually use, and any control offering to change the
+ * horizon would move nothing on screen. The flag lets the panel say so instead
+ * of implying a forecast that varies over time.
+ */
+export async function getForecastModelInfo(): Promise<{
+  name: string | null;
+  accuracy: number | null;
+  trainedAt: string | null;
+  rejectedCount: number;
+  horizonVaries: boolean;
+  horizons: number;
+} | null> {
+  if (!db) return null;
+  try {
+    const [{ rows: model }, { rows: variance }] = await Promise.all([
+      db.query(
+        `SELECT model_name, r2, updated_at,
+                (SELECT COUNT(*) FROM gold.ml_model_metrics
+                  WHERE target = 'Congestion' AND NOT accepted)::int AS rejected
+           FROM gold.ml_model_metrics
+          WHERE target = 'Congestion' AND accepted
+          ORDER BY rank NULLS LAST
+          LIMIT 1`,
+      ),
+      db.query(
+        `SELECT COUNT(*) FILTER (WHERE variants > 1)::int AS varying,
+                MAX(horizons)::int                        AS horizons
+           FROM (
+             SELECT segment_name,
+                    COUNT(DISTINCT congestion_state || ':' || probability::text) AS variants,
+                    COUNT(DISTINCT hours_ahead)                                  AS horizons
+               FROM gold.ml_predictive_congestion
+              GROUP BY segment_name
+           ) per_segment`,
+      ),
+    ]);
+
+    const m = model[0];
+    const v = variance[0];
+    return {
+      name: m?.model_name ?? null,
+      accuracy: m?.r2 === null || m?.r2 === undefined ? null : Number(m.r2),
+      trainedAt: m?.updated_at ? new Date(m.updated_at).toISOString() : null,
+      rejectedCount: Number(m?.rejected ?? 0),
+      horizonVaries: Number(v?.varying ?? 0) > 0,
+      horizons: Number(v?.horizons ?? 0),
+    };
+  } catch (error) {
+    console.error("Database query failed for forecast model info:", error);
+    return null;
+  }
+}
+
 /**
  * [DEV-02] Predicted congestion for the forecast map panel.
  *

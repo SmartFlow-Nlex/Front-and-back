@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import type { EChartsOption } from "echarts";
 import DashboardChart from "./DashboardChart";
+import { aggregateSeries } from "./aggregateSeries";
 import IncidentNarrative, { MetricHint, metricHintFor, modelHintFor } from "./IncidentNarrative";
 import {
   ACTUAL_COLOR,
@@ -128,6 +129,13 @@ export default function PredictiveIncidentChart({
   // spirit, just with the opposite starting state since Rainfall used to be
   // unconditional.
   const [showWeather, setShowWeather] = useState(true);
+  // Viewing aid only, same contract as PredictiveVolumeChart's granularity
+  // control (see aggregateSeries.ts) — bucketed points are a MEAN of the days
+  // inside them and never change what was scored or forecast. No Hourly here:
+  // this chart's drill-down already opens the hourly breakdown from any Daily
+  // point, so an Hourly granularity would offer nothing an Hourly button on
+  // the traffic chart's own (decorative, always-disabled) control does either.
+  const [granularity, setGranularity] = useState<"Daily" | "Weekly" | "Monthly">("Daily");
   // Guards the one-time "open on the champion" default against filter refetches.
   const seededRef = useRef(false);
   // `selected` is now a fetch dependency (below) so a user's model pick
@@ -284,17 +292,20 @@ export default function PredictiveIncidentChart({
   const dates = daily.map((d) => fmtDate(d.date));
 
   // Drill-down: any point on any series maps back to its day by dataIndex, since
-  // every series here is plotted against the same `daily` array. Every day
-  // navigates regardless of which band it falls in — the hourly view is driven
-  // by recorded weather, which exists for the whole window including the
-  // forecast horizon, and that page states when a day's incident log hasn't
-  // caught up rather than drawing zeros for it.
+  // every series here is plotted against the same effective (possibly
+  // aggregated) date array. Every day navigates regardless of which band it
+  // falls in — the hourly view is driven by recorded weather, which exists
+  // for the whole window including the forecast horizon, and that page states
+  // when a day's incident log hasn't caught up rather than drawing zeros for
+  // it. Disabled once bucketed (below): a point is a period there, not a
+  // single day, mirroring PredictiveVolumeChart's openDay.
   const openDay = (i: number) => {
-    if (i < 0 || i >= daily.length) return;
+    if (isAggregated) return;
+    if (i < 0 || i >= effIso.length) return;
     // Carry the current Range/Weather along so the drill-down's "Back to daily"
     // can restore the exact view it was opened from, rather than dropping the
     // user back on the default 12-month window.
-    const qs = new URLSearchParams({ date: daily[i].date });
+    const qs = new URLSearchParams({ date: effIso[i] });
     if (months) qs.set("months", months);
     if (from) qs.set("from", from);
     if (to) qs.set("to", to);
@@ -304,11 +315,10 @@ export default function PredictiveIncidentChart({
   // x-axis labels are click targets too (xAxis.triggerEvent below) — a wider
   // hit area than the line symbols, mirroring PredictiveVolumeChart's onChartClick.
   const onChartClick = (p: { componentType?: string; dataIndex?: number; value?: string }) => {
-    if (p.componentType === "xAxis") return openDay(dates.indexOf(String(p.value)));
+    if (p.componentType === "xAxis") return openDay(effDates.indexOf(String(p.value)));
     if (typeof p.dataIndex === "number") openDay(p.dataIndex);
   };
   const actualData = daily.map((d) => d.actual);
-  const lastIndex = dates.length - 1;
 
   // Only offer toggles for models the pipeline actually stored a series for.
   const availableModels = MODELS.filter((m) => daily.some((d) => d.models?.[m.key] != null));
@@ -355,20 +365,75 @@ export default function PredictiveIncidentChart({
   // construction regardless of how validationStart was derived.
   const validationStart = Math.min(rawValidationStart === -1 ? futureStart : rawValidationStart, futureStart);
 
-  const showPast = validationStart > 0;
-  const showPresent = futureStart > validationStart;
-  const showFuture = futureStart < daily.length;
+  // The scored window itself never moves — only how much of it is drawn — so
+  // this is computed off the raw daily boundaries, before any Future trim or
+  // aggregation below, the same way PredictiveVolumeChart's toolbar caption
+  // reads its untrimmed chartData.holdoutStart/futureStart rather than the
+  // (possibly cut/bucketed) render-local ones.
+  const presentScoredDays = futureStart - validationStart;
+
+  // Aggregation: a viewing aid only, same contract as PredictiveVolumeChart
+  // (see aggregateSeries.ts) — a bucket carries the MEAN of the days inside
+  // it and cannot change what was scored or forecast. Volume rides along as
+  // an extra "model" column so it gets the same mean-and-majority-zone
+  // treatment as everything else without a second aggregation pass.
+  type AggKey = ModelKey | "__volume";
+  const modelsFlat = Object.fromEntries(
+    availableModels.map((m) => [
+      m.key,
+      daily.map((d) => {
+        if (d.predictionType !== "validation" && d.predictionType !== "future") return null;
+        // Same twin-selection rule the model-line series below applies — kept
+        // in sync by hand since both need to answer the current toggle state
+        // identically before either one aggregates or draws anything.
+        const source =
+          showVolume && showWeather ? d.models
+          : !showVolume && showWeather ? (d.modelsNoVolume ?? d.models)
+          : showVolume && !showWeather ? (d.modelsNoWeather ?? d.models)
+          : (d.modelsNoVolume ?? d.modelsNoWeather ?? d.models);
+        return source?.[m.key] ?? null;
+      }),
+    ])
+  ) as Record<ModelKey, (number | null)[]>;
+
+  const agg =
+    granularity === "Daily"
+      ? null
+      : aggregateSeries<AggKey>({
+          granularity,
+          isoDates: daily.map((d) => d.date),
+          baseActual: actualData,
+          models: { ...modelsFlat, __volume: daily.map((d) => d.volume ?? null) },
+          rainfall: daily.map((d) => d.rainfallMm),
+          holdoutStart: validationStart,
+          futureStart,
+        });
+
+  const isAggregated = agg != null;
+  const effDates = agg ? agg.dates : dates;
+  const effIso = agg ? agg.isoDates : daily.map((d) => d.date);
+  const effActual = agg ? agg.baseActual : actualData;
+  const effRainfall = agg ? agg.rainfall : daily.map((d) => d.rainfallMm);
+  const effModels: Record<AggKey, (number | null)[]> = agg ? agg.models : (modelsFlat as Record<AggKey, (number | null)[]>);
+  const effVolume = effModels.__volume ?? daily.map((d) => d.volume ?? null);
+  const effHoldoutStart = agg ? agg.holdoutStart : validationStart;
+  const effFutureStart = agg ? agg.futureStart : futureStart;
+  const effLastIndex = effDates.length - 1;
+
+  const showPast = effHoldoutStart > 0;
+  const showPresent = effFutureStart > effHoldoutStart;
+  const showFuture = effFutureStart < effDates.length;
 
   // A band's label is suppressed once it's too narrow to read on its own —
   // "Present" and "Future" are the ones that collide in practice, since the
   // forecast horizon here is short (~a week) against a Range that can be a
   // year wide. If every rendered band is that narrow, the widest of them
   // still gets a label rather than leaving the chart with none.
-  const totalPoints = Math.max(daily.length, 1);
+  const totalPoints = Math.max(effDates.length, 1);
   const zoneFraction: Record<"Past" | "Present" | "Future", number> = {
-    Past: showPast ? validationStart / totalPoints : 0,
-    Present: showPresent ? (futureStart - validationStart) / totalPoints : 0,
-    Future: showFuture ? (daily.length - futureStart) / totalPoints : 0,
+    Past: showPast ? effHoldoutStart / totalPoints : 0,
+    Present: showPresent ? (effFutureStart - effHoldoutStart) / totalPoints : 0,
+    Future: showFuture ? (effDates.length - effFutureStart) / totalPoints : 0,
   };
 
   // Dev-only invariant: the three bands must partition the axis without
@@ -383,7 +448,7 @@ export default function PredictiveIncidentChart({
       console.warn(
         "[PredictiveIncidentChart] Past/Present/Future band fractions sum to " +
           `${(total * 100).toFixed(2)}% (> 100%) — bands overlap. ` +
-          `validationStart=${validationStart} futureStart=${futureStart} daily.length=${daily.length}`
+          `holdoutStart=${effHoldoutStart} futureStart=${effFutureStart} dates.length=${effDates.length}`
       );
     }
   }
@@ -408,27 +473,40 @@ export default function PredictiveIncidentChart({
   if (showPast) {
     markAreaData.push([
       { xAxis: 0, itemStyle: { color: "rgba(37, 99, 235, 0.05)" }, label: zoneLabel("Past", showZoneLabel("Past")) },
-      { xAxis: Math.max(validationStart - 1, 0) },
+      { xAxis: Math.max(effHoldoutStart - 1, 0) },
     ]);
   }
   if (showPresent) {
     markAreaData.push([
-      { xAxis: validationStart, itemStyle: { color: "rgba(249, 115, 22, 0.08)" }, label: zoneLabel("Present", showZoneLabel("Present")) },
-      { xAxis: Math.max(futureStart - 1, 0) },
+      { xAxis: effHoldoutStart, itemStyle: { color: "rgba(249, 115, 22, 0.08)" }, label: zoneLabel("Present", showZoneLabel("Present")) },
+      { xAxis: Math.max(effFutureStart - 1, 0) },
     ]);
   }
   if (showFuture) {
     markAreaData.push([
-      { xAxis: futureStart, itemStyle: { color: "rgba(22, 163, 74, 0.08)" }, label: zoneLabel("Future", showZoneLabel("Future")) },
-      { xAxis: lastIndex },
+      { xAxis: effFutureStart, itemStyle: { color: "rgba(22, 163, 74, 0.08)" }, label: zoneLabel("Future", showZoneLabel("Future")) },
+      { xAxis: effLastIndex },
     ]);
   }
   // A divider only at a boundary where both neighboring bands are actually
   // drawn — a line at validationStart with no Past band to its left (or at
   // futureStart with nothing to its left) would be a stray mark, not a divider.
   const markLineData: { xAxis: number }[] = [];
-  if (showPast && showPresent) markLineData.push({ xAxis: validationStart });
-  if (showFuture && (showPast || showPresent)) markLineData.push({ xAxis: futureStart });
+  if (showPast && showPresent) markLineData.push({ xAxis: effHoldoutStart });
+  if (showFuture && (showPast || showPresent)) markLineData.push({ xAxis: effFutureStart });
+
+  // Rainfall shaded by intensity so the bars read as a weather condition at a
+  // glance rather than as anonymous blue blocks. Thresholds match
+  // PredictiveVolumeChart's PAGASA-advisory bands so the two charts agree on
+  // what counts as "Heavy" — only the caption below differs, because rain
+  // pushes incidents the opposite way it pushes volume.
+  const RAIN_BANDS = [
+    { max: 7.5, label: "Light", color: "rgba(56, 189, 248, 0.45)" },
+    { max: 15, label: "Moderate", color: "rgba(14, 165, 233, 0.65)" },
+    { max: 30, label: "Heavy", color: "rgba(2, 132, 199, 0.8)" },
+    { max: Infinity, label: "Intense", color: "rgba(30, 64, 175, 0.9)" },
+  ];
+  const rainBand = (mm: number) => RAIN_BANDS.find((b) => mm < b.max) ?? RAIN_BANDS[RAIN_BANDS.length - 1];
 
   const option: EChartsOption = {
     grid: { left: 60, right: 24, top: 28, bottom: 76 },
@@ -447,6 +525,9 @@ export default function PredictiveIncidentChart({
                 : fmtInt(Number(p.value));
           tip += `${p.marker} ${p.seriesName}: <b>${val}</b><br/>`;
         });
+        tip += `<span style="color:#94a3b8;font-size:11px">${
+          isAggregated ? "Switch to Daily to open a day" : "Click to view hourly breakdown"
+        }</span>`;
         return tip;
       },
     },
@@ -464,7 +545,7 @@ export default function PredictiveIncidentChart({
     },
     xAxis: {
       type: "category",
-      data: dates,
+      data: effDates,
       // Labels are click targets too — a wider hit area than the line symbols
       // (matches PredictiveVolumeChart's xAxis).
       triggerEvent: true,
@@ -527,10 +608,11 @@ export default function PredictiveIncidentChart({
               name: "Rainfall",
               type: "bar" as const,
               yAxisIndex: 1,
-              data: daily.map((d) => d.rainfallMm),
+              data: effRainfall.map((mm) =>
+                mm == null ? null : { value: mm, itemStyle: { color: rainBand(mm).color } }
+              ),
               barMaxWidth: 14,
-              itemStyle: { color: RAIN_COLOR, opacity: 0.35 },
-              emphasis: { itemStyle: { opacity: 0.6 } },
+              itemStyle: { borderRadius: [2, 2, 0, 0] },
               z: 1,
             },
           ]
@@ -546,7 +628,7 @@ export default function PredictiveIncidentChart({
               name: "Vehicle Volume",
               type: "line" as const,
               yAxisIndex: 2,
-              data: daily.map((d) => d.volume ?? null),
+              data: effVolume,
               smooth: true,
               symbol: "none" as const,
               connectNulls: false,
@@ -560,7 +642,7 @@ export default function PredictiveIncidentChart({
       {
         name: "Actual Count",
         type: "line",
-        data: actualData,
+        data: effActual,
         smooth: true,
         symbol: "circle",
         symbolSize: 5,
@@ -591,36 +673,15 @@ export default function PredictiveIncidentChart({
       ...activeModels.map((key) => ({
         name: `${META[key].label} Prediction`,
         type: "line" as const,
-        // Model curves are drawn only across Present (validation) and Future.
-        // The Past band shows ground truth alone — a fitted value over a day
-        // the model was trained on is not a forecast, and plotting it beside
-        // real out-of-sample predictions would overstate the model.
-        //
-        // Gated on predictionType rather than merely on "a value exists": the
-        // two coincide today only because ml_predictive_incidents holds nothing
-        // but validation and future rows. If in-sample rows are ever backfilled
-        // to give the hourly drill-down past coverage, this keeps them out of
-        // this chart instead of silently extending every line across history.
-        // Picks which of a day's three stored series (primary / volume-free /
-        // weather-free) answers the current toggle state — the same rule the
-        // backend's pickPrediction applies when scoring modelMetrics (kept in
-        // sync by hand since one lives in SQL-column-space and the other in
-        // this response's field names), so the table underneath never
-        // disagrees with what this line is plotting. There's no
-        // jointly-ablated twin (a 4th trained variant per model), so with
-        // BOTH toggles off this falls back to the volume-free twin — volume
-        // is the far stronger feature (R2=0.518 alone vs 0.0016 for rain), so
-        // ablating it is the more meaningful single substitution. `?? d.models`
-        // on each branch also covers a table with no twin stored yet.
-        data: daily.map((d) => {
-          if (d.predictionType !== "validation" && d.predictionType !== "future") return null;
-          const source =
-            showVolume && showWeather ? d.models
-            : !showVolume && showWeather ? (d.modelsNoVolume ?? d.models)
-            : showVolume && !showWeather ? (d.modelsNoWeather ?? d.models)
-            : (d.modelsNoVolume ?? d.modelsNoWeather ?? d.models);
-          return source?.[key] ?? null;
-        }),
+        // Model curves are drawn only across Present (validation) and Future —
+        // modelsFlat above already nulls out Train rows and picks which of a
+        // day's three stored series (primary / volume-free / weather-free)
+        // answers the current toggle state, the same rule the backend's
+        // pickPrediction applies when scoring modelMetrics, so the table
+        // underneath never disagrees with what this line is plotting. Reading
+        // from effModels here (rather than re-deriving per-day) is what lets
+        // this line aggregate along with everything else under Weekly/Monthly.
+        data: effModels[key] ?? [],
         smooth: true,
         connectNulls: true,
         symbol: "circle" as const,
@@ -912,51 +973,146 @@ export default function PredictiveIncidentChart({
         </div>
       </div>
 
-      {/* Forecast-horizon control. Hidden outright when the visible window has
-          no Future band at all (a custom range ending before the horizon
-          starts), since there would be nothing for it to trim. */}
-      {futureAvailable > 0 && (
-        <div style={{ display: "flex", alignItems: "center", gap: "8px", flexWrap: "wrap", fontSize: "0.75rem", color: "#4b5e7d" }}>
-          <span style={{ width: 10, height: 10, borderRadius: 2, background: "rgba(22,163,74,0.3)" }} />
-          <b style={{ color: "#0f172a" }}>Future</b>
-          {FUTURE_PRESETS.map((item) => {
-            const unavailable = item.d > futureAvailable;
-            const active = effectiveFutureDays === item.d;
-            return (
+      {/* Zone window & Granularity controls, laid out the same way
+          PredictiveVolumeChart's toolbar is: one row, GRANULARITY first, then
+          a legend swatch per band. No Hourly pill here — every Daily point
+          already opens the hourly breakdown on click, so there's no separate
+          capability an Hourly granularity would add. */}
+      <div style={{
+        display: "flex", alignItems: "center", gap: "20px", flexWrap: "wrap",
+        padding: "10px 14px", borderRadius: "10px", background: "#f8fafc",
+        border: "1px solid #e2e8f0", fontSize: "0.76rem",
+      }}>
+        {/* GRANULARITY control pill */}
+        <span style={{ display: "inline-flex", alignItems: "center", gap: "8px" }}>
+          <b style={{ color: "#3b82f6", letterSpacing: "0.04em", fontSize: "0.75rem", textTransform: "uppercase" }}>
+            GRANULARITY
+          </b>
+          <div style={{
+            display: "inline-flex", alignItems: "center", padding: "2px",
+            borderRadius: "999px", background: "#fff", border: "1px solid #dce2ef",
+          }}>
+            {(["Daily", "Weekly", "Monthly"] as const).map((g) => (
               <button
-                key={item.label}
-                onClick={() => setFutureDays(item.d)}
-                disabled={unavailable}
+                key={g}
+                onClick={() => setGranularity(g)}
                 title={
-                  unavailable
-                    ? `The forecast only runs ${futureAvailable} day${futureAvailable === 1 ? "" : "s"} ahead — retrain the incident pipeline with a longer horizon to use this`
-                    : `Show ${item.d} days of forecast`
+                  g === "Daily"
+                    ? "One point per day — the resolution the models actually forecast"
+                    : `Averaged per ${g.replace("ly", "").toLowerCase()} — a viewing aid, not a separate forecast`
                 }
                 style={{
-                  padding: "3px 10px",
-                  borderRadius: "999px",
-                  cursor: unavailable ? "not-allowed" : "pointer",
-                  border: active ? "1px solid #16a34a" : "1px solid #dce2ef",
-                  background: active ? "#16a34a" : "#fff",
-                  color: active ? "#fff" : "#4b5e7d",
-                  fontWeight: 600,
-                  fontSize: "0.72rem",
-                  opacity: unavailable ? 0.4 : 1,
+                  padding: "3px 10px", borderRadius: "999px", cursor: "pointer", border: "none",
+                  background: "transparent",
+                  color: granularity === g ? "#2563eb" : "#4b5e7d",
+                  fontWeight: granularity === g ? 700 : 600, fontSize: "0.72rem",
                 }}
               >
-                {item.label}
+                {granularity === g ? `✓ ${g}` : g}
               </button>
-            );
-          })}
-          <span style={{ color: "#64748b" }}>
-            · {futureAvailable}d forecast written by the last training run
+            ))}
+          </div>
+        </span>
+
+        {/* Past */}
+        {showPast && (
+          <span style={{ display: "inline-flex", alignItems: "center", gap: "8px" }}>
+            <span style={{ width: 10, height: 10, borderRadius: 2, background: "rgba(37,99,235,0.25)" }} />
+            <b style={{ color: "#0f172a" }}>Past</b>
           </span>
-        </div>
-      )}
+        )}
+
+        {/* Present */}
+        {showPresent && (
+          <span style={{ display: "inline-flex", alignItems: "center", gap: "8px" }}>
+            <span style={{ width: 10, height: 10, borderRadius: 2, background: "rgba(249,115,22,0.35)" }} />
+            <b style={{ color: "#0f172a" }}>Present</b>
+            <span style={{ color: "#4b5e7d" }}>
+              {presentScoredDays}d scored · fixed by evaluation
+            </span>
+          </span>
+        )}
+
+        {/* Future. Hidden outright when the visible window has no Future band
+            at all (a custom range ending before the horizon starts), since
+            there would be nothing for the preset buttons to trim. */}
+        {futureAvailable > 0 && (
+          <span style={{ display: "inline-flex", alignItems: "center", gap: "8px", flexWrap: "wrap" }}>
+            <span style={{ width: 10, height: 10, borderRadius: 2, background: "rgba(22,163,74,0.3)" }} />
+            <b style={{ color: "#0f172a" }}>Future</b>
+            {FUTURE_PRESETS.map((item) => {
+              const unavailable = item.d > futureAvailable;
+              const active = effectiveFutureDays === item.d;
+              return (
+                <button
+                  key={item.label}
+                  onClick={() => setFutureDays(item.d)}
+                  disabled={unavailable}
+                  title={
+                    unavailable
+                      ? `The forecast only runs ${futureAvailable} day${futureAvailable === 1 ? "" : "s"} ahead — retrain the incident pipeline with a longer horizon to use this`
+                      : `Show ${item.d} days of forecast`
+                  }
+                  style={{
+                    padding: "3px 10px",
+                    borderRadius: "999px",
+                    cursor: unavailable ? "not-allowed" : "pointer",
+                    border: active ? "1px solid #16a34a" : "1px solid #dce2ef",
+                    background: active ? "#16a34a" : "#fff",
+                    color: active ? "#fff" : "#4b5e7d",
+                    fontWeight: 600,
+                    fontSize: "0.72rem",
+                    opacity: unavailable ? 0.4 : 1,
+                  }}
+                >
+                  {item.label}
+                </button>
+              );
+            })}
+            <span style={{ color: "#64748b" }}>
+              · {effectiveFutureDays}d forecast written by the last training run
+            </span>
+          </span>
+        )}
+      </div>
 
       <div style={{ height: "450px", width: "100%", cursor: "pointer" }}>
         <DashboardChart option={option} height={450} onEvents={{ click: onChartClick as (p: never) => void }} />
       </div>
+
+      {/* Without this key the rainfall bars are anonymous blue blocks — a reader
+          has no way to tell a drizzle from a storm, or why they should care.
+          Unlike the traffic chart, heavier rain here reads as a warning, not a
+          calming signal: fewer cars are out, but reduced visibility, slicker
+          roads and hydroplaning drive up collisions and breakdowns per mile
+          driven, and the resulting jams run worse than a sunny-day incident's
+          because road capacity itself has dropped. */}
+      {showWeather && (
+        <div style={{
+          display: "flex", alignItems: "center", gap: "18px", flexWrap: "wrap",
+          padding: "10px 14px", borderRadius: "10px", background: "#f8fafc",
+          border: "1px solid #e2e8f0", fontSize: "0.75rem", color: "#4b5e7d",
+        }}>
+          <span style={{ fontWeight: 700, color: "#0f172a" }}>Daily rainfall</span>
+          {RAIN_BANDS.map((b, i) => (
+            <span key={b.label} style={{ display: "inline-flex", alignItems: "center", gap: "6px" }}>
+              <span style={{
+                width: 14, height: 10, borderRadius: 2, background: b.color,
+                border: "1px solid rgba(2,132,199,0.5)", display: "inline-block",
+              }} />
+              {b.label}
+              <span style={{ color: "#94a3b8" }}>
+                {i === 0 ? `< ${b.max} mm`
+                  : b.max === Infinity ? `≥ ${RAIN_BANDS[i - 1].max} mm`
+                  : `${RAIN_BANDS[i - 1].max}–${b.max} mm`}
+              </span>
+            </span>
+          ))}
+          <span style={{ color: "#4b5e7d", borderLeft: "1px solid #e2e8f0", paddingLeft: "14px" }}>
+            Taller bar = wetter day. Heavy rain typically coincides with higher incident rates and worse congestion, even as traffic volume drops.
+          </span>
+        </div>
+      )}
 
       {metricsTable}
       {weatherPanel}

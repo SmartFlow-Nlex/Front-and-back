@@ -7,3 +7,13 @@ python-dotenv
 statsmodels
 tensorflow
 requests
+
+# train_incident_spatial_models.py only (GWR + Spatial LSTM). torch rather
+# than tensorflow for its LSTM: this pipeline's own LSTM/GRU need TF, whose
+# wheels lag behind on newer Python versions — torch's are more current, and
+# PoissonNLLLoss is a natural fit for count-data anyway.
+mgwr
+torch
+
+# train_incident_severity_models.py only (Cox PH survival model).
+lifelines

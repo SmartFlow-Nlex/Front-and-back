@@ -12,6 +12,8 @@ import CustomSelect from "../../../components/dashboard/CustomSelect";
 import PageHeader from "../../../components/dashboard/PageHeader";
 import PredictiveIncidentChart from "../../../components/dashboard/PredictiveIncidentChart";
 import PredictiveCorridorChart from "../../../components/dashboard/PredictiveCorridorChart";
+import IncidentSeverityModels from "../../../components/dashboard/IncidentSeverityModels";
+import SecondaryIncidentRiskPanel from "../../../components/dashboard/SecondaryIncidentRiskPanel";
 import type { CorridorForecastPoint } from "../../../components/dashboard/incidentPredictive.shared";
 import DateRangePicker from "../traffic/components/DateRangePicker";
 import { rangeDays, grainBlockedReason, bestGrainFor, axisLabelFor, bucketLabelFor } from "../../../lib/granularity";
@@ -714,6 +716,16 @@ export default function IncidentPage() {
               forecastModelLabel={corridorData?.forecastModelLabel ?? null}
               loading={corridorData === null}
             />
+          </div>
+        )}
+        {activeTab === "Predictive" && (
+          <div className={styles.spanFull}>
+            <IncidentSeverityModels />
+          </div>
+        )}
+        {activeTab === "Predictive" && (
+          <div className={styles.spanFull}>
+            <SecondaryIncidentRiskPanel />
           </div>
         )}
         {activeTab === "Prescriptive" && (

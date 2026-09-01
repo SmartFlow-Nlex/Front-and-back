@@ -14,6 +14,9 @@ import {
   getIncidentPredictiveFromDb,
   getIncidentPredictiveAnchors,
 } from "../services/incident.service.js";
+import { getIncidentSpatialFromDb } from "../services/incident-spatial.service.js";
+import { getIncidentSeverityFromDb } from "../services/incident-severity.service.js";
+import { getIncidentWeatherSpeedFromDb } from "../services/incident-weather-speed.service.js";
 
 const IncidentAnalyticsQuerySchema = z.object({
   months: z.enum(["3", "12", "all"]).optional().default("12"),
@@ -140,4 +143,53 @@ export const getWeatherCorrelation = async (_req: Request, res: Response) => {
   }
 
   res.json({ success: true, source: "mock", data: { clear: 5, rain: 20 } });
+};
+
+// GET /api/incident/spatial — the two per-exit models from
+// train_incident_spatial_models.py: GWR's local coefficients (feeds the
+// coefficient map) and the Spatial LSTM's next-24h per-exit ranking (feeds
+// the high-risk segment list). No query params: unlike /predictive, this is
+// a single "as of the last training run" snapshot across all 20 exits, not
+// a Range/Weather-scoped query.
+export const getIncidentSpatial = async (_req: Request, res: Response) => {
+  const data = await getIncidentSpatialFromDb();
+  if (!data) {
+    return res.status(503).json({
+      success: false,
+      message: "Spatial incident models unavailable: database not reachable or the pipeline hasn't written yet",
+    });
+  }
+  res.json({ success: true, source: "database", data });
+};
+
+// GET /api/incident/severity — the per-incident models from
+// train_incident_severity_models.py: severity (Ordinal Logistic vs
+// XGBoost), Cox PH's clearance survival curve, and the secondary-incident
+// risk score. Also a single "as of the last training run" snapshot, no
+// query params.
+export const getIncidentSeverity = async (_req: Request, res: Response) => {
+  const data = await getIncidentSeverityFromDb();
+  if (!data) {
+    return res.status(503).json({
+      success: false,
+      message: "Severity/clearance models unavailable: database not reachable or the pipeline hasn't written yet",
+    });
+  }
+  res.json({ success: true, source: "database", data });
+};
+
+// GET /api/incident/weather-speed — the models from
+// train_incident_weather_speed_models.py: daily speed/volume forecast
+// (SARIMAX/LSTM/GRU/XGBoost), the road-closure and weather-incident-risk
+// logistic regressions, and the exit-hour contour map. Single snapshot, no
+// query params, same as /spatial and /severity.
+export const getIncidentWeatherSpeed = async (_req: Request, res: Response) => {
+  const data = await getIncidentWeatherSpeedFromDb();
+  if (!data) {
+    return res.status(503).json({
+      success: false,
+      message: "Weather-adjusted speed models unavailable: database not reachable or the pipeline hasn't written yet",
+    });
+  }
+  res.json({ success: true, source: "database", data });
 };

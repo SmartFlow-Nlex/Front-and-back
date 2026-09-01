@@ -1,0 +1,32 @@
+================================================================================
+  WEATHER-ADJUSTED SPEED MODELS
+================================================================================
+
+  Daily speed forecast — holdout comparison
+    XGBoost    MAE=0.992  RMSE=1.781  R2=-0.231  n=90  [SELECTED]
+    SARIMAX    MAE=1.485  RMSE=1.878  R2=-0.370  n=90  
+    LSTM       MAE=1.927  RMSE=2.171  R2=-0.829  n=90  
+    GRU        MAE=2.193  RMSE=2.369  R2=-1.179  n=90  
+    naive (predict training mean) MAE = 2.405
+
+  Road closure probability — logistic regression
+    AUC = 0.588
+    base rate = 14.4%  n=90
+      rain=   0mm -> P(closure) = 0.033
+      rain=  10mm -> P(closure) = 0.033
+      rain=  30mm -> P(closure) = 0.033
+      rain=  60mm -> P(closure) = 0.033
+      rain= 100mm -> P(closure) = 0.033
+
+  Weather incident risk — logistic regression
+    AUC = 0.704
+    base rate = 28.9%  n=90
+      rain=   0mm -> P(high-incident day) = 0.140
+      rain=  10mm -> P(high-incident day) = 0.140
+      rain=  30mm -> P(high-incident day) = 0.141
+      rain=  60mm -> P(high-incident day) = 0.142
+      rain= 100mm -> P(high-incident day) = 0.143
+
+  Contour (exit x hour) — XGBoost holdout
+    MAE=1.003  R2=-0.149  n=37128
+================================================================================

@@ -43,7 +43,7 @@ type Analytics = {
     weatherKnown: number;
   };
   dailyTrend: { d: string; road: number; moto: number; stalled: number }[];
-  hotspots: { km_bin: number; exit_name: string | null; total: number; road: number; moto: number; stalled: number; injuries: number; fatalities: number }[];
+  hotspots: { km_bin: number; total: number; road: number; moto: number; stalled: number; injuries: number; fatalities: number }[];
   heatmap: { dow: number; hour: number; v: number }[];
   causes: { label: string; total: number; injuries: number; fatalities: number }[];
   types: { label: string; total: number; injuries: number; fatalities: number }[];
@@ -67,26 +67,7 @@ const fmtInt = (n: number) => Math.round(n).toLocaleString("en-US");
 const fmt1 = (n: number) => n.toLocaleString("en-US", { minimumFractionDigits: 1, maximumFractionDigits: 1 });
 const fmtHour = (h: number) => (h === 0 ? "12 AM" : h < 12 ? `${h} AM` : h === 12 ? "12 PM" : `${h - 12} PM`);
 const fmtPct = (p: number) => `${p >= 0 ? "+" : ""}${p.toFixed(1)}%`;
-/* A km-post is how the data is keyed, not how anyone knows the road.
- *
- * The name comes from the API, which reads it from the incident data's own
- * nearest_exit column. It cannot be derived here: the location km-posts are the
- * Manila-origin ones the road is signed with, where Balintawak is km 11, while
- * the dashboard's exit list measures from Balintawak at 0. Mapping one onto the
- * other displaced every label by 11 km or more, so the lookup belongs where
- * both columns sit side by side.
- *
- * Bins below km 10 have no name because the data has none: they fall before
- * Balintawak and no row there carries an exit. Those keep the km range, which
- * is honest about what is known. */
-const kmRange = (bin: number) => `Km ${bin}–${bin + 4}`;
-
-const kmPlace = (r: { km_bin: number; exit_name?: string | null }) =>
-  r.exit_name ?? kmRange(r.km_bin);
-
-/** Place first, km second — wherever there is room for both. */
-const kmLabel = (r: { km_bin: number; exit_name?: string | null }) =>
-  r.exit_name ? `${r.exit_name} · km ${r.km_bin}–${r.km_bin + 4}` : kmRange(r.km_bin);
+const kmLabel = (bin: number) => `Km ${bin}–${bin + 4}`;
 const weekdayOf = (dateStr: string) =>
   new Date(`${dateStr}T00:00:00`).toLocaleDateString("en-US", { weekday: "long" });
 
@@ -398,13 +379,13 @@ export default function IncidentPage() {
       option: {
         grid: { left: 84, right: 46, top: 8, bottom: 46 },
         xAxis: { type: "value", splitNumber: 3, axisLabel: { fontSize: 10 } },
-        yAxis: { type: "category", data: display.map((r) => kmPlace(r)), axisLabel: { interval: 0, fontSize: 10 }, axisTick: { show: false } },
+        yAxis: { type: "category", data: display.map((r) => kmLabel(r.km_bin)), axisLabel: { interval: 0, fontSize: 10 }, axisTick: { show: false } },
         tooltip: {
           axisPointer: { type: "shadow" },
           formatter: (p) => {
             const i = (p as { dataIndex: number }).dataIndex;
             const r = display[i];
-            return `<b>${kmLabel(r)}</b><br/>${fmtInt(r.total)} incidents · ${fmtInt(r.injuries)} injured · ${fmtInt(r.fatalities)} fatalities`;
+            return `<b>${kmLabel(r.km_bin)}</b><br/>${fmtInt(r.total)} incidents · ${fmtInt(r.injuries)} injured · ${fmtInt(r.fatalities)} fatalities`;
           },
         },
         legend: { show: true, bottom: 0, left: "center", itemWidth: 14, itemHeight: 8, itemGap: 18, padding: 0, textStyle: { fontSize: 11 } },
@@ -551,7 +532,7 @@ export default function IncidentPage() {
   const showHotspotDetail = (r: Analytics["hotspots"][number]) => {
     if (!derived) return;
     setDetail({
-      title: kmLabel(r),
+      title: kmLabel(r.km_bin),
       subtitle: "Incident hotspot (5-km segment)",
       rows: [
         ["Total incidents", fmtInt(r.total)],
@@ -801,7 +782,7 @@ export default function IncidentPage() {
         <article className={styles.kpiTile}>
           <span className={styles.kpiIcon} aria-hidden="true"><MapPin size={15} /></span>
           <h3>Top Hotspot</h3>
-          <div className={styles.kpiValue}>{kpiValue(derived?.topHotspot ? kmPlace(derived.topHotspot) : null)}</div>
+          <div className={styles.kpiValue}>{kpiValue(derived?.topHotspot ? kmLabel(derived.topHotspot.km_bin) : null)}</div>
           <p className={styles.kpiHint}>
             {derived?.topHotspot && derived.hotspotTotal > 0
               ? `${((derived.topHotspot.total / derived.hotspotTotal) * 100).toFixed(1)}% of located incidents`
@@ -883,7 +864,7 @@ export default function IncidentPage() {
       <article className={`${styles.chartCard} ${styles.chart3}`}>
         <div className={styles.chartHead}>
           <div className={styles.headText}>
-            <h3>Hotspots by Location</h3>
+            <h3>Hotspots by Km Segment</h3>
           </div>
           <button
             type="button"
@@ -995,7 +976,7 @@ export default function IncidentPage() {
                   {data.hotspots.map((r, i) => (
                     <tr key={r.km_bin} className={styles.clickableRow} onClick={() => { setAllHotspotsOpen(false); showHotspotDetail(r); }}>
                       <td className={styles.plazaRank}>{i + 1}</td>
-                      <td>{kmLabel(r)}</td>
+                      <td>{kmLabel(r.km_bin)}</td>
                       <td className={styles.plazaNum}>{fmtInt(r.total)}</td>
                       <td className={styles.plazaNum}>{fmtInt(r.road)}</td>
                       <td className={styles.plazaNum}>{fmtInt(r.moto)}</td>

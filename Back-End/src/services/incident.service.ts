@@ -134,17 +134,43 @@ export async function getIncidentAnalyticsFromDb(filters: IncidentAnalyticsFilte
            FROM incidents WHERE ${WHERE} GROUP BY 1 ORDER BY 1`,
           params
         ),
-        // Hotspots: 5-km bins from the Km-post in the location field
+        // Hotspots: 5-km bins from the Km-post in the location field, each
+        // labelled with the exit the data itself puts there.
+        //
+        // The km-posts in `location` are the Manila-origin ones the road is
+        // signed with — Balintawak is km 11, Dau is km 82 — not distance along
+        // the corridor. Naming a bin from the dashboard's own exit list, which
+        // measures from Balintawak at 0, displaced every label by 11 km or more
+        // and silently mislabelled the busiest stretches. So the names come from
+        // silver.nlex_incidents_clean, which carries km_value and nearest_exit
+        // side by side and is therefore the only thing that can say which exit a
+        // km-post belongs to on this scale. MODE picks the exit most rows in the
+        // bin agree on; eight of the ten bins are unanimous.
+        //
+        // Bins below km 10 get no name because the data has none for them: they
+        // sit before Balintawak, and no row down there carries a nearest_exit.
         db.query(
-          `WITH ${INCIDENTS_CTE}, ${WXALL_CTE}
-           SELECT (FLOOR(${KM_OF} / 5) * 5)::int AS km_bin, COUNT(*)::int AS total,
-                  COUNT(*) FILTER (WHERE src = 'road')::int AS road,
-                  COUNT(*) FILTER (WHERE src = 'moto')::int AS moto,
-                  COUNT(*) FILTER (WHERE src = 'stalled')::int AS stalled,
-                  SUM(inj)::int AS injuries, SUM(fat)::int AS fatalities
-           FROM incidents
-           WHERE ${WHERE} AND location ~ 'Km\\s*\\d+'
-           GROUP BY 1 ORDER BY 2 DESC`,
+          `WITH ${INCIDENTS_CTE}, ${WXALL_CTE},
+           exit_by_bin AS (
+             SELECT (FLOOR(km_value / 5) * 5)::int AS km_bin,
+                    MODE() WITHIN GROUP (ORDER BY nearest_exit) AS exit_name
+             FROM silver.nlex_incidents_clean
+             WHERE nearest_exit IS NOT NULL AND nearest_exit <> 'Unknown' AND km_value > 0
+             GROUP BY 1
+           )
+           SELECT b.km_bin, e.exit_name, b.total, b.road, b.moto, b.stalled, b.injuries, b.fatalities
+           FROM (
+             SELECT (FLOOR(${KM_OF} / 5) * 5)::int AS km_bin, COUNT(*)::int AS total,
+                    COUNT(*) FILTER (WHERE src = 'road')::int AS road,
+                    COUNT(*) FILTER (WHERE src = 'moto')::int AS moto,
+                    COUNT(*) FILTER (WHERE src = 'stalled')::int AS stalled,
+                    SUM(inj)::int AS injuries, SUM(fat)::int AS fatalities
+             FROM incidents
+             WHERE ${WHERE} AND location ~ 'Km\\s*\\d+'
+             GROUP BY 1
+           ) b
+           LEFT JOIN exit_by_bin e ON e.km_bin = b.km_bin
+           ORDER BY b.total DESC`,
           params
         ),
         // Hour x day-of-week frequency

@@ -736,6 +736,17 @@ export default function TrafficMapPanel({ title, subtitle, badge, endpoint, laye
       // Point Hover
 
 
+      /* Where the live reports are, so the plaza pins can get out of their way.
+         Declared out here rather than beside the plazas, because renderAlerts
+         fills it and the plaza declutter reads it. */
+      const reportPins: [number, number][] = [];
+
+      /* Set by the plaza block below. renderAlerts calls it once the reports
+         have moved, so a plaza that has just been uncovered — or has just
+         started covering something — is re-evaluated straight away rather than
+         waiting for the reader to pan. */
+      let rethinkPlazaPins: (() => void) | null = null;
+
       // Toll Plaza HTML Markers — All 20 NLEX exits with exact coordinates from official data
       if (isRealtime) {
         const tollPlazas = [
@@ -1006,17 +1017,25 @@ export default function TrafficMapPanel({ title, subtitle, badge, endpoint, laye
         const PIN_GAP_PX = 26;
 
         const declutterPlazas = () => {
-          const kept: { x: number; y: number }[] = [];
+          /* Reports win. A plaza is a fixed landmark the reader can find again
+             by zooming; a report is the thing they came to see, and it was
+             being hidden underneath — plazas draw above reports so that they
+             stay hoverable, which meant an exit pin could completely cover an
+             accident sitting next to it. Zooming in separated them, which is
+             why reports seemed to appear only when zoomed. */
+          const kept = reportPins.map((c) => map.project(c));
+
           for (const pin of plazaPins) {
             const q = map.project(pin.lngLat);
             const clash = kept.some(
               (k) => Math.abs(k.x - q.x) < PIN_GAP_PX && Math.abs(k.y - q.y) < PIN_GAP_PX,
             );
             pin.el.style.display = clash ? "none" : "";
-            if (!clash) kept.push({ x: q.x, y: q.y });
+            if (!clash) kept.push(q);
           }
         };
 
+        rethinkPlazaPins = declutterPlazas;
         declutterPlazas();
         map.on("zoom", declutterPlazas);
         map.on("move", declutterPlazas);
@@ -1031,6 +1050,7 @@ export default function TrafficMapPanel({ title, subtitle, badge, endpoint, laye
         // Clear old alert markers
         alertMarkersRef.current.forEach((m) => m.remove());
         alertMarkersRef.current = [];
+        reportPins.length = 0;
 
         if (!geojson || !("features" in geojson) || !Array.isArray(geojson.features)) return;
         
@@ -1157,7 +1177,10 @@ export default function TrafficMapPanel({ title, subtitle, badge, endpoint, laye
           });
 
           alertMarkersRef.current.push(marker);
+          reportPins.push(coords as [number, number]);
         });
+
+        rethinkPlazaPins?.();
       };
       
       /* Drive the flow dashes.

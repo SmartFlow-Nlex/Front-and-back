@@ -235,7 +235,11 @@ export default function WazeLiveModal({ open, onClose }: { open: boolean; onClos
                   </div>
                   <div className="wz-kpi reports">
                     <span className="wz-kpi-label">Active reports</span>
-                    <span className="wz-kpi-value">{data?.activeReports ?? "—"}<AlertCircle size={14} /></span>
+                    {/* The list below, not the API's own tally. That tally counts every
+                        report the feed carried, including the ones off the
+                        corridor, so this tile disagreed with both the list
+                        under it and the panel behind it. */}
+                    <span className="wz-kpi-value">{data ? corridorAlerts.length : "—"}<AlertCircle size={14} /></span>
                   </div>
                   <div className="wz-kpi delay">
                     <span className="wz-kpi-label">Current delay</span>

@@ -12,7 +12,20 @@ import { lookOf } from "../../lib/waze-report-look";
 import MapLegend from "./MapLegend";
 // The same reading of a Waze street name the map uses to put a jam on the
 // right carriageway, so a row and a ribbon never disagree about direction.
-import { directionFromStreet } from "../../lib/corridor-shape";
+import { corridorGuard, directionFromStreet, type LngLat } from "../../lib/corridor-shape";
+import { FALLBACK_EXITS } from "../../lib/nlex-exits";
+import nlexGeometry from "./nlex-geometry.json";
+
+/* The same corridor test the map draws by, so this list cannot name a report
+   the map does not show. Waze brands its slip roads, so a name alone lets
+   through hazards 1.8 km off the mainline. */
+const CORRIDOR = corridorGuard(
+  (nlexGeometry as unknown as { coordinates: LngLat[] }).coordinates,
+  [...FALLBACK_EXITS].sort((a, b) => a.km - b.km).map((e) => [e.longitude, e.latitude] as LngLat),
+);
+
+const onCorridor = (a: { lat?: number | null; lon?: number | null }) =>
+  a.lat == null || a.lon == null ? true : CORRIDOR.metresOff([a.lon, a.lat]) <= 200;
 
 /**
  * Maximised view of the Waze panel.
@@ -117,6 +130,7 @@ export default function WazeLiveModal({ open, onClose }: { open: boolean; onClos
   const { isDark } = useChartTheme();
   const palette = mapPalette(isDark);
   const [data, setData] = useState<Overview | null>(null);
+  const corridorAlerts = (data?.alerts ?? []).filter(onCorridor);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(false);
   const [clock, setClock] = useState("");
@@ -248,10 +262,10 @@ export default function WazeLiveModal({ open, onClose }: { open: boolean; onClos
                     were hidden — the list is the thing people read to find out
                     what the number means. It scrolls instead of truncating. */}
                 <h4 className="wz-sec">
-                  Current alerts{data?.alerts?.length ? ` (${data.alerts.length})` : ""}
+                  Current alerts{corridorAlerts.length ? ` (${corridorAlerts.length})` : ""}
                 </h4>
                 <ul className="wz-alerts">
-                  {(data?.alerts ?? []).map((a, i) => {
+                  {corridorAlerts.map((a, i) => {
                     const look = lookOf(a.type);
                     const Icon = look.icon;
                     /* A row is a button, not decoration: it points at a real
@@ -301,7 +315,7 @@ export default function WazeLiveModal({ open, onClose }: { open: boolean; onClos
                       </li>
                     );
                   })}
-                  {data && data.alerts.length === 0 && <li className="wz-empty-row">No alerts on the corridor right now</li>}
+                  {data && corridorAlerts.length === 0 && <li className="wz-empty-row">No alerts on the corridor right now</li>}
                 </ul>
 
                 {worst && (

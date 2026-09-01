@@ -94,12 +94,10 @@ export default function MapComparisonPage() {
              somebody reporting something. Counting both added two different
              units together. Only the five categories the legend names count --
              see lib/waze-reports.ts. */
-          /* isActiveReport only — the corridor test above no longer applies to
-             alerts (see guard.filter in lib/corridor-shape.ts), because the API
-             already restricts them to NLEX-named streets. Counting the same
-             filtered set the map draws is what keeps this tile and the
-             maximised panel's Active Reports in step. */
-          const alertCount = features.filter((f: Feature) => isActiveReport(f)).length;
+/* On the corridor and of a counted type. Both halves matter: the
+             feed carries reports branded NLEX that sit up to 1.8 km off the
+             road, on spurs and entries. */
+          const alertCount = onNlex.filter((f: Feature) => isActiveReport(f)).length;
 
           const jams = onNlex.filter(
             (f: Feature) =>

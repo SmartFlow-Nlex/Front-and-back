@@ -426,31 +426,28 @@ export function corridorGuard(raw: LngLat[], exits: LngLat[], toleranceM = CORRI
         ...fc,
         features: (fc.features as { properties?: { feature_type?: string; street?: string } }[]).filter((f) => {
           const kind = f?.properties?.feature_type;
-          /* Jams only.
+          if (kind !== "jam" && kind !== "alert") return true;
 
-             Alerts used to be geometry-tested here too, from when the API
-             returned everything within 3 km of an exit and something had to
-             throw out the neighbouring road network. The API now filters alerts
-             by street name — a stricter and more meaningful test than distance,
-             since it reads the road Waze itself named.
+          /* Both are tested by position.
 
-             Testing them twice reintroduced a disagreement rather than
-             preventing one: the tolerance is 200 m, and a report on a road
-             labelled "North Luzon Expressway S" measured 214 m off the
-             centreline. The sidebar counted it, this dropped it, and the two
-             tiles differed by one. GPS scatter on a 60 m carriageway is not
-             evidence of a different road.
+             Alerts were exempted for a while, on the grounds that the API had
+             already filtered them by street name — a more meaningful test than
+             distance, since it reads the road Waze itself named. It is not
+             enough. Waze brands its slip roads: four hazards on "E1: NLEX
+             Tabang Spur Road W" sat 1.8 km from the mainline and an "E1: NLEX N
+             Entry" 302 m off, and every one of them passed on its name while
+             plainly not being on the road the map draws.
 
-             Jams keep the test. They are LineStrings that have to be snapped
-             onto the corridor to colour it, so their geometry has to be on it.
+             The reason the test was dropped was a disagreement — the tile
+             counted a report the map had thrown away — but that was two
+             different filters, not one filter being wrong. The tile and the
+             maximised view's list now run this same guard, so there is one rule
+             and they cannot drift.
 
-             They are also tested by name, because a jam paints the road. Being
-             within the tolerance is not enough: service roads, frontage roads
-             and the local roads crossing NLEX run within metres of it, and a
-             jam on "East Service Rd" and one on "Santa Ana - Mexico - San Luis
-             - San Simon Rd" were colouring mainline ribbons red. */
-          if (kind !== "jam") return true;
-          if (!isNlexStreet(f?.properties?.street)) return false;
+             A jam also has to be on the corridor by name, because a jam paints
+             the road: service roads run within the tolerance for their whole
+             length and would otherwise colour the mainline. */
+          if (kind === "jam" && !isNlexStreet(f?.properties?.street)) return false;
           return onCorridor(f as Parameters<CorridorGuard["onCorridor"]>[0]);
         }),
       };

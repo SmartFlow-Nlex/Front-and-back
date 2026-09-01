@@ -244,6 +244,40 @@ export function isNlexStreet(street: string | null | undefined): boolean {
   return isNlex && !isNeighbour;
 }
 
+/**
+ * Which carriageway a point report is on.
+ *
+ * Two signals, and they disagree often enough to need an order. The street name
+ * is the carriageway Waze assigned the report — "E1: NLEX N On-Ramp" — and it is
+ * a statement about the road. The heading is the reporter's own bearing, which
+ * on a curving ramp points wherever the driver happened to be facing: one live
+ * report sat on "NLEX N On-Ramp" with a heading of 129 degrees, pointing
+ * south-east. So the name wins, and the heading is used only where the name
+ * declares nothing.
+ *
+ * NLEX runs roughly SSE to NNW, so a bearing in the northern half means
+ * northbound. Reports with neither signal get no direction rather than a guess.
+ */
+export function reportDirection(
+  street: string | null | undefined,
+  heading: number | null | undefined,
+): "NB" | "SB" | null {
+  const named = directionFromStreet(street);
+  if (named) return named;
+  if (heading == null || !Number.isFinite(heading)) return null;
+  const deg = ((heading % 360) + 360) % 360;
+  return deg < 90 || deg > 270 ? "NB" : "SB";
+}
+
+/** "Northbound" / "Southbound", or null when neither signal says. */
+export function directionLabel(
+  street: string | null | undefined,
+  heading: number | null | undefined,
+): string | null {
+  const d = reportDirection(street, heading);
+  return d === "NB" ? "Northbound" : d === "SB" ? "Southbound" : null;
+}
+
 export type SnappedJam = {
   coords: LngLat[];
   direction: "NB" | "SB";

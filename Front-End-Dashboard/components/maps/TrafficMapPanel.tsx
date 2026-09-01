@@ -5,7 +5,7 @@ import mapboxgl, { GeoJSONSource } from "mapbox-gl";
 import type { Point } from "geojson";
 import { useEffect, useRef, useState } from "react";
 import nlexGeometry from "./nlex-geometry.json";
-import { corridorGuard, sliceCorridor, type LngLat } from "../../lib/corridor-shape";
+import { corridorGuard, directionLabel, sliceCorridor, type LngLat } from "../../lib/corridor-shape";
 import { FALLBACK_EXITS } from "../../lib/nlex-exits";
 import { useChartTheme } from "../../lib/chart-theme";
 import { mapPalette } from "../../lib/map-palette";
@@ -1115,6 +1115,11 @@ export default function TrafficMapPanel({ title, subtitle, badge, endpoint, laye
              report on this corridor, so on its own it does not distinguish one
              card from the next; the exit and the distance to it do. Same
              reasoning as the sidebar rows. */
+          /* Which way the report faces, ahead of where it is. On a corridor
+             where both directions are drawn separately, "southbound" is often
+             the first thing that decides whether it matters to the reader. */
+          const dirText = directionLabel(props.street as string | undefined, props.heading as number | undefined);
+
           const exitText = props.nearest_exit
             ? Number.isFinite(Number(props.exit_distance_m))
               ? `${Number(props.exit_distance_m) < 950
@@ -1129,7 +1134,7 @@ export default function TrafficMapPanel({ title, subtitle, badge, endpoint, laye
                 <span class="nlex-pop-mark">${look.svg}</span>
                 <span class="nlex-pop-name">
                   <span class="nlex-pop-title">${look.label}</span>
-                  <span class="nlex-pop-sub">${exitText}</span>
+                  <span class="nlex-pop-sub">${dirText ? `${dirText} &middot; ` : ""}${exitText}</span>
                 </span>
               </div>
               <div class="nlex-pop-foot">Click for the full report</div>

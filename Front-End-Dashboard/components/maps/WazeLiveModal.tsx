@@ -12,7 +12,7 @@ import { lookOf } from "../../lib/waze-report-look";
 import MapLegend from "./MapLegend";
 // The same reading of a Waze street name the map uses to put a jam on the
 // right carriageway, so a row and a ribbon never disagree about direction.
-import { corridorGuard, directionFromStreet, type LngLat } from "../../lib/corridor-shape";
+import { corridorGuard, directionLabel, type LngLat } from "../../lib/corridor-shape";
 import { FALLBACK_EXITS } from "../../lib/nlex-exits";
 import nlexGeometry from "./nlex-geometry.json";
 
@@ -81,9 +81,10 @@ type Overview = {
  * Naming the carriageway and the distance from the exit puts the difference on
  * screen, and is what someone would need to find the thing anyway.
  */
-function whereText(a: { street?: string | null; nearestExit?: string | null; metresFromExit?: number | null; city?: string | null }): string {
-  const dir = directionFromStreet(a.street);
-  const side = dir === "NB" ? "Northbound" : dir === "SB" ? "Southbound" : null;
+function whereText(a: { street?: string | null; nearestExit?: string | null; metresFromExit?: number | null; city?: string | null; heading?: number | null }): string {
+  // Same reading the map's hover card uses, including the heading fallback, so
+  // a row and the pin it points at cannot name different carriageways.
+  const side = directionLabel(a.street, a.heading);
 
   const m = a.metresFromExit;
   const distance =

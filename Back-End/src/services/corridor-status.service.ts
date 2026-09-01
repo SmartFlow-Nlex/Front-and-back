@@ -22,6 +22,11 @@ import { db } from "../config/db.js";
  *
  * NAMED_ONLY matches are excluded: those sit ~3.9 km from the corridor and were
  * matched on a street name alone, so they describe somewhere else.
+ *
+ * Jams must also be on NLEX by the name Waze gave them, the same test the map
+ * applies before painting a ribbon. Position alone is not enough: the local road
+ * network runs within metres of the corridor for most of its length, and
+ * counting it made this panel disagree with the map about the whole road.
  */
 
 export type SegmentStatus = "clear" | "slow" | "congested";
@@ -84,6 +89,32 @@ export async function getCorridorStatus() {
        WHERE j.corridor_match IN ('ON_CORRIDOR', 'NEAR_CORRIDOR')
          AND j.last_seen_at > NOW() - ($1 || ' minutes')::interval
          AND j.geom IS NOT NULL
+         /* On NLEX by name, not merely near it.
+
+            corridor_match alone admits anything the matcher put within reach of
+            an exit, and the local road network runs right alongside: a live
+            sample had this panel reporting jams on Gen. T. De Leon, Governor
+            Padilla Road, M. Villarica Road, Tullahan and Maysan Road as exit
+            conditions, 172 jams where the map drew 21. It coloured nearly every
+            exit on the panel amber or red while the map showed a mostly clear
+            corridor.
+
+            This is isNlexCorridorStreet from lib/nlex-corridor.ts written as
+            SQL, because the aggregation happens in the query. Keep the two in
+            step: the map applies the same test to the jams it paints with. */
+         AND (LOWER(j.street) LIKE '%nlex%' OR LOWER(j.street) LIKE '%north luzon%')
+         AND LOWER(j.street) NOT LIKE '%service%'
+         AND LOWER(j.street) NOT LIKE '%crossing%'
+         AND LOWER(j.street) NOT LIKE '%exit rd%'
+         AND LOWER(j.street) NOT LIKE '%halili%'
+         AND LOWER(j.street) NOT LIKE '%dulalia%'
+         AND LOWER(j.street) NOT LIKE '%tullahan%'
+         AND LOWER(j.street) NOT LIKE '%libtong%'
+         AND LOWER(j.street) NOT LIKE '%slex%'
+         AND LOWER(j.street) NOT LIKE '%skyway%'
+         AND LOWER(j.street) NOT LIKE '%sctex%'
+         AND LOWER(j.street) NOT LIKE '%tplex%'
+         AND LOWER(j.street) NOT LIKE '%cavitex%'
      ),
      bearing AS (
        SELECT nlex_exit_id, level, speed_kmh, last_seen_at,

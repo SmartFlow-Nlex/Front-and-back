@@ -11,6 +11,8 @@ import ChartSkeleton, { KpiSkeleton } from "../../../components/dashboard/ChartS
 import CustomSelect from "../../../components/dashboard/CustomSelect";
 import PageHeader from "../../../components/dashboard/PageHeader";
 import PredictiveIncidentChart from "../../../components/dashboard/PredictiveIncidentChart";
+import PredictiveCorridorChart from "../../../components/dashboard/PredictiveCorridorChart";
+import type { CorridorForecastPoint } from "../../../components/dashboard/incidentPredictive.shared";
 import DateRangePicker from "../traffic/components/DateRangePicker";
 import { rangeDays, grainBlockedReason, bestGrainFor, axisLabelFor, bucketLabelFor } from "../../../lib/granularity";
 import styles from "../traffic/traffic.module.css";
@@ -121,6 +123,17 @@ export default function IncidentPage() {
   // Whether the predictive endpoint's current Range has any scored rows for
   // Weather to filter.
   const [weatherApplicable, setWeatherApplicable] = useState(true);
+
+  // Lifted from PredictiveIncidentChart's same response so the corridor card
+  // below it doesn't refetch /api/incident/predictive on its own.
+  const [corridorData, setCorridorData] = useState<{
+    corridorForecast: CorridorForecastPoint[] | null;
+    unclassifiedLocationShare: number | null;
+    forecastHorizon: number;
+    forecastModelLabel: string | null;
+    showVolume: boolean;
+    showWeather: boolean;
+  } | null>(null);
 
   // Restore the view the hourly drill-down was opened from
   useEffect(() => {
@@ -686,9 +699,24 @@ export default function IncidentPage() {
               weather={weather}
               onDataBoundsChange={setPredictiveDataBounds}
               onWeatherApplicableChange={setWeatherApplicable}
+              onCorridorForecastChange={setCorridorData}
             />
           </div>
-        ) : (
+        ) : null}
+        {activeTab === "Predictive" && (
+          <div className={styles.spanFull}>
+            <PredictiveCorridorChart
+              corridorForecast={corridorData?.corridorForecast ?? null}
+              unclassifiedLocationShare={corridorData?.unclassifiedLocationShare ?? null}
+              forecastHorizon={corridorData?.forecastHorizon ?? 0}
+              showVolume={corridorData?.showVolume ?? false}
+              showWeather={corridorData?.showWeather ?? true}
+              forecastModelLabel={corridorData?.forecastModelLabel ?? null}
+              loading={corridorData === null}
+            />
+          </div>
+        )}
+        {activeTab === "Prescriptive" && (
           <article className={`${styles.chartCard} ${styles.chart1}`}>
             <div className={styles.chartHead}>
               <div className={styles.headText}>

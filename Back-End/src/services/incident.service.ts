@@ -1,4 +1,9 @@
 import { db } from "../config/db.js";
+// Reused rather than duplicated: this is the same nlex_exits + dim_location
+// join every other tab (map, maintenance, AI sandbox) already trusts for the
+// corridor's one authoritative exit list. See its own doc comment for why km
+// is derived instead of hardcoded.
+import { searchExitsInDb } from "./map-comparison.service.js";
 
 // ---------------------------------------------------------------------------
 // Incident analytics for the descriptive dashboard.
@@ -657,6 +662,17 @@ export const INCIDENT_MODELS = [
   { key: "SARIMAX", column: "pred_sarimax" },
 ] as const;
 
+// Volume-free twin of each column above, matching PRED_COLUMN_NV in the trainer.
+// Selected alongside the primary set so the dashboard's Volume toggle can switch
+// the forecast itself; null on tables written before the twins existed, which the
+// mapper below reports as an absent series rather than a zero.
+const INCIDENT_MODEL_COLUMNS_NV_SQL = INCIDENT_MODELS.map((m) => `${m.column}_nv`).join(", ");
+
+// Weather-free twin, matching PRED_COLUMN_NW in the trainer — same reasoning as
+// the volume-free twin above, but for rain_mm. Drives the dashboard's Weather
+// toggle the same way the volume twin drives its Volume toggle.
+const INCIDENT_MODEL_COLUMNS_NW_SQL = INCIDENT_MODELS.map((m) => `${m.column}_nw`).join(", ");
+
 type PredictiveIncidentRow = {
   date: string;
   prediction_type: "train" | "validation" | "future";
@@ -677,7 +693,32 @@ export type IncidentPredictiveFilters = {
   from?: string;
   to?: string;
   weather: IncidentWeather;
+  // Drive the dashboard's Volume/Weather toggles: which of a model's stored
+  // series (primary / volume-free / weather-free) modelMetrics and
+  // weatherMetrics are scored against, via pickPrediction. Distinct from
+  // `weather` above, which is the wet/dry accuracy SPLIT — these instead pick
+  // which trained MODEL is being split. Default "on" (the primary,
+  // both-features series) so a caller that omits them gets today's behavior.
+  volumeToggle?: "on" | "off";
+  weatherToggle?: "on" | "off";
+  // The chart's Future control (1wk/2wk/1mo) — how many of the published
+  // future days corridorForecast apportions its total over. Absent means
+  // "the whole stored horizon", matching the chart's own default before the
+  // control is touched. Distinct from purely client-side trimming: the
+  // corridor total needs the actual per-day predictions for just this many
+  // days, not a scaled-down guess.
+  futureDays?: number;
+  // The Models toolbar's active selection — which model corridorForecast
+  // apportions. Falls back to the champion when absent or when the named
+  // model has no stored data for this table.
+  forecastModel?: ModelKeyString;
 };
+
+// Matches ModelKey in the frontend's incidentPredictive.shared.ts / MODEL_NAMES
+// in train_incident_models.py — kept as a plain union (not imported from the
+// Zod schema) since this service has no other dependency on the validator's
+// types beyond IncidentPredictiveResult.
+type ModelKeyString = (typeof INCIDENT_MODELS)[number]["key"];
 
 // The response shape is now the source of truth in incident.validator.ts
 // (IncidentPredictiveResponseSchema) and this type is inferred from it, so the
@@ -719,6 +760,31 @@ const DAILY_WET_SQL = `
          SUM(avg_rain) AS rainfall_mm
   FROM hourly
   GROUP BY d
+`;
+
+// Daily vehicle volume for the incident forecast chart's exposure overlay.
+//
+// Read from gold.ml_predictive_volume because that one table spans both sides of
+// the chart: actual_volume covers observed history and the is_future rows carry
+// the traffic module's forecast, so the overlay continues across the Future band
+// instead of stopping dead at the last observed day. COALESCE walks the traffic
+// candidates in the same order the incident trainer does — pred_xgboost is NULL
+// across the future window even though it is populated historically, so naming a
+// single column would blank the forecast half.
+//
+// Same scale throughout, which matters: gold.daily_traffic_volume reports the
+// same series ~4.4x larger, and mixing the two would put a step change in the
+// middle of the line for no reason the reader could see.
+const DAILY_VOLUME_SQL = `
+  SELECT forecast_date::text AS date,
+         COALESCE(actual_volume, pred_lstm, pred_prophet, pred_sarimax,
+                  pred_holtwinters, pred_holts_linear, pred_xgboost)::float AS volume,
+         (actual_volume IS NULL) AS is_forecast
+  FROM gold.ml_predictive_volume
+  WHERE forecast_date >= $1::date AND forecast_date <= $2::date
+    AND COALESCE(actual_volume, pred_lstm, pred_prophet, pred_sarimax,
+                 pred_holtwinters, pred_holts_linear, pred_xgboost) IS NOT NULL
+  ORDER BY forecast_date ASC
 `;
 
 const MONTHS_TO_CONTEXT_DAYS: Record<"3" | "12", number> = { "3": 90, "12": 365 };
@@ -913,6 +979,146 @@ function computeModelMetricsForModel(
   };
 }
 
+// Picks which of a model's three stored series (primary / volume-free /
+// weather-free) answers the current Volume+Weather toggle state — the same
+// selection the chart itself makes over d.models/modelsNoVolume/modelsNoWeather
+// (see PredictiveIncidentChart's activeModelSource), kept in one place so the
+// accuracy metrics table can never disagree with what the chart is plotting.
+// There is no jointly-ablated twin (that would be a 4th trained variant per
+// model), so when BOTH toggles are off this falls back to the volume-free
+// twin — volume is the far stronger feature (R2=0.518 alone vs 0.0016 for
+// rain; see the trainer's VOLUME_COLS comment), so ablating it is the more
+// meaningful single substitution when only one twin can be shown.
+function pickPrediction(
+  p: PredictiveIncidentRow,
+  m: (typeof INCIDENT_MODELS)[number],
+  includeVolume: boolean,
+  includeWeather: boolean
+): number | null {
+  const primary = p[m.column];
+  const nv = p[`${m.column}_nv` as keyof typeof p] as string | number | null | undefined;
+  const nw = p[`${m.column}_nw` as keyof typeof p] as string | number | null | undefined;
+  const chosen = includeVolume && includeWeather
+    ? primary
+    : !includeVolume && includeWeather
+      ? nv ?? primary
+      : includeVolume && !includeWeather
+        ? nw ?? primary
+        : nv ?? nw ?? primary;
+  return chosen != null ? Number(chosen) : null;
+}
+
+// ---------------------------------------------------------------------------
+// Corridor/exit breakdown for the predictive tab's "predicted incidents per
+// exit" card.
+//
+// There is no per-exit trained model — ml_predictive_incidents holds one
+// daily total for the whole corridor. So this apportions that total using
+// each exit's HISTORICAL SHARE of incidents, the same kind of derivation the
+// hourly drill-down already does (a daily total spread across hours by a
+// weekday profile — see getIncidentHourlyFromDb's own doc comment). It is
+// disclosed as an apportionment, not presented as a separately modeled
+// per-location forecast.
+// ---------------------------------------------------------------------------
+
+const LOCATION_KM_RE = /Km\s*(\d+(?:\.\d+)?)/i;
+
+// Strip to lowercase alphanumerics so punctuation/spacing differences
+// ("Bocaue Interchange" vs "bocaue-interchange") can't cause a false miss —
+// mirrors normalizePlaza() in src/etl/cleaner.ts, which validates these same
+// location strings on the way in.
+function normalizeLocationText(s: string): string {
+  return s.toLowerCase().replace(/[^a-z0-9]/g, "");
+}
+
+// Maps one incident's free-text `location` to the exit it most likely
+// happened near. Two strategies, tried in order:
+//   1. A literal "Km N" figure — snapped to the exit whose own km-post is
+//      closest, the same nearest-km rule the frontend's exitNearestKm()
+//      already uses to label a position on the corridor (kept in sync by
+//      hand since one runs in SQL/Node and the other in the browser).
+//   2. A plaza/exit name written directly ("Balintawak", "Bocaue Barrier") —
+//      the ETL cleaner validates incoming locations against exactly this kind
+//      of name (see NLEX_PLAZAS in src/etl/cleaner.ts), so many rows carry a
+//      name rather than a km figure. Matched by normalized substring, longest
+//      exit name first so "Bocaue Interchange" is not shadowed by a shorter
+//      partial some other exit name happens to contain.
+// Returns null when neither resolves — the caller counts these as
+// "unclassified" and discloses the share rather than guessing.
+function resolveExitForLocation(
+  location: string,
+  exits: { exit_id: number; exit_name: string; km: number }[]
+): { exit_id: number; exit_name: string; km: number } | null {
+  const kmMatch = location.match(LOCATION_KM_RE);
+  if (kmMatch) {
+    const km = Number(kmMatch[1]);
+    if (Number.isFinite(km) && exits.length > 0) {
+      return exits.reduce((best, x) => (Math.abs(x.km - km) < Math.abs(best.km - km) ? x : best));
+    }
+  }
+  const norm = normalizeLocationText(location);
+  if (!norm) return null;
+  const candidates = exits
+    .filter((x) => {
+      const en = normalizeLocationText(x.exit_name);
+      return en.length > 0 && (norm.includes(en) || en.includes(norm));
+    })
+    .sort((a, b) => normalizeLocationText(b.exit_name).length - normalizeLocationText(a.exit_name).length);
+  return candidates[0] ?? null;
+}
+
+export type CorridorForecastPoint = {
+  exitId: number;
+  exitName: string;
+  km: number;
+  historicalCount: number;
+  historicalShare: number;
+  predictedIncidents: number;
+};
+
+function buildCorridorForecast(
+  locationRows: { location: string | null }[],
+  exitRows: { exit_id: number; exit_name: string; km: number }[],
+  totalPredicted: number
+): { corridorForecast: CorridorForecastPoint[] | null; unclassifiedLocationShare: number | null } {
+  if (exitRows.length === 0 || locationRows.length === 0) {
+    return { corridorForecast: null, unclassifiedLocationShare: null };
+  }
+
+  const counts = new Map<number, number>();
+  let unclassified = 0;
+  for (const row of locationRows) {
+    if (!row.location) continue;
+    const exit = resolveExitForLocation(row.location, exitRows);
+    if (exit) counts.set(exit.exit_id, (counts.get(exit.exit_id) ?? 0) + 1);
+    else unclassified++;
+  }
+
+  const totalClassified = Array.from(counts.values()).reduce((s, v) => s + v, 0);
+  const totalSeen = totalClassified + unclassified;
+  if (totalSeen === 0) return { corridorForecast: null, unclassifiedLocationShare: null };
+
+  const corridorForecast = exitRows
+    .map((x) => {
+      const historicalCount = counts.get(x.exit_id) ?? 0;
+      const historicalShare = totalClassified > 0 ? historicalCount / totalClassified : 0;
+      return {
+        exitId: x.exit_id,
+        exitName: x.exit_name,
+        km: x.km,
+        historicalCount,
+        historicalShare,
+        // Apportioned, not independently modeled — see the doc comment on
+        // this section. Rounded to 2dp: this is already a derived estimate,
+        // more precision would misstate how exact it is.
+        predictedIncidents: Math.round(totalPredicted * historicalShare * 100) / 100,
+      };
+    })
+    .sort((a, b) => b.predictedIncidents - a.predictedIncidents);
+
+  return { corridorForecast, unclassifiedLocationShare: unclassified / totalSeen };
+}
+
 // Joins one predictions result set onto its actuals/wet lookups and keeps
 // only validation-type rows with a known ground truth — there's nothing to
 // score a future row or an unobserved day against.
@@ -920,7 +1126,9 @@ function toAlignedValidationRows(
   rows: PredictiveIncidentRow[],
   actualByDate: Map<string, number>,
   wetByDate: Map<string, boolean>,
-  availableModels: readonly (typeof INCIDENT_MODELS)[number][]
+  availableModels: readonly (typeof INCIDENT_MODELS)[number][],
+  includeVolume: boolean,
+  includeWeather: boolean
 ): AlignedValidationRow[] {
   return rows
     .filter((p) => p.prediction_type === "validation" && actualByDate.has(p.date))
@@ -929,7 +1137,7 @@ function toAlignedValidationRows(
       actual: actualByDate.get(p.date)!,
       isWet: wetByDate.get(p.date) ?? null,
       models: Object.fromEntries(
-        availableModels.map((m) => [m.key, p[m.column] != null ? Number(p[m.column]) : null])
+        availableModels.map((m) => [m.key, pickPrediction(p, m, includeVolume, includeWeather)])
       ),
     }));
 }
@@ -956,7 +1164,18 @@ export function buildIncidentPredictiveResponse(
   // here without narrowing weatherMetrics' sample along with the chart — see
   // the doc comment on weatherMetrics below for why that would be wrong.
   holdoutActuals: DailyActualRow[],
-  holdoutPredictions: PredictiveIncidentRow[]
+  holdoutPredictions: PredictiveIncidentRow[],
+  // Daily vehicle volume, observed where recorded and the traffic module's
+  // forecast beyond that (see DAILY_VOLUME_SQL). Optional so existing callers
+  // and tests keep working — an absent map simply draws no exposure overlay.
+  volumeByDate: Map<string, number> = new Map(),
+  // Raw `location` text for every incident in the resolved Range — feeds
+  // corridorForecast below. Optional for the same reason volumeByDate is: an
+  // absent array just means the corridor card can't be built.
+  locationRows: { location: string | null }[] = [],
+  // The corridor's authoritative exit list (see searchExitsInDb). Optional
+  // for the same reason.
+  exitRows: { exit_id: number; exit_name: string; km: number }[] = []
 ): IncidentPredictiveResult {
   const actualByDate = new Map(actuals.map((r) => [r.date, Number(r.total)]));
   const predByDate = new Map(predictions.map((r) => [r.date, r]));
@@ -973,9 +1192,24 @@ export function buildIncidentPredictiveResponse(
   const fullDaily = allDates.map((date) => {
     const pred = predByDate.get(date);
     const models: Record<string, number | null> = {};
+    // Volume-free twin of the same series. Populated only when the pipeline
+    // fitted a second, volume-free pass (see has_volume_free_twin in the
+    // metadata); left empty on older tables so the chart can tell "no twin
+    // exists" apart from "the twin predicted nothing", and fall back to
+    // treating its Volume toggle as an overlay-only control.
+    const modelsNoVolume: Record<string, number | null> = {};
+    // Weather-free twin, same idea as modelsNoVolume above but for rain_mm —
+    // populated only when has_weather_free_twin is true, which lets the chart
+    // tell "no twin exists" apart from "the twin predicted nothing" the same
+    // way it already does for volume.
+    const modelsNoWeather: Record<string, number | null> = {};
     for (const m of availableModels) {
       const v = pred?.[m.column];
       models[m.key] = v != null ? Number(v) : null;
+      const nv = pred?.[`${m.column}_nv` as keyof typeof pred];
+      if (nv != null) modelsNoVolume[m.key] = Number(nv);
+      const nw = pred?.[`${m.column}_nw` as keyof typeof pred];
+      if (nw != null) modelsNoWeather[m.key] = Number(nw);
     }
     return {
       date,
@@ -1004,7 +1238,13 @@ export function buildIncidentPredictiveResponse(
       // forecast horizon, so nothing is lost today.
       rainfallMm: rainByDate.get(date) ?? null,
       isWet: wetByDate.has(date) ? wetByDate.get(date)! : null,
+      // Exposure. Null on days the traffic warehouse does not cover, so the
+      // overlay breaks rather than drawing a zero — a zero here would read as
+      // "no traffic that day", which is never what a gap means.
+      volume: volumeByDate.get(date) ?? null,
       models,
+      modelsNoVolume: Object.keys(modelsNoVolume).length > 0 ? modelsNoVolume : undefined,
+      modelsNoWeather: Object.keys(modelsNoWeather).length > 0 ? modelsNoWeather : undefined,
     };
   });
 
@@ -1027,6 +1267,50 @@ export function buildIncidentPredictiveResponse(
   );
   const championModel = predictions.find((p) => p.champion_model)?.champion_model ?? (metadata.champion_model as string | undefined) ?? null;
 
+  // Which trained variant modelMetrics/weatherMetrics/corridorForecast are
+  // scored/apportioned against — must match the chart's own choice of series
+  // so nothing on this response ever describes a different model than the one
+  // whose line is on screen.
+  const includeVolume = filters.volumeToggle !== "off";
+  const includeWeather = filters.weatherToggle !== "off";
+
+  // Which model corridorForecast apportions: the Models toolbar's active
+  // selection when one was sent and it actually has stored data on this
+  // table, else the champion — the same fallback the frontend's own model
+  // toolbar uses when a Range change leaves a previously-selected model
+  // without data. predicted_incident_count is a fixed column that's always
+  // the champion's PRIMARY (volume+weather-aware) series and has no _nv/_nw
+  // twin of its own, so either way this reads pickPrediction off the
+  // resolved model's OWN column (pred_xgboost/_nv/_nw etc.) for the same
+  // toggle-aware total the chart and modelMetrics already use, rather than
+  // the corridor card silently staying pinned to one fixed series.
+  const corridorModelKey =
+    filters.forecastModel && availableModels.some((m) => m.key === filters.forecastModel)
+      ? filters.forecastModel
+      : championModel;
+  const corridorModelEntry = INCIDENT_MODELS.find((m) => m.key === corridorModelKey);
+  // futurePreds is ordered by forecast_date ASC (see the SQL in
+  // getIncidentPredictiveFromDb), so slicing the first N rows takes the
+  // NEAREST N future days — the same window the chart's own Future control
+  // (1wk/2wk/1mo) trims to on screen, per PredictiveIncidentChart's
+  // effectiveFutureDays. Clamped so a stale futureDays wider than what's
+  // actually published can't slice past the array's end.
+  const corridorFutureDays =
+    filters.futureDays != null ? Math.max(0, Math.min(filters.futureDays, futurePreds.length)) : futurePreds.length;
+  const corridorFuturePreds = futurePreds.slice(0, corridorFutureDays);
+  const totalPredictedForCorridor = corridorModelEntry
+    ? corridorFuturePreds.reduce(
+        (sum, p) => sum + (pickPrediction(p, corridorModelEntry, includeVolume, includeWeather) ?? Number(p.predicted_incident_count)),
+        0
+      )
+    : corridorFuturePreds.reduce((sum, p) => sum + Number(p.predicted_incident_count), 0);
+
+  const { corridorForecast, unclassifiedLocationShare } = buildCorridorForecast(
+    locationRows,
+    exitRows,
+    totalPredictedForCorridor
+  );
+
   // The pipeline's own comparison table — now used only as a fallback for a
   // model whose Range+Weather slice has zero scored rows (e.g. a 3-month
   // window with weather=wet and no wet days in it). `selectedBy` still governs
@@ -1040,7 +1324,7 @@ export function buildIncidentPredictiveResponse(
   // via the caller's SQL, Weather via this filter) — so composing the two
   // filters and re-reading the metrics table shows the number that matches
   // what's on screen, not a number from a different slice of history.
-  const rangeAligned = toAlignedValidationRows(predictions, actualByDate, wetByDate, availableModels);
+  const rangeAligned = toAlignedValidationRows(predictions, actualByDate, wetByDate, availableModels, includeVolume, includeWeather);
   const weatherFilteredRangeAligned =
     filters.weather === "all" ? rangeAligned : rangeAligned.filter((r) => r.isWet === (filters.weather === "wet"));
 
@@ -1118,7 +1402,7 @@ export function buildIncidentPredictiveResponse(
   // holdoutPredictions/holdoutActuals carry the full holdout independent of
   // whatever the user picked in the Range control.
   const holdoutActualByDate = new Map(holdoutActuals.map((r) => [r.date, Number(r.total)]));
-  const holdoutAligned = toAlignedValidationRows(holdoutPredictions, holdoutActualByDate, wetByDate, availableModels);
+  const holdoutAligned = toAlignedValidationRows(holdoutPredictions, holdoutActualByDate, wetByDate, availableModels, includeVolume, includeWeather);
 
   const weatherMetrics =
     filters.weather === "all"
@@ -1163,6 +1447,23 @@ export function buildIncidentPredictiveResponse(
         (metadata.evaluation as { holdout_days?: number } | undefined)?.holdout_days ?? null,
     },
     weatherMetrics,
+    // Predicted incidents per exit/corridor — an apportionment of
+    // totalPredictedForCorridor (corridorModelEntry's toggle-aware forecast
+    // summed over corridorForecastDays days, NOT summary.totalPredictedNext7Days)
+    // by each exit's historical share of incidents in the current Range, not a
+    // separately trained per-location model. Null when the exit list or the
+    // location data needed to build it wasn't available.
+    corridorForecast,
+    unclassifiedLocationShare,
+    // How many of the published future days corridorForecast was actually
+    // apportioned over — echoes filters.futureDays (clamped to what's
+    // published) so the card's axis/caption can say "next Nd" honestly
+    // instead of assuming the chart's Future control and this total agree.
+    corridorForecastDays: corridorFutureDays,
+    // Which model corridorForecast was actually apportioned from — echoes
+    // filters.forecastModel when it was valid and had data, else the
+    // champion. Null only alongside corridorForecast: null.
+    corridorForecastModel: corridorForecast ? corridorModelKey : null,
     scoringWindow,
     // Whether the Weather control means anything for the current Range: with
     // zero scored rows (scoringWindow === null) every model has already
@@ -1240,7 +1541,7 @@ export async function getIncidentPredictiveFromDb(
         ? anchors.validationStart
         : historicalStart;
 
-    const [actualsRes, predsRes, wetRes, holdoutActualsRes, holdoutPredsRes] = await Promise.all([
+    const [actualsRes, predsRes, wetRes, volumeRes, holdoutActualsRes, holdoutPredsRes, locationsRes, exitRows] = await Promise.all([
       // Range-bounded: this is what the chart draws. Pushed into SQL rather
       // than fetched whole and sliced in JS, so a narrow Range is a smaller
       // result set, not just a smaller rendered array.
@@ -1259,7 +1560,7 @@ export async function getIncidentPredictiveFromDb(
       isCustomRange
         ? db.query<PredictiveIncidentRow>(
             `SELECT forecast_date::text AS date, prediction_type, predicted_incident_count, champion_model,
-                    same_day_last_year, rainfall_mm, ${INCIDENT_MODEL_COLUMNS_SQL}
+                    same_day_last_year, rainfall_mm, ${INCIDENT_MODEL_COLUMNS_SQL}, ${INCIDENT_MODEL_COLUMNS_NV_SQL}, ${INCIDENT_MODEL_COLUMNS_NW_SQL}
              FROM ml_predictive_incidents
              WHERE forecast_date BETWEEN $1::date AND $2::date
              ORDER BY forecast_date ASC`,
@@ -1267,7 +1568,7 @@ export async function getIncidentPredictiveFromDb(
           )
         : db.query<PredictiveIncidentRow>(
             `SELECT forecast_date::text AS date, prediction_type, predicted_incident_count, champion_model,
-                    same_day_last_year, rainfall_mm, ${INCIDENT_MODEL_COLUMNS_SQL}
+                    same_day_last_year, rainfall_mm, ${INCIDENT_MODEL_COLUMNS_SQL}, ${INCIDENT_MODEL_COLUMNS_NV_SQL}, ${INCIDENT_MODEL_COLUMNS_NW_SQL}
              FROM ml_predictive_incidents
              WHERE prediction_type = 'future'
                 OR (forecast_date >= $1::date AND ($2::date IS NULL OR forecast_date <= $2::date))
@@ -1275,6 +1576,12 @@ export async function getIncidentPredictiveFromDb(
             [historicalStart, historicalEnd]
           ),
       db.query<{ date: string; is_wet: boolean; rainfall_mm: string | number | null }>(DAILY_WET_SQL, [
+        wetLowerBound,
+        anchors.maxForecastDate,
+      ]),
+      // Bounded by the same window as the rainfall lookup so the exposure
+      // overlay covers exactly the days the chart can draw.
+      db.query<{ date: string; volume: string | number | null; is_forecast: boolean }>(DAILY_VOLUME_SQL, [
         wetLowerBound,
         anchors.maxForecastDate,
       ]),
@@ -1290,11 +1597,24 @@ export async function getIncidentPredictiveFromDb(
         : Promise.resolve({ rows: [] as DailyActualRow[] }),
       db.query<PredictiveIncidentRow>(
         `SELECT forecast_date::text AS date, prediction_type, predicted_incident_count, champion_model,
-                same_day_last_year, rainfall_mm, ${INCIDENT_MODEL_COLUMNS_SQL}
+                same_day_last_year, rainfall_mm, ${INCIDENT_MODEL_COLUMNS_SQL}, ${INCIDENT_MODEL_COLUMNS_NV_SQL}, ${INCIDENT_MODEL_COLUMNS_NW_SQL}
          FROM ml_predictive_incidents
          WHERE prediction_type = 'validation'
          ORDER BY forecast_date ASC`
       ),
+      // Raw location text for every incident in the resolved Range — feeds the
+      // per-exit/corridor breakdown card. Bounded the same way `actuals` is so
+      // the corridor split answers to the same Range control as the rest of
+      // the tab, rather than always describing the whole corpus.
+      db.query<{ location: string | null }>(
+        `WITH ${INCIDENTS_CTE}
+         SELECT location FROM incidents WHERE d >= $1::date AND ($2::date IS NULL OR d <= $2::date) AND location IS NOT NULL`,
+        [historicalStart, historicalEnd]
+      ),
+      // The corridor's one authoritative exit list (see the import above) —
+      // empty query string matches every exit_name via the ILIKE '%...%' the
+      // shared helper already uses for its search box.
+      searchExitsInDb(""),
     ]);
 
     const wetByDate = new Map(wetRes.rows.map((r) => [r.date, r.is_wet]));
@@ -1302,6 +1622,11 @@ export async function getIncidentPredictiveFromDb(
       wetRes.rows
         .filter((r) => r.rainfall_mm != null)
         .map((r) => [r.date, Number(r.rainfall_mm)])
+    );
+    const volumeByDate = new Map(
+      volumeRes.rows
+        .filter((r) => r.volume != null)
+        .map((r) => [r.date, Number(r.volume)])
     );
     return buildIncidentPredictiveResponse(
       actualsRes.rows,
@@ -1314,7 +1639,10 @@ export async function getIncidentPredictiveFromDb(
       anchors,
       historicalStart,
       holdoutActualsRes.rows,
-      holdoutPredsRes.rows
+      holdoutPredsRes.rows,
+      volumeByDate,
+      locationsRes.rows,
+      exitRows ?? []
     );
   } catch (error) {
     console.error("Failed to fetch ML incident forecast:", error);

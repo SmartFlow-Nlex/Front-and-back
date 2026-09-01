@@ -97,6 +97,38 @@ SEED = 42
 # i.e. the SAME WEEKDAY last year, not the same calendar date. December averages
 # 33.9 incidents/day against August's 22.7, so the annual shape is real.
 YOY_LAG = 364  # 52 weeks — keeps day-of-week aligned across the year boundary
+
+# Exposure: how much traffic was on the road that day.
+#
+# An incident needs a vehicle to happen to, so the count is partly a function of
+# how many vehicles there were — the rest of the feature set describes *when* a
+# day is, but nothing described *how busy* it was. Measured on the joined series
+# (2,398 days, 2020-01-01..2026-07-25): Pearson r = +0.720 against daily
+# incidents, and the relationship is monotonic across volume quintiles —
+# 16.2 incidents/day in the lowest fifth rising to 36.6 in the highest. Volume
+# alone regresses to R2 = 0.518, against 0.0016 for rainfall.
+#
+# Both columns are knowable in advance, which is what makes them legal here:
+# history comes from gold.ml_predictive_volume.actual_volume and the forecast
+# window from that same table's is_future rows — the traffic module's own
+# published volume forecast, not a number this model would lack at inference.
+# Both columns are transforms of volume, not the raw count, and the reason is
+# numerical rather than stylistic. Raw volume runs to ~3e5 while every other
+# feature here sits between 0 and 40; feeding that to the log-link GLMs makes
+# exp(B.x) overflow, which measurably happened — NegBinomial_GLM failed outright
+# on NaN and SARIMAX diverged to 1e38 before this was changed.
+#
+#   log_volume      — ln(volume). For a Poisson/NegBinomial log link this is the
+#                     natural form: a coefficient near 1.0 states that incidents
+#                     scale proportionally with traffic, which is the hypothesis
+#                     being tested rather than an arbitrary rescale. Monotonic,
+#                     so tree splits are unaffected by the transform.
+#   volume_ratio_7  — volume over its trailing 7-day mean, centred on 1.0. Says
+#                     "how busy is today for this week" — a surge term the level
+#                     alone cannot express. Kept as a ratio rather than a second
+#                     log level because two log levels would correlate ~0.95 and
+#                     put collinear columns into the GLM design matrix.
+VOLUME_COLS = ["log_volume", "volume_ratio_7"]
 FEATURE_COLS = [
     "dow", "is_weekend", "is_holiday",
     "month", "doy_sin", "doy_cos",
@@ -104,6 +136,7 @@ FEATURE_COLS = [
     "roll_mean_7", "roll_mean_14", "roll_mean_28",
     "lag_364", "yoy_mean_5",
     "rain_mm",
+    *VOLUME_COLS,
 ]
 # Only calendar-derived columns are valid SARIMAX exog for future dates — every
 # one of these is knowable in advance for any date.
@@ -113,11 +146,19 @@ CALENDAR_COLS = ["is_weekend", "is_holiday", "doy_sin", "doy_cos"]
 # fetch_future_rain() (hourly_weather actuals where available, Open-Meteo
 # forecast beyond that), never from data the model wouldn't have at inference
 # time. Used as SARIMAX exog instead of CALENDAR_COLS.
-EXOG_COLS = CALENDAR_COLS + ["rain_mm"]
+# `log_volume` joins it on the same terms, sourced from the traffic module's
+# forecast. Only the level goes in: SARIMAX's own AR terms already carry
+# short-run momentum, so the 7-day surge ratio would duplicate them.
+EXOG_COLS = CALENDAR_COLS + ["rain_mm", "log_volume"]
 
 # Populated once in main() from dim_holiday; build_features is called recursively
 # during forecasting, so this stays module-level rather than threaded through.
 HOLIDAY_DATES: set = set()
+# Observed volume plus the forecast horizon's, keyed by date. Same reasoning as
+# HOLIDAY_DATES: the recursive forecast needs a volume for each future day it
+# steps onto, and threading a dict through eight call sites to say so would cost
+# more than it explains.
+VOLUME_BY_DATE: dict = {}
 MODEL_NAMES = ["XGBoost", "RandomForest", "Poisson_GLM", "NegBinomial_GLM", "SARIMAX", "LSTM", "GRU"]
 
 # Daily incident counts from the three operations logs, matching INCIDENTS_CTE in
@@ -144,6 +185,32 @@ DAILY_RAIN_SQL = """
     SELECT (timestamp_utc + interval '8 hours')::date AS d, SUM(rainfall)::float AS rain_mm
     FROM hourly_weather
     GROUP BY 1
+    ORDER BY 1
+"""
+
+# Observed daily vehicle volume. Read from gold.ml_predictive_volume rather than
+# gold.daily_traffic_volume so history and forecast come from one table on one
+# scale — the two series correlate at 0.9998 but differ by a constant factor of
+# ~4.4, and mixing them would put a step change in the middle of the feature.
+DAILY_VOLUME_SQL = """
+    SELECT forecast_date AS d, actual_volume::float AS volume
+    FROM gold.ml_predictive_volume
+    WHERE actual_volume IS NOT NULL
+    ORDER BY 1
+"""
+
+# Volume over the forecast horizon, taken from the traffic module's own published
+# forecast. COALESCE walks that module's candidates in descending order of trust
+# rather than naming one: pred_xgboost is NULL across the future window even
+# though it is populated historically, so a single hard-coded column would hand
+# every future day a NULL and silently drop volume exactly where it is needed.
+FUTURE_VOLUME_SQL = """
+    SELECT forecast_date AS d,
+           COALESCE(pred_lstm, pred_prophet, pred_sarimax,
+                    pred_holtwinters, pred_holts_linear, pred_xgboost)::float AS volume
+    FROM gold.ml_predictive_volume
+    WHERE is_future AND COALESCE(pred_lstm, pred_prophet, pred_sarimax,
+                                 pred_holtwinters, pred_holts_linear, pred_xgboost) IS NOT NULL
     ORDER BY 1
 """
 
@@ -201,6 +268,46 @@ def load_daily_rain(conn) -> pd.DataFrame:
     df = pd.read_sql(DAILY_RAIN_SQL, conn)
     df["d"] = pd.to_datetime(df["d"])
     return df
+
+
+def load_daily_volume(conn) -> pd.DataFrame:
+    """Observed daily vehicle volume, inner-joined onto the incident series in
+    main(). Coverage is exact — 2,398 volume days against 2,398 incident days
+    over 2020-01-01..2026-07-25, no gaps and no non-positive readings — so this
+    costs no training rows and needs no imputation."""
+    df = pd.read_sql(DAILY_VOLUME_SQL, conn)
+    df["d"] = pd.to_datetime(df["d"])
+    return df
+
+
+def fetch_future_volume(conn, future_dates: list, volume_by_date: dict) -> dict:
+    """Volume for each date in the forecast horizon.
+
+    Mirrors fetch_future_rain's rule: prefer an observed value where one exists,
+    fall back to a forecast only past the edge of what is recorded. Here the
+    fallback is the traffic module's published forecast rather than a live API.
+
+    Any date still missing after both — a horizon reaching past where traffic
+    has forecast to — falls back to the trailing 28-day mean of whatever volume
+    is known. That is a deliberately dull estimate, and the alternative is worse:
+    a default of 0 would tell the model the expressway was empty and drag its
+    incident prediction toward zero on exactly the days it has least evidence.
+    """
+    known = {d.date(): volume_by_date[d.date()] for d in future_dates if d.date() in volume_by_date}
+    missing = [d for d in future_dates if d.date() not in known]
+    if missing:
+        forecast = pd.read_sql(FUTURE_VOLUME_SQL, conn)
+        forecast["d"] = pd.to_datetime(forecast["d"])
+        by_date = dict(zip(forecast["d"].dt.date, forecast["volume"]))
+        known.update({d.date(): by_date[d.date()] for d in missing if d.date() in by_date})
+        still_missing = [d for d in future_dates if d.date() not in known]
+        if still_missing:
+            recent = list(volume_by_date.values())[-28:]
+            fallback = float(np.mean(recent)) if recent else 0.0
+            print(f"  {len(still_missing)} forecast day(s) past the traffic module's horizon; "
+                  f"using trailing 28-day mean volume ({fallback:,.0f})")
+            known.update({d.date(): fallback for d in still_missing})
+    return known
 
 
 def load_holidays(conn) -> set:
@@ -292,6 +399,21 @@ def build_features(df: pd.DataFrame) -> pd.DataFrame:
     # Same stretch of last year, averaged over a 5-day window centred on YOY_LAG
     # (lags 362-366), so one freak day last year can't swing the estimate.
     out["yoy_mean_5"] = out["total"].shift(YOY_LAG - 2).rolling(5).mean()
+    # Volume needs no shift, unlike the incident lags above: the day's own volume
+    # is knowable before the day starts (observed history, or the traffic
+    # module's forecast), so using it is not leakage. The 7-day mean is included
+    # rather than shifted for the same reason — it says "how busy has this week
+    # been, this day included", which is the level the incident rate tracks.
+    # min_periods keeps the first six rows usable instead of dropping them.
+    if "volume" in out.columns:
+        vol = out["volume"].astype(float)
+        roll7 = vol.rolling(7, min_periods=1).mean()
+        # clip(lower=1) rather than a guard: volume is strictly positive across
+        # all 2,398 observed days, so this only defends the recursive forecast
+        # against a degenerate value arriving from upstream, where ln(0) would
+        # otherwise put -inf into the design matrix.
+        out["log_volume"] = np.log(vol.clip(lower=1.0))
+        out["volume_ratio_7"] = vol / roll7.clip(lower=1.0)
     return out
 
 
@@ -739,21 +861,26 @@ def final_tabular_forecast(name: str, feat: pd.DataFrame, rain_by_date: dict):
 
     # Recursive future forecast: feed each prediction back in as if observed,
     # since real future actuals don't exist yet.
-    history = feat[["d", "total", "rain_mm"]].copy()
+    carry = ["d", "total", "rain_mm"] + (["volume"] if "volume" in feat.columns else [])
+    history = feat[carry].copy()
     future_dates = [history["d"].iloc[-1] + timedelta(days=i) for i in range(1, FUTURE_DAYS + 1)]
     future_rain = fetch_future_rain(future_dates, rain_by_date)
     future_rows = []
     for next_date in future_dates:
         rain_val = future_rain[next_date.date()]
+        # Volume is not fed back the way `total` is: the prediction being made
+        # is of incidents, so each future day takes the volume already known for
+        # it rather than anything this model produced.
+        extra = {"volume": VOLUME_BY_DATE[next_date.date()]} if "volume" in carry else {}
         candidate = pd.concat(
-            [history, pd.DataFrame([{"d": next_date, "total": np.nan, "rain_mm": rain_val}])],
+            [history, pd.DataFrame([{"d": next_date, "total": np.nan, "rain_mm": rain_val, **extra}])],
             ignore_index=True,
         )
         row_feat = build_features(candidate).iloc[[-1]]
         pred = predict_row(row_feat)
         future_rows.append((next_date, pred))
         history = pd.concat(
-            [history, pd.DataFrame([{"d": next_date, "total": pred, "rain_mm": rain_val}])],
+            [history, pd.DataFrame([{"d": next_date, "total": pred, "rain_mm": rain_val, **extra}])],
             ignore_index=True,
         )
 
@@ -771,6 +898,27 @@ def final_sarimax_forecast(feat: pd.DataFrame, rain_by_date: dict):
     future_rain = fetch_future_rain(future_dates, rain_by_date)
     future_exog = calendar_features(pd.Series(future_dates))[CALENDAR_COLS].reset_index(drop=True)
     future_exog["rain_mm"] = [future_rain[d.date()] for d in future_dates]
+    if "log_volume" in EXOG_COLS:
+        future_exog["log_volume"] = [
+            float(np.log(max(VOLUME_BY_DATE[d.date()], 1.0))) for d in future_dates
+        ]
+    if "volume_ratio_7" in EXOG_COLS:
+        # Trailing 7-day window per future day, drawn from VOLUME_BY_DATE, which
+        # holds observed history and the forecast horizon together — so the
+        # earliest future days average over real volume and later ones roll
+        # onto forecast volume, exactly as the tabular path does.
+        ratios = []
+        for d in future_dates:
+            window = [VOLUME_BY_DATE[(d - timedelta(days=k)).date()]
+                      for k in range(7)
+                      if (d - timedelta(days=k)).date() in VOLUME_BY_DATE]
+            mean = max(float(np.mean(window)), 1.0) if window else 1.0
+            ratios.append(float(VOLUME_BY_DATE[d.date()]) / mean)
+        future_exog["volume_ratio_7"] = ratios
+    # Reindex so the future block's column order matches the fitted design
+    # matrix — SARIMAX matches exog positionally, and a silent transposition
+    # here would feed rainfall in as volume.
+    future_exog = future_exog[EXOG_COLS]
     combined_exog = pd.concat([val[EXOG_COLS].reset_index(drop=True), future_exog], ignore_index=True)
 
     forecast = res.get_forecast(steps=VALIDATION_DAYS + FUTURE_DAYS, exog=combined_exog).predicted_mean.to_numpy()
@@ -838,6 +986,21 @@ PRED_COLUMN = {
     "SARIMAX": "pred_sarimax",
 }
 
+# Volume-free twin of every prediction column, mirroring gold.ml_predictive_volume's
+# pred_*_nw (no-weather) pair. The dashboard's Volume toggle switches between the
+# two sets, so turning volume off does not merely hide the overlay — it shows what
+# the same model predicts when it never saw volume at all. Without these the
+# toggle would be cosmetic, which is exactly the confusion they prevent.
+PRED_COLUMN_NV = {m: f"{c}_nv" for m, c in PRED_COLUMN.items()}
+
+# Weather-free twin, same reasoning as PRED_COLUMN_NV but with rain_mm dropped
+# instead of the volume columns — this is what the dashboard's own Weather
+# toggle now switches the forecast between. LSTM/GRU never saw rain_mm to begin
+# with (final_rnn_forecast is univariate on `total` alone), so their _nw values
+# come out identical to the primary column; that mirrors how their _nv columns
+# already behave and is not a bug.
+PRED_COLUMN_NW = {m: f"{c}_nw" for m, c in PRED_COLUMN.items()}
+
 
 def build_all_final_predictions(feat: pd.DataFrame, rain_by_date: dict) -> tuple[dict[str, dict], dict[str, list]]:
     """Refit every model on the full series so the dashboard can overlay any of
@@ -870,7 +1033,7 @@ def build_all_final_predictions(feat: pd.DataFrame, rain_by_date: dict) -> tuple
     return by_model, importances
 
 
-def ensure_schema(conn) -> None:
+def ensure_schema(conn, commit: bool = True) -> None:
     with conn.cursor() as cur:
         cur.execute(
             """
@@ -910,6 +1073,35 @@ def ensure_schema(conn) -> None:
                 ADD COLUMN IF NOT EXISTS pred_negbinomial_glm  DOUBLE PRECISION,
                 ADD COLUMN IF NOT EXISTS pred_sarimax          DOUBLE PRECISION;
 
+            -- Volume-free twins. Same seven models refit on the same window with
+            -- the volume features removed, so the dashboard's Volume toggle can
+            -- switch the forecast itself rather than only the overlay. Null on
+            -- rows written by a --no-volume run, where the primary columns are
+            -- already the volume-free series and a twin would duplicate them.
+            ALTER TABLE ml_predictive_incidents
+                ADD COLUMN IF NOT EXISTS pred_xgboost_nv          DOUBLE PRECISION,
+                ADD COLUMN IF NOT EXISTS pred_randomforest_nv     DOUBLE PRECISION,
+                ADD COLUMN IF NOT EXISTS pred_lstm_nv             DOUBLE PRECISION,
+                ADD COLUMN IF NOT EXISTS pred_gru_nv              DOUBLE PRECISION,
+                ADD COLUMN IF NOT EXISTS pred_poisson_glm_nv      DOUBLE PRECISION,
+                ADD COLUMN IF NOT EXISTS pred_negbinomial_glm_nv  DOUBLE PRECISION,
+                ADD COLUMN IF NOT EXISTS pred_sarimax_nv          DOUBLE PRECISION;
+
+            -- Weather-free twins. Same seven models refit on the same window with
+            -- rain_mm removed, so the dashboard's Weather toggle can switch the
+            -- forecast itself the same way the Volume toggle already does, rather
+            -- than only hiding the rainfall bars. Null on rows written by a
+            -- --no-weather run, where the primary columns are already the
+            -- weather-free series and a twin would duplicate them.
+            ALTER TABLE ml_predictive_incidents
+                ADD COLUMN IF NOT EXISTS pred_xgboost_nw          DOUBLE PRECISION,
+                ADD COLUMN IF NOT EXISTS pred_randomforest_nw     DOUBLE PRECISION,
+                ADD COLUMN IF NOT EXISTS pred_lstm_nw             DOUBLE PRECISION,
+                ADD COLUMN IF NOT EXISTS pred_gru_nw              DOUBLE PRECISION,
+                ADD COLUMN IF NOT EXISTS pred_poisson_glm_nw      DOUBLE PRECISION,
+                ADD COLUMN IF NOT EXISTS pred_negbinomial_glm_nw  DOUBLE PRECISION,
+                ADD COLUMN IF NOT EXISTS pred_sarimax_nw          DOUBLE PRECISION;
+
             -- Rain (mm) behind each date's forecast: the real hourly_weather total
             -- for validation dates and any future date hourly_weather already
             -- covers, an Open-Meteo forecast otherwise (see fetch_future_rain).
@@ -920,18 +1112,32 @@ def ensure_schema(conn) -> None:
                 ADD COLUMN IF NOT EXISTS rainfall_mm DOUBLE PRECISION;
             """
         )
-    conn.commit()
+    if commit:
+        conn.commit()
 
 
 def write_to_db(conn, daily: pd.DataFrame, feat: pd.DataFrame, champion: str,
-                 by_model: dict[str, dict], metadata: dict, rain_by_date: dict) -> None:
-    ensure_schema(conn)
+                 by_model: dict[str, dict], metadata: dict, rain_by_date: dict,
+                 by_model_nv: dict[str, dict] | None = None,
+                 by_model_nw: dict[str, dict] | None = None, dry: bool = False) -> None:
+    # dry: do every real query, then roll back. Proves the migration, the row
+    # shape and the insert against the live schema without changing a shared
+    # table that other people's dashboards read.
+    ensure_schema(conn, commit=not dry)
     actual_by_date = {row.d.date(): float(row.total) for row in daily.itertuples()}
     yoy = lambda d: actual_by_date.get(d - timedelta(days=YOY_LAG))
 
     val_dates = [d.date() for d in feat["d"].iloc[-VALIDATION_DAYS:]]
     future_dates = sorted(by_model[champion]["future"].keys())
     model_cols = [PRED_COLUMN[m] for m in MODEL_NAMES]
+    # Volume-free / weather-free twins are written only when that second pass
+    # was actually fitted. A --no-volume (resp. --no-weather) run has nothing
+    # to contrast against, so its twin columns stay NULL and the dashboard
+    # falls back to the primary series.
+    nv = by_model_nv or {}
+    nv_cols = [PRED_COLUMN_NV[m] for m in MODEL_NAMES]
+    nw = by_model_nw or {}
+    nw_cols = [PRED_COLUMN_NW[m] for m in MODEL_NAMES]
 
     def num(v):
         """Built-in float or None — psycopg2 cannot adapt numpy scalars."""
@@ -942,8 +1148,10 @@ def write_to_db(conn, daily: pd.DataFrame, feat: pd.DataFrame, champion: str,
         # predicted_incident_count stays the champion's series so every existing
         # reader keeps working unchanged.
         champ = num(by_model[champion][kind].get(d))
+        preds_nv = [num(nv[m][kind].get(d)) if m in nv else None for m in MODEL_NAMES]
+        preds_nw = [num(nw[m][kind].get(d)) if m in nw else None for m in MODEL_NAMES]
         return (d, kind, champ if champ is not None else 0.0, champion, num(yoy(d)),
-                *preds, num(rain_by_date.get(d)))
+                *preds, num(rain_by_date.get(d)), *preds_nv, *preds_nw)
 
     with conn.cursor() as cur:
         cur.execute("DELETE FROM ml_daily_actuals")
@@ -959,20 +1167,30 @@ def write_to_db(conn, daily: pd.DataFrame, feat: pd.DataFrame, champion: str,
             cur,
             "INSERT INTO ml_predictive_incidents (forecast_date, prediction_type, "
             "predicted_incident_count, champion_model, same_day_last_year, "
-            + ", ".join(model_cols) + ", rainfall_mm) VALUES %s",
+            + ", ".join(model_cols) + ", rainfall_mm, " + ", ".join(nv_cols) + ", " + ", ".join(nw_cols) + ") VALUES %s",
             pred_rows,
         )
 
         cur.execute("DELETE FROM ml_training_metadata")
         cur.execute("INSERT INTO ml_training_metadata (metadata_json) VALUES (%s)", [json.dumps(metadata)])
-    conn.commit()
+    if dry:
+        conn.rollback()
+        print("DRY WRITE: every query ran, transaction rolled back — the shared table is unchanged")
+    else:
+        conn.commit()
 
 
 def main() -> None:
-    global HOLIDAY_DATES, VALIDATION_DAYS
+    global HOLIDAY_DATES, VALIDATION_DAYS, VOLUME_BY_DATE, FEATURE_COLS, EXOG_COLS
 
     parser = argparse.ArgumentParser()
     parser.add_argument("--write-db", action="store_true", help="Also write the champion's predictions/metadata to the database")
+    parser.add_argument(
+        "--dry-write", action="store_true",
+        help="Run the entire write path — both model passes, the schema migration "
+             "and the INSERT — then roll back. Proves the write works against the "
+             "live schema without changing a table other dashboards read.",
+    )
     parser.add_argument(
         "--protocol", choices=["holdout", "walk-forward"], default="holdout",
         help="holdout (default): single most-recent window, matching how the traffic "
@@ -993,8 +1211,52 @@ def main() -> None:
         help="Force a specific champion, overriding --select-by. The full "
              "comparison table is still recorded either way.",
     )
+    parser.add_argument(
+        "--no-volume", action="store_true",
+        help="Drop the traffic-volume features, reproducing the pre-volume "
+             "feature set. Exists so the volume columns can be A/B'd under an "
+             "otherwise identical protocol rather than argued about.",
+    )
+    parser.add_argument(
+        "--volume-mode", choices=["both", "level", "ratio"], default="both",
+        help="Which volume features to use. both (default) = log_volume + "
+             "volume_ratio_7. level = the absolute log level only. ratio = the "
+             "7-day relative surge only. The distinction matters because the "
+             "incident rate per vehicle is falling ~16%% since 2020 (9.55 -> 8.02 "
+             "per 100k), so the absolute level is calibrated to a safety regime "
+             "that no longer holds, while the ratio is scale-free and immune to "
+             "that drift.",
+    )
+    parser.add_argument(
+        "--train-years", type=float, default=None,
+        help="Keep only the most recent N years of training history (the holdout "
+             "window is preserved on top). The incident rate per vehicle has "
+             "fallen ~16%% since 2020, so training across all six years fits a "
+             "safety regime that no longer holds and is scored as overfitting "
+             "even though the model generalises fine within any single era.",
+    )
+    parser.add_argument(
+        "--no-weather", action="store_true",
+        help="Drop rain_mm. Pairs with --no-volume so the two signals can be "
+             "ablated independently — weather has been in this model since "
+             "before volume was, so isolating it takes removing it.",
+    )
     args = parser.parse_args()
     VALIDATION_DAYS = args.holdout_days
+    if args.no_volume:
+        FEATURE_COLS = [c for c in FEATURE_COLS if c not in VOLUME_COLS]
+        EXOG_COLS = [c for c in EXOG_COLS if c != "log_volume"]
+    elif args.volume_mode != "both":
+        drop = "volume_ratio_7" if args.volume_mode == "level" else "log_volume"
+        FEATURE_COLS = [c for c in FEATURE_COLS if c != drop]
+        EXOG_COLS = [c for c in EXOG_COLS if c != drop]
+        if args.volume_mode == "ratio":
+            # SARIMAX would be left with no volume exog at all; give it the
+            # surge term so it is still testing the same hypothesis as the rest.
+            EXOG_COLS = EXOG_COLS + ["volume_ratio_7"]
+    if args.no_weather:
+        FEATURE_COLS = [c for c in FEATURE_COLS if c != "rain_mm"]
+        EXOG_COLS = [c for c in EXOG_COLS if c != "rain_mm"]
 
     set_all_seeds()
     conn = get_conn()
@@ -1010,6 +1272,20 @@ def main() -> None:
         print(f"  rainfall joined from hourly_weather ({len(rain_daily)} days, "
               f"latest {rain_daily['d'].max().date()})")
 
+        if not args.no_volume:
+            vol_daily = load_daily_volume(conn)
+            # Inner join: a day with no volume reading has no exposure figure to
+            # reason from, and imputing one would invent the very quantity being
+            # tested. Coverage is currently exact, so this drops nothing.
+            before = len(daily)
+            daily = daily.merge(vol_daily, on="d", how="inner")
+            VOLUME_BY_DATE = dict(zip(vol_daily["d"].dt.date, vol_daily["volume"]))
+            print(f"  volume joined from gold.ml_predictive_volume ({len(vol_daily)} days, "
+                  f"latest {vol_daily['d'].max().date()}"
+                  f"{f'; {before - len(daily)} incident day(s) dropped for want of a reading' if before != len(daily) else ''})")
+        else:
+            print("  volume features DISABLED (--no-volume)")
+
         HOLIDAY_DATES = load_holidays(conn)
         print(f"  {len(HOLIDAY_DATES)} holiday dates loaded from dim_holiday")
 
@@ -1019,6 +1295,17 @@ def main() -> None:
               f"({feat['d'].min().date()} .. {feat['d'].max().date()})")
         if len(feat) < VALIDATION_DAYS + 30:
             sys.exit(f"Not enough history to train: only {len(feat)} usable rows after feature warm-up")
+
+        if args.train_years:
+            # Trim after build_features, never before: the lag/YoY columns need the
+            # full history behind them, so cutting first would blank the very
+            # features this keeps. The holdout window rides on top of the kept
+            # years so the scoring window is identical to every other run.
+            keep = int(args.train_years * 365.25) + VALIDATION_DAYS
+            if keep < len(feat):
+                feat = feat.iloc[-keep:].reset_index(drop=True)
+                print(f"  trimmed to the most recent {args.train_years:g} year(s) of training history: "
+                      f"{len(feat)} rows ({feat['d'].min().date()} .. {feat['d'].max().date()})")
 
         per_model_folds = run_evaluation(feat, args.protocol)
         comparison = summarize_folds(per_model_folds)
@@ -1045,7 +1332,7 @@ def main() -> None:
         report_path.write_text(report, encoding="utf-8")
         print(f"Full per-model report written to {report_path}\n")
 
-        if not args.write_db:
+        if not args.write_db and not args.dry_write:
             print("Training complete. Re-run with --write-db once you've reviewed the comparison above.")
             return
 
@@ -1055,11 +1342,49 @@ def main() -> None:
         # below) reads the same values instead of each refetching separately.
         future_dates = [feat["d"].iloc[-1] + timedelta(days=i) for i in range(1, FUTURE_DAYS + 1)]
         rain_by_date.update({d: v for d, v in fetch_future_rain(future_dates, rain_by_date).items()})
+        # Same idea for volume: resolve the horizon once from the traffic
+        # module's forecast so every model's recursive loop reads one set of
+        # numbers rather than each re-deriving its own.
+        if not args.no_volume:
+            VOLUME_BY_DATE.update(fetch_future_volume(conn, future_dates, VOLUME_BY_DATE))
 
         print("Refitting all candidates on the full dataset so the dashboard can overlay any of them...")
         by_model, importances = build_all_final_predictions(feat, rain_by_date)
         if champion not in by_model:
             sys.exit(f"Champion '{champion}' failed its final refit — nothing safe to write")
+
+        # Second pass: the same seven models over the same window with volume
+        # removed, stored alongside as the _nv columns. This is what the
+        # dashboard's Volume toggle switches to, so turning volume OFF shows a
+        # forecast that genuinely never saw volume rather than the same line with
+        # the overlay hidden. Skipped when this run had no volume to begin with —
+        # the primary columns are already the volume-free series there.
+        by_model_nv: dict[str, dict] = {}
+        if not args.no_volume:
+            saved_features, saved_exog = FEATURE_COLS, EXOG_COLS
+            FEATURE_COLS = [c for c in FEATURE_COLS if c not in VOLUME_COLS]
+            EXOG_COLS = [c for c in EXOG_COLS if c not in VOLUME_COLS]
+            print("Refitting the volume-free control set (drives the dashboard's Volume toggle)...")
+            try:
+                by_model_nv, _ = build_all_final_predictions(feat, rain_by_date)
+            finally:
+                FEATURE_COLS, EXOG_COLS = saved_features, saved_exog
+
+        # Third pass: the same seven models with rain_mm removed, stored as the
+        # _nw columns — this is what the dashboard's Weather toggle switches to,
+        # mirroring the volume-free pass above. Skipped when this run had no
+        # weather to begin with (--no-weather), where the primary columns are
+        # already the weather-free series.
+        by_model_nw: dict[str, dict] = {}
+        if not args.no_weather:
+            saved_features, saved_exog = FEATURE_COLS, EXOG_COLS
+            FEATURE_COLS = [c for c in FEATURE_COLS if c != "rain_mm"]
+            EXOG_COLS = [c for c in EXOG_COLS if c != "rain_mm"]
+            print("Refitting the weather-free control set (drives the dashboard's Weather toggle)...")
+            try:
+                by_model_nw, _ = build_all_final_predictions(feat, rain_by_date)
+            finally:
+                FEATURE_COLS, EXOG_COLS = saved_features, saved_exog
         feature_importance = importances.get(champion, [])
         champion_row = next(r for r in comparison if r["model"] == champion)
 
@@ -1073,13 +1398,30 @@ def main() -> None:
             # Which models actually made it into the prediction columns, so the
             # dashboard only offers toggles that have data behind them.
             "available_models": [m for m in MODEL_NAMES if m in by_model],
+            # What the primary columns were fitted with, and whether a
+            # volume-free twin exists behind them. The dashboard reads this to
+            # decide whether its Volume toggle can switch the forecast or should
+            # only govern the overlay — so a stale table can never make the
+            # toggle silently lie about what it is doing.
+            "uses_volume": not args.no_volume,
+            # Read off FEATURE_COLS, not the VOLUME_COLS constant: --volume-mode
+            # drops one of the pair, and reporting the constant would claim a
+            # feature the run never fitted with.
+            "volume_features": [c for c in FEATURE_COLS if c in VOLUME_COLS],
+            "has_volume_free_twin": bool(by_model_nv),
+            # Same pair of flags as the volume ones above, but for rain_mm — the
+            # dashboard reads this to decide whether its Weather toggle can
+            # switch the forecast or should only govern the rainfall overlay.
+            "uses_weather": not args.no_weather,
+            "has_weather_free_twin": bool(by_model_nw),
         }
         if degraded:
             metadata["warning"] = "No model beat the naive seasonal (MASE<=1.0) baseline; champion is a fallback pick."
 
         print("Writing ml_daily_actuals, ml_predictive_incidents, ml_training_metadata (one transaction)...")
-        write_to_db(conn, daily, feat, champion, by_model, metadata, rain_by_date)
-        print("Committed.")
+        write_to_db(conn, daily, feat, champion, by_model, metadata, rain_by_date, by_model_nv,
+                    by_model_nw, dry=args.dry_write and not args.write_db)
+        print("Rolled back (dry write)." if (args.dry_write and not args.write_db) else "Committed.")
         print(f"Champion: {champion}   R2={champion_row['R2']}   MAE={champion_row['MAE']}   "
               f"models stored: {len(by_model)}/{len(MODEL_NAMES)}")
     except Exception:

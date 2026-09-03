@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import type { EChartsOption } from "echarts";
 import DashboardChart from "./DashboardChart";
+import InfoTooltip from "./InfoTooltip";
 import { aggregateSeries } from "./aggregateSeries";
 import IncidentNarrative, { MetricHint, metricHintFor, modelHintFor } from "./IncidentNarrative";
 import {
@@ -49,6 +50,7 @@ type Props = {
   // Range/Weather-scoped data.
   onCorridorForecastChange?: (corridor: {
     corridorForecast: PredictiveData["corridorForecast"];
+    kmSegmentForecast: PredictiveData["kmSegmentForecast"];
     unclassifiedLocationShare: number | null;
     forecastHorizon: number;
     // Pretty label of whichever model corridorForecast was apportioned from
@@ -210,6 +212,7 @@ export default function PredictiveIncidentChart({
         onWeatherApplicableChange?.(payload.weatherApplicable);
         onCorridorForecastChange?.({
           corridorForecast: payload.corridorForecast,
+          kmSegmentForecast: payload.kmSegmentForecast,
           unclassifiedLocationShare: payload.unclassifiedLocationShare,
           // The window corridorForecast was actually apportioned over — NOT
           // modelInfo.forecastHorizon (the pipeline's full published horizon),
@@ -372,6 +375,14 @@ export default function PredictiveIncidentChart({
   // (possibly cut/bucketed) render-local ones.
   const presentScoredDays = futureStart - validationStart;
 
+  // Past/Present's share of the full trained-plus-scored window — real
+  // figures straight from the training run's own metadata (modelInfo.
+  // trainedDays/scoredDays), not derived from whatever's currently drawn, so
+  // the percentage stays true regardless of which Range slice is on screen.
+  const trainedPlusScored = (modelInfo.trainedDays ?? 0) + presentScoredDays;
+  const trainedPct = trainedPlusScored > 0 && modelInfo.trainedDays != null ? (modelInfo.trainedDays / trainedPlusScored) * 100 : null;
+  const scoredPct = trainedPlusScored > 0 ? (presentScoredDays / trainedPlusScored) * 100 : null;
+
   // Aggregation: a viewing aid only, same contract as PredictiveVolumeChart
   // (see aggregateSeries.ts) — a bucket carries the MEAN of the days inside
   // it and cannot change what was scored or forecast. Volume rides along as
@@ -509,7 +520,27 @@ export default function PredictiveIncidentChart({
   const rainBand = (mm: number) => RAIN_BANDS.find((b) => mm < b.max) ?? RAIN_BANDS[RAIN_BANDS.length - 1];
 
   const option: EChartsOption = {
-    grid: { left: 60, right: 24, top: 28, bottom: 76 },
+    grid: { left: 60, right: 24, top: 28, bottom: 96 },
+    // A scrub/zoom bar under the chart, same as PredictiveVolumeChart's —
+    // useful specifically because Range can put hundreds of daily points on
+    // screen at once; the slider lets a reader narrow in without switching
+    // Range or Granularity. "inside" mirrors the slider for scroll/pinch.
+    dataZoom: [
+      {
+        type: "slider",
+        xAxisIndex: 0,
+        bottom: 30,
+        height: 16,
+        borderColor: "transparent",
+        backgroundColor: "#eef2ff",
+        fillerColor: "rgba(79,70,229,0.25)",
+        handleStyle: { color: "#4f46e5", borderColor: "#4f46e5" },
+        moveHandleStyle: { color: "#4f46e5" },
+        textStyle: { color: "#64748b", fontSize: 10 },
+        showDetail: false,
+      },
+      { type: "inside", xAxisIndex: 0 },
+    ],
     tooltip: {
       trigger: "axis",
       formatter: (params: unknown) => {
@@ -900,6 +931,7 @@ export default function PredictiveIncidentChart({
         <div style={{ minWidth: "260px" }}>
           <h3 style={{ fontSize: "1.05rem", color: "#0f172a", fontWeight: 700, margin: 0, letterSpacing: "-0.01em" }}>
             Incident Walk-Forward Forecast
+            <InfoTooltip text="Daily incident forecast, scored against real held-out data. Past = training history, Present = the model's held-out accuracy check (never trained on), Future = the published forecast for days that haven't happened yet." />
           </h3>
           <p style={{ color: "#64748b", fontSize: "0.82rem", margin: "4px 0 0 0" }}>
             Click any point to view that day&apos;s hourly breakdown
@@ -973,18 +1005,35 @@ export default function PredictiveIncidentChart({
         </div>
       </div>
 
+      {/* "Each point = X" badge — only relevant once aggregation is actually
+          bucketing days together, same clarifying role as
+          PredictiveVolumeChart's own badge: without it a Weekly/Monthly mean
+          reads as a total to anyone skimming the axis. */}
+      {isAggregated && (
+        <div style={{
+          display: "inline-flex", alignItems: "center", gap: "6px", alignSelf: "flex-start",
+          padding: "5px 12px", borderRadius: "999px",
+          background: "linear-gradient(135deg, #4f46e5, #4338ca)", color: "#fff",
+          fontSize: "0.74rem", fontWeight: 600,
+        }}>
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none">
+            <path d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+          </svg>
+          Each point = {granularity === "Weekly" ? "7-day" : "~30-day"} mean, not a total
+        </div>
+      )}
+
       {/* Zone window & Granularity controls, laid out the same way
           PredictiveVolumeChart's toolbar is: one row, GRANULARITY first, then
-          a legend swatch per band. No Hourly pill here — every Daily point
+          a tinted card per band. No Hourly pill here — every Daily point
           already opens the hourly breakdown on click, so there's no separate
           capability an Hourly granularity would add. */}
-      <div style={{
-        display: "flex", alignItems: "center", gap: "20px", flexWrap: "wrap",
-        padding: "10px 14px", borderRadius: "10px", background: "#f8fafc",
-        border: "1px solid #e2e8f0", fontSize: "0.76rem",
-      }}>
+      <div style={{ display: "flex", alignItems: "center", gap: "12px", flexWrap: "wrap" }}>
         {/* GRANULARITY control pill */}
-        <span style={{ display: "inline-flex", alignItems: "center", gap: "8px" }}>
+        <span style={{
+          display: "inline-flex", alignItems: "center", gap: "8px", padding: "10px 14px",
+          borderRadius: "10px", background: "#f8fafc", border: "1px solid #e2e8f0", fontSize: "0.76rem",
+        }}>
           <b style={{ color: "#3b82f6", letterSpacing: "0.04em", fontSize: "0.75rem", textTransform: "uppercase" }}>
             GRANULARITY
           </b>
@@ -1016,19 +1065,30 @@ export default function PredictiveIncidentChart({
 
         {/* Past */}
         {showPast && (
-          <span style={{ display: "inline-flex", alignItems: "center", gap: "8px" }}>
-            <span style={{ width: 10, height: 10, borderRadius: 2, background: "rgba(37,99,235,0.25)" }} />
+          <span style={{
+            display: "inline-flex", alignItems: "center", gap: "8px", padding: "10px 14px",
+            borderRadius: "10px", background: "rgba(37,99,235,0.07)", border: "1px solid rgba(37,99,235,0.18)", fontSize: "0.76rem",
+          }}>
+            <span style={{ width: 10, height: 10, borderRadius: 2, background: "rgba(37,99,235,0.5)" }} />
             <b style={{ color: "#0f172a" }}>Past</b>
+            {modelInfo.trainedDays != null && (
+              <span style={{ color: "#4b5e7d" }}>
+                {fmtInt(modelInfo.trainedDays)}d trained{trainedPct != null ? ` · ${trainedPct.toFixed(2)}%` : ""} · showing last {fmtInt(effHoldoutStart)}d
+              </span>
+            )}
           </span>
         )}
 
         {/* Present */}
         {showPresent && (
-          <span style={{ display: "inline-flex", alignItems: "center", gap: "8px" }}>
-            <span style={{ width: 10, height: 10, borderRadius: 2, background: "rgba(249,115,22,0.35)" }} />
+          <span style={{
+            display: "inline-flex", alignItems: "center", gap: "8px", padding: "10px 14px",
+            borderRadius: "10px", background: "rgba(249,115,22,0.08)", border: "1px solid rgba(249,115,22,0.22)", fontSize: "0.76rem",
+          }}>
+            <span style={{ width: 10, height: 10, borderRadius: 2, background: "rgba(249,115,22,0.55)" }} />
             <b style={{ color: "#0f172a" }}>Present</b>
             <span style={{ color: "#4b5e7d" }}>
-              {presentScoredDays}d scored · fixed by evaluation
+              {presentScoredDays}d scored{scoredPct != null ? ` · ${scoredPct.toFixed(2)}%` : ""} · fixed by evaluation
             </span>
           </span>
         )}
@@ -1037,8 +1097,11 @@ export default function PredictiveIncidentChart({
             at all (a custom range ending before the horizon starts), since
             there would be nothing for the preset buttons to trim. */}
         {futureAvailable > 0 && (
-          <span style={{ display: "inline-flex", alignItems: "center", gap: "8px", flexWrap: "wrap" }}>
-            <span style={{ width: 10, height: 10, borderRadius: 2, background: "rgba(22,163,74,0.3)" }} />
+          <span style={{
+            display: "inline-flex", alignItems: "center", gap: "8px", flexWrap: "wrap", padding: "10px 14px",
+            borderRadius: "10px", background: "rgba(22,163,74,0.07)", border: "1px solid rgba(22,163,74,0.2)", fontSize: "0.76rem",
+          }}>
+            <span style={{ width: 10, height: 10, borderRadius: 2, background: "rgba(22,163,74,0.5)" }} />
             <b style={{ color: "#0f172a" }}>Future</b>
             {FUTURE_PRESETS.map((item) => {
               const unavailable = item.d > futureAvailable;
@@ -1070,7 +1133,7 @@ export default function PredictiveIncidentChart({
               );
             })}
             <span style={{ color: "#64748b" }}>
-              · {effectiveFutureDays}d forecast written by the last training run
+              · validated at {presentScoredDays}d
             </span>
           </span>
         )}

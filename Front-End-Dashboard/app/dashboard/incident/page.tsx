@@ -14,7 +14,13 @@ import PredictiveIncidentChart from "../../../components/dashboard/PredictiveInc
 import PredictiveCorridorChart from "../../../components/dashboard/PredictiveCorridorChart";
 import IncidentSeverityModels from "../../../components/dashboard/IncidentSeverityModels";
 import SecondaryIncidentRiskPanel from "../../../components/dashboard/SecondaryIncidentRiskPanel";
-import type { CorridorForecastPoint } from "../../../components/dashboard/incidentPredictive.shared";
+import CorridorRiskModelsPanel from "../../../components/dashboard/CorridorRiskModelsPanel";
+import HighIncidentDayRiskPanel from "../../../components/dashboard/HighIncidentDayRiskPanel";
+import PrescriptiveDeploymentPanel from "../../../components/dashboard/PrescriptiveDeploymentPanel";
+import InfoTooltip from "../../../components/dashboard/InfoTooltip";
+import SecondaryRiskMitigationPanel from "../../../components/dashboard/SecondaryRiskMitigationPanel";
+import IncidentTypePriorityPanel from "../../../components/dashboard/IncidentTypePriorityPanel";
+import type { CorridorForecastPoint, KmSegmentForecastPoint } from "../../../components/dashboard/incidentPredictive.shared";
 import DateRangePicker from "../traffic/components/DateRangePicker";
 import { rangeDays, grainBlockedReason, bestGrainFor, axisLabelFor, bucketLabelFor } from "../../../lib/granularity";
 import styles from "../traffic/traffic.module.css";
@@ -79,15 +85,6 @@ function weekStart(dateStr: string): string {
   return dt.toISOString().slice(0, 10);
 }
 
-// ---------- Prescriptive mock (unchanged tab) ----------
-const prescriptiveResourceOption: EChartsOption = {
-  grid: { left: 46, right: 20, top: 20, bottom: 36 },
-  xAxis: { type: "category", data: ["Ambulance", "Tow Truck", "Patrol", "Fire"] },
-  yAxis: { type: "value" },
-  tooltip: { trigger: "axis" },
-  series: [{ type: "bar", data: [3, 5, 8, 2], itemStyle: { color: "#4f7de5", borderRadius: [8, 8, 0, 0] } }],
-};
-
 export default function IncidentPage() {
   // Chart furniture follows the active theme; series hues stay fixed.
   const chartTheme = useChartTheme();
@@ -130,6 +127,7 @@ export default function IncidentPage() {
   // below it doesn't refetch /api/incident/predictive on its own.
   const [corridorData, setCorridorData] = useState<{
     corridorForecast: CorridorForecastPoint[] | null;
+    kmSegmentForecast: KmSegmentForecastPoint[] | null;
     unclassifiedLocationShare: number | null;
     forecastHorizon: number;
     forecastModelLabel: string | null;
@@ -622,6 +620,10 @@ export default function IncidentPage() {
   const kpiValue = (v: string | null) =>
     loading && !data ? <KpiSkeleton /> : (v ?? "—");
 
+  // One-glance explanation of what a KPI tile actually measures — same
+  // portal-based popup used on every Predictive-tab card title.
+  const kpiInfo = (text: string) => <InfoTooltip text={text} />;
+
   // ---------- Global filter controls ----------
   // Rendered on both the Descriptive shell and the Predictive one so the strip
   // above the page means the same thing whichever tab is open. Defined once
@@ -681,7 +683,7 @@ export default function IncidentPage() {
               {weatherFilter}
             </>
           )}
-          {activeTab === "Prescriptive" && <span className={styles.filterLabel}>Recommended resource allocation</span>}
+          {activeTab === "Prescriptive" && <span className={styles.filterLabel}>Patrol zone deployment (linear program)</span>}
           <span className={styles.spacer} />
           <div className={styles.modeTabs}>
             {(["Descriptive", "Predictive", "Prescriptive"] as const).map((t) => (
@@ -706,9 +708,10 @@ export default function IncidentPage() {
           </div>
         ) : null}
         {activeTab === "Predictive" && (
-          <div className={styles.spanFull}>
+          <div className={styles.spanHalf}>
             <PredictiveCorridorChart
               corridorForecast={corridorData?.corridorForecast ?? null}
+              kmSegmentForecast={corridorData?.kmSegmentForecast ?? null}
               unclassifiedLocationShare={corridorData?.unclassifiedLocationShare ?? null}
               forecastHorizon={corridorData?.forecastHorizon ?? 0}
               showVolume={corridorData?.showVolume ?? false}
@@ -719,26 +722,39 @@ export default function IncidentPage() {
           </div>
         )}
         {activeTab === "Predictive" && (
+          <div className={styles.spanHalf}>
+            <SecondaryIncidentRiskPanel />
+          </div>
+        )}
+        {activeTab === "Predictive" && (
           <div className={styles.spanFull}>
             <IncidentSeverityModels />
           </div>
         )}
         {activeTab === "Predictive" && (
           <div className={styles.spanFull}>
-            <SecondaryIncidentRiskPanel />
+            <CorridorRiskModelsPanel />
+          </div>
+        )}
+        {activeTab === "Predictive" && (
+          <div className={styles.spanFull}>
+            <HighIncidentDayRiskPanel />
           </div>
         )}
         {activeTab === "Prescriptive" && (
-          <article className={`${styles.chartCard} ${styles.chart1}`}>
-            <div className={styles.chartHead}>
-              <div className={styles.headText}>
-                <h3>Recommended Resource Deployment</h3>
-              </div>
-            </div>
-            <div className={styles.chartBody}>
-              <DashboardChart option={prescriptiveResourceOption} height={280} />
-            </div>
-          </article>
+          <div className={styles.spanFull}>
+            <PrescriptiveDeploymentPanel />
+          </div>
+        )}
+        {activeTab === "Prescriptive" && (
+          <div className={styles.spanFull}>
+            <SecondaryRiskMitigationPanel />
+          </div>
+        )}
+        {activeTab === "Prescriptive" && (
+          <div className={styles.spanFull}>
+            <IncidentTypePriorityPanel />
+          </div>
         )}
       </section>
     );
@@ -770,7 +786,10 @@ export default function IncidentPage() {
       <div className={styles.kpiRow}>
         <article className={styles.kpiTile}>
           <span className={styles.kpiIcon} aria-hidden="true"><AlertTriangle size={15} /></span>
-          <h3>Total Incidents</h3>
+          <h3>
+            Total Incidents
+            {kpiInfo("All logged incidents — road crashes, motorcycle crashes, and stalled vehicles — in the selected Range, compared to the equivalent prior period.")}
+          </h3>
           <div className={styles.kpiValue}>{kpiValue(data ? fmtInt(data.kpis.totalIncidents) : null)}</div>
           <p className={styles.kpiHint}>
             {derived ? (
@@ -781,19 +800,28 @@ export default function IncidentPage() {
         </article>
         <article className={styles.kpiTile}>
           <span className={styles.kpiIcon} aria-hidden="true"><HeartPulse size={15} /></span>
-          <h3>Injuries</h3>
+          <h3>
+            Injuries
+            {kpiInfo("Total people injured across all incidents in the Range, including incidents that also had a fatality.")}
+          </h3>
           <div className={styles.kpiValue}>{kpiValue(data ? fmtInt(data.kpis.injuries) : null)}</div>
           <p className={styles.kpiHint}>{data ? `${fmtInt(data.kpis.fatalities)} fatalities in range` : "—"}</p>
         </article>
         <article className={styles.kpiTile}>
           <span className={styles.kpiIcon} aria-hidden="true"><Timer size={15} /></span>
-          <h3>Avg Response Time</h3>
+          <h3>
+            Avg Response Time
+            {kpiInfo("Average minutes from an incident being reported to a responder arriving on scene, excluding outliers beyond 2 hours.")}
+          </h3>
           <div className={styles.kpiValue}>{kpiValue(data?.kpis.avgResponseMin != null ? `${data.kpis.avgResponseMin} min` : null)}</div>
           <p className={styles.kpiHint}>reported → responder on scene</p>
         </article>
         <article className={styles.kpiTile}>
           <span className={styles.kpiIcon} aria-hidden="true"><MapPin size={15} /></span>
-          <h3>Top Hotspot</h3>
+          <h3>
+            Top Hotspot
+            {kpiInfo("The 5km corridor segment with the most incidents in the Range, among segments whose location could be resolved.")}
+          </h3>
           <div className={styles.kpiValue}>{kpiValue(derived?.topHotspot ? kmLabel(derived.topHotspot.km_bin) : null)}</div>
           <p className={styles.kpiHint}>
             {derived?.topHotspot && derived.hotspotTotal > 0
@@ -803,7 +831,10 @@ export default function IncidentPage() {
         </article>
         <article className={styles.kpiTile}>
           <span className={styles.kpiIcon} aria-hidden="true"><CloudRain size={15} /></span>
-          <h3>Crash Rate in Rain</h3>
+          <h3>
+            Crash Rate in Rain
+            {kpiInfo("Road and motorcycle crashes per day during rainy hours vs. dry hours, normalized for how often each occurs. Above 1× means rain sees more crashes per hour of exposure.")}
+          </h3>
           <div className={styles.kpiValue}>{kpiValue(derived?.rainMultiplier != null ? `${derived.rainMultiplier.toFixed(2)}×` : null)}</div>
           <p className={styles.kpiHint}>
             {derived ? `${derived.wetRate.toFixed(1)} vs ${derived.dryRate.toFixed(1)} crashes/day, wet vs dry` : "—"}
@@ -815,7 +846,10 @@ export default function IncidentPage() {
       <article className={`${styles.chartCard} ${styles.chart1} ${styles.hero}`}>
         <div className={styles.chartHead}>
           <div className={styles.headText}>
-            <h3>Incident Trend</h3>
+            <h3>
+              Incident Trend
+              <InfoTooltip text="Incident counts over the selected Range, by type (road crashes, motorcycle crashes, stalled vehicles). Daily, weekly, or monthly — click a point to see that period's breakdown." />
+            </h3>
           </div>
         </div>
         <div className={styles.heroFilters}>
@@ -858,7 +892,10 @@ export default function IncidentPage() {
       <article className={`${styles.chartCard} ${styles.chart2}`}>
         <div className={styles.chartHead}>
           <div className={styles.headText}>
-            <h3>When Incidents Happen</h3>
+            <h3>
+              When Incidents Happen
+              <InfoTooltip text="Average incidents per day by hour (weekdays vs. weekends) or by day of week, normalized for how many of each day type are actually in the Range — so 5 weekdays vs. 2 weekend days compare fairly." />
+            </h3>
             {timeTakeaway && <p className={styles.subtitle}>{timeTakeaway}</p>}
           </div>
           <div className={styles.segmentedSmall}>
@@ -876,7 +913,10 @@ export default function IncidentPage() {
       <article className={`${styles.chartCard} ${styles.chart3}`}>
         <div className={styles.chartHead}>
           <div className={styles.headText}>
-            <h3>Hotspots by Km Segment</h3>
+            <h3>
+              Hotspots by Km Segment
+              <InfoTooltip text="Top 10 km segments by total located incidents in the Range. Hover a bar for its injury and fatality counts." />
+            </h3>
           </div>
           <button
             type="button"
@@ -899,7 +939,10 @@ export default function IncidentPage() {
       <article className={`${styles.chartCard} ${styles.chart4}`}>
         <div className={styles.chartHead}>
           <div className={styles.headText}>
-            <h3>{causeMode === "Causes" ? "Top Incident Causes" : "Top Accident Types"}</h3>
+            <h3>
+              {causeMode === "Causes" ? "Top Incident Causes" : "Top Accident Types"}
+              <InfoTooltip text="Top 9 logged causes or collision types by incident count in the Range, with injuries and fatalities on hover. Toggle between Causes and Types on the right." />
+            </h3>
           </div>
           <button
             type="button"
@@ -925,7 +968,10 @@ export default function IncidentPage() {
       <article className={`${styles.chartCard} ${styles.chart5}`}>
         <div className={styles.chartHead}>
           <div className={styles.headText}>
-            <h3>Incidents per Day: Dry vs Wet Weather</h3>
+            <h3>
+              Incidents per Day: Dry vs Wet Weather
+              <InfoTooltip text="Average incidents per day by type, dry vs. wet hours — normalized by hours of exposure (× 24) so rare wet hours compare fairly against far more abundant dry ones, not raw counts." />
+            </h3>
           </div>
         </div>
         <div className={styles.chartBody}>{chartFrame(weatherChart, "No weather data in range", onWeatherClick)}</div>

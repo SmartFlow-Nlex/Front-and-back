@@ -7,6 +7,9 @@ import { db } from "../config/db.js";
 // lookup over 20 rows and doing it here means a schema/exit-list change
 // never requires re-running the Python pipeline.
 import { searchExitsInDb } from "./map-comparison.service.js";
+// Same exit-to-exit segments incident.service.ts's kmSegmentForecast uses —
+// shared so this panel's "By Km" view can't drift from that one again.
+import { buildExitToExitSegments, segmentIndexForKm } from "../lib/exit-segments.js";
 
 // Reads for gold.ml_incident_severity_predictions / ml_incident_survival_curve /
 // ml_incident_severity_metadata — written by
@@ -21,7 +24,13 @@ import { searchExitsInDb } from "./map-comparison.service.js";
 
 const SEVERITY_LABEL: Record<number, string> = { 0: "Property Damage Only", 1: "Injury", 2: "Fatal" };
 
-export type SurvivalCurvePoint = { group: string; timeMin: number; survivalProbability: number };
+// dimension: "baseline" (the one reference curve, shown regardless of which
+// toggle is active), "severity" (PDO/Injury/Fatal), "source" (Road/Moto
+// Crash), or "both" (the 2x3 cross of the two) — see
+// train_incident_severity_models.py's fit_cox_ph for why these are separate
+// toggled views rather than every curve on one chart, and for n: sample
+// size behind this one curve, as low as 25 for the thinnest "both" cells.
+export type SurvivalCurvePoint = { group: string; dimension: string; timeMin: number; survivalProbability: number; n: number };
 
 export type SeverityBreakdownRow = {
   severityCode: number;
@@ -30,12 +39,38 @@ export type SeverityBreakdownRow = {
   predictedCount: number;
 };
 
+// avgClearanceMin rides alongside avgRisk (not a separate query) so a
+// prioritization tool that needs both — "which zones combine high secondary
+// risk with slow clearance" — can pair them without hoping two independently
+// computed groupings happen to land on the same rows. See
+// SecondaryRiskMitigationPanel.tsx's doc comment for why that pairing is the
+// actual point: secondary risk alone says WHERE, clearance speed is the
+// lever that actually changes it.
 export type SecondaryRiskByExit = {
   exitId: number;
   exitName: string;
   km: number;
   n: number;
   avgRisk: number;
+  avgClearanceMin: number;
+  actualSecondaryCount: number;
+};
+
+// Same rows as SecondaryRiskByExit, grouped by km position instead of
+// nearest exit — quantile bins (equal incident COUNT, unequal km width),
+// not fixed-width ones. km_value turns out to hold only a handful of
+// distinct values across this data (verified directly against
+// train_incident_severity_models.py's training set — 19 total), so a fixed
+// 5km grid the way the corridor chart uses would leave several bins
+// completely empty here; quantile bins guarantee every segment has
+// comparable evidence behind it instead.
+export type SecondaryRiskByKmSegment = {
+  label: string;
+  kmStart: number;
+  kmEnd: number;
+  n: number;
+  avgRisk: number;
+  avgClearanceMin: number;
   actualSecondaryCount: number;
 };
 
@@ -45,6 +80,7 @@ export type IncidentSeverityData = {
   avgPredictedClearanceMin: number | null;
   avgSecondaryRisk: number | null;
   secondaryRiskByExit: SecondaryRiskByExit[];
+  secondaryRiskByKmSegment: SecondaryRiskByKmSegment[];
   trainedAt: string | null;
   metadata: Record<string, unknown> | null;
 };
@@ -53,8 +89,8 @@ export async function getIncidentSeverityFromDb(): Promise<IncidentSeverityData 
   if (!db) return null;
   try {
     const [curveRes, actualRes, predRes, avgRes, metaRes, riskRowsRes, exitRows] = await Promise.all([
-      db.query<{ group_label: string; time_min: number; survival_probability: number }>(
-        `SELECT group_label, time_min, survival_probability
+      db.query<{ group_label: string; dimension: string; time_min: number; survival_probability: number; n: number }>(
+        `SELECT group_label, dimension, time_min, survival_probability, n
          FROM gold.ml_incident_survival_curve
          ORDER BY group_label, time_min`
       ),
@@ -78,8 +114,11 @@ export async function getIncidentSeverityFromDb(): Promise<IncidentSeverityData 
         `SELECT metadata_json, created_at FROM gold.ml_incident_severity_metadata
          ORDER BY created_at DESC LIMIT 1`
       ),
-      db.query<{ km_value: number; secondary_incident_risk: number | null; actual_had_secondary: boolean | null }>(
-        `SELECT km_value, secondary_incident_risk, actual_had_secondary
+      db.query<{
+        km_value: number; secondary_incident_risk: number | null; actual_had_secondary: boolean | null;
+        predicted_clearance_min: number | null;
+      }>(
+        `SELECT km_value, secondary_incident_risk, actual_had_secondary, predicted_clearance_min
          FROM gold.ml_incident_severity_predictions
          WHERE secondary_incident_risk IS NOT NULL`
       ),
@@ -108,18 +147,28 @@ export async function getIncidentSeverityFromDb(): Promise<IncidentSeverityData 
     // just against a numeric km_value directly rather than a regex-matched
     // one, since these rows already carry it.
     const exits = (exitRows ?? []) as { exit_id: number; exit_name: string; km: number }[];
-    const byExit = new Map<number, { exitName: string; km: number; n: number; sumRisk: number; secondaryCount: number }>();
+    const byExit = new Map<
+      number,
+      { exitName: string; km: number; n: number; sumRisk: number; secondaryCount: number; sumClearance: number; clearanceN: number }
+    >();
     if (exits.length > 0) {
       for (const row of riskRowsRes.rows) {
         const nearest = exits.reduce((best, x) =>
           Math.abs(x.km - row.km_value) < Math.abs(best.km - row.km_value) ? x : best
         );
         const entry = byExit.get(nearest.exit_id) ?? {
-          exitName: nearest.exit_name, km: nearest.km, n: 0, sumRisk: 0, secondaryCount: 0,
+          exitName: nearest.exit_name, km: nearest.km, n: 0, sumRisk: 0, secondaryCount: 0, sumClearance: 0, clearanceN: 0,
         };
         entry.n += 1;
         entry.sumRisk += Number(row.secondary_incident_risk);
         if (row.actual_had_secondary) entry.secondaryCount += 1;
+        // predicted_clearance_min can be null on rows where Cox PH's
+        // per-row prediction didn't resolve — averaged over its own count,
+        // not `n`, so a handful of nulls don't quietly drag the average down.
+        if (row.predicted_clearance_min != null) {
+          entry.sumClearance += Number(row.predicted_clearance_min);
+          entry.clearanceN += 1;
+        }
         byExit.set(nearest.exit_id, entry);
       }
     }
@@ -130,21 +179,66 @@ export async function getIncidentSeverityFromDb(): Promise<IncidentSeverityData 
         km: v.km,
         n: v.n,
         avgRisk: v.sumRisk / v.n,
+        avgClearanceMin: v.clearanceN > 0 ? v.sumClearance / v.clearanceN : 0,
         actualSecondaryCount: v.secondaryCount,
       }))
       .sort((a, b) => b.avgRisk - a.avgRisk);
+
+    // Exit-to-exit corridor segments — the same segmentation
+    // incident.service.ts's kmSegmentForecast uses (see lib/exit-segments.ts),
+    // so this panel's "By Km" view lines up with the Predicted Incidents
+    // Ranking's instead of each inventing its own, disagreeing bins. A
+    // segment with no predictions at all is dropped rather than kept at
+    // n=0: unlike an incident count, an average risk/clearance time has no
+    // honest value to report from zero rows.
+    const segments = buildExitToExitSegments(exits);
+    const bySegmentIdx = new Map<
+      number,
+      { n: number; sumRisk: number; secondaryCount: number; sumClearance: number; clearanceN: number }
+    >();
+    for (const row of riskRowsRes.rows) {
+      const idx = segmentIndexForKm(row.km_value, segments);
+      if (idx < 0) continue;
+      const entry = bySegmentIdx.get(idx) ?? { n: 0, sumRisk: 0, secondaryCount: 0, sumClearance: 0, clearanceN: 0 };
+      entry.n += 1;
+      entry.sumRisk += Number(row.secondary_incident_risk);
+      if (row.actual_had_secondary) entry.secondaryCount += 1;
+      if (row.predicted_clearance_min != null) {
+        entry.sumClearance += Number(row.predicted_clearance_min);
+        entry.clearanceN += 1;
+      }
+      bySegmentIdx.set(idx, entry);
+    }
+    const secondaryRiskByKmSegment: SecondaryRiskByKmSegment[] = segments
+      .map((seg, i) => {
+        const v = bySegmentIdx.get(i);
+        if (!v || v.n === 0) return null;
+        return {
+          label: seg.label,
+          kmStart: seg.segmentStart,
+          kmEnd: seg.segmentEnd,
+          n: v.n,
+          avgRisk: v.sumRisk / v.n,
+          avgClearanceMin: v.clearanceN > 0 ? v.sumClearance / v.clearanceN : 0,
+          actualSecondaryCount: v.secondaryCount,
+        };
+      })
+      .filter((x): x is SecondaryRiskByKmSegment => x != null);
 
     const avg = avgRes.rows[0];
     return {
       survivalCurve: curveRes.rows.map((r) => ({
         group: r.group_label,
+        dimension: r.dimension,
         timeMin: Number(r.time_min),
         survivalProbability: Number(r.survival_probability),
+        n: r.n,
       })),
       severityBreakdown,
       avgPredictedClearanceMin: avg?.avg_clearance == null ? null : Number(avg.avg_clearance),
       avgSecondaryRisk: avg?.avg_risk == null ? null : Number(avg.avg_risk),
       secondaryRiskByExit,
+      secondaryRiskByKmSegment,
       trainedAt: avg?.trained_at ? new Date(avg.trained_at).toISOString() : null,
       metadata: metaRes.rows[0]?.metadata_json ?? null,
     };

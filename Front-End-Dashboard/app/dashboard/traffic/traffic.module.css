@@ -631,6 +631,13 @@
   min-width: 0;
 }
 
+/* Half-width sibling of .spanFull, for two self-chromed Predictive* cards
+   sitting side by side in the same row instead of stacked. */
+.spanHalf {
+  grid-column: span 6;
+  min-width: 0;
+}
+
 .chart1 { grid-column: 1 / -1; }
 .chart2 { grid-column: span 7; }
 .chart3 { grid-column: span 5; }
@@ -873,7 +880,7 @@
   .filterRow { flex-wrap: wrap; position: static; margin: 0; padding: 0; }
   .kpiRow { grid-template-columns: repeat(2, 1fr); }
 
-  .chart1, .chart2, .chart3, .chart4, .chart5 {
+  .chart1, .chart2, .chart3, .chart4, .chart5, .spanHalf {
     grid-column: 1 / -1;
   }
 }

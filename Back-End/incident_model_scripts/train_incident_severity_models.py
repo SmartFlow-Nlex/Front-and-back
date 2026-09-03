@@ -247,6 +247,7 @@ def build_design_matrix(df: pd.DataFrame, dummy_columns: list[str] | None = None
 # Model 1: Severity — Ordinal Logistic Regression vs XGBoost
 # ---------------------------------------------------------------------------
 SEVERITY_LABELS = {0: "Property Damage Only", 1: "Injury", 2: "Fatal"}
+SOURCE_LABELS = {"road": "Road Crash", "moto": "Motorcycle Crash"}
 
 
 # Verified against a real run: OrdinalLogistic and XGBoost land on the exact
@@ -335,27 +336,121 @@ def fit_cox_ph(train: pd.DataFrame, holdout: pd.DataFrame) -> dict:
 
     # Representative survival curves for the clearance-survival-curve
     # visualization: the corridor-wide baseline, plus one curve per severity
-    # class holding every other covariate at its training-set mean — shows
-    # whether a more severe incident is expected to take longer to clear.
-    baseline = cph.baseline_survival_.iloc[:, 0]
-    curves = [{"group": "Baseline (average incident)", "times": baseline.index.tolist(), "survival": baseline.values.tolist()}]
+    # class and one per source. Built from the EMPIRICAL data (Kaplan-Meier),
+    # not from the Cox model, and that choice is load-bearing, not stylistic:
+    #
+    # An earlier version of this built each group's curve by averaging that
+    # group's covariates into one "representative profile" and scoring THAT
+    # through cph.predict_survival_function — a known statistical trap for a
+    # non-linear model. It was caught by cross-checking: it put Road/Motorcycle
+    # medians at 53/50min, versus the model's own per-row predict_median on
+    # actual holdout rows (87/49min, matching the raw group medians almost
+    # exactly, source coefficient p=1.2e-52) and the exact raw medians
+    # themselves (87/53min, computed with zero censoring so this IS the true
+    # Kaplan-Meier answer, not an approximation). Averaging-then-predicting
+    # was quietly wrong by ~34 minutes on this split; averaging individual
+    # per-row survival curves together (the textbook-correct fix for THAT
+    # specific mistake) reproduced the same wrong ~53min, which means the
+    # distortion runs deeper than the aggregation step alone. Sidestepped
+    # entirely by not routing the group curves through the regularized,
+    # heavily-collinear covariate model at all: with event=1 on every row
+    # (no incident here is still open), Kaplan-Meier collapses to the plain
+    # empirical survival function, which is simple, exact by construction,
+    # and unaffected by whatever the model's fit does elsewhere. The Cox
+    # model itself is untouched for what it's actually suited to — the
+    # per-incident predicted_clearance_min above, the concordance KPI, and
+    # the coefficient table — this only changes how the DISPLAYED group
+    # curves are built.
+    def empirical_curve(durations: np.ndarray) -> tuple[list[float], list[float]]:
+        d = np.sort(durations)
+        n = len(d)
+        times = np.unique(d).tolist()
+        survival = [float((d > t).sum() / n) for t in times]
+        return times, survival
 
-    mean_profile = X_train.mean().to_frame().T
-    for code, label in SEVERITY_LABELS.items():
-        profile = mean_profile.copy()
-        # Severity itself isn't a Cox PH covariate (it's excluded from
-        # build_design_matrix as an outcome, same as injuries/fatalities) —
-        # these group curves instead condition on the average incident of
-        # each OBSERVED severity class's own feature profile, which is the
-        # honest way to ask "how did fatal incidents actually tend to clear"
-        # without fabricating severity as something Cox PH was fit to use.
-        subset = train[train["severity_code"] == code]
+    def group_curve(mask: pd.Series, label: str, dimension: str) -> dict | None:
+        subset = train.loc[mask, "duration_min"].values
         if len(subset) == 0:
-            continue
-        subset_X = build_design_matrix(subset, dummy_columns=list(X_train.columns))
-        profile = subset_X.mean().to_frame().T
-        sf = cph.predict_survival_function(profile)
-        curves.append({"group": label, "times": sf.index.tolist(), "survival": sf.iloc[:, 0].values.tolist()})
+            return None
+        times, survival = empirical_curve(subset)
+        # n travels with every curve, not just the crossed ones — the
+        # crossed cells are the thinnest (as low as 25), but a reader
+        # comparing across views has no way to know that unless every curve
+        # states its own sample size, not only the ones that happen to need it.
+        return {"group": label, "dimension": dimension, "times": times, "survival": survival, "n": int(len(subset))}
+
+    base_times, base_survival = empirical_curve(train["duration_min"].values)
+    curves = [{
+        "group": "Baseline (average incident)", "dimension": "baseline",
+        "times": base_times, "survival": base_survival, "n": int(len(train)),
+    }]
+
+    for code, label in SEVERITY_LABELS.items():
+        c = group_curve(train["severity_code"] == code, label, "severity")
+        if c:
+            curves.append(c)
+
+    # A second factor alongside severity — source (road vs. motorcycle crash)
+    # turned out to be the single largest clearance-time split found anywhere
+    # in this data (87min vs 53min median, exact empirical values). Checked
+    # for the same "is this real" red flag that ruled out adding
+    # source=stalled-vehicle here (that table's response-time field turned
+    # out to be near-uniform random noise over 0-8 minutes): road and moto
+    # both show naturally shaped, wide-ranging durations (177 and 111
+    # distinct observed values respectively), so this is a real split, not
+    # an artifact — unlike stalled vehicles, which stay excluded from this
+    # entire script for exactly that reason.
+    for src, label in SOURCE_LABELS.items():
+        c = group_curve(train["source"] == src, label, "source")
+        if c:
+            curves.append(c)
+
+    # Both factors crossed — 2 sources x 3 severities. Stalled vehicles can't
+    # join this cross even in principle: this whole script excludes them for
+    # having no severity data (source `severity` column is 100% NULL, and
+    # they're the one table with no injury/fatality columns to derive it
+    # from either), on top of the response-time issue that already rules
+    # them out of the source-only view above. Smallest cross cell in this
+    # data is n=25 (Motorcycle Fatal) — thin, but real; n travels with each
+    # curve's group label so the frontend can show it rather than let a
+    # 25-incident curve read with the same implied confidence as a
+    # 6,000-incident one.
+    for src, src_label in SOURCE_LABELS.items():
+        for code, sev_label in SEVERITY_LABELS.items():
+            mask = (train["source"] == src) & (train["severity_code"] == code)
+            c = group_curve(mask, f"{src_label} — {sev_label}", "both")
+            if c:
+                curves.append(c)
+
+    # Km position along the corridor — a fourth factor, rendered by the
+    # frontend as a bar chart of each segment's median rather than more
+    # overlaid survival curves (six "both" lines is already close to the
+    # limit of what one chart can show).
+    #
+    # NOT fixed-width km buckets, on purpose: km_value turns out to hold only
+    # 19 distinct values across all 7,774 training incidents (verified
+    # directly), not a continuous position — this data was already snapped
+    # to coarse waypoints upstream, the same way corridorForecast's own
+    # location-to-exit resolution works. Fixed 5km bins against 19 discrete
+    # values leaves entire bins empty (Km 35-55 and Km 60-65 are all exactly
+    # 0 in this run) while others hold thousands — informative about the
+    # data's own resolution, but a bad chart. Quantile bins instead — equal
+    # INCIDENT COUNT per segment, unequal km width — guarantee every segment
+    # has comparable statistical power, and the label states the actual km
+    # range each one covers so the unequal width is never hidden.
+    KM_QUANTILE_GROUPS = 4
+    sorted_train = train.sort_values("km_value")
+    n_train = len(sorted_train)
+    group_size = n_train // KM_QUANTILE_GROUPS
+    for i in range(KM_QUANTILE_GROUPS):
+        lo = i * group_size
+        hi = (i + 1) * group_size if i < KM_QUANTILE_GROUPS - 1 else n_train
+        chunk = sorted_train.iloc[lo:hi]
+        km_lo, km_hi = float(chunk["km_value"].min()), float(chunk["km_value"].max())
+        mask = pd.Series(train.index.isin(chunk.index), index=train.index)
+        c = group_curve(mask, f"Km {km_lo:.0f}–{km_hi:.0f}", "km")
+        if c:
+            curves.append(c)
 
     return {
         "concordance_index": float(cph.concordance_index_),
@@ -422,6 +517,20 @@ def ensure_schema(conn, commit: bool = True) -> None:
                 trained_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
             );
 
+            -- Which factor a curve is grouped by ('baseline' / 'severity' /
+            -- 'source' / 'both') — lets the dashboard offer toggled views
+            -- instead of every curve on one chart. Added via ALTER because
+            -- the table predates the source-crossed curves.
+            ALTER TABLE gold.ml_incident_survival_curve
+                ADD COLUMN IF NOT EXISTS dimension TEXT NOT NULL DEFAULT 'severity';
+
+            -- How many incidents this one curve is built from — the 'both'
+            -- (severity x source) cross has cells as thin as 25, and a
+            -- reader has no way to know that unless every curve states its
+            -- own sample size.
+            ALTER TABLE gold.ml_incident_survival_curve
+                ADD COLUMN IF NOT EXISTS n INT;
+
             CREATE TABLE IF NOT EXISTS gold.ml_incident_severity_metadata (
                 id SERIAL PRIMARY KEY,
                 metadata_json JSONB NOT NULL,
@@ -466,13 +575,13 @@ def write_to_db(conn, holdout: pd.DataFrame, severity_out: dict, cox_out: dict,
 
         cur.execute("DELETE FROM gold.ml_incident_survival_curve")
         curve_rows = [
-            (c["group"], t, s)
+            (c["group"], c["dimension"], t, s, c["n"])
             for c in cox_out["curves"]
             for t, s in zip(c["times"], c["survival"])
         ]
         psycopg2.extras.execute_values(
             cur,
-            "INSERT INTO gold.ml_incident_survival_curve (group_label, time_min, survival_probability) VALUES %s",
+            "INSERT INTO gold.ml_incident_survival_curve (group_label, dimension, time_min, survival_probability, n) VALUES %s",
             curve_rows,
         )
 

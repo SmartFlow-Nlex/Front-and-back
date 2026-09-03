@@ -107,6 +107,19 @@ export type CorridorForecastPoint = {
   predictedIncidents: number;
 };
 
+// Same apportionment as CorridorForecastPoint, grouped by fixed 5km corridor
+// segments instead of nearest exit — see buildKmSegmentForecast's doc
+// comment in incident.service.ts for why that's a meaningfully finer view,
+// not a duplicate of the exit one.
+export type KmSegmentForecastPoint = {
+  segmentStart: number;
+  segmentEnd: number;
+  label: string;
+  historicalCount: number;
+  historicalShare: number;
+  predictedIncidents: number;
+};
+
 export type PredictiveData = {
   summary: {
     totalPredictedNext7Days: number;
@@ -122,6 +135,7 @@ export type PredictiveData = {
     trainedAt: string | null;
     metrics: Record<string, unknown> | null;
     scoredDays: number | null;
+    trainedDays: number | null;
   };
   weatherMetrics: {
     weather: "all" | "dry" | "wet";
@@ -136,6 +150,8 @@ export type PredictiveData = {
    * available to build it.
    */
   corridorForecast: CorridorForecastPoint[] | null;
+  /** Same apportionment, grouped by fixed 5km corridor segments instead of nearest exit. */
+  kmSegmentForecast: KmSegmentForecastPoint[] | null;
   /** Fraction of the Range's incidents whose location matched no known exit. */
   unclassifiedLocationShare: number | null;
   /** How many published future days corridorForecast was apportioned over. */

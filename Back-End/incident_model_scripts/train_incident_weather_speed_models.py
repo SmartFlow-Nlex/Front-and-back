@@ -294,6 +294,23 @@ def load_exit_hour_panel(conn, exits_df: pd.DataFrame) -> pd.DataFrame:
 # ---------------------------------------------------------------------------
 FEATURE_COLS = ["dow", "is_weekend", "is_holiday", "doy_sin", "doy_cos", "rain_mm", "log_volume"]
 EXOG_COLS = ["is_weekend", "is_holiday", "doy_sin", "doy_cos", "rain_mm", "log_volume"]
+# Added after diagnosing XGBoost's negative holdout R2 despite a MAE well
+# below the naive baseline: its holdout predictions had pred_std=0.66 against
+# the holdout's own actual std=1.61 (speed_kmh) — with only calendar/rain/
+# volume to go on, the model regressed every day toward a narrow band instead
+# of tracking real day-to-day movement. lag_1/lag_7/roll_mean_7 is exactly the
+# signal that was missing; mirrors train_incident_models.py's own lag
+# features and rationale.
+LAG_FEATURE_COLS = ["lag_1", "lag_7", "roll_mean_7"]
+TABULAR_FEATURE_COLS = FEATURE_COLS + LAG_FEATURE_COLS
+
+
+def add_lag_features(panel: pd.DataFrame, target_col: str) -> pd.DataFrame:
+    out = panel.copy()
+    out["lag_1"] = out[target_col].shift(1)
+    out["lag_7"] = out[target_col].shift(7)
+    out["roll_mean_7"] = out[target_col].shift(1).rolling(7, min_periods=1).mean()
+    return out
 
 
 def _make_sequences(y: np.ndarray, lo: int, hi: int, seq_len: int) -> tuple[np.ndarray, np.ndarray]:
@@ -362,16 +379,39 @@ def _rnn_forecast(model: SimpleRNN, y_scaled: np.ndarray, start: int, steps: int
 
 
 def fit_daily_models(panel: pd.DataFrame, target_col: str, holdout_days: int) -> dict:
-    n = len(panel)
+    # First 7 rows drop out here (lag_7 undefined that early) rather than
+    # being imputed — a ~2300-day series can afford to lose a week off the
+    # front, and it keeps every training row's lag features genuine.
+    lagged = add_lag_features(panel, target_col).iloc[7:].reset_index(drop=True)
+    n = len(lagged)
     train_end = n - holdout_days
-    train, holdout = panel.iloc[:train_end], panel.iloc[train_end:]
+    train, holdout = lagged.iloc[:train_end], lagged.iloc[train_end:]
     y_train, y_holdout = train[target_col].values, holdout[target_col].values
 
     results: dict[str, dict] = {}
 
     xgb = XGBRegressor(n_estimators=200, max_depth=4, learning_rate=0.05, subsample=0.9, colsample_bytree=0.9, random_state=SEED)
-    xgb.fit(train[FEATURE_COLS], y_train)
-    results["XGBoost"] = {"pred": xgb.predict(holdout[FEATURE_COLS]), "model": xgb}
+    xgb.fit(train[TABULAR_FEATURE_COLS], y_train)
+    # Recursive one-step holdout forecast, not a single vectorized .predict()
+    # over the whole holdout block: lag_1/lag_7/roll_mean_7 for holdout day i
+    # must come from what a real forecast would actually know at that point
+    # — real history for the first few days, this model's own prior
+    # predictions once the recursion runs past the last training day. Reading
+    # every holdout day's lag features off the ACTUAL future value (what a
+    # single vectorized call over holdout[TABULAR_FEATURE_COLS] would do) is
+    # exactly the leak this loop avoids — same pattern as
+    # train_incident_models.py's final_tabular_forecast.
+    history = list(lagged[target_col].values[:train_end])
+    xgb_pred = []
+    for i in range(len(holdout)):
+        row = holdout[FEATURE_COLS].iloc[[i]].copy()
+        row["lag_1"] = history[-1]
+        row["lag_7"] = history[-7]
+        row["roll_mean_7"] = float(np.mean(history[-7:]))
+        p = float(xgb.predict(row[TABULAR_FEATURE_COLS])[0])
+        xgb_pred.append(p)
+        history.append(p)
+    results["XGBoost"] = {"pred": np.array(xgb_pred), "model": xgb}
 
     try:
         sarimax_res = SARIMAX(
@@ -384,7 +424,7 @@ def fit_daily_models(panel: pd.DataFrame, target_col: str, holdout_days: int) ->
         print(f"  SARIMAX failed ({e}) — dropped from comparison")
 
     scaler_mean, scaler_std = y_train.mean(), y_train.std() or 1.0
-    y_scaled = ((panel[target_col].values - scaler_mean) / scaler_std).astype("float32")
+    y_scaled = ((lagged[target_col].values - scaler_mean) / scaler_std).astype("float32")
     for kind in ("LSTM", "GRU"):
         try:
             model = _fit_rnn(kind, y_scaled, train_end)
@@ -455,7 +495,45 @@ def fit_logistic_kpi(panel: pd.DataFrame, target_col: str, holdout_days: int) ->
         p = float(np.asarray(model.predict(row))[0])
         scenario_rows.append({"rain_mm": rain_mm, "probability": p})
 
-    return {"auc": auc, "base_rate": float(y_holdout.mean()), "n": int(len(y_holdout)), "scenarios": scenario_rows}
+    # A second scenario curve, swept over traffic volume instead of rain, held
+    # at the training-set quantiles of the *raw* volume column (translated to
+    # log_volume for the design matrix, reported back in raw terms) — added
+    # after diagnosing why the rain curve above is nearly flat: on this
+    # corridor's data, log_volume's coefficient standardizes to an effect size
+    # roughly 20-40x rain_mm's (verified directly: |coef*std| ~1.3 and ~2.1 for
+    # log_volume on road_closure/high_incident_day respectively, vs ~0.03-0.06
+    # for rain_mm, whose p-value never clears 0.05 either). The rain curve
+    # isn't broken — it's honestly reporting a weak driver. This one shows the
+    # driver that actually moves the number.
+    volume_quantiles = train["volume"].quantile([0.1, 0.3, 0.5, 0.7, 0.9])
+    volume_scenario_rows = []
+    for volume in volume_quantiles:
+        row = mean_row.copy()
+        row["log_volume"] = float(np.log(max(volume, 1.0)))
+        row = sm.add_constant(row.to_frame().T, has_constant="add")[X_train.columns]
+        p = float(np.asarray(model.predict(row))[0])
+        volume_scenario_rows.append({"volume": float(volume), "probability": p})
+
+    # Standardized effect size (|coefficient| * feature std) for every
+    # non-intercept term, so the strongest driver can be named directly
+    # instead of a reader having to eyeball raw log-odds coefficients that
+    # live on wildly different scales (rain_mm ranges into the thousands,
+    # log_volume sits between 12 and 15).
+    feature_std = train[FEATURE_COLS].std()
+    effect_size = (model.params.drop("const") * feature_std).abs().sort_values(ascending=False)
+    top_feature = effect_size.index[0]
+    rain_p_value = float(model.pvalues.get("rain_mm", float("nan")))
+
+    return {
+        "auc": auc,
+        "base_rate": float(y_holdout.mean()),
+        "n": int(len(y_holdout)),
+        "scenarios": scenario_rows,
+        "volumeScenarios": volume_scenario_rows,
+        "rainSignificant": bool(np.isfinite(rain_p_value) and rain_p_value < 0.05),
+        "rainPValue": rain_p_value if np.isfinite(rain_p_value) else None,
+        "topDriver": {"feature": str(top_feature), "effectSize": float(effect_size.iloc[0])},
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -611,14 +689,24 @@ def print_report(speed_out: dict, closure_out: dict, risk_out: dict, contour_out
     L.append("  Road closure probability — logistic regression")
     L.append(f"    AUC = {closure_out['auc']:.3f}" if closure_out["auc"] is not None else "    AUC = n/a")
     L.append(f"    base rate = {closure_out['base_rate'] * 100:.1f}%  n={closure_out['n']}")
+    L.append(f"    top driver = {closure_out['topDriver']['feature']} (effect size {closure_out['topDriver']['effectSize']:.3f})"
+              f"  |  rain_mm significant at p<0.05: {closure_out['rainSignificant']} (p={closure_out['rainPValue']:.3f})"
+              if closure_out["rainPValue"] is not None else "    rain_mm p-value = n/a")
     for s in closure_out["scenarios"]:
         L.append(f"      rain={s['rain_mm']:>4}mm -> P(closure) = {s['probability']:.3f}")
+    for s in closure_out["volumeScenarios"]:
+        L.append(f"      volume={s['volume']:>8,.0f} -> P(closure) = {s['probability']:.3f}")
     L.append("")
     L.append("  Weather incident risk — logistic regression")
     L.append(f"    AUC = {risk_out['auc']:.3f}" if risk_out["auc"] is not None else "    AUC = n/a")
     L.append(f"    base rate = {risk_out['base_rate'] * 100:.1f}%  n={risk_out['n']}")
+    L.append(f"    top driver = {risk_out['topDriver']['feature']} (effect size {risk_out['topDriver']['effectSize']:.3f})"
+              f"  |  rain_mm significant at p<0.05: {risk_out['rainSignificant']} (p={risk_out['rainPValue']:.3f})"
+              if risk_out["rainPValue"] is not None else "    rain_mm p-value = n/a")
     for s in risk_out["scenarios"]:
         L.append(f"      rain={s['rain_mm']:>4}mm -> P(high-incident day) = {s['probability']:.3f}")
+    for s in risk_out["volumeScenarios"]:
+        L.append(f"      volume={s['volume']:>8,.0f} -> P(high-incident day) = {s['probability']:.3f}")
     L.append("")
     L.append("  Contour (exit x hour) — XGBoost holdout")
     L.append(f"    MAE={contour_out['metrics']['MAE']:.3f}  R2={contour_out['metrics']['R2']:.3f}  n={contour_out['metrics']['n']}")
@@ -702,9 +790,13 @@ def main() -> None:
             "volume_refit_of": speed_out["champion"],
             "volume_metrics": volume_out["metrics"].get(speed_out["champion"], volume_out["metrics"][volume_out["champion"]]),
             "road_closure": {"auc": closure_out["auc"], "base_rate": closure_out["base_rate"], "n": closure_out["n"],
-                              "scenarios": closure_out["scenarios"], "jam_ceiling": float(jam_ceiling)},
+                              "scenarios": closure_out["scenarios"], "volumeScenarios": closure_out["volumeScenarios"],
+                              "rainSignificant": closure_out["rainSignificant"], "rainPValue": closure_out["rainPValue"],
+                              "topDriver": closure_out["topDriver"], "jam_ceiling": float(jam_ceiling)},
             "weather_incident_risk": {"auc": risk_out["auc"], "base_rate": risk_out["base_rate"], "n": risk_out["n"],
-                                       "scenarios": risk_out["scenarios"]},
+                                       "scenarios": risk_out["scenarios"], "volumeScenarios": risk_out["volumeScenarios"],
+                                       "rainSignificant": risk_out["rainSignificant"], "rainPValue": risk_out["rainPValue"],
+                                       "topDriver": risk_out["topDriver"]},
             "contour": {"metrics": contour_out["metrics"], "wet_scenario_mm": WET_SCENARIO_MM},
             "holdout_days": args.holdout_days,
             "trained_at": pd.Timestamp.utcnow().isoformat(),

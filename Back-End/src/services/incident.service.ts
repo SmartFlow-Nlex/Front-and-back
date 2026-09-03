@@ -4,6 +4,7 @@ import { db } from "../config/db.js";
 // corridor's one authoritative exit list. See its own doc comment for why km
 // is derived instead of hardcoded.
 import { searchExitsInDb } from "./map-comparison.service.js";
+import { buildExitToExitSegments, segmentIndexForKm } from "../lib/exit-segments.js";
 
 // ---------------------------------------------------------------------------
 // Incident analytics for the descriptive dashboard.
@@ -762,28 +763,29 @@ const DAILY_WET_SQL = `
   GROUP BY d
 `;
 
-// Daily vehicle volume for the incident forecast chart's exposure overlay.
+// Daily vehicle volume for the incident forecast chart's exposure overlay —
+// observed history only, deliberately NOT the traffic module's volume
+// forecast: this tab is about the incident forecast, and volume already has
+// its own home (the Traffic module's own predictive tabs). Extending this
+// line across the Future band would put a second, unrelated forecast on a
+// chart whose Future band is about incidents, so the overlay stops wherever
+// actual_volume runs out instead of borrowing a prediction to fill the rest.
 //
-// Read from gold.ml_predictive_volume because that one table spans both sides of
-// the chart: actual_volume covers observed history and the is_future rows carry
-// the traffic module's forecast, so the overlay continues across the Future band
-// instead of stopping dead at the last observed day. COALESCE walks the traffic
-// candidates in the same order the incident trainer does — pred_xgboost is NULL
-// across the future window even though it is populated historically, so naming a
-// single column would blank the forecast half.
+// Read from gold.ml_predictive_volume rather than gold.daily_traffic_volume
+// so history matches the same scale the incident trainer's volume feature
+// uses — the two series correlate at 0.9998 but differ by a constant factor
+// of ~4.4, and mixing them would put a step change in the middle of the line.
 //
-// Same scale throughout, which matters: gold.daily_traffic_volume reports the
-// same series ~4.4x larger, and mixing the two would put a step change in the
-// middle of the line for no reason the reader could see.
+// split_label = '80_20': the traffic module stores each date TWICE here (an
+// '80_20' row and a '90_10' row, one per train/test split it evaluates).
+// actual_volume is identical between the two (verified), so this filter is
+// just to avoid fetching the same value twice per date, not to pick a winner.
 const DAILY_VOLUME_SQL = `
-  SELECT forecast_date::text AS date,
-         COALESCE(actual_volume, pred_lstm, pred_prophet, pred_sarimax,
-                  pred_holtwinters, pred_holts_linear, pred_xgboost)::float AS volume,
-         (actual_volume IS NULL) AS is_forecast
+  SELECT forecast_date::text AS date, actual_volume::float AS volume
   FROM gold.ml_predictive_volume
   WHERE forecast_date >= $1::date AND forecast_date <= $2::date
-    AND COALESCE(actual_volume, pred_lstm, pred_prophet, pred_sarimax,
-                 pred_holtwinters, pred_holts_linear, pred_xgboost) IS NOT NULL
+    AND split_label = '80_20'
+    AND actual_volume IS NOT NULL
   ORDER BY forecast_date ASC
 `;
 
@@ -1119,6 +1121,79 @@ function buildCorridorForecast(
   return { corridorForecast, unclassifiedLocationShare: unclassified / totalSeen };
 }
 
+export type KmSegmentForecastPoint = {
+  segmentStart: number;
+  segmentEnd: number;
+  label: string;
+  historicalCount: number;
+  historicalShare: number;
+  predictedIncidents: number;
+};
+
+// Prefers a literal "Km N" figure in the location text over the resolved
+// exit's own km — that reading is more precise (an exact position, not
+// "nearest interchange"), and it's exactly what resolveExitForLocation
+// itself discards once it has picked a nearest exit. Falls back to the
+// matched exit's km for a name-only location ("Balintawak"), same source of
+// truth corridorForecast uses for the same rows.
+function resolveKmForLocation(
+  location: string,
+  exits: { exit_id: number; exit_name: string; km: number }[]
+): number | null {
+  const kmMatch = location.match(LOCATION_KM_RE);
+  if (kmMatch) {
+    const km = Number(kmMatch[1]);
+    if (Number.isFinite(km)) return km;
+  }
+  return resolveExitForLocation(location, exits)?.km ?? null;
+}
+
+function buildKmSegmentForecast(
+  locationRows: { location: string | null }[],
+  exitRows: { exit_id: number; exit_name: string; km: number }[],
+  totalPredicted: number
+): { kmSegmentForecast: KmSegmentForecastPoint[] | null; unclassifiedLocationShare: number | null } {
+  if (exitRows.length < 2 || locationRows.length === 0) {
+    return { kmSegmentForecast: null, unclassifiedLocationShare: null };
+  }
+
+  const segments = buildExitToExitSegments(exitRows);
+  const counts = new Map<number, number>();
+  let unclassified = 0;
+  for (const row of locationRows) {
+    if (!row.location) continue;
+    const km = resolveKmForLocation(row.location, exitRows);
+    if (km == null || km < 0) {
+      unclassified++;
+      continue;
+    }
+    const segmentIdx = segmentIndexForKm(km, segments);
+    counts.set(segmentIdx, (counts.get(segmentIdx) ?? 0) + 1);
+  }
+
+  const totalClassified = Array.from(counts.values()).reduce((s, v) => s + v, 0);
+  const totalSeen = totalClassified + unclassified;
+  if (totalSeen === 0) return { kmSegmentForecast: null, unclassifiedLocationShare: null };
+
+  // Every segment across the whole corridor, not just the ones with a count
+  // — a 0-incident stretch is itself part of "seeing the whole corridor by
+  // km," the thing a pure exit list can't show.
+  const kmSegmentForecast: KmSegmentForecastPoint[] = segments.map((seg, i) => {
+    const historicalCount = counts.get(i) ?? 0;
+    const historicalShare = totalClassified > 0 ? historicalCount / totalClassified : 0;
+    return {
+      segmentStart: seg.segmentStart,
+      segmentEnd: seg.segmentEnd,
+      label: seg.label,
+      historicalCount,
+      historicalShare,
+      predictedIncidents: Math.round(totalPredicted * historicalShare * 100) / 100,
+    };
+  });
+
+  return { kmSegmentForecast, unclassifiedLocationShare: unclassified / totalSeen };
+}
+
 // Joins one predictions result set onto its actuals/wet lookups and keeps
 // only validation-type rows with a known ground truth — there's nothing to
 // score a future row or an unobserved day against.
@@ -1310,6 +1385,13 @@ export function buildIncidentPredictiveResponse(
     exitRows,
     totalPredictedForCorridor
   );
+  // Same rows, same total, grouped by fixed km buckets instead of nearest
+  // exit — see buildKmSegmentForecast's own doc comment for why that's a
+  // meaningfully different (more granular) view, not a duplicate of the
+  // exit one. unclassifiedLocationShare comes out numerically identical to
+  // the exit version (same "did this location resolve at all" test), so
+  // only one is kept on the response rather than two names for one number.
+  const { kmSegmentForecast } = buildKmSegmentForecast(locationRows, exitRows, totalPredictedForCorridor);
 
   // The pipeline's own comparison table — now used only as a fallback for a
   // model whose Range+Weather slice has zero scored rows (e.g. a 3-month
@@ -1445,6 +1527,12 @@ export function buildIncidentPredictiveResponse(
       metrics: (metadata.metrics as Record<string, unknown> | undefined) ?? null,
       scoredDays:
         (metadata.evaluation as { holdout_days?: number } | undefined)?.holdout_days ?? null,
+      // How many rows the champion actually trained on — the walk-forward
+      // chart's "Past" band annotates itself with this (real figure from the
+      // training run, not a count of whatever's currently drawn) the same
+      // way PredictiveVolumeChart's does.
+      trainedDays:
+        (metadata.evaluation as { train_rows?: number } | undefined)?.train_rows ?? null,
     },
     weatherMetrics,
     // Predicted incidents per exit/corridor — an apportionment of
@@ -1454,6 +1542,11 @@ export function buildIncidentPredictiveResponse(
     // separately trained per-location model. Null when the exit list or the
     // location data needed to build it wasn't available.
     corridorForecast,
+    // Same apportionment, grouped by fixed 5km corridor segments instead of
+    // nearest exit — see buildKmSegmentForecast's doc comment. Null under
+    // the identical conditions corridorForecast is (no exit list, or no
+    // usable location rows in the current Range).
+    kmSegmentForecast,
     unclassifiedLocationShare,
     // How many of the published future days corridorForecast was actually
     // apportioned over — echoes filters.futureDays (clamped to what's
@@ -1581,7 +1674,7 @@ export async function getIncidentPredictiveFromDb(
       ]),
       // Bounded by the same window as the rainfall lookup so the exposure
       // overlay covers exactly the days the chart can draw.
-      db.query<{ date: string; volume: string | number | null; is_forecast: boolean }>(DAILY_VOLUME_SQL, [
+      db.query<{ date: string; volume: string | number | null }>(DAILY_VOLUME_SQL, [
         wetLowerBound,
         anchors.maxForecastDate,
       ]),

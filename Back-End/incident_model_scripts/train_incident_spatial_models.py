@@ -433,6 +433,36 @@ def fit_gwr(exits_df: pd.DataFrame, panel: pd.DataFrame) -> dict:
         "bandwidth_km": None,  # fixed-kernel bw is in coordinate (degree) units, not km — see note below
     }
 
+    # Leave-one-exit-out MAE, reported alongside (not instead of) the
+    # in-sample fit above. N=20 is too thin for a fixed train/test split (the
+    # reasoning in this function's own docstring for why one isn't used), but
+    # LOOCV needs no such split — every exit gets its turn as the held-out
+    # point, refit on the other 19 at the SAME bandwidth already selected
+    # (re-running Sel_BW's search 20x would be needlessly expensive for a
+    # bandwidth on this small a grid). GWR.predict()'s own `.predictions`
+    # attribute turned out NOT to be on the response scale for a Poisson
+    # family (verified directly: produced negative values for a count-rate
+    # target, which is impossible) — `.mu`, the GLM mean response, is the
+    # correct field; found by comparing both against a known in-sample point.
+    loo_actual, loo_pred = [], []
+    for i in range(len(cross)):
+        mask = np.ones(len(cross), dtype=bool)
+        mask[i] = False
+        try:
+            fold_model = GWR(
+                [coords[j] for j in range(len(coords)) if mask[j]],
+                y[mask], X[mask], bw, family=GWRPoisson(), fixed=True,
+            )
+            fold_result = fold_model.predict(np.array([coords[i]]), X[[i]])
+            loo_actual.append(float(y[i, 0]))
+            loo_pred.append(float(np.asarray(fold_result.mu).flatten()[0]))
+        except Exception:
+            pass  # a single fold's numerical failure shouldn't drop the whole LOOCV figure
+    metrics["loocv_mae"] = (
+        mae_of(np.array(loo_actual), np.array(loo_pred)) if loo_pred else None
+    )
+    metrics["loocv_n"] = len(loo_pred)
+
     # results.params columns are [const, km, access_count, mean_log_volume] —
     # constant=True (mgwr's default) prepends the intercept itself.
     var_names = ["intercept"] + GWR_VARIABLES
@@ -724,6 +754,12 @@ def print_report(gwr_out: dict, lstm_out: dict) -> str:
     L.append(f"    MAE              = {gwr_out['metrics']['MAE']:.3f}")
     L.append(f"    Poisson_Deviance = {gwr_out['metrics']['Poisson_Deviance']:.3f}")
     L.append(f"    n                = {gwr_out['metrics']['n']}")
+    loocv_mae = gwr_out["metrics"].get("loocv_mae")
+    L.append(
+        f"    Leave-one-exit-out MAE = {loocv_mae:.3f}  (n={gwr_out['metrics']['loocv_n']} folds) "
+        f"— the honest generalization estimate; compare against the in-sample MAE above"
+        if loocv_mae is not None else "    Leave-one-exit-out MAE = n/a (every fold failed)"
+    )
     L.append("")
     sig = [c for c in gwr_out["coefficients"] if c["variable"] != "intercept" and c["significant"]]
     L.append(f"    {len(sig)} of {len([c for c in gwr_out['coefficients'] if c['variable'] != 'intercept'])} "

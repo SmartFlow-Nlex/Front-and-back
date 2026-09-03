@@ -157,6 +157,7 @@ export const IncidentPredictiveResponseSchema = z.object({
     trainedAt: z.string().nullable(),
     metrics: z.record(z.string(), z.unknown()).nullable(),
     scoredDays: z.number().nullable(),
+    trainedDays: z.number().nullable(),
   }),
   weatherMetrics: IncidentPredictiveWeatherMetricsSchema,
   /**
@@ -172,6 +173,23 @@ export const IncidentPredictiveResponseSchema = z.object({
         exitId: z.number().int(),
         exitName: z.string(),
         km: z.number(),
+        historicalCount: z.number().int().nonnegative(),
+        historicalShare: z.number().min(0).max(1),
+        predictedIncidents: z.number().nonnegative(),
+      })
+    )
+    .nullable(),
+  // Same apportionment as corridorForecast, grouped by fixed 5km corridor
+  // segments instead of nearest exit — a finer, evenly-spaced view for the
+  // long inter-exit stretches (up to ~11.6km) the exit view snaps entirely
+  // to whichever endpoint is closest. Null under the identical conditions
+  // corridorForecast is.
+  kmSegmentForecast: z
+    .array(
+      z.object({
+        segmentStart: z.number().nonnegative(),
+        segmentEnd: z.number().nonnegative(),
+        label: z.string(),
         historicalCount: z.number().int().nonnegative(),
         historicalShare: z.number().min(0).max(1),
         predictedIncidents: z.number().nonnegative(),

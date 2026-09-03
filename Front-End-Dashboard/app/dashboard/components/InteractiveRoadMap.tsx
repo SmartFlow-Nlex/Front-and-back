@@ -34,11 +34,16 @@ import { useNlexExits, accessLabel, displayExitName, type NlexExit } from "../..
 const BACKEND = process.env.NEXT_PUBLIC_BACKEND_URL ?? "http://localhost:4000";
 
 /* Shared with the live map: same shapes, same derivation. */
-import { corridorStatusFromFeed, type ExitStatus, type SegmentStatus } from "../../../lib/corridor-status";
+import { corridorSegmentLevels, corridorStatusFromFeed, type ExitStatus, type SegmentStatus } from "../../../lib/corridor-status";
 
 type CorridorStatus = {
   windowMinutes: number;
   segments: ExitStatus[];
+  /* Level per `${segmentOrder}:${direction}` — what the map paints the road
+     between two exits with. The panel colours its blocks from this so the two
+     views show the same road in the same colour, rather than two readings of
+     the same jams. */
+  segmentLevels: Map<string, number>;
   feed: { newestAt: string | null; ageMinutes: number | null; stale: boolean };
 };
 
@@ -79,6 +84,15 @@ const CLEAR: TrafficRecord = {
   level: null,
   jamCount: 0,
 };
+
+/* Waze's level, in the panel's three colours. The same thresholds classify()
+   uses, so a block and the hover card describing it cannot disagree: level 0
+   is free flow, 1-2 is slow, 3 and up is congested. */
+function levelClass(level: number): string {
+  if (level >= 3) return "seg-red";
+  if (level >= 1) return "seg-orange";
+  return "seg-green";
+}
 
 const COLOR_CLASS: Record<SegmentStatus, string> = {
   clear: "seg-green",
@@ -138,6 +152,7 @@ function useCorridorStatus() {
         setData({
           windowMinutes: fc.feed?.windowMinutes ?? 60,
           segments: corridorStatusFromFeed(fc),
+          segmentLevels: corridorSegmentLevels(fc),
           feed: {
             newestAt: fc.feed?.newestAt ?? null,
             ageMinutes: fc.feed?.ageMinutes ?? null,
@@ -201,8 +216,15 @@ export default function InteractiveRoadMap() {
 
   const rows = useMemo(
     () =>
-      exits.map((x) => ({
+      exits.map((x, i) => ({
         exit: x,
+        /* The stretch each block stands for is the road ahead of that exit in
+           that direction: going north it is the segment leaving exit i, going
+           south the one leaving it back towards Manila. The first southbound
+           block and the last northbound block have no road ahead of them, so
+           they stay clear. Segment orders are 1-based. */
+        nbSegment: i + 1 <= exits.length - 1 ? `${i + 1}:NB` : null,
+        sbSegment: i >= 1 ? `${i}:SB` : null,
         nb: statusByExit.get(statusKey(x.exit_name, "NB")) ?? CLEAR,
         sb: statusByExit.get(statusKey(x.exit_name, "SB")) ?? CLEAR,
         nbAccess: accessLabel(x, "NB"),
@@ -284,6 +306,8 @@ export default function InteractiveRoadMap() {
 
   /** One carriageway. Both are built from the same markup so they read as one
       road split down the middle rather than two unrelated strips. */
+  const segmentLevels = corridor?.segmentLevels ?? new Map<string, number>();
+
   const carriageway = (
     dir: "NB" | "SB",
     pick: (r: (typeof rows)[number]) => { data: TrafficRecord; access: string | null },
@@ -291,11 +315,17 @@ export default function InteractiveRoadMap() {
     <div className={`ds-rd-way dir-${dir.toLowerCase()}`}>
       <div className="ds-rd-segs">
         {rows.map((r) => {
-          const { data, access } = pick(r);
+          const { access } = pick(r);
+          /* Coloured by the segment the block draws, which is the same value
+             the Live Map paints that stretch of road with. The exit's own
+             status still drives the hover card and the tally; this is only
+             about what the road looks like. */
+          const key = dir === "NB" ? r.nbSegment : r.sbSegment;
+          const level = key ? segmentLevels.get(key) ?? 0 : 0;
           return (
             <span
               key={`${dir}-${r.exit.exit_name}`}
-              className={`ds-rd-seg ${access === "No Access" ? "no-ramp" : data.colorClass} ${
+              className={`ds-rd-seg ${access === "No Access" ? "no-ramp" : levelClass(level)} ${
                 activeStation === r.exit.exit_name ? "is-active" : ""
               }`}
             />

@@ -1,6 +1,6 @@
 "use client";
 
-import { corridorGuard, type LngLat } from "./corridor-shape";
+import { corridorGuard, sliceCorridor, type LngLat } from "./corridor-shape";
 import { FALLBACK_EXITS, type NlexExit } from "./nlex-exits";
 import nlexGeometry from "../components/maps/nlex-geometry.json";
 
@@ -46,6 +46,17 @@ const M_PER_DEG_LAT = 110574;
 const M_PER_DEG_LON = 111320 * Math.cos((15 * Math.PI) / 180);
 
 const orderedExits = (exits: NlexExit[]) => [...exits].sort((a, b) => a.km - b.km);
+
+let cachedParts: LngLat[][] | null = null;
+function partsFor(exits: NlexExit[]) {
+  if (!cachedParts) {
+    cachedParts = sliceCorridor(
+      (nlexGeometry as unknown as { coordinates: LngLat[] }).coordinates,
+      orderedExits(exits).map((e) => [e.longitude, e.latitude] as LngLat),
+    );
+  }
+  return cachedParts;
+}
 
 let cachedGuard: ReturnType<typeof corridorGuard> | null = null;
 function guardFor(exits: NlexExit[]) {
@@ -131,4 +142,53 @@ export function corridorStatusFromFeed(
       observedAt: a.observedAt,
     };
   });
+}
+
+
+/* ---------------------------------------------------------------------------
+   The same congestion, keyed the way the map draws it.
+
+   corridorStatusFromFeed above answers "how is this exit", which is how the
+   Home panel is laid out. The map paints the road between exits, so it needs
+   "how is this segment". Both come from the same jams, but until they came from
+   the same function the two views could still colour differently for the same
+   feed — one attributing a jam to its nearest exit, the other to every segment
+   it spans.
+   ------------------------------------------------------------------------- */
+
+/** Level per `${segmentOrder}:${direction}`, segment 1 being Balintawak's. */
+export function corridorSegmentLevels(
+  fc: { features?: Feature[] } | null | undefined,
+  exits: NlexExit[] = FALLBACK_EXITS,
+): Map<string, number> {
+  const levels = new Map<string, number>();
+  if (!fc?.features?.length) return levels;
+
+  const guard = guardFor(exits);
+  const parts = partsFor(exits);
+  const kept = guard.filter(fc as { features?: unknown[] }) as { features?: Feature[] };
+
+  /* Parts share their end vertices, so each one after the first advances the
+     index by its length minus one. */
+  const bounds: { order: number; from: number; to: number }[] = [];
+  let at = 0;
+  parts.forEach((part, i) => {
+    const to = at + part.length - 1;
+    bounds.push({ order: i + 1, from: at, to });
+    at = to;
+  });
+
+  for (const f of kept.features ?? []) {
+    const p = f.properties;
+    if (p?.feature_type !== "jam" || f.geometry?.type !== "LineString") continue;
+    const snapped = guard.snap(f.geometry.coordinates as number[][], p.street as string | undefined);
+    if (!snapped) continue;
+    const level = Number(p.level ?? 0);
+    for (const b of bounds) {
+      if (b.to < snapped.startIndex || b.from > snapped.endIndex) continue;
+      const key = `${b.order}:${snapped.direction}`;
+      levels.set(key, Math.max(levels.get(key) ?? 0, level));
+    }
+  }
+  return levels;
 }

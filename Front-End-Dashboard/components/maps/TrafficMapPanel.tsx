@@ -6,6 +6,7 @@ import type { Point } from "geojson";
 import { useEffect, useRef, useState } from "react";
 import nlexGeometry from "./nlex-geometry.json";
 import { corridorGuard, directionLabel, sliceCorridor, type LngLat } from "../../lib/corridor-shape";
+import { corridorSegmentLevels } from "../../lib/corridor-status";
 import { FALLBACK_EXITS } from "../../lib/nlex-exits";
 import { useChartTheme } from "../../lib/chart-theme";
 import { mapPalette } from "../../lib/map-palette";
@@ -369,7 +370,11 @@ export default function TrafficMapPanel({ title, subtitle, badge, endpoint, laye
 
     /** Colours the corridor from whichever shape of state the endpoint sends. */
     const corridorWithState = (fc: GeoJSON.FeatureCollection): GeoJSON.FeatureCollection => {
-      const bySegment = new Map<string, number>();
+      /* One derivation, shared with the Home tab's corridor panel. It used to
+         live here as its own loop over the same guard and the same snap, which
+         meant the two views agreed only for as long as nobody edited one of
+         them. */
+      const bySegment = new Map<string, number>(corridorSegmentLevels(fc));
 
       for (const f of fc.features ?? []) {
         const q = f.properties as Record<string, unknown> | null;
@@ -390,19 +395,7 @@ export default function TrafficMapPanel({ title, subtitle, badge, endpoint, laye
            Deriving the colour here from the same filtered, snapped, correctly
            directed jams means the ribbon and the jam on it can never tell two
            different stories. */
-        if (q.feature_type === "jam" && f.geometry?.type === "LineString") {
-          const snapped = guard.snap(
-            f.geometry.coordinates as number[][],
-            q.street as string | undefined,
-          );
-          if (!snapped) continue;
-          const level = Number(q.level ?? 0);
-          for (const order of segmentsSpanned(snapped.startIndex, snapped.endIndex)) {
-            const key = order + ":" + snapped.direction;
-            // Worst condition wins where two jams overlap a segment.
-            bySegment.set(key, Math.max(bySegment.get(key) ?? 0, level));
-          }
-        }
+        // Jams are handled once, below, by the shared derivation.
 
         // Forecast: named "X to Y", with no direction, so it colours both ways.
         if (q.feature_type === "forecast" && typeof q.corridor_segment === "string") {

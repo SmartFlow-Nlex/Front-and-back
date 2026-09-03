@@ -226,3 +226,34 @@ export const IncidentPredictiveResponseSchema = z.object({
 });
 
 export type IncidentPredictiveResult = z.infer<typeof IncidentPredictiveResponseSchema>;
+
+// ---------------------------------------------------------------------------
+// Feature-evidence panels — "Does weather predict incidents?" / "Does traffic
+// volume predict incidents?" Same response shape for both (correlations +
+// modelComparison), so one Zod schema and one frontend component cover both.
+// The traffic module's own equivalent endpoint (weather-evidence) has no Zod
+// schema at all; this one is validated to match the rest of the incident
+// module's established convention instead.
+// ---------------------------------------------------------------------------
+
+export const IncidentFeatureEvidenceResponseSchema = z.object({
+  correlations: z.array(
+    z.object({
+      variable: z.string(),
+      label: z.string(),
+      pearson: z.number().nullable(),
+      spearman: z.number().nullable(),
+      days: z.number().int().nonnegative(),
+    })
+  ),
+  modelComparison: z.array(
+    z.object({
+      model: z.string(),
+      withFeature: z.number().nullable(),
+      withoutFeature: z.number().nullable(),
+      deltaPts: z.number().nullable(),
+    })
+  ),
+});
+
+export type IncidentFeatureEvidenceResult = z.infer<typeof IncidentFeatureEvidenceResponseSchema>;

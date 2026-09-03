@@ -1649,3 +1649,196 @@ export async function getIncidentPredictiveFromDb(
     return null;
   }
 }
+
+// ---------------------------------------------------------------------------
+// Feature-evidence panels — "Does weather predict incidents?" / "Does traffic
+// volume predict incidents?" Mirrors traffic.service.ts's own
+// getWeatherEvidenceFromDb: a live correlation query plus a same-model
+// with/without comparison, so this dashboard can make the same kind of
+// evidence-based claim the traffic one already does. Two functions rather
+// than one parameterized by feature, because the correlation SQL genuinely
+// differs (weather has four variables and joins hourly_weather; volume has
+// one and joins gold.ml_predictive_volume) — but both share the same
+// with/without mechanism via pickPrediction/toAlignedValidationRows/
+// computeModelMetricsForModel, already used everywhere else on this endpoint.
+// ---------------------------------------------------------------------------
+
+export type IncidentFeatureCorrelation = {
+  variable: string;
+  label: string;
+  pearson: number | null;
+  spearman: number | null;
+  days: number;
+};
+
+export type IncidentFeatureModelComparison = {
+  model: string;
+  withFeature: number | null;
+  withoutFeature: number | null;
+  deltaPts: number | null;
+};
+
+export type IncidentFeatureEvidence = {
+  correlations: IncidentFeatureCorrelation[];
+  modelComparison: IncidentFeatureModelComparison[];
+};
+
+// LSTM/GRU are univariate (final_rnn_forecast in train_incident_models.py
+// never sees rain_mm or volume) — their _nv/_nw columns are always identical
+// to the primary, so including them here would silently count two models
+// that can never show a difference. Traffic excludes its own univariate
+// candidates (Holt-Winters, Holts Linear) from the same comparison for the
+// same reason.
+const FEATURE_EVIDENCE_ELIGIBLE_MODELS = INCIDENT_MODELS.filter((m) => m.key !== "LSTM" && m.key !== "GRU");
+
+// Shared by both evidence panels: scores every eligible model's WMAPE over
+// the full holdout with the named feature on vs off, using the exact same
+// pickPrediction selection the chart/metrics table/corridor card already
+// apply — so "helps" here can never disagree with what those already show.
+async function computeIncidentFeatureModelComparison(
+  feature: "volume" | "weather"
+): Promise<IncidentFeatureModelComparison[] | null> {
+  if (!db) return null;
+  const anchors = await getIncidentPredictiveAnchors();
+  if (!anchors || !anchors.validationStart) return null;
+
+  const [actualsRes, predsRes] = await Promise.all([
+    db.query<DailyActualRow>(
+      `SELECT d::text AS date, total FROM ml_daily_actuals WHERE d >= $1::date AND d < $2::date ORDER BY d ASC`,
+      [anchors.validationStart, anchors.futureStart ?? anchors.maxForecastDate]
+    ),
+    db.query<PredictiveIncidentRow>(
+      `SELECT forecast_date::text AS date, prediction_type, predicted_incident_count, champion_model,
+              same_day_last_year, rainfall_mm, ${INCIDENT_MODEL_COLUMNS_SQL}, ${INCIDENT_MODEL_COLUMNS_NV_SQL}, ${INCIDENT_MODEL_COLUMNS_NW_SQL}
+       FROM ml_predictive_incidents WHERE prediction_type = 'validation' ORDER BY forecast_date ASC`
+    ),
+  ]);
+
+  const actualByDate = new Map(actualsRes.rows.map((r) => [r.date, Number(r.total)]));
+  const eligibleModels = FEATURE_EVIDENCE_ELIGIBLE_MODELS.filter((m) =>
+    predsRes.rows.some((p) => p[m.column] != null)
+  );
+  if (eligibleModels.length === 0) return [];
+
+  // isWet plays no role in this comparison — an empty map rather than a real
+  // wet/dry lookup, since toAlignedValidationRows requires the parameter but
+  // this call site never reads the field it populates.
+  const emptyWet = new Map<string, boolean>();
+  const withRows = toAlignedValidationRows(predsRes.rows, actualByDate, emptyWet, eligibleModels, true, true);
+  const withoutRows = toAlignedValidationRows(
+    predsRes.rows,
+    actualByDate,
+    emptyWet,
+    eligibleModels,
+    feature === "volume" ? false : true,
+    feature === "weather" ? false : true
+  );
+
+  return eligibleModels.map((m) => {
+    const withFeature = computeModelMetricsForModel(withRows, m.key, null).wmape;
+    const withoutFeature = computeModelMetricsForModel(withoutRows, m.key, null).wmape;
+    return {
+      model: m.key,
+      withFeature,
+      withoutFeature,
+      // Positive => the feature-aware version scores a lower (better) WMAPE,
+      // i.e. the feature demonstrably helps — same sign convention as
+      // traffic's own deltaPts.
+      deltaPts: withFeature != null && withoutFeature != null ? Number((withoutFeature - withFeature).toFixed(3)) : null,
+    };
+  });
+}
+
+/**
+ * Evidence for whether WEATHER predicts incidents. Mirrors
+ * getWeatherEvidenceFromDb in traffic.service.ts almost exactly — same four
+ * variables, same station-averaging-before-aggregating correction — joined to
+ * ml_daily_actuals (this module's own daily series) instead of
+ * gold.daily_traffic_volume_corrected.
+ */
+export async function getIncidentWeatherEvidenceFromDb(): Promise<IncidentFeatureEvidence | null> {
+  if (!db) return null;
+  try {
+    const CTE = `
+      WITH hourly AS (
+        SELECT (timestamp_utc + interval '8 hours')::date AS ds, timestamp_utc AS hr,
+               AVG(temperature) t, AVG(rainfall) r, AVG(wind_speed) w, AVG(humidity) h
+        FROM public.hourly_weather GROUP BY 1, 2
+      ), wx AS (
+        SELECT ds, AVG(t) avg_temp, SUM(r) total_rain, AVG(w) avg_wind, AVG(h) avg_humidity
+        FROM hourly GROUP BY ds
+      ), joined AS (
+        SELECT a.total::float AS y, wx.*
+        FROM ml_daily_actuals a JOIN wx ON wx.ds = a.d
+      ), ranked AS (
+        SELECT RANK() OVER (ORDER BY y) ry,
+               RANK() OVER (ORDER BY total_rain)   r_rain,
+               RANK() OVER (ORDER BY avg_wind)     r_wind,
+               RANK() OVER (ORDER BY avg_temp)     r_temp,
+               RANK() OVER (ORDER BY avg_humidity) r_hum
+        FROM joined
+      )`;
+    const { rows } = await db.query(`${CTE}
+      SELECT (SELECT COUNT(*) FROM joined)::int AS days,
+             (SELECT CORR(y, total_rain)   FROM joined) AS p_rain,
+             (SELECT CORR(y, avg_wind)     FROM joined) AS p_wind,
+             (SELECT CORR(y, avg_temp)     FROM joined) AS p_temp,
+             (SELECT CORR(y, avg_humidity) FROM joined) AS p_hum,
+             (SELECT CORR(ry, r_rain) FROM ranked) AS s_rain,
+             (SELECT CORR(ry, r_wind) FROM ranked) AS s_wind,
+             (SELECT CORR(ry, r_temp) FROM ranked) AS s_temp,
+             (SELECT CORR(ry, r_hum)  FROM ranked) AS s_hum`);
+    const r = rows[0];
+    const num = (v: unknown) => (v === null || v === undefined ? null : Number(v));
+    const correlations: IncidentFeatureCorrelation[] = [
+      { variable: "avg_humidity", label: "Humidity",    pearson: num(r.p_hum),  spearman: num(r.s_hum),  days: r.days },
+      { variable: "total_rain",   label: "Rainfall",    pearson: num(r.p_rain), spearman: num(r.s_rain), days: r.days },
+      { variable: "avg_wind",     label: "Wind speed",  pearson: num(r.p_wind), spearman: num(r.s_wind), days: r.days },
+      { variable: "avg_temp",     label: "Temperature", pearson: num(r.p_temp), spearman: num(r.s_temp), days: r.days },
+    ].sort((a, b) => Math.abs(b.pearson ?? 0) - Math.abs(a.pearson ?? 0));
+
+    const modelComparison = (await computeIncidentFeatureModelComparison("weather")) ?? [];
+    return { correlations, modelComparison };
+  } catch (error) {
+    console.error("Database query failed for incident weather evidence:", error);
+    return null;
+  }
+}
+
+/**
+ * Evidence for whether TRAFFIC VOLUME predicts incidents. Only one variable
+ * (volume itself, not four) — joined to gold.ml_predictive_volume the same
+ * way the exposure overlay and the training pipeline's own DAILY_VOLUME_SQL /
+ * load_daily_volume do, restricted to actual_volume IS NOT NULL so the
+ * correlation is only ever computed against observed volume, never a
+ * forecasted figure standing in for one.
+ */
+export async function getIncidentVolumeEvidenceFromDb(): Promise<IncidentFeatureEvidence | null> {
+  if (!db) return null;
+  try {
+    const { rows } = await db.query(`
+      WITH joined AS (
+        SELECT a.total::float AS y, v.actual_volume::float AS volume
+        FROM ml_daily_actuals a
+        JOIN gold.ml_predictive_volume v ON v.forecast_date = a.d
+        WHERE v.actual_volume IS NOT NULL
+      ), ranked AS (
+        SELECT RANK() OVER (ORDER BY y) ry, RANK() OVER (ORDER BY volume) r_vol FROM joined
+      )
+      SELECT (SELECT COUNT(*) FROM joined)::int AS days,
+             (SELECT CORR(y, volume) FROM joined) AS p_vol,
+             (SELECT CORR(ry, r_vol) FROM ranked) AS s_vol
+    `);
+    const r = rows[0];
+    const num = (v: unknown) => (v === null || v === undefined ? null : Number(v));
+    const correlations: IncidentFeatureCorrelation[] = [
+      { variable: "volume", label: "Vehicle volume", pearson: num(r.p_vol), spearman: num(r.s_vol), days: r.days },
+    ];
+
+    const modelComparison = (await computeIncidentFeatureModelComparison("volume")) ?? [];
+    return { correlations, modelComparison };
+  } catch (error) {
+    console.error("Database query failed for incident volume evidence:", error);
+    return null;
+  }
+}

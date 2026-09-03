@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import type { EChartsOption } from "echarts";
 import DashboardChart from "./DashboardChart";
 import IncidentNarrative, { MetricHint, metricHintFor, modelHintFor } from "./IncidentNarrative";
+import IncidentFeatureEvidencePanel from "./IncidentFeatureEvidencePanel";
 import {
   ACTUAL_COLOR,
   META,
@@ -546,7 +547,15 @@ export default function PredictiveIncidentChart({
               name: "Vehicle Volume",
               type: "line" as const,
               yAxisIndex: 2,
-              data: daily.map((d) => d.volume ?? null),
+              // Stops at Present deliberately: this chart's subject is the
+              // incident forecast, and the Future band's volume figures are
+              // themselves a forecast from the traffic module, not an
+              // observed exposure — drawing them here read as though volume
+              // were also being predicted. Nulled rather than trimmed from
+              // `daily` so the x-axis width and the incident lines are
+              // unaffected; connectNulls:false below then just stops the
+              // line rather than bridging the cut.
+              data: daily.map((d) => (d.predictionType === "future" ? null : d.volume ?? null)),
               smooth: true,
               symbol: "none" as const,
               connectNulls: false,
@@ -957,6 +966,31 @@ export default function PredictiveIncidentChart({
       <div style={{ height: "450px", width: "100%", cursor: "pointer" }}>
         <DashboardChart option={option} height={450} onEvents={{ click: onChartClick as (p: never) => void }} />
       </div>
+
+      {/* Evidence panels, gated on the same toggles that already govern their
+          respective overlays — mirrors WeatherEvidencePanel's placement on the
+          traffic module's own predictive chart (right after the chart, before
+          the metrics table). */}
+      {showWeather && (
+        <IncidentFeatureEvidencePanel
+          endpoint="weather-evidence"
+          title="Does weather predict incidents?"
+          subtitle="Correlations for all four variables, and the with/without model test"
+          plotted="total_rain"
+          featureLabel="weather"
+          explainerNote="Only rainfall is fed into the trained models — humidity, wind and temperature are shown here for comparison but aren't inputs to any of them. The chart overlays rainfall for the same reason."
+        />
+      )}
+      {showVolume && (
+        <IncidentFeatureEvidencePanel
+          endpoint="volume-evidence"
+          title="Does traffic volume predict incidents?"
+          subtitle="Correlation with daily vehicle volume, and the with/without model test"
+          plotted="volume"
+          featureLabel="volume"
+          explainerNote="Vehicle volume is an input to XGBoost, Random Forest, the two GLMs and SARIMAX — the chart overlays it directly."
+        />
+      )}
 
       {metricsTable}
       {weatherPanel}

@@ -275,6 +275,43 @@ export async function getLiveCorridorOverview() {
 }
 
 
+
+/**
+ * How fresh the jam feed is, and how long a window the live map is reading.
+ *
+ * The Home tab's corridor panel needs this to say "last report 4 min ago", and
+ * it was the only reason that panel had to call a second endpoint with its own
+ * pipeline — which is how the two views came to disagree about the road. Served
+ * alongside the features so one request answers both questions.
+ */
+export async function getFeedFreshness(): Promise<{
+  windowMinutes: number;
+  newestAt: string | null;
+  ageMinutes: number | null;
+  stale: boolean;
+}> {
+  const fallback = { windowMinutes: WINDOW_MINUTES, newestAt: null, ageMinutes: null, stale: true };
+  if (!db) return fallback;
+  try {
+    const { rows } = await db.query<{ newest: Date | null }>(
+      `SELECT MAX(last_seen_at) AS newest FROM silver.fact_waze_jams`,
+    );
+    const newest = rows[0]?.newest ? new Date(rows[0].newest) : null;
+    const ageMinutes = newest ? (Date.now() - newest.getTime()) / 60000 : null;
+    return {
+      windowMinutes: WINDOW_MINUTES,
+      newestAt: newest ? newest.toISOString() : null,
+      ageMinutes: ageMinutes != null ? Math.round(ageMinutes * 10) / 10 : null,
+      // Same threshold the corridor-status endpoint used, so the wording on the
+      // panel does not change with the source.
+      stale: (ageMinutes ?? 999) > 30,
+    };
+  } catch (error) {
+    console.error("Database query failed for feed freshness:", error);
+    return fallback;
+  }
+}
+
 /**
  * The live map's GeoJSON, built from the warehouse.
  *

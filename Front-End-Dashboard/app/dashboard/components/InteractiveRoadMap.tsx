@@ -15,9 +15,16 @@ import { useNlexExits, accessLabel, displayExitName, type NlexExit } from "../..
 /* ══════════════════════════════════════════════════════════════════════════════
    LIVE CORRIDOR STATE
 
-   This section used to hold three hardcoded datasets (LIVE / +1HR / +2HR). It now
-   reads /api/dashboard/corridor-status, which derives per-exit, per-direction
-   status from the same Waze jam feed the Live Map uses.
+   This section used to hold three hardcoded datasets (LIVE / +1HR / +2HR). It
+   now reads /api/map-comparison/real-time — the Live Map's own feed — and
+   derives per-exit, per-direction status from it through the same functions the
+   map draws with, so the two views cannot disagree about the road.
+
+   It read /api/dashboard/corridor-status before, which aggregated the same jams
+   in SQL but under slightly different rules: no geometric corridor test, and
+   direction from bearing rather than from the street name Waze supplies. That
+   was enough for this panel to call a stretch congested on the strength of a
+   jam the map had discarded.
 
    Absence is information here: Waze only emits a record where there IS a jam, so
    an exit with no recent row is flowing freely. Every exit therefore starts clear
@@ -26,17 +33,8 @@ import { useNlexExits, accessLabel, displayExitName, type NlexExit } from "../..
 
 const BACKEND = process.env.NEXT_PUBLIC_BACKEND_URL ?? "http://localhost:4000";
 
-type SegmentStatus = "clear" | "slow" | "congested";
-
-type ExitStatus = {
-  exit: string;
-  direction: "NB" | "SB";
-  status: SegmentStatus;
-  level: number | null;
-  speedKmh: number | null;
-  jamCount: number;
-  observedAt: string | null;
-};
+/* Shared with the live map: same shapes, same derivation. */
+import { corridorStatusFromFeed, type ExitStatus, type SegmentStatus } from "../../../lib/corridor-status";
 
 type CorridorStatus = {
   windowMinutes: number;
@@ -127,11 +125,25 @@ function useCorridorStatus() {
     let cancelled = false;
     const load = async () => {
       try {
-        const r = await fetch(`${BACKEND}/api/dashboard/corridor-status`, { cache: "no-store" });
-        const json = await r.json();
+        /* The live map's own feed, run through the live map's own rules.
+           This used to read /api/dashboard/corridor-status, which aggregated
+           the same jams in SQL under slightly different ones — it skipped the
+           geometric corridor test and took direction from bearing alone — so
+           this panel and the map disagreed about which stretches were busy.
+           Both now derive from one payload through one function. */
+        const r = await fetch(`${BACKEND}/api/map-comparison/real-time`, { cache: "no-store" });
+        const fc = await r.json();
         if (cancelled) return;
-        if (!json.success) throw new Error(json.message ?? "Request failed");
-        setData(json.data);
+        if (!fc?.features) throw new Error("Feed unavailable");
+        setData({
+          windowMinutes: fc.feed?.windowMinutes ?? 60,
+          segments: corridorStatusFromFeed(fc),
+          feed: {
+            newestAt: fc.feed?.newestAt ?? null,
+            ageMinutes: fc.feed?.ageMinutes ?? null,
+            stale: fc.feed?.stale ?? false,
+          },
+        });
         setError(false);
       } catch {
         if (!cancelled) setError(true);

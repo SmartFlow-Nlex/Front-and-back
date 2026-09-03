@@ -1,5 +1,5 @@
 import type { Request, Response } from "express";
-import { getLiveCorridorOverview, getLiveMapGeoJson } from "../services/map-live.service.js";
+import { getLiveCorridorOverview, getLiveMapGeoJson, getFeedFreshness } from "../services/map-live.service.js";
 import { z } from "zod";
 import { searchExitsInDb, getForecastCongestionFromDb, getForecastModelInfo } from "../services/map-comparison.service.js";
 import { ExitSearchSchema } from "../validators/map-comparison.validator.js";
@@ -109,7 +109,11 @@ export const getMapRealtime = async (_req: Request, res: Response) => {
   // still tried first in case the ingester starts filling it again.
   const redis = redisConfig();
   if (!redis) {
-    return res.json(await getLiveMapGeoJson());
+    /* The feed's own freshness travels with it. The Home tab needs it to
+       say how old the newest report is, and that was the only reason it
+       had to read a different endpoint with a different pipeline. */
+    const [fc, feed] = await Promise.all([getLiveMapGeoJson(), getFeedFreshness()]);
+    return res.json({ ...fc, feed });
   }
 
   try {
@@ -203,7 +207,11 @@ export const getMapRealtime = async (_req: Request, res: Response) => {
     // corridor that actually has fifty jams on it.
     const redisJams = features.filter((f) => f?.properties?.feature_type === "jam").length;
     if (redisJams === 0) {
-      return res.json(await getLiveMapGeoJson());
+      /* The feed's own freshness travels with it. The Home tab needs it to
+         say how old the newest report is, and that was the only reason it
+         had to read a different endpoint with a different pipeline. */
+      const [fc, feed] = await Promise.all([getLiveMapGeoJson(), getFeedFreshness()]);
+      return res.json({ ...fc, feed });
     }
 
     res.json({

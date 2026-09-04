@@ -578,13 +578,32 @@ export async function getMLPredictiveVolume(window: ForecastWindow = {}) {
   // weather_* drive the rainfall bars; the _nw columns are the weather-free twins
   // the Weather toggle switches to. Without them the toggle changes nothing.
   const cols = `forecast_date as "date", actual_volume, pred_lstm, pred_prophet, pred_xgboost, pred_holtwinters, pred_sarimax, pred_holts_linear, is_holdout, is_future, weather_rainfall, weather_temp, pred_prophet_nw, pred_sarimax_nw, pred_lstm_nw`;
+
+  /* gold.ml_predictive_volume stacks TWO evaluation runs in one table, told
+     apart only by split_label: an 80/20 run and a 90/10 run, 1,489 dates each,
+     2,978 rows total. Nothing here filtered them, so every query returned each
+     calendar date twice and the chart drew both.
+     
+     That is not a cosmetic duplicate. The two runs disagree about which dates
+     are holdout (294 vs 140) and carry predictions over different spans (322 vs
+     168 dates with a Prophet value), so the series alternated between a scored
+     value and a null on consecutive points at the same date — a sawtooth laid
+     over the real signal, at double the point count, which is why the daily
+     view read as noise. It also broke the zone boundaries: scanning rows for
+     the first is_holdout found a row from whichever run happened to sort first,
+     which is how a 294-day holdout came to be labelled "587d scored".
+
+     80/20 is the split the dashboard reports and the one the metrics table is
+     computed over, so it is the run to show. The 90/10 rows stay in the
+     warehouse for comparison; they are simply not a second copy of this chart. */
+  const SPLIT = `split_label = '80_20'`;
   try {
     // An explicit from/to wins; otherwise months trims back from the newest
     // forecast date the table holds.
     if (window.from && window.to) {
       const { rows } = await db.query(
         `SELECT ${cols} FROM gold.ml_predictive_volume
-         WHERE forecast_date BETWEEN $1::date AND $2::date
+         WHERE ${SPLIT} AND forecast_date BETWEEN $1::date AND $2::date
          ORDER BY forecast_date ASC`,
         [window.from, window.to]
       );
@@ -602,17 +621,20 @@ export async function getMLPredictiveVolume(window: ForecastWindow = {}) {
       // 0 past rows. Anchoring on the holdout START keeps it whole.
       const { rows } = await db.query(
         `SELECT ${cols} FROM gold.ml_predictive_volume
-         WHERE is_holdout OR is_future
-            OR forecast_date >= (
-                 SELECT MIN(forecast_date) FROM gold.ml_predictive_volume WHERE is_holdout
-               ) - ($1::int * interval '1 month')
+         WHERE ${SPLIT} AND (
+              is_holdout OR is_future
+              OR forecast_date >= (
+                   SELECT MIN(forecast_date) FROM gold.ml_predictive_volume
+                   WHERE ${SPLIT} AND is_holdout
+                 ) - ($1::int * interval '1 month')
+         )
          ORDER BY forecast_date ASC`,
         [Number(window.months)]
       );
       return rows;
     }
 
-    const { rows } = await db.query(`SELECT ${cols} FROM gold.ml_predictive_volume ORDER BY forecast_date ASC`);
+    const { rows } = await db.query(`SELECT ${cols} FROM gold.ml_predictive_volume WHERE ${SPLIT} ORDER BY forecast_date ASC`);
     return rows;
   } catch (error) {
     console.error("Failed to fetch ML volume:", error);

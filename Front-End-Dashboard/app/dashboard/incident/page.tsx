@@ -14,12 +14,12 @@ import PredictiveIncidentChart from "../../../components/dashboard/PredictiveInc
 import PredictiveCorridorChart from "../../../components/dashboard/PredictiveCorridorChart";
 import IncidentSeverityModels from "../../../components/dashboard/IncidentSeverityModels";
 import SecondaryIncidentRiskPanel from "../../../components/dashboard/SecondaryIncidentRiskPanel";
-import CorridorRiskModelsPanel from "../../../components/dashboard/CorridorRiskModelsPanel";
-import HighIncidentDayRiskPanel from "../../../components/dashboard/HighIncidentDayRiskPanel";
 import PrescriptiveDeploymentPanel from "../../../components/dashboard/PrescriptiveDeploymentPanel";
 import InfoTooltip from "../../../components/dashboard/InfoTooltip";
 import SecondaryRiskMitigationPanel from "../../../components/dashboard/SecondaryRiskMitigationPanel";
 import IncidentTypePriorityPanel from "../../../components/dashboard/IncidentTypePriorityPanel";
+import VmsAdvisoryPanel from "../../../components/dashboard/VmsAdvisoryPanel";
+import ClearanceSimulatorPanel from "../../../components/dashboard/ClearanceSimulatorPanel";
 import type { CorridorForecastPoint, KmSegmentForecastPoint } from "../../../components/dashboard/incidentPredictive.shared";
 import DateRangePicker from "../traffic/components/DateRangePicker";
 import { rangeDays, grainBlockedReason, bestGrainFor, axisLabelFor, bucketLabelFor } from "../../../lib/granularity";
@@ -683,7 +683,15 @@ export default function IncidentPage() {
               {weatherFilter}
             </>
           )}
-          {activeTab === "Prescriptive" && <span className={styles.filterLabel}>Patrol zone deployment (linear program)</span>}
+          {activeTab === "Prescriptive" && (
+            <>
+              {rangeFilter}
+              <span className={styles.filterLabel} style={{ color: "var(--text-muted)", fontWeight: 400 }}>
+                Applies to Resource Staging and VMS Advisory Routing — clearance-time recommendations come from a
+                trained model and don&apos;t change per Range.
+              </span>
+            </>
+          )}
           <span className={styles.spacer} />
           <div className={styles.modeTabs}>
             {(["Descriptive", "Predictive", "Prescriptive"] as const).map((t) => (
@@ -731,19 +739,13 @@ export default function IncidentPage() {
             <IncidentSeverityModels />
           </div>
         )}
-        {activeTab === "Predictive" && (
-          <div className={styles.spanFull}>
-            <CorridorRiskModelsPanel />
-          </div>
-        )}
-        {activeTab === "Predictive" && (
-          <div className={styles.spanFull}>
-            <HighIncidentDayRiskPanel />
-          </div>
-        )}
         {activeTab === "Prescriptive" && (
           <div className={styles.spanFull}>
-            <PrescriptiveDeploymentPanel />
+            <PrescriptiveDeploymentPanel
+              months={rangeMode === "custom" ? "all" : rangeMode}
+              from={rangeMode === "custom" ? customFrom : undefined}
+              to={rangeMode === "custom" ? customTo : undefined}
+            />
           </div>
         )}
         {activeTab === "Prescriptive" && (
@@ -753,7 +755,21 @@ export default function IncidentPage() {
         )}
         {activeTab === "Prescriptive" && (
           <div className={styles.spanFull}>
+            <VmsAdvisoryPanel
+              months={rangeMode === "custom" ? "all" : rangeMode}
+              from={rangeMode === "custom" ? customFrom : undefined}
+              to={rangeMode === "custom" ? customTo : undefined}
+            />
+          </div>
+        )}
+        {activeTab === "Prescriptive" && (
+          <div className={styles.spanFull}>
             <IncidentTypePriorityPanel />
+          </div>
+        )}
+        {activeTab === "Prescriptive" && (
+          <div className={styles.spanFull}>
+            <ClearanceSimulatorPanel />
           </div>
         )}
       </section>

@@ -35,6 +35,22 @@ function median(values: number[]): number {
   return sorted.length % 2 === 0 ? (sorted[mid - 1] + sorted[mid]) / 2 : sorted[mid];
 }
 
+// Which upstream intervention a priority zone calls for — driven by WHICH of
+// the two axes is comparatively more extreme for that zone (each measured as
+// % above its own median, so the two are on a comparable scale), not an
+// arbitrary per-row assignment. A zone that's mostly a clearance problem
+// needs the queue physically protected while it's cleared; a zone that's
+// mostly a risk problem needs approaching traffic warned earlier. A zone
+// where neither dominates gets both. The 1.2x margin keeps genuine near-ties
+// in the "both" bucket rather than forcing a coin-flip pick.
+function interventionFor(r: Row, medianRisk: number, medianClearance: number): string {
+  const riskExcess = medianRisk > 0 ? (r.risk - medianRisk) / medianRisk : 0;
+  const clearExcess = medianClearance > 0 ? (r.clearanceMin - medianClearance) / medianClearance : 0;
+  if (clearExcess >= riskExcess * 1.2) return "Queue-end protection vehicle";
+  if (riskExcess >= clearExcess * 1.2) return "Automated VMS hazard warning";
+  return "Queue-end vehicle + VMS warning";
+}
+
 export default function SecondaryRiskMitigationPanel() {
   const [view, setView] = useState<"exit" | "km">("exit");
   const [data, setData] = useState<SeverityData | null>(null);
@@ -176,17 +192,11 @@ export default function SecondaryRiskMitigationPanel() {
 
   return (
     <article className="chart-card wide" style={{ padding: "24px", display: "flex", flexDirection: "column", gap: "16px" }}>
-      <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: "12px" }}>
-        <div style={{ flex: 1, minWidth: 0 }}>
-          <h3 style={{ fontSize: "1.05rem", color: "#0f172a", fontWeight: 700, margin: 0, letterSpacing: "-0.01em" }}>
-            Secondary Risk Priority Matrix
-            <InfoTooltip text="A solution for the Predictive tab's own Secondary Incident Risk panel: that panel ranks WHERE risk is elevated, but the actual lever is clearance speed — every extra minute a first incident stays unresolved is another minute a second one can start nearby." />
-          </h3>
-          <p style={{ color: "#64748b", fontSize: "0.82rem", margin: "4px 0 0 0" }}>
-            Each point is one {useKmView ? "km segment" : "exit"}; size is evidence (n). Dashed lines mark this
-            view&apos;s own median clearance time and median risk, not a fixed threshold.
-          </p>
-        </div>
+      <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: "12px", flexWrap: "wrap" }}>
+        <h3 style={{ fontSize: "1.05rem", color: "#0f172a", fontWeight: 700, margin: 0, letterSpacing: "-0.01em" }}>
+          Dynamic Queue &amp; Secondary Risk Mitigation
+          <InfoTooltip text="A solution for the Predictive tab's own Secondary Incident Risk panel: that panel ranks WHERE risk is elevated, but the actual lever is clearance speed — every extra minute a first incident stays unresolved is another minute a second one can start nearby. Priority zones get a recommended upstream intervention (queue-end protection vehicle, automated VMS hazard warning, or both), driven by whether that zone's problem is mostly slow clearance, elevated risk, or roughly both." />
+        </h3>
         <div style={{ display: "inline-flex", gap: "2px", padding: "3px", background: "var(--bg-surface, #fff)", border: "1px solid #dce2ef", borderRadius: "999px", flexShrink: 0 }}>
           {(["exit", "km"] as const).map((v) => (
             <button
@@ -205,6 +215,10 @@ export default function SecondaryRiskMitigationPanel() {
           ))}
         </div>
       </div>
+      <p style={{ color: "#64748b", fontSize: "0.82rem", margin: 0 }}>
+        Each point is one {useKmView ? "km segment" : "exit"}; size is evidence (n). Dashed lines mark this
+        view&apos;s own median clearance time and median risk, not a fixed threshold.
+      </p>
 
       {priorityRows.length > 0 && (
         <div style={{ padding: "10px 14px", borderRadius: "10px", background: "#fef2f2", border: "1px solid #fecaca" }}>
@@ -212,9 +226,11 @@ export default function SecondaryRiskMitigationPanel() {
             <strong>{priorityRows.length}</strong> of {rows.length} {useKmView ? "segments" : "exits"} combine
             above-median secondary risk (≥{(medianRisk * 100).toFixed(2)}%) with above-median clearance time (≥
             {medianClearance.toFixed(0)} min) — led by <strong>{priorityRows[0].label}</strong> (
-            {(priorityRows[0].risk * 100).toFixed(2)}% risk, {priorityRows[0].clearanceMin.toFixed(0)} min). These
-            are the best candidates for faster-response resources: cutting clearance time here does double duty,
-            since it also shortens the window a secondary incident has to start in.
+            {(priorityRows[0].risk * 100).toFixed(2)}% risk, {priorityRows[0].clearanceMin.toFixed(0)} min),
+            recommending a <strong>{interventionFor(priorityRows[0], medianRisk, medianClearance)}</strong>. Cutting
+            clearance time at any of these does double duty, since it also shortens the window a secondary incident
+            has to start in. Across every priority zone, a lower advisory speed threshold during active incidents is
+            also worth standing up — a standing operational recommendation, not something this model measures.
           </p>
         </div>
       )}
@@ -252,6 +268,7 @@ export default function SecondaryRiskMitigationPanel() {
                 <th style={{ fontWeight: 600, paddingBottom: "4px", textAlign: "right" }}>Secondary risk</th>
                 <th style={{ fontWeight: 600, paddingBottom: "4px", textAlign: "right" }}>Predicted clearance</th>
                 <th style={{ fontWeight: 600, paddingBottom: "4px", textAlign: "right" }}>n</th>
+                <th style={{ fontWeight: 600, paddingBottom: "4px", textAlign: "right" }}>Recommended intervention</th>
               </tr>
             </thead>
             <tbody>
@@ -261,6 +278,9 @@ export default function SecondaryRiskMitigationPanel() {
                   <td style={{ padding: "4px 0", textAlign: "right", color: "#dc2626", fontWeight: 700 }}>{(r.risk * 100).toFixed(2)}%</td>
                   <td style={{ padding: "4px 0", textAlign: "right", color: "#334155" }}>{r.clearanceMin.toFixed(1)} min</td>
                   <td style={{ padding: "4px 0", textAlign: "right", color: "#94a3b8" }}>{fmtInt(r.n)}</td>
+                  <td style={{ padding: "4px 0", textAlign: "right", color: "#4f46e5", fontWeight: 600, fontSize: "0.72rem" }}>
+                    {interventionFor(r, medianRisk, medianClearance)}
+                  </td>
                 </tr>
               ))}
             </tbody>

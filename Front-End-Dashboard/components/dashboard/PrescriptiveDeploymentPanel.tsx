@@ -75,7 +75,20 @@ function solveMclp(weights: number[], covers: number[][], k: number): { chosen: 
   return best;
 }
 
-export default function PrescriptiveDeploymentPanel() {
+type Props = {
+  // The Prescriptive tab's own Range control, threaded through the same way
+  // PredictiveIncidentChart takes it — corridorForecast's apportionment
+  // shares are computed from incidents within this window (verified: the
+  // per-exit split shifts a few points between 3mo/12mo/all, even though the
+  // published total forecast itself doesn't), so which exits this panel
+  // recommends staffing genuinely can move with Range. Defaults to 12mo,
+  // this panel's original fixed window, when unset.
+  months?: "3" | "12" | "all";
+  from?: string;
+  to?: string;
+};
+
+export default function PrescriptiveDeploymentPanel({ months = "12", from, to }: Props) {
   const [view, setView] = useState<"exit" | "km">("exit");
   const [fleetSize, setFleetSize] = useState(4);
   const [radiusKm, setRadiusKm] = useState(8);
@@ -87,10 +100,12 @@ export default function PrescriptiveDeploymentPanel() {
 
   useEffect(() => {
     let cancelled = false;
-    // months=12 to match the Predictive tab's own default Range — same
-    // sample the ranking card shows on a fresh page load, not some other
-    // arbitrarily-scoped slice of it.
-    fetch(`${BACKEND}/api/incident/predictive?months=12`, { cache: "no-store" })
+    setLoading(true);
+    const qs = new URLSearchParams();
+    if (months) qs.set("months", months);
+    if (from) qs.set("from", from);
+    if (to) qs.set("to", to);
+    fetch(`${BACKEND}/api/incident/predictive?${qs}`, { cache: "no-store" })
       .then(async (res) => {
         const json = await res.json();
         if (cancelled) return;
@@ -123,7 +138,7 @@ export default function PrescriptiveDeploymentPanel() {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [months, from, to]);
 
   if (loading && predictive === null) {
     return (
@@ -207,8 +222,8 @@ export default function PrescriptiveDeploymentPanel() {
       <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: "16px" }}>
         <div style={{ flex: 1, minWidth: 0 }}>
           <h3 style={{ fontSize: "1.05rem", color: "#0f172a", fontWeight: 700, margin: 0, letterSpacing: "-0.01em" }}>
-            Patrol Zone Deployment
-            <InfoTooltip text="A solution for the Predictive tab's own Predicted Incidents Ranking: an exact linear program (Maximal Covering Location solve) that chooses which exits or km segments to station patrol units at, to cover as much predicted incident risk as possible. Fleet size and coverage radius are yours to set — nothing in the warehouse records NLEX's actual patrol fleet." />
+            Resource Staging &amp; Patrol Repositioning
+            <InfoTooltip text="A solution for the Predictive tab's own Predicted Incidents Ranking: an exact linear program (Maximal Covering Location solve) that recommends exactly where to pre-position patrol and tow-truck units — which exits or km segments to station them at — to cover as much predicted incident risk as possible, cutting response time during high-risk windows. Fleet size and coverage radius are yours to set — nothing in the warehouse records NLEX's actual patrol fleet." />
           </h3>
           <p style={{ color: "#64748b", fontSize: "0.82rem", margin: "4px 0 0 0" }}>
             Built from the {predictive.corridorForecastModel ? `${predictive.corridorForecastModel} ` : ""}
@@ -242,8 +257,9 @@ export default function PrescriptiveDeploymentPanel() {
 
       <div style={{ padding: "10px 14px", borderRadius: "10px", background: "#eef2ff", border: "1px solid #c7d2fe" }}>
         <p style={{ margin: 0, fontSize: "0.85rem", color: "#312e81" }}>
-          Staffing <strong>{staffedCount}</strong> of {rows.length} {useKmView ? "segments" : "exits"} with a{" "}
-          {radiusKm}km radius covers <strong>{(coverageShare * 100).toFixed(0)}%</strong> of the ranking&apos;s{" "}
+          <strong>Recommended staging: {chosen.map((j) => rows[j].label).join(", ")}.</strong> Pre-position patrol
+          and tow-truck units at these {staffedCount} {useKmView ? "segments" : "exits"} — a {radiusKm}km radius from
+          each covers <strong>{(coverageShare * 100).toFixed(0)}%</strong> of the ranking&apos;s{" "}
           {fmtInt(totalWeight)}-incident forecast ({fmtInt(coveredWeight)} of {fmtInt(totalWeight)}) —{" "}
           {coverageShare >= 0.8
             ? "this fleet size/radius combination reaches most of the ranking's predicted risk."
@@ -251,131 +267,135 @@ export default function PrescriptiveDeploymentPanel() {
         </p>
       </div>
 
-      <div>
-        <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: "10px", flexWrap: "wrap", marginBottom: "6px" }}>
-          <div>
-            <div style={{ fontSize: "0.68rem", fontWeight: 800, color: "#4f46e5", letterSpacing: "0.04em", textTransform: "uppercase" }}>
-              LP deployment map
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "24px", alignItems: "start" }}>
+        {/* Left: the LP deployment map itself. */}
+        <div>
+          <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: "10px", flexWrap: "wrap", marginBottom: "6px" }}>
+            <div>
+              <div style={{ fontSize: "0.68rem", fontWeight: 800, color: "#4f46e5", letterSpacing: "0.04em", textTransform: "uppercase" }}>
+                LP deployment map
+              </div>
+              <div style={{ fontSize: "0.75rem", color: "#64748b" }}>Corridor order (Km 0 first)</div>
             </div>
-            <div style={{ fontSize: "0.75rem", color: "#64748b" }}>Corridor order (Km 0 first)</div>
+            <div style={{ display: "flex", alignItems: "center", gap: "14px", fontSize: "0.7rem", color: "#64748b", flexWrap: "wrap" }}>
+              <span style={{ display: "inline-flex", alignItems: "center", gap: "4px" }}>
+                <span style={{ color: "#4f46e5" }}>●</span> staffed
+              </span>
+              <span style={{ display: "inline-flex", alignItems: "center", gap: "4px" }}>
+                <span style={{ color: "#cbd5e1" }}>○</span> not staffed
+              </span>
+              <span style={{ display: "inline-flex", alignItems: "center", gap: "4px" }}>
+                <span style={{ width: 10, height: 10, borderRadius: "999px", background: "linear-gradient(90deg, #818cf8, #3730a3)", display: "inline-block" }} />
+                darker = higher incidents/km
+              </span>
+              <span style={{ color: "#94a3b8" }}>· Hover a row for details</span>
+            </div>
           </div>
-          <div style={{ display: "flex", alignItems: "center", gap: "14px", fontSize: "0.7rem", color: "#64748b" }}>
-            <span style={{ display: "inline-flex", alignItems: "center", gap: "4px" }}>
-              <span style={{ color: "#4f46e5" }}>●</span> staffed
-            </span>
-            <span style={{ display: "inline-flex", alignItems: "center", gap: "4px" }}>
-              <span style={{ color: "#cbd5e1" }}>○</span> not staffed
-            </span>
-            <span style={{ display: "inline-flex", alignItems: "center", gap: "4px" }}>
-              <span style={{ width: 10, height: 10, borderRadius: "999px", background: "linear-gradient(90deg, #818cf8, #3730a3)", display: "inline-block" }} />
-              darker = higher incidents/km
-            </span>
-            <span style={{ color: "#94a3b8" }}>· Hover a row for details</span>
-          </div>
-        </div>
-        <div style={{ display: "flex", flexDirection: "column", gap: "1px" }}>
-          {rows.map((r, j) => {
-            const staffed = chosenSet.has(j);
-            const pct = Math.max((r.ratePerKm / maxRate) * 100, 2);
-            return (
-              <div
-                key={r.key}
-                onMouseEnter={() => setHoveredKey(r.key)}
-                onMouseLeave={() => setHoveredKey((k) => (k === r.key ? null : k))}
-                style={{
-                  position: "relative", display: "grid",
-                  gridTemplateColumns: "18px minmax(120px, 240px) 1fr 60px",
-                  columnGap: "10px", alignItems: "center", padding: "4px 8px", borderRadius: "8px",
-                  background: staffed ? "rgba(79,70,229,0.08)" : hoveredKey === r.key ? "rgba(79,70,229,0.05)" : "transparent",
-                }}
-              >
-                <span style={{ fontSize: "0.72rem", color: staffed ? "#4f46e5" : "#cbd5e1" }}>{staffed ? "●" : "○"}</span>
-                <span
-                  style={{ fontSize: "0.78rem", fontWeight: staffed ? 700 : 500, color: staffed ? "#312e81" : "#334155", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
-                  title={useKmView ? r.label : `${r.label} (Km ${r.km})`}
+          <div style={{ display: "flex", flexDirection: "column", gap: "1px" }}>
+            {rows.map((r, j) => {
+              const staffed = chosenSet.has(j);
+              const pct = Math.max((r.ratePerKm / maxRate) * 100, 2);
+              return (
+                <div
+                  key={r.key}
+                  onMouseEnter={() => setHoveredKey(r.key)}
+                  onMouseLeave={() => setHoveredKey((k) => (k === r.key ? null : k))}
+                  style={{
+                    position: "relative", display: "grid",
+                    gridTemplateColumns: "18px minmax(100px, 200px) 1fr 60px",
+                    columnGap: "10px", alignItems: "center", padding: "4px 8px", borderRadius: "8px",
+                    background: staffed ? "rgba(79,70,229,0.08)" : hoveredKey === r.key ? "rgba(79,70,229,0.05)" : "transparent",
+                  }}
                 >
-                  {r.label}
-                </span>
-                <div style={{ position: "relative" }}>
-                  <div style={{ height: 12, borderRadius: "999px", background: "#eef1f7", overflow: "hidden" }}>
-                    <div style={{ height: "100%", width: `${pct}%`, borderRadius: "999px", background: shadeFor(r.ratePerKm / maxRate) }} />
-                  </div>
-                  {hoveredKey === r.key && (
-                    <div
-                      style={{
-                        position: "absolute", left: 0, bottom: "calc(100% + 6px)", zIndex: 20, pointerEvents: "none",
-                        background: "#0f172a", color: "#f1f5f9", borderRadius: "8px", padding: "8px 10px",
-                        fontSize: "0.72rem", lineHeight: 1.5, minWidth: "200px", boxShadow: "0 10px 24px rgba(15,23,42,0.28)",
-                      }}
-                    >
-                      <div style={{ fontWeight: 700 }}>{useKmView ? r.label : `${r.label} (Km ${r.km})`}</div>
-                      <div>{r.predictedIncidents.toFixed(2)} predicted incidents · {predictive.corridorForecastDays}d</div>
-                      <div style={{ color: "#94a3b8" }}>
-                        {staffed
-                          ? `Staffed — covers ${covers[j].length} zone${covers[j].length === 1 ? "" : "s"} within ${radiusKm}km`
-                          : covers[j].length > 0
-                            ? `Not staffed — reachable by ${covers[j].length} other zone${covers[j].length === 1 ? "" : "s"}' radius`
-                            : "Not staffed — outside every staffed zone's radius"}
-                      </div>
+                  <span style={{ fontSize: "0.72rem", color: staffed ? "#4f46e5" : "#cbd5e1" }}>{staffed ? "●" : "○"}</span>
+                  <span
+                    style={{ fontSize: "0.78rem", fontWeight: staffed ? 700 : 500, color: staffed ? "#312e81" : "#334155", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
+                    title={useKmView ? r.label : `${r.label} (Km ${r.km})`}
+                  >
+                    {r.label}
+                  </span>
+                  <div style={{ position: "relative" }}>
+                    <div style={{ height: 12, borderRadius: "999px", background: "#eef1f7", overflow: "hidden" }}>
+                      <div style={{ height: "100%", width: `${pct}%`, borderRadius: "999px", background: shadeFor(r.ratePerKm / maxRate) }} />
                     </div>
-                  )}
+                    {hoveredKey === r.key && (
+                      <div
+                        style={{
+                          position: "absolute", left: 0, bottom: "calc(100% + 6px)", zIndex: 20, pointerEvents: "none",
+                          background: "#0f172a", color: "#f1f5f9", borderRadius: "8px", padding: "8px 10px",
+                          fontSize: "0.72rem", lineHeight: 1.5, minWidth: "200px", boxShadow: "0 10px 24px rgba(15,23,42,0.28)",
+                        }}
+                      >
+                        <div style={{ fontWeight: 700 }}>{useKmView ? r.label : `${r.label} (Km ${r.km})`}</div>
+                        <div>{r.predictedIncidents.toFixed(2)} predicted incidents · {predictive.corridorForecastDays}d</div>
+                        <div style={{ color: "#94a3b8" }}>
+                          {staffed
+                            ? `Staffed — covers ${covers[j].length} zone${covers[j].length === 1 ? "" : "s"} within ${radiusKm}km`
+                            : covers[j].length > 0
+                              ? `Not staffed — reachable by ${covers[j].length} other zone${covers[j].length === 1 ? "" : "s"}' radius`
+                              : "Not staffed — outside every staffed zone's radius"}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                  <span style={{ justifySelf: "end", fontSize: "0.72rem", color: "#64748b" }}>{r.ratePerKm.toFixed(2)}/km</span>
                 </div>
-                <span style={{ justifySelf: "end", fontSize: "0.72rem", color: "#64748b" }}>{r.ratePerKm.toFixed(2)}/km</span>
-              </div>
-            );
-          })}
+              );
+            })}
+          </div>
         </div>
-      </div>
 
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "16px" }}>
-        <div style={{ borderTop: "1px solid #e2e8f0", paddingTop: "12px" }}>
-          <h4 style={{ margin: "0 0 4px 0", fontSize: "0.85rem", color: "#0f172a", fontWeight: 700 }}>Hotspot monitoring alert</h4>
-          <p style={{ color: "#94a3b8", fontSize: "0.72rem", margin: "0 0 8px 0" }}>
-            {useKmView ? "Segments" : "Exits"} carrying at least 80% of the ranking&apos;s predicted incident total
-            between them — same evidence-coverage cutoff used on the ranking cards above, not an arbitrary top-N.
-            {alertRows.length > rows.length / 2 && (
-              <> That takes {alertRows.length} of {rows.length} — risk here is spread across most of the corridor
-              rather than concentrated in a handful of spots, so the cutoff genuinely needs this many.</>
-            )}
-          </p>
-          <div style={{ display: "flex", justifyContent: "space-between", fontSize: "0.68rem", color: "#94a3b8", fontWeight: 600, padding: "0 0 3px 0" }}>
-            <span>{useKmView ? "Segment" : "Exit"}</span>
-            <span>Predicted incidents</span>
-          </div>
-          <div style={{ display: "flex", flexDirection: "column", gap: "4px", maxHeight: "280px", overflowY: "auto" }}>
-            {alertRows.map((r) => (
-              <div key={r.key} style={{ display: "flex", justifyContent: "space-between", fontSize: "0.78rem", padding: "3px 0", borderTop: "1px solid #f1f5f9" }}>
-                <span style={{ color: "#334155" }}>{r.label}</span>
-                <span style={{ color: "#b45309", fontWeight: 700 }}>{fmtInt(r.predictedIncidents)}</span>
-              </div>
-            ))}
-          </div>
-        </div>
-        <div style={{ borderTop: "1px solid #e2e8f0", paddingTop: "12px" }}>
-          <h4 style={{ margin: "0 0 4px 0", fontSize: "0.85rem", color: "#0f172a", fontWeight: 700 }}>Proactive speed advisory</h4>
-          <p style={{ color: "#94a3b8", fontSize: "0.72rem", margin: "0 0 8px 0" }}>
-            Top 3 hotspots by density (predicted incidents per km) — advise reduced speed here first as rainfall
-            rises. The percentages below are the weather-incident-risk model&apos;s own probability of a
-            corridor-wide high-incident day at each rainfall level{weatherRisk ? ` (AUC ${weatherRisk.auc?.toFixed(3) ?? "—"})` : ""}.
-          </p>
-          <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
-            {speedAdvisoryRows.map((r) => (
-              <div key={r.key} style={{ fontSize: "0.78rem", padding: "3px 0", borderTop: "1px solid #f1f5f9" }}>
-                <span style={{ color: "#334155", fontWeight: 600 }}>{r.label}</span>
-                <span style={{ color: "#94a3b8" }}> — {useKmView ? "" : `Km ${r.km}, `}{r.ratePerKm.toFixed(2)} incidents/km</span>
-              </div>
-            ))}
-          </div>
-          {weatherRisk && (
-            <div style={{ display: "flex", gap: "8px", flexWrap: "wrap", marginTop: "8px" }}>
-              {weatherRisk.scenarios.map((s) => (
-                <div key={s.rain_mm} style={{ padding: "4px 8px", borderRadius: "6px", background: "#f8fafc", border: "1px solid #e2e8f0", fontSize: "0.68rem" }}>
-                  <div style={{ color: "#94a3b8" }}>{s.rain_mm}mm rain</div>
-                  <div style={{ fontWeight: 700, color: "#0f172a" }}>{(s.probability * 100).toFixed(1)}%</div>
+        {/* Right: Hotspot monitoring alert, stacked above Proactive speed advisory. */}
+        <div style={{ display: "flex", flexDirection: "column", gap: "20px" }}>
+          <div style={{ borderTop: "1px solid #e2e8f0", paddingTop: "12px" }}>
+            <h4 style={{ margin: "0 0 4px 0", fontSize: "0.85rem", color: "#0f172a", fontWeight: 700 }}>Hotspot monitoring alert</h4>
+            <p style={{ color: "#94a3b8", fontSize: "0.72rem", margin: "0 0 8px 0" }}>
+              {useKmView ? "Segments" : "Exits"} carrying at least 80% of the ranking&apos;s predicted incident total
+              between them — same evidence-coverage cutoff used on the ranking cards above, not an arbitrary top-N.
+              {alertRows.length > rows.length / 2 && (
+                <> That takes {alertRows.length} of {rows.length} — risk here is spread across most of the corridor
+                rather than concentrated in a handful of spots, so the cutoff genuinely needs this many.</>
+              )}
+            </p>
+            <div style={{ display: "flex", justifyContent: "space-between", fontSize: "0.68rem", color: "#94a3b8", fontWeight: 600, padding: "0 0 3px 0" }}>
+              <span>{useKmView ? "Segment" : "Exit"}</span>
+              <span>Predicted incidents</span>
+            </div>
+            <div style={{ display: "flex", flexDirection: "column", gap: "4px", maxHeight: "220px", overflowY: "auto" }}>
+              {alertRows.map((r) => (
+                <div key={r.key} style={{ display: "flex", justifyContent: "space-between", fontSize: "0.78rem", padding: "3px 0", borderTop: "1px solid #f1f5f9" }}>
+                  <span style={{ color: "#334155" }}>{r.label}</span>
+                  <span style={{ color: "#b45309", fontWeight: 700 }}>{fmtInt(r.predictedIncidents)}</span>
                 </div>
               ))}
             </div>
-          )}
+          </div>
+          <div style={{ borderTop: "1px solid #e2e8f0", paddingTop: "12px" }}>
+            <h4 style={{ margin: "0 0 4px 0", fontSize: "0.85rem", color: "#0f172a", fontWeight: 700 }}>Proactive speed advisory</h4>
+            <p style={{ color: "#94a3b8", fontSize: "0.72rem", margin: "0 0 8px 0" }}>
+              Top 3 hotspots by density (predicted incidents per km) — advise reduced speed here first as rainfall
+              rises. The percentages below are the weather-incident-risk model&apos;s own probability of a
+              corridor-wide high-incident day at each rainfall level{weatherRisk ? ` (AUC ${weatherRisk.auc?.toFixed(3) ?? "—"})` : ""}.
+            </p>
+            <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
+              {speedAdvisoryRows.map((r) => (
+                <div key={r.key} style={{ fontSize: "0.78rem", padding: "3px 0", borderTop: "1px solid #f1f5f9" }}>
+                  <span style={{ color: "#334155", fontWeight: 600 }}>{r.label}</span>
+                  <span style={{ color: "#94a3b8" }}> — {useKmView ? "" : `Km ${r.km}, `}{r.ratePerKm.toFixed(2)} incidents/km</span>
+                </div>
+              ))}
+            </div>
+            {weatherRisk && (
+              <div style={{ display: "flex", gap: "8px", flexWrap: "wrap", marginTop: "8px" }}>
+                {weatherRisk.scenarios.map((s) => (
+                  <div key={s.rain_mm} style={{ padding: "4px 8px", borderRadius: "6px", background: "#f8fafc", border: "1px solid #e2e8f0", fontSize: "0.68rem" }}>
+                    <div style={{ color: "#94a3b8" }}>{s.rain_mm}mm rain</div>
+                    <div style={{ fontWeight: 700, color: "#0f172a" }}>{(s.probability * 100).toFixed(1)}%</div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
         </div>
       </div>
     </article>

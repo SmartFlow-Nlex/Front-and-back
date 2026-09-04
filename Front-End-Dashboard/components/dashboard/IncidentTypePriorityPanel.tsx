@@ -22,8 +22,30 @@ const BACKEND = process.env.NEXT_PUBLIC_BACKEND_URL ?? "http://localhost:4000";
 // fetches (severity + predictive), same convention PrescriptiveDeploymentPanel
 // already uses for its own two-endpoint pull.
 type SurvivalCurvePoint = { group: string; dimension: string; timeMin: number; survivalProbability: number; n: number };
-type SeverityData = { survivalCurve: SurvivalCurvePoint[] };
+type SeverityData = { survivalCurve: SurvivalCurvePoint[]; avgPredictedClearanceMin: number | null };
 type PredictiveSlice = { totalPredictedNext7Days: number; corridorForecastDays: number; corridorForecastModel: string | null };
+
+// Standard incident-response dispatch tiers, not a model output — a real,
+// commonly used doctrine (heavier scenes need more simultaneous resources),
+// paired below with this corridor's own measured clearance times per
+// severity so the "why" stays grounded in real numbers even though the
+// package itself is operational judgment, not something the ML pipeline
+// predicts. Matched by substring so it reads any label containing the
+// severity word — "Fatal" and "Road Crash — Fatal" both resolve the same
+// way — and falls back to a generic response for source-only labels (Road
+// Crash / Motorcycle Crash) that carry no severity component at all.
+const DISPATCH_PACKAGE: Record<"Fatal" | "Injury" | "Property Damage Only" | "default", string> = {
+  Fatal: "Heavy tow + medical unit + traffic control (simultaneous dispatch)",
+  Injury: "Medical unit + traffic control",
+  "Property Damage Only": "Standard patrol response",
+  default: "Standard patrol response",
+};
+function dispatchPackageFor(label: string): string {
+  if (label.includes("Fatal")) return DISPATCH_PACKAGE.Fatal;
+  if (label.includes("Injury")) return DISPATCH_PACKAGE.Injury;
+  if (label.includes("Property Damage Only")) return DISPATCH_PACKAGE["Property Damage Only"];
+  return DISPATCH_PACKAGE.default;
+}
 
 type Dimension = "severity" | "source" | "both";
 // Mirrors IncidentSeverityModels.tsx's own VIEW_GROUPS, minus each
@@ -67,7 +89,7 @@ export default function IncidentTypePriorityPanel() {
         if (cancelled) return;
         if (!severityJson.success) throw new Error(severityJson.message ?? "Request failed");
         if (!predictiveJson.success) throw new Error(predictiveJson.message ?? "Request failed");
-        setSeverity({ survivalCurve: severityJson.data.survivalCurve });
+        setSeverity({ survivalCurve: severityJson.data.survivalCurve, avgPredictedClearanceMin: severityJson.data.avgPredictedClearanceMin ?? null });
         setPredictive({
           totalPredictedNext7Days: predictiveJson.data.summary.totalPredictedNext7Days,
           corridorForecastDays: predictiveJson.data.corridorForecastDays,
@@ -214,8 +236,8 @@ export default function IncidentTypePriorityPanel() {
     <article className="chart-card wide" style={{ padding: "24px", display: "flex", flexDirection: "column", gap: "16px" }}>
       <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: "12px", flexWrap: "wrap" }}>
         <h3 style={{ fontSize: "1.05rem", color: "#0f172a", fontWeight: 700, margin: 0, letterSpacing: "-0.01em" }}>
-          Response Priority, by Incident Type
-          <InfoTooltip text="A solution for two Predictive-tab charts at once: the Predicted Incidents Ranking's total forecast, apportioned across incident types the same derived way it's apportioned across exits, crossed with each type's own median clearance time from Time to Clear, by Incident Source/Severity. Types combining high predicted volume with slow clearance are the best candidates for a dedicated response protocol, not a fixed patrol location." />
+          Clearance Protocol &amp; Resource Recommendation
+          <InfoTooltip text="A solution for two Predictive-tab charts at once: the Predicted Incidents Ranking's total forecast, apportioned across incident types the same derived way it's apportioned across exits, crossed with each type's own median clearance time from Time to Clear, by Incident Source/Severity. Each severity level gets a recommended dispatch package — a standard incident-response doctrine, not a model prediction — paired with this corridor's own measured clearance time for that severity, so heavier packages are justified by real numbers, not assumed." />
         </h3>
         <div style={{ display: "inline-flex", gap: "2px", padding: "3px", background: "var(--bg-surface, #fff)", border: "1px solid #dce2ef", borderRadius: "999px", flexShrink: 0 }}>
           {(["severity", "source", "both"] as const).map((v) => (
@@ -247,9 +269,12 @@ export default function IncidentTypePriorityPanel() {
             <strong>{priorityRows.length}</strong> of {rows.length} incident types combine above-median predicted
             volume (≥{fmtInt(medianVolume)}) with above-median clearance time (≥{medianClearance.toFixed(0)} min) —
             led by <strong>{priorityRows[0].label}</strong> ({fmtInt(priorityRows[0].predictedVolume)} predicted,{" "}
-            {priorityRows[0].medianClearanceMin.toFixed(0)} min). These are the best candidates for a dedicated
-            response protocol or pre-briefed unit: frequent enough to matter, slow enough that shaving minutes off
-            compounds across the most incidents.
+            {priorityRows[0].medianClearanceMin.toFixed(0)} min), recommending{" "}
+            <strong>{dispatchPackageFor(priorityRows[0].label)}</strong>
+            {severity.avgPredictedClearanceMin != null &&
+              ` to bring clearance down from the corridor's ${severity.avgPredictedClearanceMin.toFixed(1)} min average`}
+            . These are the best candidates for a dedicated response protocol: frequent enough to matter, slow
+            enough that shaving minutes off compounds across the most incidents.
           </p>
         </div>
       )}
@@ -287,6 +312,7 @@ export default function IncidentTypePriorityPanel() {
                 <th style={{ fontWeight: 600, paddingBottom: "4px", textAlign: "right" }}>Predicted incidents</th>
                 <th style={{ fontWeight: 600, paddingBottom: "4px", textAlign: "right" }}>Median clearance</th>
                 <th style={{ fontWeight: 600, paddingBottom: "4px", textAlign: "right" }}>n</th>
+                <th style={{ fontWeight: 600, paddingBottom: "4px", textAlign: "right" }}>Recommended dispatch</th>
               </tr>
             </thead>
             <tbody>
@@ -301,6 +327,9 @@ export default function IncidentTypePriorityPanel() {
                   <td style={{ padding: "4px 0", textAlign: "right", color: "#dc2626", fontWeight: 700 }}>{fmtInt(r.predictedVolume)}</td>
                   <td style={{ padding: "4px 0", textAlign: "right", color: "#334155" }}>{r.medianClearanceMin.toFixed(1)} min</td>
                   <td style={{ padding: "4px 0", textAlign: "right", color: "#94a3b8" }}>{fmtInt(r.n)}</td>
+                  <td style={{ padding: "4px 0", textAlign: "right", color: "#4f46e5", fontWeight: 600, fontSize: "0.72rem" }}>
+                    {dispatchPackageFor(r.label)}
+                  </td>
                 </tr>
               ))}
             </tbody>

@@ -169,7 +169,15 @@ export default function PredictiveVolumeChart({ months = "all", from, to, weathe
   // narrowing PAST here can never change a metric.
   //
   // Granularity & zone window controls
-  const [granularity, setGranularity] = useState<"Hourly" | "Daily" | "Weekly" | "Monthly" | "Yearly">("Daily");
+  /* Opens on Weekly.
+     The scored window is ~1,600 days. Drawn daily in a ~1,300px panel that is
+     under a pixel per point, so the day-of-week cycle — the strongest signal in
+     the series — collapses into a furry band and the reader sees noise where
+     the pattern is. Weekly buckets the same span into ~230 points, which is
+     legible at this width and is the granularity the trend and the seasonal
+     swing actually read at. Daily is one click away and still exact; it is a
+     drill-down, not the overview. */
+  const [granularity, setGranularity] = useState<"Hourly" | "Daily" | "Weekly" | "Monthly" | "Yearly">("Weekly");
   // ECharts needs literal colours, so the CSS tokens are resolved at runtime.
   const T = useThemeTokens();
   const ZONE = zoneTints(T.isDark);
@@ -674,7 +682,9 @@ export default function PredictiveVolumeChart({ months = "all", from, to, weathe
     { max: 7.5, label: "Light", color: "rgba(56, 189, 248, 0.45)" },
     { max: 15, label: "Moderate", color: "rgba(14, 165, 233, 0.65)" },
     { max: 30, label: "Heavy", color: "rgba(2, 132, 199, 0.8)" },
-    { max: Infinity, label: "Intense", color: "rgba(30, 64, 175, 0.9)" },
+    // Teal rather than navy: the old value sat almost on top of the volume
+    // line's blue, so the tallest bars read as part of the volume series.
+    { max: Infinity, label: "Intense", color: "rgba(13, 148, 136, 0.9)" },
   ];
   const rainBand = (mm: number) => RAIN_BANDS.find((b) => mm < b.max) ?? RAIN_BANDS[RAIN_BANDS.length - 1];
 
@@ -828,7 +838,16 @@ export default function PredictiveVolumeChart({ months = "all", from, to, weathe
         axisLine: { show: showWeather, lineStyle: { color: T.isDark ? "#38bdf8" : "#0284c7" } },
         splitLine: { show: false },
         min: 0,
-        max: (value: { max: number }) => Math.ceil(value.max * 1.2) || 10,
+        /* Headroom of 3x, so the heaviest bar fills about a third of the plot
+           and the rain reads as a strip along the bottom.
+
+           At 1.2x the tallest bar climbed to ~83% of the height, straight
+           through the volume line, and the "Intense" band is a navy close
+           enough to the volume blue that the two were hard to tell apart. That
+           is a secondary series obscuring the primary one. The axis still
+           labels true millimetres — this changes how tall the bars are drawn,
+           not what they say. */
+        max: (value: { max: number }) => Math.ceil(value.max * 3) || 10,
       },
     ],
     series: [

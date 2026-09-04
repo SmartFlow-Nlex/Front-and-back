@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { EChartsOption } from "echarts";
 import DashboardChart from "./DashboardChart";
 import ModelNarrative, { type MetricRow } from "./ModelNarrative";
@@ -9,6 +9,14 @@ import { useThemeTokens, zoneTints } from "./useThemeTokens";
 import WeatherEvidencePanel from "./WeatherEvidencePanel";
 
 type ModelType = "LSTM" | "Prophet" | "HoltWinters" | "SARIMAX" | "HoltsLinear";
+
+/* What each button is called in gold.ml_model_metrics. Module level because two
+   things need it: the metrics table, and the code that picks which model the
+   chart opens on. */
+const MODEL_DB_NAME: Record<ModelType, string> = {
+  LSTM: "LSTM", Prophet: "Prophet", HoltWinters: "HoltWinters",
+  SARIMAX: "SARIMAX", HoltsLinear: "Holts_Linear",
+};
 
 type ModelMeta = {
   key: ModelType;
@@ -133,9 +141,22 @@ type Props = {
 };
 
 export default function PredictiveVolumeChart({ months = "all", from, to, weather = "all" }: Props) {
-  // Several models can be on screen at once; the list never empties so the
-  // chart always has something to compare the ground truth against.
+  /* Several models can be on screen at once; the list never empties so the
+     chart always has something to compare the ground truth against.
+
+     Which one it OPENS on is decided once the metrics arrive, in the effect
+     below. It used to be hardcoded to LSTM — the one model the pipeline
+     rejects. LSTM scores MASE 1.568, meaning its forecast is 57% worse than
+     repeating last week's values, and retrain_honest.py records the reason as
+     "does not beat baseline". Three accepted models sit beside it
+     (HoltWinters 0.873, SARIMAX 0.874, Prophet 0.896), so the default put the
+     weakest candidate in front of every reader who never touched the buttons.
+     LSTM stays selectable — being outperformed is a finding worth showing — it
+     just no longer speaks for the system unprompted. */
   const [selected, setSelected] = useState<ModelType[]>(["LSTM"]);
+  // Set once the reader picks a model themselves, so a late metrics fetch
+  // cannot yank the chart out from under them.
+  const modelChosenByUser = useRef(false);
   const [chartData, setChartData] = useState<ChartData | null>(null);
   // Raw metric rows, kept unmodified so the narrative can read fields the
   // metrics TABLE does not display (rejected_reason, aic/bic, the _nw twins).
@@ -169,10 +190,7 @@ export default function PredictiveVolumeChart({ months = "all", from, to, weathe
     if (!rawMetrics.length) return next;
 
     const byName = new Map(rawMetrics.map((m) => [m.model_name, m]));
-    const DB_NAME: Record<ModelType, string> = {
-      LSTM: "LSTM", Prophet: "Prophet", HoltWinters: "HoltWinters",
-      SARIMAX: "SARIMAX", HoltsLinear: "Holts_Linear",
-    };
+    const DB_NAME = MODEL_DB_NAME;
     const TWIN: Partial<Record<ModelType, string>> = {
       Prophet: "Prophet_nw", SARIMAX: "SARIMAX_nw", LSTM: "LSTM_nw",
     };
@@ -204,7 +222,27 @@ export default function PredictiveVolumeChart({ months = "all", from, to, weathe
     return next;
   }, [rawMetrics, showWeather]);
 
+  /* Open on the best model the pipeline actually accepted.
+     Rank is assigned across the full candidate set by the training run, so the
+     lowest rank among accepted rows is the champion; ties and missing ranks
+     fall back to MASE, the metric acceptance is judged on. If nothing was
+     accepted the initial choice stands rather than inventing a winner. */
+  useEffect(() => {
+    if (modelChosenByUser.current || !rawMetrics.length) return;
+    const byName = new Map(rawMetrics.map((m) => [m.model_name, m]));
+    const num = (v: unknown) => (typeof v === "number" && isFinite(v) ? v : Infinity);
+    const champion = (Object.keys(MODEL_DB_NAME) as ModelType[])
+      .map((k) => ({ k, row: byName.get(MODEL_DB_NAME[k]) }))
+      .filter((c) => c.row?.accepted)
+      .sort((a, b) => {
+        const r = num(a.row?.rank) - num(b.row?.rank);
+        return r !== 0 ? r : num((a.row as never)?.["mase"]) - num((b.row as never)?.["mase"]);
+      })[0];
+    if (champion) setSelected([champion.k]);
+  }, [rawMetrics]);
+
   const toggleModel = useCallback((key: ModelType) => {
+    modelChosenByUser.current = true;
     setSelected((prev) => {
       if (!prev.includes(key)) return MODELS.filter((m) => m.key === key || prev.includes(m.key)).map((m) => m.key);
       if (prev.length === 1) return prev; // keep at least one line on the chart

@@ -56,9 +56,6 @@ const ACTUAL_COLOR = "#2563eb";
 // ReferenceError, was swallowed by the catch, and the chart sat on "Loading…".
 const BACKEND = process.env.NEXT_PUBLIC_BACKEND_URL ?? "http://localhost:4000";
 const VALIDATED_HORIZON = 14; // must match retrain_honest.py HORIZON
-// Show every stored training day. The blue line is meant to BE the trained
-// dataset, and only at full width do the 80/20 proportions read correctly.
-const ALL_PAST = 100000;
 
 // The API hands back a DATE column that pg has already localised, so read the
 // calendar parts back out in local time to recover the original YYYY-MM-DD.
@@ -156,7 +153,6 @@ export default function PredictiveVolumeChart({ months = "all", from, to, weathe
   const T = useThemeTokens();
   const ZONE = zoneTints(T.isDark);
 
-  const [pastDays, setPastDays] = useState<number>(ALL_PAST);
   const [futureDays, setFutureDays] = useState<number>(14);
 
   // Drill-down: which day is expanded to its 24-hour breakdown
@@ -228,7 +224,15 @@ export default function PredictiveVolumeChart({ months = "all", from, to, weathe
           qs.set("from", from);
           qs.set("to", to);
         } else {
-          qs.set("months", months);
+          /* Always the full history, whatever the page's Range says.
+             This chart's subject is the model's own split — how much data
+             trained it against how much tested it — and that split is fixed by
+             the training run, not by a viewing window. Asking for 12 months
+             returned less training data than the holdout is long, so the bands
+             came out roughly even and the chart showed a model tested on half
+             its data. The Range control still governs the descriptive charts,
+             where it means what it says. */
+          qs.set("months", "all");
         }
         if (weather && weather !== "all") {
           qs.set("weather", weather);
@@ -469,7 +473,22 @@ export default function PredictiveVolumeChart({ months = "all", from, to, weathe
   // Trim to the requested zone widths. Slicing every series by the same window
   // keeps the zone boundaries aligned with the data after the cut.
   // All three zones (Past · Present · Future) are always fully visible.
-  const lo = Math.max(0, chartData.holdoutStart - pastDays);
+  /* How much training history to show.
+   *
+   * The zones are the model's own split: everything before holdoutStart trained
+   * it, the holdout tested it, and the future is the forecast. In the warehouse
+   * that is 2,488 / 434 / 56 rows — roughly 85/15 of the scored period. The
+   * chart only tells that story if the training band is drawn several times
+   * wider than the test band.
+   *
+   * Daily used to clip the past to a flat 90 days while the holdout ran 434, so
+   * the picture inverted: a sliver of training beside ten months of testing,
+   * which reads as a model tested on most of its data. The clip exists because
+   * 2,400 raw points in 1,400px is an unreadable band, so it stays — but sized
+   * from the holdout rather than fixed, which keeps the proportion honest at
+   * every granularity. */
+  const proportionalPast = Math.max(90, (chartData.futureStart - chartData.holdoutStart) * 4);
+  const lo = Math.max(0, chartData.holdoutStart - proportionalPast);
   const hi = Math.min(chartData.dates.length, chartData.futureStart + futureDays);
   const cut = <T,>(a: T[]) => a.slice(lo, hi);
 
@@ -505,17 +524,6 @@ export default function PredictiveVolumeChart({ months = "all", from, to, weathe
   const holdoutStart = agg ? agg.holdoutStart : dailyHoldoutStart;
   const futureStart = agg ? agg.futureStart : dailyFutureStart;
 
-  /* Where the slider starts, as a percentage. Aim to show the forecast plus
-     about four times its length of run-up, so it has context without being
-     swamped; clamped so a long forecast cannot hide the recent past and a
-     short series still opens fully. */
-  const zoomStart = (() => {
-    const total = dates.length;
-    if (total === 0 || futureStart <= 0 || futureStart >= total) return 0;
-    const futureLen = total - futureStart;
-    const window = Math.min(total, Math.max(futureLen * 5, 60));
-    return Math.max(0, Math.min(85, ((total - window) / total) * 100));
-  })();
   const isAggregated = agg != null;
   const drillIndex = drillDate ? isoDates.indexOf(drillDate) : -1;
   const drillLabel = drillIndex >= 0 ? dates[drillIndex] : drillDate ?? "";
@@ -723,14 +731,14 @@ export default function PredictiveVolumeChart({ months = "all", from, to, weathe
       textStyle: { fontSize: 12, color: T.chartText },
     },
     dataZoom: [
-      /* Opens on the recent past plus the whole forecast, not the entire
-         series. Fourteen days of forecast against ~700 of history is 2% of the
-         axis: the green band was a sliver at the right edge and the predicted
-         line inside it was a few pixels long, which is the thing a reader came
-         to look at. Framing the tail puts the forecast at roughly a fifth of
-         the width. The slider still reaches the whole history — this changes
-         where the chart opens, not what it holds. */
-      { type: "slider", start: zoomStart, end: 100, height: 18, bottom: 44,
+      /* Full width. The chart's subject is the split — how much data trained
+         the model, how much it was tested on, and what it forecasts — and that
+         proportion only reads if all three zones are on screen at once.
+         An earlier attempt opened on the tail to make the forecast bigger; it
+         made the forecast legible by hiding the training period that gives it
+         meaning, which is a worse trade. The forecast is found by its dashed
+         line and its green band instead. */
+      { type: "slider", start: 0, end: 100, height: 18, bottom: 44,
         borderColor: T.border, fillerColor: T.isDark ? "rgba(56,118,245,0.18)" : "rgba(37,99,235,0.08)",
         handleStyle: { color: "#3876f5" }, textStyle: { color: T.textMuted, fontSize: 10 },
         backgroundColor: T.isDark ? "rgba(255,255,255,0.03)" : "transparent",
@@ -1231,10 +1239,10 @@ export default function PredictiveVolumeChart({ months = "all", from, to, weathe
               <button
                 key={g}
                 onClick={() => {
+                  /* The window no longer depends on granularity: it is sized
+                     from the holdout where `lo` is computed, so every view
+                     shows the same split in the same proportion. */
                   setGranularity(g);
-                  // Daily stays zoomed because 2,400 raw points is unreadable;
-                  // the aggregated views bucket the data so they can show it all.
-                  setPastDays(g === "Daily" ? 90 : ALL_PAST);
                 }}
                 title={
                   g === "Daily"

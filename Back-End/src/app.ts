@@ -23,7 +23,28 @@ const apiLimiter = rateLimit({
   }
 });
 
-app.use(cors({ origin: env.FRONTEND_ORIGIN }));
+/**
+ * Allow every origin listed in FRONTEND_ORIGIN, plus requests that carry no
+ * Origin header at all.
+ *
+ * That last case is the mobile app: a React Native fetch is not a browser
+ * request, so it sends no Origin and there is nothing to allow it against.
+ * Such a request is passed rather than rejected; it still comes back without an
+ * Access-Control-Allow-Origin header, which is fine, because nothing on the
+ * native side is looking for one.
+ *
+ * None of this is a security boundary. CORS only ever restrains browsers, and
+ * these routes carry no auth at all — what has to gate them before the app
+ * leaves the LAN is the Supabase middleware in auth.middleware.ts.
+ */
+app.use(
+  cors({
+    origin: (origin, callback) => {
+      if (!origin || env.ALLOWED_ORIGINS.includes(origin)) return callback(null, true);
+      callback(null, false);
+    },
+  }),
+);
 app.use(express.json({ limit: "2mb" }));
 app.use(morgan("dev"));
 

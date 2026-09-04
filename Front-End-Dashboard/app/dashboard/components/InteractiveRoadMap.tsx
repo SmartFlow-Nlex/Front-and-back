@@ -35,6 +35,8 @@ const BACKEND = process.env.NEXT_PUBLIC_BACKEND_URL ?? "http://localhost:4000";
 
 /* Shared with the live map: same shapes, same derivation. */
 import { corridorSegmentLevels, corridorStatusFromFeed, type ExitStatus, type SegmentStatus } from "../../../lib/corridor-status";
+import { mapPalette } from "../../../lib/map-palette";
+import { useChartTheme } from "../../../lib/chart-theme";
 
 type CorridorStatus = {
   windowMinutes: number;
@@ -85,14 +87,22 @@ const CLEAR: TrafficRecord = {
   jamCount: 0,
 };
 
-/* Waze's level, in the panel's three colours. The same thresholds classify()
-   uses, so a block and the hover card describing it cannot disagree: level 0
-   is free flow, 1-2 is slow, 3 and up is congested. */
-function levelClass(level: number): string {
-  if (level >= 3) return "seg-red";
-  if (level >= 1) return "seg-orange";
-  return "seg-green";
-}
+/* Waze's six levels are six colours, and they are the map's.
+
+   This panel used to paint three — one green, one orange, one red — from hues
+   of its own that appear nowhere else. So a stretch Waze called level 3 was
+   orange on the Live Map and red here, and level 2 was amber there and orange
+   here. The two views agreed on the number and disagreed on the colour, which
+   is the part a reader actually sees.
+
+   Worse, the panel's own key already described all six bands while painting
+   three, so it disagreed with the road beside it as well.
+
+   Both now read mapPalette, the same table the Mapbox paint expression uses. A
+   level renders in one colour across the whole dashboard, and it follows the
+   theme, which the hardcoded hues never did. */
+const levelColour = (palette: ReturnType<typeof mapPalette>, level: number) =>
+  palette.level[Math.max(0, Math.min(5, Math.round(level))) as 0 | 1 | 2 | 3 | 4 | 5];
 
 const COLOR_CLASS: Record<SegmentStatus, string> = {
   clear: "seg-green",
@@ -306,6 +316,8 @@ export default function InteractiveRoadMap() {
 
   /** One carriageway. Both are built from the same markup so they read as one
       road split down the middle rather than two unrelated strips. */
+  const { isDark } = useChartTheme();
+  const palette = mapPalette(isDark);
   const segmentLevels = corridor?.segmentLevels ?? new Map<string, number>();
 
   const carriageway = (
@@ -322,12 +334,14 @@ export default function InteractiveRoadMap() {
              about what the road looks like. */
           const key = dir === "NB" ? r.nbSegment : r.sbSegment;
           const level = key ? segmentLevels.get(key) ?? 0 : 0;
+          const noRamp = access === "No Access";
           return (
             <span
               key={`${dir}-${r.exit.exit_name}`}
-              className={`ds-rd-seg ${access === "No Access" ? "no-ramp" : levelClass(level)} ${
+              className={`ds-rd-seg ${noRamp ? "no-ramp" : ""} ${
                 activeStation === r.exit.exit_name ? "is-active" : ""
               }`}
+              style={noRamp ? undefined : { background: levelColour(palette, level) }}
             />
           );
         })}
@@ -486,7 +500,7 @@ export default function InteractiveRoadMap() {
             <ul className="ds-rd-scale-list">
               {JAM_SCALE.map((r) => (
                 <li key={r.level}>
-                  <span className={`ds-rd-scale-chip lv-${r.level}`}>{r.level}</span>
+                  <span className="ds-rd-scale-chip" style={{ background: levelColour(palette, r.level) }}>{r.level}</span>
                   <span className="ds-rd-scale-band">{r.band}</span>
                   <span className="ds-rd-scale-word">{r.label}</span>
                 </li>

@@ -3556,9 +3556,9 @@ body {
   transition: opacity 140ms ease, filter 140ms ease;
 }
 
-.ds-rd-seg.seg-red    { background: #e04434; }
-.ds-rd-seg.seg-orange { background: #e08a2e; }
-.ds-rd-seg.seg-green  { background: #23a55a; }
+/* Colour comes from lib/map-palette via an inline style, so the road here and
+   the road on the Live Map are painted from one table. Three hardcoded hues
+   used to live here and matched neither. */
 /* No ramp this way: bare tarmac, no traffic claim. */
 .ds-rd-seg.no-ramp    { background: none; }
 
@@ -3883,12 +3883,9 @@ body {
   font-weight: 800;
   color: #fff;
 }
-.ds-rd-scale-chip.lv-0 { background: #23a55a; }
-.ds-rd-scale-chip.lv-1,
-.ds-rd-scale-chip.lv-2 { background: #e08a2e; }
-.ds-rd-scale-chip.lv-3,
-.ds-rd-scale-chip.lv-4,
-.ds-rd-scale-chip.lv-5 { background: #e04434; }
+/* Six levels, six colours, set inline from the same palette the road uses. The
+   rules here collapsed them into three, so the key contradicted the scale it
+   was explaining. */
 
 .ds-rd-scale-band {
   font-size: 0.78rem;

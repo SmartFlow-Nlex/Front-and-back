@@ -60,7 +60,14 @@ STEP      = 14   # non-overlapping blocks
 # origins left the top three models within 0.6 WMAPE points of each other, which
 # is inside the noise; this gives the ranking enough independent cycles to mean
 # something.
-N_ORIGINS = 34
+N_ORIGINS = 10   # 90/10 SPLIT RUN. 10 x 14 = 140 scored days = 9.58% of the
+                 # 1,461-day series; train 1,321 days = 90.42%. The manuscript
+                 # (p86) commits to evaluating BOTH 80/20 and 90/10 and picking
+                 # empirically, so this is the second arm of that comparison.
+                 # 80/20 used N_ORIGINS = 21.
+                 # single-source series (2022-2025). Was 34 when the series
+                 # still carried the spliced 2020-21 and 2026 years; 34 origins
+                 # would now consume 476 of 1,461 days = 32.6%, not an 80/20 split.
 SEASON    = 7    # weekly seasonality
 # Project 28 days even though only 14 are validated. Days 1-14 carry the measured
 # h=14 accuracy; days 15-28 are extrapolation beyond it and the chart marks them

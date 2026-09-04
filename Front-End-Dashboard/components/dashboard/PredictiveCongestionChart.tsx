@@ -6,23 +6,13 @@ import DashboardChart from "./DashboardChart";
 
 type State = "Low" | "Med" | "High";
 
-type RawRow = { segment: string; hours: number; state: State; probability: number | string };
+type RawRow = { segment: string; hours: number; state: State; probability: number | string;
+                km?: number | null; kmEstimated?: boolean };
 
-// Segments are laid out along the corridor, not alphabetically — congestion
-// propagates between neighbours, and that pattern is only visible when the
-// rows are in km-post order.
-const KM_POST: Record<string, number> = {
-  Balintawak: 0,
-  "Mindanao Ave": 2,
-  Karuhatan: 4,
-  Valenzuela: 8,
-  Meycauayan: 16,
-  Marilao: 22,
-  Bocaue: 26,
-  Balagtas: 30,
-  Tabang: 35,
-  "Santa Rita": 40,
-};
+// Corridor position now arrives per row from the API (gold.exit_km_post), which
+// carries all 20 exits. The hardcoded table here held only 10, so half the
+// corridor rendered "km —" AND sorted to the end — and congestion propagates
+// between NEIGHBOURS, so a wrong row order hides the one pattern worth seeing.
 
 // Solid fills only. Confidence used to be encoded as opacity, which made a
 // low-confidence SEVERE cell look calmer than a solid HEAVY one — the opacity
@@ -36,6 +26,24 @@ const STATE_META: Record<State, { rank: number; color: string; text: string; lab
 
 const LOW_CONF = 0.8;
 
+type ModelInfo = {
+  model: string; accuracy: number | null; accepted: boolean;
+  rejectedReason: string | null;
+  baseline: { model: string; accuracy: number | null } | null;
+};
+
+/** km lookup built from whatever the API returned, so it always covers every
+ *  segment actually present rather than a fixed list. */
+function kmIndex(rows: { segment: string; km?: number | null; kmEstimated?: boolean }[]) {
+  const m = new Map<string, { km: number | null; est: boolean }>();
+  for (const r of rows) {
+    if (!m.has(r.segment)) m.set(r.segment, { km: r.km ?? null, est: Boolean(r.kmEstimated) });
+  }
+  return m;
+}
+const kmLabel = (e?: { km: number | null; est: boolean }) =>
+  e?.km == null ? "—" : `${e.km}${e.est ? "*" : ""}`;
+
 type CellItem = { value: [number, number, number]; state: State; conf: number; label: { color: string } };
 const BACKEND = process.env.NEXT_PUBLIC_BACKEND_URL ?? "http://localhost:4000";
 
@@ -43,7 +51,12 @@ type Alert = { segment: string; state: State; from: number; to: number; conf: nu
 
 export default function PredictiveCongestionChart() {
   const [raw, setRaw] = useState<RawRow[] | null>(null);
+  const [modelInfo, setModelInfo] = useState<ModelInfo | null>(null);
   const [alertsOpen, setAlertsOpen] = useState(false);
+
+  // One km lookup for the whole component: the heatmap, the alert list and the
+  // detail drawer all order by corridor position and must agree on it.
+  const KMI = useMemo(() => kmIndex(raw ?? []), [raw]);
 
   useEffect(() => {
     let cancelled = false;
@@ -52,6 +65,7 @@ export default function PredictiveCongestionChart() {
       .then((json) => {
         if (cancelled || !json.success || !json.data?.congestion) return;
         setRaw(json.data.congestion as RawRow[]);
+        setModelInfo(json.data.congestionModel ?? null);
       })
       .catch((err) => console.error("Failed to fetch ML congestion forecast", err));
     return () => {
@@ -75,7 +89,7 @@ export default function PredictiveCongestionChart() {
     if (!raw || raw.length === 0) return null;
 
     const byKm = Array.from(new Set(raw.map((d) => d.segment))).sort(
-      (a, b) => (KM_POST[a] ?? 999) - (KM_POST[b] ?? 999)
+      (a, b) => (KMI.get(a)?.km ?? 9999) - (KMI.get(b)?.km ?? 9999)
     );
     const maxHour = Math.max(...raw.map((d) => d.hours));
     const hourLabels = Array.from({ length: maxHour }, (_, i) => `+${i + 1}h`);
@@ -166,7 +180,7 @@ export default function PredictiveCongestionChart() {
       firstSevere,
       lowConfCount: cells.filter((c) => c.state !== "Low" && c.conf < LOW_CONF).length,
     };
-  }, [raw]);
+  }, [raw, KMI]);
 
   if (!model) {
     return (
@@ -225,7 +239,7 @@ export default function PredictiveCongestionChart() {
         return `
           <div style="padding:2px 4px; min-width:215px;">
             <b style="font-size:1.05em; color:#0f172a;">${segments[y]}</b>
-            <span style="color:#94a3b8; font-size:0.85em;"> · km ${KM_POST[segments[y]] ?? "—"}</span>
+            <span style="color:#94a3b8; font-size:0.85em;"> · km ${kmLabel(KMI.get(segments[y]))}</span>
             <div style="margin-top:8px; display:grid; grid-template-columns:112px 1fr; gap:5px 8px; font-size:0.9em;">
               <span style="color:#64748b;">Horizon</span><span style="font-weight:600;">${hourLabels[x]}</span>
               <span style="color:#64748b;">Predicted state</span><span style="color:${d.state === "Low" ? "#166534" : d.state === "Med" ? "#b45309" : "#dc2626"}; font-weight:700;">${meta.label}</span>
@@ -262,7 +276,7 @@ export default function PredictiveCongestionChart() {
       {
         gridIndex: 0,
         type: "category",
-        data: segments.map((s) => `${s}  ·  km ${KM_POST[s] ?? "—"}`),
+        data: segments.map((s) => `${s}  ·  km ${kmLabel(KMI.get(s))}`),
         axisTick: { show: false },
         axisLine: { show: false },
         axisLabel: { color: "#334155", fontWeight: 600, fontSize: 11 },
@@ -337,7 +351,7 @@ export default function PredictiveCongestionChart() {
   const bySegment = segments
     .map((seg) => ({ seg, runs: alerts.filter((a) => a.segment === seg).sort((a, b) => a.from - b.from) }))
     .filter((g) => g.runs.length > 0)
-    .sort((a, b) => (KM_POST[a.seg] ?? 999) - (KM_POST[b.seg] ?? 999));
+    .sort((a, b) => (KMI.get(a.seg)?.km ?? 9999) - (KMI.get(b.seg)?.km ?? 9999));
 
   const alertCard = (a: Alert, key: string) => {
     const severe = a.state === "High";
@@ -363,7 +377,7 @@ export default function PredictiveCongestionChart() {
         </span>
         <div style={{ minWidth: 0, fontSize: "0.82rem", lineHeight: 1.4 }}>
           <div style={{ fontWeight: 700, color: "#0f172a" }}>
-            {a.segment} <span style={{ fontWeight: 500, color: "#94a3b8" }}>km {KM_POST[a.segment] ?? "—"}</span>
+            {a.segment} <span style={{ fontWeight: 500, color: "#94a3b8" }}>km {kmLabel(KMI.get(a.segment))}</span>
           </div>
           <div style={{ color: "#64748b" }}>
             {a.from === a.to ? `+${a.from}h` : `+${a.from}h → +${a.to}h`} · {span}h · {(a.conf * 100).toFixed(0)}% confidence
@@ -385,8 +399,22 @@ export default function PredictiveCongestionChart() {
         <div>
           <h3 style={{ fontSize: "1.05rem", color: "#0f172a", fontWeight: 700, margin: 0, letterSpacing: "-0.01em", display: "flex", alignItems: "center", gap: "8px" }}>
             Predictive Congestion State Map
-            <span style={{ fontSize: "0.72rem", padding: "2px 8px", background: "#f1f5f9", borderRadius: "999px", border: "1px solid #dce2ef", color: "#475569", fontWeight: 600 }}>
-              XGBoost
+            {/* Read from gold.ml_model_metrics, never hardcoded. The caption said
+                XGBoost while the accepted model was GRU, so the label and the data
+                described different models. Accuracy sits beside it so the panel
+                states how well it actually does. */}
+            <span
+              title={modelInfo && !modelInfo.accepted && modelInfo.rejectedReason ? modelInfo.rejectedReason : undefined}
+              style={{
+                fontSize: "0.72rem", padding: "2px 8px", borderRadius: "999px", fontWeight: 600,
+                background: modelInfo?.accepted ? "#ecfdf5" : "#f1f5f9",
+                border: `1px solid ${modelInfo?.accepted ? "#a7f3d0" : "#dce2ef"}`,
+                color: modelInfo?.accepted ? "#047857" : "#475569",
+              }}
+            >
+              {modelInfo?.model ?? "—"}
+              {modelInfo?.accuracy != null && ` · ${(modelInfo.accuracy * 100).toFixed(1)}%`}
+              {modelInfo && !modelInfo.accepted && " · not accepted"}
             </span>
           </h3>
           <p style={{ color: "#64748b", fontSize: "0.82rem", margin: "4px 0 0 0" }}>
@@ -522,7 +550,7 @@ export default function PredictiveCongestionChart() {
                 <div key={seg}>
                   <div style={{ display: "flex", alignItems: "baseline", gap: "8px", marginBottom: "8px" }}>
                     <span style={{ fontSize: "0.88rem", fontWeight: 700, color: "#0f172a" }}>{seg}</span>
-                    <span style={{ fontSize: "0.74rem", color: "#94a3b8" }}>km {KM_POST[seg] ?? "—"}</span>
+                    <span style={{ fontSize: "0.74rem", color: "#94a3b8" }}>km {kmLabel(KMI.get(seg))}</span>
                     <span style={{ flex: 1, borderBottom: "1px solid #eef2f7" }} />
                     <span style={{ fontSize: "0.74rem", color: "#94a3b8" }}>
                       {runs.length} {runs.length === 1 ? "episode" : "episodes"}

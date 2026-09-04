@@ -218,7 +218,7 @@ export async function getTrafficAnalyticsFromDb(filters: AnalyticsFilters) {
         // "9,000" above "54,589" and often kept the smaller event.)
         //
         // Which plaza — measured at the venue's OWN interchange. The events
-        // table points at Cdv/Ph Arena (the Philippine Arena's exit) and bronze
+        // table points at CDV/PH Arena (the Philippine Arena's exit) and bronze
         // now carries a volume series for it, so no proxy is needed. This
         // previously fell back to Bocaue, 2.4 km away, because the public
         // matview had no CDV series.
@@ -583,7 +583,7 @@ export async function getVehicleClassDistributionFromDb() {
  * Percentages are over train+holdout only. Future days are projections with no
  * actuals, so including them would understate the holdout share.
  */
-export async function getSplitSummary() {
+export async function getSplitSummary(split: SplitLabel = DEFAULT_SPLIT) {
   if (!db) return null;
   try {
     const { rows } = await db.query(`
@@ -595,7 +595,8 @@ export async function getSplitSummary() {
         MAX(forecast_date) FILTER (WHERE NOT is_holdout AND NOT is_future)::text AS train_end,
         MIN(forecast_date) FILTER (WHERE is_holdout)::text AS holdout_start
       FROM gold.ml_predictive_volume
-    `);
+      WHERE split_label = $1
+    `, [split]);
     const r = rows[0];
     if (!r) return null;
     const scored = Number(r.train_days) + Number(r.holdout_days);
@@ -616,9 +617,23 @@ export async function getSplitSummary() {
   }
 }
 
-export type ForecastWindow = { months?: "3" | "12" | "all"; from?: string; to?: string };
+/**
+ * Chronological split arm. The manuscript (p86) commits to evaluating BOTH an
+ * 80/20 and a 90/10 split and choosing empirically, so both are stored and the
+ * dashboard can toggle between them. 80/20 is the default: its 294-day scored
+ * window spans Mar-Dec, while 90/10's 140 days cover only Aug-Dec — one season,
+ * which fails the manuscript's own "sufficiently diverse time frame" condition.
+ *
+ * gold.ml_predictive_volume and gold.ml_model_metrics hold BOTH arms, so every
+ * query against them must filter on split_label or the two mix.
+ */
+export type SplitLabel = "80_20" | "90_10";
+export const DEFAULT_SPLIT: SplitLabel = "80_20";
+
+export type ForecastWindow = { months?: "3" | "12" | "all"; from?: string; to?: string; split?: SplitLabel };
 
 export async function getMLPredictiveVolume(window: ForecastWindow = {}) {
+  const split: SplitLabel = window.split ?? DEFAULT_SPLIT;
   if (!db) return null;
   // weather_* drive the rainfall bars; the _nw columns are the weather-free twins
   // the Weather toggle switches to. Without them the toggle changes nothing.
@@ -629,9 +644,9 @@ export async function getMLPredictiveVolume(window: ForecastWindow = {}) {
     if (window.from && window.to) {
       const { rows } = await db.query(
         `SELECT ${cols} FROM gold.ml_predictive_volume
-         WHERE forecast_date BETWEEN $1::date AND $2::date
+         WHERE split_label = $3 AND forecast_date BETWEEN $1::date AND $2::date
          ORDER BY forecast_date ASC`,
-        [window.from, window.to]
+        [window.from, window.to, split]
       );
       return rows;
     }
@@ -647,17 +662,20 @@ export async function getMLPredictiveVolume(window: ForecastWindow = {}) {
       // 0 past rows. Anchoring on the holdout START keeps it whole.
       const { rows } = await db.query(
         `SELECT ${cols} FROM gold.ml_predictive_volume
-         WHERE is_holdout OR is_future
-            OR forecast_date >= (
-                 SELECT MIN(forecast_date) FROM gold.ml_predictive_volume WHERE is_holdout
-               ) - ($1::int * interval '1 month')
+         WHERE split_label = $2
+           AND (is_holdout OR is_future
+                OR forecast_date >= (
+                     SELECT MIN(forecast_date) FROM gold.ml_predictive_volume
+                     WHERE is_holdout AND split_label = $2
+                   ) - ($1::int * interval '1 month'))
          ORDER BY forecast_date ASC`,
-        [Number(window.months)]
+        [Number(window.months), split]
       );
       return rows;
     }
 
-    const { rows } = await db.query(`SELECT ${cols} FROM gold.ml_predictive_volume ORDER BY forecast_date ASC`);
+    const { rows } = await db.query(
+      `SELECT ${cols} FROM gold.ml_predictive_volume WHERE split_label = $1 ORDER BY forecast_date ASC`, [split]);
     return rows;
   } catch (error) {
     console.error("Failed to fetch ML volume:", error);
@@ -669,10 +687,57 @@ export async function getMLPredictiveVolume(window: ForecastWindow = {}) {
 export async function getMLPredictiveCongestion() {
   if (!db) return null;
   try {
-    const { rows } = await db.query(`SELECT segment_name as "segment", hours_ahead as "hours", congestion_state as "state", probability FROM gold.ml_predictive_congestion ORDER BY segment_name ASC, hours_ahead ASC`);
+    // km_post joins in so the map can order segments south to north. The
+    // frontend used to carry a hardcoded table of 10 exits, which left the other
+    // 10 showing "km —" and, worse, unordered — congestion propagates between
+    // NEIGHBOURS, so a wrong row order hides the only pattern worth seeing.
+    // `estimated` marks positions calibrated from coordinates rather than taken
+    // from the NLEX reference, so the UI can be honest about which is which.
+    const { rows } = await db.query(`
+      SELECT c.segment_name AS "segment", c.hours_ahead AS "hours",
+             c.congestion_state AS "state", c.probability,
+             k.km_post::float AS "km", COALESCE(k.estimated, false) AS "kmEstimated"
+      FROM gold.ml_predictive_congestion c
+      LEFT JOIN gold.exit_km_post k ON k.exit_name = c.segment_name
+      ORDER BY k.km_post NULLS LAST, c.segment_name ASC, c.hours_ahead ASC`);
     return rows;
   } catch (error) {
     console.error("Failed to fetch ML congestion:", error);
+    return null;
+  }
+}
+
+/**
+ * Accepted congestion model and its measured accuracy.
+ *
+ * The panel hardcoded "XGBoost" while the accepted model was GRU, so the label
+ * and the data described different models. Reading it from the metrics table
+ * means a future retrain cannot leave the caption stale again.
+ */
+export async function getCongestionModel() {
+  if (!db) return null;
+  try {
+    const { rows } = await db.query(`
+      SELECT model_name, r2::float AS accuracy, accepted, rejected_reason, updated_at
+      FROM gold.ml_model_metrics
+      WHERE target = 'Congestion' AND rank IS NOT NULL
+      ORDER BY accepted DESC, r2 DESC NULLS LAST
+      LIMIT 1`);
+    if (!rows[0]) return null;
+    const base = await db.query(`
+      SELECT model_name, r2::float AS accuracy FROM gold.ml_model_metrics
+      WHERE target = 'Congestion' AND rank IS NULL
+      ORDER BY r2 DESC NULLS LAST LIMIT 1`);
+    return {
+      model: rows[0].model_name,
+      accuracy: rows[0].accuracy,
+      accepted: Boolean(rows[0].accepted),
+      rejectedReason: rows[0].rejected_reason ?? null,
+      baseline: base.rows[0] ? { model: base.rows[0].model_name, accuracy: base.rows[0].accuracy } : null,
+      updatedAt: rows[0].updated_at,
+    };
+  } catch (error) {
+    console.error("Failed to fetch congestion model:", error);
     return null;
   }
 }
@@ -772,7 +837,8 @@ const MODEL_COLUMN: Record<string, string> = {
 export async function getMLPredictiveVolumeHourly(
   date: string,
   model = "LSTM",
-  weather: "all" | "dry" | "wet" = "all"
+  weather: "all" | "dry" | "wet" = "all",
+  split: SplitLabel = DEFAULT_SPLIT
 ): Promise<HourlyForecastResult | null> {
   if (!db) return null;
   const column = MODEL_COLUMN[model] ?? MODEL_COLUMN.LSTM;
@@ -794,8 +860,8 @@ export async function getMLPredictiveVolumeHourly(
       // The day's totals as the models see them
       db.query(
         `SELECT forecast_date::text AS date, actual_volume, ${column} AS predicted, is_future
-         FROM gold.ml_predictive_volume WHERE forecast_date = $1::date`,
-        [date]
+         FROM gold.ml_predictive_volume WHERE forecast_date = $1::date AND split_label = $2`,
+        [date, split]
       ),
       // Observed hourly totals, if this date has been recorded
       wetFilter === null
@@ -916,7 +982,7 @@ export type MLModelMetric = {
   updatedAt: string | null;
 };
 
-export async function getMLModelMetrics(): Promise<MLModelMetric[] | null> {
+export async function getMLModelMetrics(split: SplitLabel = DEFAULT_SPLIT): Promise<MLModelMetric[] | null> {
   if (!db) return null;
   try {
     const { rows } = await db.query(
@@ -927,7 +993,13 @@ export async function getMLModelMetrics(): Promise<MLModelMetric[] | null> {
               mape, smape, rmsse, adjusted_r2, train_r2, val_r2, gap,
               uses_weather, aic, bic, diagnosis, rejected_reason, updated_at
        FROM gold.ml_model_metrics
-       ORDER BY rank NULLS LAST, model_name`
+       -- Scoped to the volume target. gold.ml_model_metrics is shared: the
+       -- congestion classifier writes target='Congestion' rows whose r2 column
+       -- holds an ACCURACY, not an R-squared. Unfiltered, those leaked into the
+       -- volume panel and an accepted congestion model outranked the volume
+       -- champion.
+       WHERE target = 'Total Traffic' AND split_label = $1
+       ORDER BY rank NULLS LAST, model_name`, [split]
     );
     const num = (v: unknown) => (v === null || v === undefined ? null : Number(v));
     return rows.map((r) => ({
@@ -1031,7 +1103,7 @@ export async function getWeatherEvidenceFromDb(): Promise<WeatherEvidence | null
 
     // Pair each weather model with its weather-free twin from the same run.
     const m = await db.query(
-      `SELECT model_name, wmape FROM gold.ml_model_metrics WHERE target = 'Total Traffic'`
+      `SELECT model_name, wmape FROM gold.ml_model_metrics WHERE target = 'Total Traffic' AND split_label = $1`, [DEFAULT_SPLIT]
     );
     const byName = new Map(m.rows.map((x) => [x.model_name, x.wmape === null ? null : Number(x.wmape)]));
     const modelComparison = ["Prophet", "SARIMAX", "LSTM"].map((name) => {

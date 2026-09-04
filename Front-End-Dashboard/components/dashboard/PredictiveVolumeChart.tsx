@@ -50,6 +50,22 @@ const MODELS: ModelMeta[] = [
 ];
 
 const META = Object.fromEntries(MODELS.map((m) => [m.key, m])) as Record<ModelType, ModelMeta>;
+/**
+ * Chronological split arm served by this dashboard.
+ *
+ * Both arms remain in the warehouse under gold.*.split_label and the 90/10 run is
+ * documented in the evaluation report; only 80/20 is SHOWN. Its 294-day scored
+ * window spans Mar-Dec, whereas 90/10's 140 days cover Aug-Dec alone, failing the
+ * manuscript's own condition (p86) that the test set still cover "a sufficiently
+ * diverse time frame". Re-scoring the 80/20 predictions on the 90/10 window
+ * reproduces 90/10's figures exactly, so that arm's better numbers come from an
+ * easier window rather than a better split.
+ *
+ * Sent explicitly rather than left to the backend default, so a change to
+ * DEFAULT_SPLIT there cannot silently swap what this chart displays.
+ */
+const SPLIT_ARM = "80_20";
+
 const ACTUAL_COLOR = "#2563eb";
 
 // Same pattern the other dashboard pages use. The literal URL was refactored out
@@ -244,6 +260,9 @@ export default function PredictiveVolumeChart({ months = "all", from, to, weathe
         } else {
           qs.set("months", months);
         }
+        // Which evaluation arm to serve. Both are stored in the warehouse and
+        // the whole panel — chart, metrics table, split chips — follows this.
+        qs.set("split", SPLIT_ARM);
         if (weather && weather !== "all") {
           qs.set("weather", weather);
         }
@@ -521,10 +540,28 @@ export default function PredictiveVolumeChart({ months = "all", from, to, weathe
   // "observation" against the saturated model colours.
   const actualColor = T.isDark ? "#cbd5e1" : "#334155";
   const rainfall = agg ? agg.rainfall : dailyRain;
+  // Bar HEIGHT is the bucket mean; bar COLOUR comes from the bucket's wettest
+  // day. The band thresholds are PAGASA DAILY advisories, so colouring by a
+  // weekly mean described an intensity no day necessarily reached: over
+  // 2022-2025, 60.6% of weeks fell in a different band from their wettest day,
+  // and 6.3% were painted below "Heavy" while containing a day above 30 mm.
+  // At Daily granularity the two arrays are identical.
+  const rainfallPeak = agg ? agg.rainfallPeak : dailyRain;
   const models = agg ? agg.models : dailyModels;
   const holdoutStart = agg ? agg.holdoutStart : dailyHoldoutStart;
   const futureStart = agg ? agg.futureStart : dailyFutureStart;
   const isAggregated = agg != null;
+
+  // Every aggregated value on this chart is a MEAN of its days, never a total.
+  // Naming that once here keeps the axis titles, the banner and the rainfall
+  // caption consistent — "per period" told the reader nothing about which
+  // period or which statistic.
+  const bucketDays = granularity === "Weekly" ? 7 : granularity === "Monthly" ? 30 : 1;
+  const meanLabel =
+    granularity === "Weekly" ? "7-day mean"
+    : granularity === "Monthly" ? "monthly mean"
+    : "";
+  const bucketNoun = granularity === "Weekly" ? "week" : granularity === "Monthly" ? "month" : "day";
   const drillIndex = drillDate ? isoDates.indexOf(drillDate) : -1;
   const drillLabel = drillIndex >= 0 ? dates[drillIndex] : drillDate ?? "";
 
@@ -652,8 +689,11 @@ export default function PredictiveVolumeChart({ months = "all", from, to, weathe
       name: "Rainfall (mm)",
       type: "bar",
       yAxisIndex: 1,
-      data: rainfall.map((mm) =>
-        mm == null ? null : { value: mm, itemStyle: { color: rainBand(mm).color } }
+      data: rainfall.map((mm, i) =>
+        mm == null ? null : {
+          value: mm,
+          itemStyle: { color: rainBand(rainfallPeak[i] ?? mm).color },
+        }
       ),
       barMaxWidth: 16,
       z: 2,
@@ -663,24 +703,50 @@ export default function PredictiveVolumeChart({ months = "all", from, to, weathe
 
   // Only worth spending a second label line on the year when the window actually
   // crosses one — at the 80/20 split it usually does, at "3 mo" it usually doesn't.
-  // Which indices get a date label. A plain fixed stride left the Future block
-  // undated: at 594 points the stride is 50, so the last tick landed on index 550
-  // while the forecast began at 566 — the entire projection had no date under it.
-  // The first forecast day and the final day are therefore always labelled, and any
-  // stride tick that would collide with them is dropped instead of overlapping.
+  //
+  // Ticks are snapped to MONTH BOUNDARIES, not strided by index. The old version
+  // labelled every ceil(n/12)-th data point, which put dates on arbitrary days
+  // ("Feb 21, Mar 28, May 2" — a 35-day stride aligned with nothing) and, worse,
+  // reshuffled the entire axis whenever granularity changed, because the point
+  // count changed with it. Month starts exist at the same calendar positions in
+  // Daily, Weekly and Monthly, so the axis now holds still when you toggle.
   const labelIndices = (() => {
     const n = dates.length;
     const keep = new Set<number>();
     if (n === 0) return keep;
-    const stride = Math.max(1, Math.ceil(n / 12));
-    for (let i = 0; i < n; i += stride) keep.add(i);
+
+    // First index of each calendar month present in the window.
+    const monthStarts: number[] = [];
+    let prevYm = "";
+    for (let i = 0; i < n; i++) {
+      const ym = isoDates[i]?.slice(0, 7) ?? "";
+      if (ym && ym !== prevYm) {
+        monthStarts.push(i);
+        prevYm = ym;
+      }
+    }
+
+    // Thin to ~12 ticks: monthly, else quarterly, half-yearly and so on.
+    if (monthStarts.length > 0) {
+      const step = monthStarts.length <= 12 ? 1 : Math.ceil(monthStarts.length / 12);
+      for (let i = 0; i < monthStarts.length; i += step) keep.add(monthStarts[i]);
+    } else {
+      // A window too short to contain a month boundary would otherwise render a
+      // bare axis, so fall back to the old index stride.
+      const stride = Math.max(1, Math.ceil(n / 12));
+      for (let i = 0; i < n; i += stride) keep.add(i);
+    }
+
+    // The forecast block must be dated at both ends. Previously a fixed stride
+    // left it undated entirely: at 594 points the last tick landed on index 550
+    // while the forecast began at 566.
     const mustLabel = [futureStart, n - 1].filter((i) => i >= 0 && i < n);
     const mustSet = new Set(mustLabel);
-    const minGap = Math.max(2, Math.floor(stride * 0.6));
+    const minGap = Math.max(2, Math.floor(n / 24));
     for (const m of mustLabel) {
-      // Only thin the regular stride ticks. Guarding mustSet matters because the
-      // start and end of the forecast sit close together, and without it the
-      // second forced label silently deleted the first.
+      // Only thin the regular ticks. Guarding mustSet matters because the start
+      // and end of the forecast sit close together, and without it the second
+      // forced label silently deleted the first.
       for (const k of Array.from(keep)) {
         if (!mustSet.has(k) && Math.abs(k - m) < minGap) keep.delete(k);
       }
@@ -702,12 +768,19 @@ export default function PredictiveVolumeChart({ months = "all", from, to, weathe
       formatter: (params: unknown) => {
         const items = params as { name: string; marker: string; seriesName: string; value: number | null }[];
         if (!items || items.length === 0) return "";
-        let tip = `<b>${items[0].name}</b>${isAggregated ? " · period average" : ""}<br/>`;
+        let tip = `<b>${items[0].name}</b>${isAggregated ? ` · ${meanLabel} (average of the ${bucketNoun}'s days)` : ""}<br/>`;
         items.forEach((p) => {
           if (p.value != null) {
             if (p.seriesName === "Rainfall (mm)") {
               const mm = Number(p.value);
-              tip += `${p.marker} Rainfall: <b>${mm.toFixed(1)} mm</b> \u00B7 ${rainBand(mm).label}<br/>`;
+              {
+                // Aggregated: give the mean AND the day that set the colour,
+                // so the tooltip can never contradict the bar it describes.
+                const pk = rainfallPeak[(p as { dataIndex?: number }).dataIndex ?? -1];
+                tip += isAggregated && pk != null
+                  ? `${p.marker} Rainfall: <b>${mm.toFixed(1)} mm/day</b> mean, wettest day <b>${pk.toFixed(1)} mm</b> - ${rainBand(pk).label}<br/>`
+                  : `${p.marker} Rainfall: <b>${mm.toFixed(1)} mm</b> \u00B7 ${rainBand(mm).label}<br/>`;
+              }
             } else {
               tip += `${p.marker} ${p.seriesName}: <b>${fmtVeh(Number(p.value))}</b><br/>`;
             }
@@ -718,6 +791,15 @@ export default function PredictiveVolumeChart({ months = "all", from, to, weathe
         }</span>`;
       },
     },
+    graphic: isAggregated
+      ? [{
+          type: "text", right: 18, top: 8, silent: true,
+          style: {
+            text: `every point = ${meanLabel}`,
+            fontSize: 11, fontWeight: 600, fill: T.textMuted,
+          },
+        }]
+      : [],
     legend: {
       data: [
         "Actual Volume",
@@ -728,6 +810,11 @@ export default function PredictiveVolumeChart({ months = "all", from, to, weathe
       icon: "circle",
       itemGap: 16,
       textStyle: { fontSize: 12, color: T.chartText },
+      // Names the statistic on every series in the place readers actually look.
+      // Formatter is display-only: the underlying seriesName values still drive
+      // tooltip matching and the click-to-drill handler, so renaming them here
+      // cannot break either.
+      formatter: (name: string) => (isAggregated ? `${name}  · ${meanLabel}` : name),
     },
     dataZoom: [
       { type: "slider", start: 0, end: 100, height: 18, bottom: 44,
@@ -764,7 +851,7 @@ export default function PredictiveVolumeChart({ months = "all", from, to, weathe
     yAxis: [
       {
         type: "value",
-        name: isAggregated ? "Avg Daily Volume (per period)" : "Total Vehicle Volume",
+        name: isAggregated ? `Avg daily volume — ${meanLabel}` : "Total Vehicle Volume",
         nameLocation: "middle",
         nameGap: 60,
         axisLabel: { color: T.chartText, formatter: (val: number) => `${(val / 1000).toFixed(0)}k` },
@@ -773,7 +860,7 @@ export default function PredictiveVolumeChart({ months = "all", from, to, weathe
       },
       {
         type: "value",
-        name: showWeather ? "Daily rainfall (mm)" : "",
+        name: showWeather ? (isAggregated ? `Avg daily rainfall, mm — ${meanLabel}` : "Daily rainfall (mm)") : "",
         nameLocation: "middle",
         nameGap: 50,
         nameTextStyle: { color: T.isDark ? "#38bdf8" : "#0284c7", fontSize: 11, fontWeight: "bold" },
@@ -1146,7 +1233,14 @@ export default function PredictiveVolumeChart({ months = "all", from, to, weathe
             Traffic Volume Walk-Forward Forecast
           </h3>
           <p style={{ color: "var(--text-secondary)", fontSize: "0.82rem", margin: "4px 0 0 0" }}>
-            Click any point to view that day&apos;s hourly breakdown · Toggle models to overlay predictions
+            {isAggregated ? (
+              <>
+                Every point is a <b style={{ color: "#1d4ed8" }}>{meanLabel}</b> — the average of that{" "}
+                {bucketNoun}&apos;s days, not a total · Toggle models to overlay predictions
+              </>
+            ) : (
+              <>Click any point to view that day&apos;s hourly breakdown · Toggle models to overlay predictions</>
+            )}
           </p>
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: "12px", flexWrap: "wrap" }}>
@@ -1177,12 +1271,46 @@ export default function PredictiveVolumeChart({ months = "all", from, to, weathe
         </div>
       </div>
 
-      {/* Zone window & Granularity controls */}
+      {/* Zone window & Granularity controls.
+          Two explicit rows: what you can CHANGE on top, what the chart currently
+          SHOWS underneath. Previously all five items sat in one wrapping flex,
+          so Past/Present/Future broke across lines at common widths and left
+          "Future" stranded alone. */}
       <div style={{
-        display: "flex", alignItems: "center", gap: "20px", flexWrap: "wrap",
-        padding: "10px 14px", borderRadius: "10px", background: "var(--bg-surface-hover)",
+        display: "flex", flexDirection: "column", gap: "7px",
+        padding: "9px 16px", borderRadius: "10px", background: "var(--bg-surface-hover)",
         border: "1px solid var(--border-default)", fontSize: "0.76rem",
       }}>
+        {/* Row 1 — controls */}
+        <div style={{
+          display: "flex", alignItems: "center", gap: "18px", flexWrap: "wrap",
+          justifyContent: "space-between",
+        }}>
+        {/* Aggregation notice. The adviser's point was that a reader should know
+            instantly what a point represents; the axis title alone is too easy to
+            skip past, and the old wording ("per period") named neither the period
+            nor the statistic. Shown only when the values ARE aggregated, so it
+            never becomes furniture the eye learns to ignore. */}
+        {isAggregated && (
+          <span
+            title={`Each plotted point is the arithmetic mean of the ${bucketDays} days in its ${bucketNoun} — for volume, for every model line, and for rainfall. Totals are never plotted: a sum would make a short ${bucketNoun} look like a dip.`}
+            style={{
+              display: "inline-flex", alignItems: "center", gap: "7px",
+              padding: "4px 11px", borderRadius: "999px",
+              background: "#1d4ed8", border: "1px solid #1d4ed8",
+              color: "#ffffff", fontSize: "0.78rem", fontWeight: 700,
+              whiteSpace: "nowrap", letterSpacing: "0.01em",
+              boxShadow: "0 1px 6px rgba(29,78,216,0.30)",
+            }}
+          >
+            <span style={{ fontSize: "0.85rem", lineHeight: 1 }}>⌀</span>
+            Each point = {meanLabel}
+            <span style={{ fontWeight: 500, color: "#bfdbfe" }}>
+              averaged, not totalled
+            </span>
+          </span>
+        )}
+
         {/* GRANULARITY control pill */}
         <span style={{ display: "inline-flex", alignItems: "center", gap: "8px" }}>
           <b style={{ color: "#3b82f6", letterSpacing: "0.04em", fontSize: "0.75rem", textTransform: "uppercase" }}>
@@ -1229,6 +1357,15 @@ export default function PredictiveVolumeChart({ months = "all", from, to, weathe
           </div>
         </span>
 
+        </div>
+
+        {/* Row 2 — what the chart is currently showing. Kept together so the
+            three zones always read as one group. */}
+        <div style={{
+          display: "flex", alignItems: "center", gap: "18px", flexWrap: "wrap",
+          justifyContent: "space-between",
+          paddingTop: "8px", borderTop: "1px solid var(--border-default)",
+        }}>
         {/* Past */}
         <span style={{ display: "inline-flex", alignItems: "center", gap: "8px" }}>
           <span style={{ width: 10, height: 10, borderRadius: 2, background: "rgba(37,99,235,0.25)" }} />
@@ -1280,6 +1417,7 @@ export default function PredictiveVolumeChart({ months = "all", from, to, weathe
           ))}
           <span style={{ color: "var(--text-secondary)" }}>· validated at 14d</span>
         </span>
+        </div>
       </div>
 
       <div style={{ height: "450px", width: "100%", cursor: "pointer" }}>
@@ -1294,7 +1432,9 @@ export default function PredictiveVolumeChart({ months = "all", from, to, weathe
           padding: "10px 14px", borderRadius: "10px", background: "var(--bg-surface-hover)",
           border: "1px solid var(--border-default)", fontSize: "0.75rem", color: "var(--text-secondary)",
         }}>
-          <span style={{ fontWeight: 700, color: "var(--text-primary)" }}>Daily rainfall</span>
+          <span style={{ fontWeight: 700, color: "var(--text-primary)" }}>
+            {isAggregated ? `Rainfall — ${meanLabel}` : "Daily rainfall"}
+          </span>
           {RAIN_BANDS.map((b, i) => (
             <span key={b.label} style={{ display: "inline-flex", alignItems: "center", gap: "6px" }}>
               <span style={{
@@ -1310,7 +1450,9 @@ export default function PredictiveVolumeChart({ months = "all", from, to, weathe
             </span>
           ))}
           <span style={{ color: "var(--text-secondary)", borderLeft: "1px solid var(--border-default)", paddingLeft: "14px" }}>
-            Taller bar = wetter day. Heavy rain typically coincides with lower traffic volume.
+            {isAggregated
+              ? `Bar HEIGHT = the ${bucketNoun}'s mean. Bar COLOUR = its wettest single day, because these bands are daily rain advisories — so a calm-looking ${bucketNoun} can still be flagged for one severe day.`
+              : "Taller bar = wetter day. Heavy rain typically coincides with lower traffic volume."}
           </span>
         </div>
       )}

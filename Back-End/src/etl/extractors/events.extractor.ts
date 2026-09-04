@@ -27,7 +27,7 @@ export function extractFromEvents(events: any[]): ExtractionResult {
         event_type: event.event_type ?? event.type ?? null,
         start_time: event.start_time ?? null,
         end_time: event.end_time ?? null,
-        impact_plaza: event.impact_plaza ?? "Cdv/Ph Arena",
+        impact_plaza: event.impact_plaza ?? "CDV/PH Arena",
         impact_direction: event.impact_direction ?? "BOTH",
       };
       rows.push(row);

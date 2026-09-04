@@ -15,12 +15,16 @@ export const ForecastQuerySchema = z.object({
   months: z.enum(["3", "12", "all"]).optional().default("all"),
   from: isoDate.optional(), // custom window start — with `to`, overrides months
   to: isoDate.optional(),
+  // Chronological split arm. Both are stored — the manuscript (p86) commits to
+  // evaluating 80/20 and 90/10 — and 80/20 is the default served.
+  split: z.enum(["80_20", "90_10"]).optional().default("80_20"),
 });
 
 export const HourlyForecastQuerySchema = z.object({
   date: isoDate,
   model: z.enum(["LSTM", "Prophet", "XGBoost", "HoltWinters", "SARIMAX", "HoltsLinear"]).optional().default("LSTM"),
   weather: z.enum(["all", "dry", "wet"]).optional().default("all"),
+  split: z.enum(["80_20", "90_10"]).optional().default("80_20"),
 });
 
 export const AnalyticsQuerySchema = z.object({

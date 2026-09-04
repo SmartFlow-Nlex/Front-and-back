@@ -21,7 +21,7 @@ const NLEX_PLAZAS: string[] = [
   "Bocaue Interchange",
   "Caloocan",
   "CDV",
-  "Cdv/Ph Arena",
+  "CDV/PH Arena",
   "Dau",
   "Karuhatan",
   "MacArthur Ramp Off",

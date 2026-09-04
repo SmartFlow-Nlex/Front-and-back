@@ -1,0 +1,84 @@
+{
+  "generated": "2026-09-04",
+  "source": "gold.fact_emissions_hourly (rebuilt from gold.fact_traffic_hourly)",
+  "series": {
+    "days": 1461,
+    "from": "2022-01-01",
+    "to": "2025-12-31",
+    "mean_tonnes_per_day": 425.20604514049285
+  },
+  "protocol": {
+    "origins": 42,
+    "horizon": 7,
+    "step": 7,
+    "season": 7,
+    "scored_days": 294
+  },
+  "baseline": {
+    "name": "SeasonalNaive",
+    "wmape": 15.997542608509107
+  },
+  "results": [
+    {
+      "model": "GBR",
+      "n": 294,
+      "mape": 7.980812931083406,
+      "wmape": 6.669197692324218,
+      "rmse": 47.86759117556552,
+      "mae": 29.250548860880397,
+      "mase": 0.8039213341346108,
+      "r2": 0.6537361321874984,
+      "accepted": true,
+      "rank": 1
+    },
+    {
+      "model": "Polynomial",
+      "n": 294,
+      "mape": 8.302638722553741,
+      "wmape": 6.672918064107762,
+      "rmse": 46.602005643389205,
+      "mae": 29.266866103471724,
+      "mase": 0.804369796811185,
+      "r2": 0.6718040286337799,
+      "accepted": true,
+      "rank": 2
+    },
+    {
+      "model": "LSTM",
+      "n": 294,
+      "mape": 10.179743073471704,
+      "wmape": 7.8868144697226885,
+      "rmse": 56.723622828247336,
+      "mae": 34.590915226404874,
+      "mase": 0.9506958262564252,
+      "r2": 0.5137585803641955,
+      "accepted": true,
+      "rank": 3
+    },
+    {
+      "model": "SeasonalNaive",
+      "n": 294,
+      "mape": 20.834945108606792,
+      "wmape": 15.997542608509107,
+      "rmse": 103.16668183687854,
+      "mae": 70.16389726500003,
+      "mase": 1.928382751572917,
+      "r2": -0.6084329244463516,
+      "accepted": false,
+      "rank": null
+    },
+    {
+      "model": "Climatology",
+      "n": 294,
+      "mape": 22.116937772612946,
+      "wmape": 19.231230792767843,
+      "rmse": 100.51217037604435,
+      "mae": 84.34658588785716,
+      "mase": 2.3181794016642168,
+      "r2": -0.5267268071469071,
+      "accepted": false,
+      "rank": null
+    }
+  ],
+  "champion": "GBR"
+}

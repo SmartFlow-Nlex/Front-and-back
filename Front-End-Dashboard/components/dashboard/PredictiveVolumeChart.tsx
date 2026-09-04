@@ -504,6 +504,18 @@ export default function PredictiveVolumeChart({ months = "all", from, to, weathe
   const models = agg ? agg.models : dailyModels;
   const holdoutStart = agg ? agg.holdoutStart : dailyHoldoutStart;
   const futureStart = agg ? agg.futureStart : dailyFutureStart;
+
+  /* Where the slider starts, as a percentage. Aim to show the forecast plus
+     about four times its length of run-up, so it has context without being
+     swamped; clamped so a long forecast cannot hide the recent past and a
+     short series still opens fully. */
+  const zoomStart = (() => {
+    const total = dates.length;
+    if (total === 0 || futureStart <= 0 || futureStart >= total) return 0;
+    const futureLen = total - futureStart;
+    const window = Math.min(total, Math.max(futureLen * 5, 60));
+    return Math.max(0, Math.min(85, ((total - window) / total) * 100));
+  })();
   const isAggregated = agg != null;
   const drillIndex = drillDate ? isoDates.indexOf(drillDate) : -1;
   const drillLabel = drillIndex >= 0 ? dates[drillIndex] : drillDate ?? "";
@@ -692,9 +704,17 @@ export default function PredictiveVolumeChart({ months = "all", from, to, weathe
       },
     },
     legend: {
+      /* The forecast is its own series and needs its own key, or the dashed
+         line in the Future band is unexplained. Named "Forecast" against the
+         fitted line's "Prediction", which is the distinction that matters:
+         one is the model scored on days that happened, the other is the part
+         that has not happened yet. */
       data: [
         "Actual Volume",
-        ...selected.map((k) => `${metricsMeta[k].label} Prediction`),
+        ...selected.flatMap((k) => [
+          `${metricsMeta[k].label} Prediction`,
+          `${metricsMeta[k].label} Forecast`,
+        ]),
         ...(showWeather ? ["Rainfall (mm)"] : []),
       ],
       bottom: 0,
@@ -703,7 +723,14 @@ export default function PredictiveVolumeChart({ months = "all", from, to, weathe
       textStyle: { fontSize: 12, color: T.chartText },
     },
     dataZoom: [
-      { type: "slider", start: 0, end: 100, height: 18, bottom: 44,
+      /* Opens on the recent past plus the whole forecast, not the entire
+         series. Fourteen days of forecast against ~700 of history is 2% of the
+         axis: the green band was a sliver at the right edge and the predicted
+         line inside it was a few pixels long, which is the thing a reader came
+         to look at. Framing the tail puts the forecast at roughly a fifth of
+         the width. The slider still reaches the whole history — this changes
+         where the chart opens, not what it holds. */
+      { type: "slider", start: zoomStart, end: 100, height: 18, bottom: 44,
         borderColor: T.border, fillerColor: T.isDark ? "rgba(56,118,245,0.18)" : "rgba(37,99,235,0.08)",
         handleStyle: { color: "#3876f5" }, textStyle: { color: T.textMuted, fontSize: 10 },
         backgroundColor: T.isDark ? "rgba(255,255,255,0.03)" : "transparent",
@@ -839,19 +866,52 @@ export default function PredictiveVolumeChart({ months = "all", from, to, weathe
           ],
         },
       },
-      ...selected.map((key) => ({
-        name: `${metricsMeta[key].label} Prediction`,
-        type: "line" as const,
-        yAxisIndex: 0,
-        data: models[key],
-        smooth: true,
-        connectNulls: true,
-        symbol: "circle",
-        symbolSize: 5,
-        lineStyle: { width: dates.length > 400 ? 1.2 : 2.2, color: metricsMeta[key].color },
-        itemStyle: { color: metricsMeta[key].color },
-        emphasis: { scale: 2.2 },
-      })),
+      /* Each model draws twice: what it fitted against days it could be scored
+         on, and what it forecasts for days that have not happened.
+
+         They were one line before, in one weight, so the reader could not see
+         where hindsight stopped and prediction began — the most important
+         boundary on the chart, and the one the Past/Present/Future bands are
+         there to mark. The forecast is dashed and drawn heavier, and the two
+         share a point at the boundary so the line stays continuous. */
+      ...selected.flatMap((key) => {
+        const colour = metricsMeta[key].color;
+        const fitted = models[key].map((v, i) => (i <= futureStart ? v : null));
+        const forecast = models[key].map((v, i) => (i >= futureStart ? v : null));
+        const dense = dates.length > 400;
+
+        return [
+          {
+            name: `${metricsMeta[key].label} Prediction`,
+            type: "line" as const,
+            yAxisIndex: 0,
+            data: fitted,
+            smooth: true,
+            connectNulls: true,
+            symbol: "circle",
+            symbolSize: 5,
+            lineStyle: { width: dense ? 1.2 : 2.2, color: colour },
+            itemStyle: { color: colour },
+            emphasis: { scale: 2.2 },
+          },
+          {
+            name: `${metricsMeta[key].label} Forecast`,
+            type: "line" as const,
+            yAxisIndex: 0,
+            data: forecast,
+            smooth: true,
+            connectNulls: true,
+            symbol: "circle",
+            symbolSize: 6,
+            // Heavier than the fitted line even when the series is dense: it is
+            // the shortest stretch on the chart and the one worth finding.
+            lineStyle: { width: dense ? 2.4 : 3.2, color: colour, type: "dashed" as const },
+            itemStyle: { color: colour },
+            emphasis: { scale: 2.4 },
+            z: 5,
+          },
+        ];
+      }),
       ...weatherSeries,
     ],
   };

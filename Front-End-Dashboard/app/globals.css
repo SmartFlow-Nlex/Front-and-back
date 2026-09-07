@@ -386,10 +386,19 @@ body {
 }
 
 .brand-copy p {
-  margin: 8px 0 0;
-  color: var(--text-secondary);
-  font-size: clamp(0.95rem, 1.2vw, 1.15rem);
-  letter-spacing: 0.01em;
+  margin: 12px 0 0;
+  /* Was --text-secondary at a near-body weight, so the tagline read as a
+     caption someone had left under the mark rather than as part of the
+     lockup. Given a deliberate treatment instead: primary text colour,
+     bold, and tracked out in caps. Kept SMALLER than the wordmark on
+     purpose -- matching its size would put two heavy lines in a row
+     competing for the same job, whereas letter-spacing buys presence
+     without buying weight. */
+  color: var(--text-primary);
+  font-size: clamp(0.82rem, 0.95vw, 0.95rem);
+  font-weight: 700;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
 }
 
 /* What the system does, for the one screen every stakeholder sees before they

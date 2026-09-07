@@ -145,8 +145,24 @@ export default function Home() {
           />
 
           <div className="brand-copy">
+            {/* The product had no name anywhere on its own first screen — the
+                mark is a road glyph with no wordmark, so the only text was a
+                grey subtitle. A stylesheet rule for .brand-copy h1 already
+                existed with nothing to style; this is the heading it was
+                written for. */}
+            <h1>SmartFlow <span>NLEX</span></h1>
             <p>Decision-Intelligence System</p>
           </div>
+
+          {/* Fills the dead half of the panel with what the system actually
+              does. A login screen is the one page every stakeholder sees
+              before they have any context, and three words each is cheaper
+              than a paragraph nobody reads. */}
+          <ul className="brand-points">
+            <li>Live corridor status</li>
+            <li>Predictive volume</li>
+            <li>Incident intelligence</li>
+          </ul>
         </div>
       </section>
 

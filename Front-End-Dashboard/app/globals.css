@@ -252,7 +252,15 @@ body {
   gap: clamp(24px, 3vw, 48px);
   padding: clamp(20px, 3vw, 40px) clamp(20px, 4vw, 56px);
   align-items: center;
-  background: var(--bg-login);
+  /* Two soft brand washes over the flat fill. The page was a single sheet of
+     #d8e1ef with nothing to give it depth, so the card had no ground to sit
+     on and read as floating. Both washes are translucent over --bg-login, so
+     the same rule works against the near-black dark value without a second
+     definition. */
+  background:
+    radial-gradient(1100px 620px at 10% 18%, rgba(54, 96, 255, 0.12), transparent 62%),
+    radial-gradient(900px 520px at 90% 84%, rgba(234, 139, 13, 0.10), transparent 62%),
+    var(--bg-login);
 }
 
 .login-brand {
@@ -271,21 +279,62 @@ body {
 }
 
 .brand-logo {
-  width: min(100%, 580px);
+  /* Was 580px: about 45% of a 1440px viewport, which put roughly four times
+     the visual weight on a decorative mark as on the form the page exists to
+     serve, and pushed the whole layout upward leaving a dead band along the
+     bottom. Sized to sit with the wordmark as a lockup instead. */
+  width: min(100%, 380px);
   height: auto;
 }
 
 .brand-copy h1 {
-  font-size: 3.2rem;
+  font-size: clamp(2.1rem, 3.4vw, 3rem);
+  line-height: 1.05;
+  font-weight: 800;
   letter-spacing: -0.04em;
-  color: #0f1c3a;
+  /* Was #0f1c3a, a near-black that stayed put when --bg-login flips to
+     #0d1117 in dark mode — the title went invisible against it. */
+  color: var(--text-primary);
+  /* The pull that closes the mark's exported transparent margin belongs on
+     whatever sits directly under it. That used to be the caption; it is the
+     wordmark now, and leaving the pull on the caption made the two overlap.
+     Kept shallow: the glyph's tail hangs low, so a deeper pull runs the text
+     into it. */
+  margin: -6px 0 0;
+}
+
+.brand-copy h1 span {
+  color: var(--brand-accent);
 }
 
 .brand-copy p {
-  margin: -36px 0 0;
-  color: #536481;
-  font-size: clamp(1rem, 1.6vw, 1.4rem);
-  letter-spacing: -0.01em;
+  margin: 8px 0 0;
+  color: var(--text-secondary);
+  font-size: clamp(0.95rem, 1.2vw, 1.15rem);
+  letter-spacing: 0.01em;
+}
+
+/* What the system does, for the one screen every stakeholder sees before they
+   have any context. */
+.brand-points {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 8px;
+  margin: 22px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.brand-points li {
+  padding: 6px 14px;
+  border-radius: 999px;
+  border: 1px solid var(--border-default);
+  background: var(--bg-surface);
+  color: var(--text-secondary);
+  font-size: 0.82rem;
+  font-weight: 600;
+  white-space: nowrap;
 }
 
 .copyright {
@@ -308,15 +357,20 @@ body {
 .login-card {
   width: 100%;
   max-width: 520px;
-  background: rgba(255, 255, 255, 0.96);
-  border: 1px solid #e8edf6;
+  /* Was a translucent white with a hardcoded #e8edf6 edge, both of which
+     ignored the theme: on the dark login background the card stayed white
+     with white text in it. Tokens flip correctly in both modes. */
+  background: var(--bg-surface);
+  border: 1px solid var(--border-default);
   border-radius: var(--radius-lg);
-  padding: 28px;
-  box-shadow: 0 20px 36px rgba(34, 55, 94, 0.08);
+  padding: clamp(28px, 2.6vw, 40px);
+  /* Lifted off the page rather than resting on it — the old shadow was too
+     shallow to separate a near-white card from a pale blue ground. */
+  box-shadow: 0 24px 56px rgba(15, 28, 58, 0.14), 0 2px 8px rgba(15, 28, 58, 0.06);
 }
 
 .login-card h2 {
-  font-size: 1.5rem;
+  font-size: 1.65rem;
   line-height: 1.15;
   font-weight: 800;
   letter-spacing: -0.04em;
@@ -3239,12 +3293,11 @@ body {
   }
 
   .brand-logo {
-    width: min(100%, 440px);
+    width: min(100%, 300px);
   }
 
-  .brand-copy p {
-    margin-top: -26px;
-    font-size: 1.1rem;
+  .brand-copy h1 {
+    margin-top: -4px;
   }
 
   .copyright {
@@ -3259,12 +3312,15 @@ body {
   }
 
   .brand-logo {
-    width: min(100%, 320px);
+    width: min(100%, 230px);
+  }
+
+  .brand-copy h1 {
+    margin-top: -2px;
   }
 
   .brand-copy p {
-    margin-top: -20px;
-    font-size: 0.95rem;
+    font-size: 0.9rem;
   }
 
   .login-card {

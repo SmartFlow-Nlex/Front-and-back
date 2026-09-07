@@ -245,11 +245,20 @@ body {
    LOGIN PAGE
    ============================================================ */
 .login-shell {
+  position: relative;
+  overflow: hidden;
   width: 100%;
   min-height: 100vh;
   display: grid;
-  grid-template-columns: minmax(0, 1.2fr) minmax(320px, 520px);
-  gap: clamp(24px, 3vw, 48px);
+  /* Fractional columns stretched to fill whatever width the display had, so
+     on a wide monitor the two halves were pinned to opposite edges with a
+     corridor of empty page between them and the card sat almost against the
+     right margin. Both columns are capped and the pair is centred, so the
+     layout stops growing past the width it was designed at and the extra
+     space goes to the margins instead of between the halves. */
+  grid-template-columns: minmax(0, 620px) minmax(320px, 460px);
+  justify-content: center;
+  gap: clamp(24px, 4vw, 64px);
   padding: clamp(20px, 3vw, 40px) clamp(20px, 4vw, 56px);
   align-items: center;
   /* Two soft brand washes over the flat fill. The page was a single sheet of
@@ -261,6 +270,75 @@ body {
     radial-gradient(1100px 620px at 10% 18%, rgba(54, 96, 255, 0.12), transparent 62%),
     radial-gradient(900px 520px at 90% 84%, rgba(234, 139, 13, 0.10), transparent 62%),
     var(--bg-login);
+}
+
+/* ---------- Login: moving corridor ---------- */
+.login-flow {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 0;
+}
+
+.login-flow svg {
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+
+.flow-line {
+  fill: none;
+  stroke: var(--brand-primary);
+  stroke-width: 2.5;
+  stroke-linecap: round;
+  /* A long gap between dashes reads as separated vehicles rather than a
+     ticking line, and offsetting by exactly one period per cycle keeps the
+     loop seamless. */
+  stroke-dasharray: 16 26;
+  opacity: 0.14;
+  animation: login-flow-dash 2.6s linear infinite;
+}
+
+.flow-line.l2 { stroke: var(--brand-accent); opacity: 0.12; animation-duration: 3.4s; }
+.flow-line.l3 { animation-duration: 4.2s; opacity: 0.10; }
+.flow-line.l4 { stroke: var(--brand-accent); animation-duration: 5s; opacity: 0.08; }
+
+@keyframes login-flow-dash {
+  to { stroke-dashoffset: -42; }
+}
+
+/* Both halves sit above the corridor. */
+.login-brand,
+.login-panel {
+  position: relative;
+  z-index: 1;
+}
+
+/* ---------- Login: entrance ---------- */
+@keyframes login-rise {
+  from { opacity: 0; transform: translateY(16px); }
+  to   { opacity: 1; transform: none; }
+}
+
+.brand-logo      { animation: login-rise 0.7s ease both; }
+.brand-copy h1   { animation: login-rise 0.7s 0.08s ease both; }
+.brand-copy p    { animation: login-rise 0.7s 0.16s ease both; }
+.brand-points li { animation: login-rise 0.6s ease both; }
+.brand-points li:nth-child(1) { animation-delay: 0.24s; }
+.brand-points li:nth-child(2) { animation-delay: 0.32s; }
+.brand-points li:nth-child(3) { animation-delay: 0.40s; }
+.login-card      { animation: login-rise 0.7s 0.12s ease both; }
+
+/* Motion here is decoration, never information, so all of it can just stop. */
+@media (prefers-reduced-motion: reduce) {
+  .flow-line,
+  .brand-logo,
+  .brand-copy h1,
+  .brand-copy p,
+  .brand-points li,
+  .login-card {
+    animation: none;
+  }
 }
 
 .login-brand {
@@ -327,7 +405,10 @@ body {
 }
 
 .brand-points li {
-  padding: 6px 14px;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 7px 15px;
   border-radius: 999px;
   border: 1px solid var(--border-default);
   background: var(--bg-surface);
@@ -335,7 +416,18 @@ body {
   font-size: 0.82rem;
   font-weight: 600;
   white-space: nowrap;
+  box-shadow: 0 2px 8px rgba(15, 28, 58, 0.05);
+  transition: transform var(--transition-fast), box-shadow var(--transition-fast), border-color var(--transition-fast);
 }
+
+.brand-points li:hover {
+  transform: translateY(-2px);
+  border-color: var(--brand-primary);
+  box-shadow: 0 8px 18px rgba(54, 96, 255, 0.16);
+}
+
+.brand-points li svg { color: var(--brand-primary); flex-shrink: 0; }
+.brand-points li:nth-child(2) svg { color: var(--brand-accent); }
 
 .copyright {
   margin: 14px 0 0;
@@ -367,6 +459,18 @@ body {
   /* Lifted off the page rather than resting on it — the old shadow was too
      shallow to separate a near-white card from a pale blue ground. */
   box-shadow: 0 24px 56px rgba(15, 28, 58, 0.14), 0 2px 8px rgba(15, 28, 58, 0.06);
+  position: relative;
+  overflow: hidden;
+}
+
+/* A brand rule along the top edge, so the panel is tied to the identity on
+   the other half of the page instead of being a plain white sheet. */
+.login-card::before {
+  content: "";
+  position: absolute;
+  inset: 0 0 auto;
+  height: 4px;
+  background: linear-gradient(90deg, var(--brand-primary), var(--brand-accent));
 }
 
 .login-card h2 {
@@ -390,15 +494,16 @@ body {
 .field-group span {
   font-size: 0.88rem;
   font-weight: 700;
-  color: #44536b;
+  /* Was #44536b, which stayed dark-on-dark once the card followed the theme. */
+  color: var(--text-secondary);
 }
 
 .field-group input {
   width: 100%;
   height: 44px;
   border-radius: var(--radius-sm);
-  border: 1px solid rgba(122, 135, 160, 0.28);
-  background: rgba(255, 255, 255, 0.97);
+  border: 1px solid var(--border-strong);
+  background: var(--bg-surface-hover);
   padding: 0 1rem;
   font-size: 0.95rem;
   color: var(--text-primary);
@@ -411,8 +516,11 @@ body {
 
 .field-group input:focus {
   outline: none;
-  border-color: rgba(54, 96, 255, 0.45);
-  box-shadow: 0 0 0 3px rgba(54, 96, 255, 0.1);
+  border-color: var(--brand-primary);
+  /* Wider and more saturated than the old 3px at 10% alpha, which was hard to
+     pick out on the card; this is the only cue for where the caret is. */
+  box-shadow: 0 0 0 4px rgba(54, 96, 255, 0.18);
+  background: var(--bg-surface);
 }
 
 .password-row {

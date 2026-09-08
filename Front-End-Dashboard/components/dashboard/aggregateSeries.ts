@@ -51,6 +51,17 @@ function bucketOf(iso: string, g: Granularity): { key: string; label: string } |
   return null;
 }
 
+/** Wettest single day in the bucket. The rainfall COLOUR bands are PAGASA daily
+ *  advisory thresholds, so applying them to a bucket mean describes an intensity
+ *  no day necessarily had: over 2022-2025, the mean's band differed from the
+ *  wettest day's band in 60.6% of weeks, and 6.3% of weeks were painted below
+ *  "Heavy" while containing a day above 30 mm. Height stays the mean (comparable
+ *  with volume, and unaffected by unequal bucket lengths); colour uses this. */
+const maxOf = (vals: (number | null)[]): number | null => {
+  const ok = vals.filter((v): v is number => v != null && isFinite(v));
+  return ok.length === 0 ? null : Math.max(...ok);
+};
+
 const meanOf = (vals: (number | null)[]): number | null => {
   const ok = vals.filter((v): v is number => v != null && isFinite(v));
   return ok.length === 0 ? null : ok.reduce((s, v) => s + v, 0) / ok.length;
@@ -72,6 +83,9 @@ export type AggOutput<K extends string> = {
   baseActual: (number | null)[];
   models: Record<K, (number | null)[]>;
   rainfall: (number | null)[];
+  /** Wettest single day per bucket. Drives the band COLOUR; the bar height uses
+   *  `rainfall` (the mean). See maxOf above for why the two must differ. */
+  rainfallPeak: (number | null)[];
   holdoutStart: number;
   futureStart: number;
   bucketDays: number[];
@@ -109,6 +123,7 @@ export function aggregateSeries<K extends string>(input: AggInput<K>): AggOutput
   const outIso: string[] = [];
   const outActual: (number | null)[] = [];
   const outRain: (number | null)[] = [];
+  const outRainPeak: (number | null)[] = [];
   const bucketDays: number[] = [];
   const zones: number[] = [];
 
@@ -119,6 +134,7 @@ export function aggregateSeries<K extends string>(input: AggInput<K>): AggOutput
     bucketDays.push(g.idx.length);
     outActual.push(meanOf(g.idx.map((i) => baseActual[i])));
     outRain.push(meanOf(g.idx.map((i) => rainfall[i])));
+    outRainPeak.push(maxOf(g.idx.map((i) => rainfall[i])));
     keys.forEach((k) => outModels[k].push(meanOf(g.idx.map((i) => models[k][i]))));
 
     // majority zone for this bucket
@@ -142,6 +158,8 @@ export function aggregateSeries<K extends string>(input: AggInput<K>): AggOutput
     baseActual: outActual,
     models: outModels,
     rainfall: outRain,
+    /** Wettest day per bucket — drives the band colour, never the bar height. */
+    rainfallPeak: outRainPeak,
     holdoutStart: firstOf(1),
     futureStart: firstOf(2),
     bucketDays,

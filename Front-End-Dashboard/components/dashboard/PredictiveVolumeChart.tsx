@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import type { EChartsOption } from "echarts";
 import DashboardChart from "./DashboardChart";
 import ModelNarrative, { type MetricRow } from "./ModelNarrative";
@@ -9,14 +9,6 @@ import { useThemeTokens, zoneTints } from "./useThemeTokens";
 import WeatherEvidencePanel from "./WeatherEvidencePanel";
 
 type ModelType = "LSTM" | "Prophet" | "HoltWinters" | "SARIMAX" | "HoltsLinear";
-
-/* What each button is called in gold.ml_model_metrics. Module level because two
-   things need it: the metrics table, and the code that picks which model the
-   chart opens on. */
-const MODEL_DB_NAME: Record<ModelType, string> = {
-  LSTM: "LSTM", Prophet: "Prophet", HoltWinters: "HoltWinters",
-  SARIMAX: "SARIMAX", HoltsLinear: "Holts_Linear",
-};
 
 type ModelMeta = {
   key: ModelType;
@@ -58,12 +50,46 @@ const MODELS: ModelMeta[] = [
 ];
 
 const META = Object.fromEntries(MODELS.map((m) => [m.key, m])) as Record<ModelType, ModelMeta>;
+/**
+ * Chronological split arm served by this dashboard.
+ *
+ * Both arms remain in the warehouse under gold.*.split_label and the 90/10 run is
+ * documented in the evaluation report; only 80/20 is SHOWN. Its 294-day scored
+ * window spans Mar-Dec, whereas 90/10's 140 days cover Aug-Dec alone, failing the
+ * manuscript's own condition (p86) that the test set still cover "a sufficiently
+ * diverse time frame". Re-scoring the 80/20 predictions on the 90/10 window
+ * reproduces 90/10's figures exactly, so that arm's better numbers come from an
+ * easier window rather than a better split.
+ *
+ * Sent explicitly rather than left to the backend default, so a change to
+ * DEFAULT_SPLIT there cannot silently swap what this chart displays.
+ */
+const SPLIT_ARM = "80_20";
+
 const ACTUAL_COLOR = "#2563eb";
+
 // Same pattern the other dashboard pages use. The literal URL was refactored out
 // of this file but the constant was never declared here, so every fetch threw a
 // ReferenceError, was swallowed by the catch, and the chart sat on "Loading…".
 const BACKEND = process.env.NEXT_PUBLIC_BACKEND_URL ?? "http://localhost:4000";
 const VALIDATED_HORIZON = 14; // must match retrain_honest.py HORIZON
+
+type HorizonBucket = {
+  model: string;
+  hLo: number;
+  hHi: number;
+  n: number;
+  wmape: number | null;
+  mape: number | null;
+  mase: number | null;
+  mae: number | null;
+  baselineWmape: number | null;
+  usable: boolean;
+  note: string | null;
+};
+// Show every stored training day. The blue line is meant to BE the trained
+// dataset, and only at full width do the 80/20 proportions read correctly.
+const ALL_PAST = 100000;
 
 // The API hands back a DATE column that pg has already localised, so read the
 // calendar parts back out in local time to recover the original YYYY-MM-DD.
@@ -117,6 +143,19 @@ type ChartData = {
   futureStart: number;
   rainfall: (number | null)[];
   temperature: (number | null)[];
+  /** True split sizes over the WHOLE table. The rows above are trimmed to the
+   *  selected range, so holdoutStart is "past days drawn", not "days trained". */
+  split: SplitSummary | null;
+};
+
+type SplitSummary = {
+  trainDays: number;
+  holdoutDays: number;
+  futureDays: number;
+  trainStart: string | null;
+  trainEnd: string | null;
+  trainPct: number | null;
+  holdoutPct: number | null;
 };
 
 /** Reads the day's shape off whichever series exists — actuals when observed,
@@ -141,26 +180,17 @@ type Props = {
 };
 
 export default function PredictiveVolumeChart({ months = "all", from, to, weather = "all" }: Props) {
-  /* Several models can be on screen at once; the list never empties so the
-     chart always has something to compare the ground truth against.
-
-     Which one it OPENS on is decided once the metrics arrive, in the effect
-     below. It used to be hardcoded to LSTM — the one model the pipeline
-     rejects. LSTM scores MASE 1.568, meaning its forecast is 57% worse than
-     repeating last week's values, and retrain_honest.py records the reason as
-     "does not beat baseline". Three accepted models sit beside it
-     (HoltWinters 0.873, SARIMAX 0.874, Prophet 0.896), so the default put the
-     weakest candidate in front of every reader who never touched the buttons.
-     LSTM stays selectable — being outperformed is a finding worth showing — it
-     just no longer speaks for the system unprompted. */
+  // Several models can be on screen at once; the list never empties so the
+  // chart always has something to compare the ground truth against.
   const [selected, setSelected] = useState<ModelType[]>(["LSTM"]);
-  // Set once the reader picks a model themselves, so a late metrics fetch
-  // cannot yank the chart out from under them.
-  const modelChosenByUser = useRef(false);
   const [chartData, setChartData] = useState<ChartData | null>(null);
   // Raw metric rows, kept unmodified so the narrative can read fields the
   // metrics TABLE does not display (rejected_reason, aic/bic, the _nw twins).
   const [rawMetrics, setRawMetrics] = useState<MetricRow[]>([]);
+  // Error as a function of how far ahead a day is. Served from
+  // gold.ml_horizon_accuracy, measured by a rolling-origin run at h=90 — NOT
+  // extrapolated from the h=14 headline figure.
+  const [horizonAcc, setHorizonAcc] = useState<HorizonBucket[]>([]);
   const [showAllMetrics, setShowAllMetrics] = useState(false);
   const [showWeather, setShowWeather] = useState(true);
 
@@ -169,19 +199,12 @@ export default function PredictiveVolumeChart({ months = "all", from, to, weathe
   // narrowing PAST here can never change a metric.
   //
   // Granularity & zone window controls
-  /* Opens on Weekly.
-     The scored window is ~1,600 days. Drawn daily in a ~1,300px panel that is
-     under a pixel per point, so the day-of-week cycle — the strongest signal in
-     the series — collapses into a furry band and the reader sees noise where
-     the pattern is. Weekly buckets the same span into ~230 points, which is
-     legible at this width and is the granularity the trend and the seasonal
-     swing actually read at. Daily is one click away and still exact; it is a
-     drill-down, not the overview. */
   const [granularity, setGranularity] = useState<"Hourly" | "Daily" | "Weekly" | "Monthly" | "Yearly">("Weekly");
   // ECharts needs literal colours, so the CSS tokens are resolved at runtime.
   const T = useThemeTokens();
   const ZONE = zoneTints(T.isDark);
 
+  const [pastDays, setPastDays] = useState<number>(ALL_PAST);
   const [futureDays, setFutureDays] = useState<number>(14);
 
   // Drill-down: which day is expanded to its 24-hour breakdown
@@ -198,7 +221,10 @@ export default function PredictiveVolumeChart({ months = "all", from, to, weathe
     if (!rawMetrics.length) return next;
 
     const byName = new Map(rawMetrics.map((m) => [m.model_name, m]));
-    const DB_NAME = MODEL_DB_NAME;
+    const DB_NAME: Record<ModelType, string> = {
+      LSTM: "LSTM", Prophet: "Prophet", HoltWinters: "HoltWinters",
+      SARIMAX: "SARIMAX", HoltsLinear: "Holts_Linear",
+    };
     const TWIN: Partial<Record<ModelType, string>> = {
       Prophet: "Prophet_nw", SARIMAX: "SARIMAX_nw", LSTM: "LSTM_nw",
     };
@@ -230,27 +256,7 @@ export default function PredictiveVolumeChart({ months = "all", from, to, weathe
     return next;
   }, [rawMetrics, showWeather]);
 
-  /* Open on the best model the pipeline actually accepted.
-     Rank is assigned across the full candidate set by the training run, so the
-     lowest rank among accepted rows is the champion; ties and missing ranks
-     fall back to MASE, the metric acceptance is judged on. If nothing was
-     accepted the initial choice stands rather than inventing a winner. */
-  useEffect(() => {
-    if (modelChosenByUser.current || !rawMetrics.length) return;
-    const byName = new Map(rawMetrics.map((m) => [m.model_name, m]));
-    const num = (v: unknown) => (typeof v === "number" && isFinite(v) ? v : Infinity);
-    const champion = (Object.keys(MODEL_DB_NAME) as ModelType[])
-      .map((k) => ({ k, row: byName.get(MODEL_DB_NAME[k]) }))
-      .filter((c) => c.row?.accepted)
-      .sort((a, b) => {
-        const r = num(a.row?.rank) - num(b.row?.rank);
-        return r !== 0 ? r : num((a.row as never)?.["mase"]) - num((b.row as never)?.["mase"]);
-      })[0];
-    if (champion) setSelected([champion.k]);
-  }, [rawMetrics]);
-
   const toggleModel = useCallback((key: ModelType) => {
-    modelChosenByUser.current = true;
     setSelected((prev) => {
       if (!prev.includes(key)) return MODELS.filter((m) => m.key === key || prev.includes(m.key)).map((m) => m.key);
       if (prev.length === 1) return prev; // keep at least one line on the chart
@@ -270,16 +276,11 @@ export default function PredictiveVolumeChart({ months = "all", from, to, weathe
           qs.set("from", from);
           qs.set("to", to);
         } else {
-          /* Always the full history, whatever the page's Range says.
-             This chart's subject is the model's own split — how much data
-             trained it against how much tested it — and that split is fixed by
-             the training run, not by a viewing window. Asking for 12 months
-             returned less training data than the holdout is long, so the bands
-             came out roughly even and the chart showed a model tested on half
-             its data. The Range control still governs the descriptive charts,
-             where it means what it says. */
-          qs.set("months", "all");
+          qs.set("months", months);
         }
+        // Which evaluation arm to serve. Both are stored in the warehouse and
+        // the whole panel — chart, metrics table, split chips — follows this.
+        qs.set("split", SPLIT_ARM);
         if (weather && weather !== "all") {
           qs.set("weather", weather);
         }
@@ -320,6 +321,9 @@ export default function PredictiveVolumeChart({ months = "all", from, to, weathe
 
         const metricsData = json.data.modelMetrics ?? json.data.metrics;
         if (metricsData) setRawMetrics(metricsData as MetricRow[]);
+        if (Array.isArray(json.data.horizonAccuracy)) {
+          setHorizonAcc(json.data.horizonAccuracy as HorizonBucket[]);
+        }
 
         setChartData({
           // The year MUST be part of the category value, not just its label. Zone
@@ -332,6 +336,7 @@ export default function PredictiveVolumeChart({ months = "all", from, to, weathe
             new Date(v.date).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })),
           isoDates: rows.map((v) => toIsoDate(v.date)),
           baseActual: rows.map((v) => v.actual_volume),
+          split: (json?.data?.split ?? null) as SplitSummary | null,
           models,
           modelsNoWeather,
           holdoutStart: holdoutStart === -1 ? rows.length : holdoutStart,
@@ -383,6 +388,12 @@ export default function PredictiveVolumeChart({ months = "all", from, to, weathe
   };
 
   // ---------- Shared chrome ----------
+  // The bucket the LAST projected day falls in — the weakest point of the
+  // chosen window, which is the honest one to quote.
+  const horizonBucketFor = (days: number): HorizonBucket | null =>
+    horizonAcc.find((b) => days >= b.hLo && days <= b.hHi) ??
+    (horizonAcc.length ? horizonAcc[horizonAcc.length - 1] : null);
+
   const modelToolbar = (
     <div style={{ display: "flex", alignItems: "center", gap: "8px", flex: "0 1 auto", minWidth: 0 }}>
       <svg width="15" height="15" viewBox="0 0 16 16" fill="none" style={{ color: "var(--text-muted)", flex: "none" }}>
@@ -519,22 +530,7 @@ export default function PredictiveVolumeChart({ months = "all", from, to, weathe
   // Trim to the requested zone widths. Slicing every series by the same window
   // keeps the zone boundaries aligned with the data after the cut.
   // All three zones (Past · Present · Future) are always fully visible.
-  /* How much training history to show.
-   *
-   * The zones are the model's own split: everything before holdoutStart trained
-   * it, the holdout tested it, and the future is the forecast. In the warehouse
-   * that is 2,488 / 434 / 56 rows — roughly 85/15 of the scored period. The
-   * chart only tells that story if the training band is drawn several times
-   * wider than the test band.
-   *
-   * Daily used to clip the past to a flat 90 days while the holdout ran 434, so
-   * the picture inverted: a sliver of training beside ten months of testing,
-   * which reads as a model tested on most of its data. The clip exists because
-   * 2,400 raw points in 1,400px is an unreadable band, so it stays — but sized
-   * from the holdout rather than fixed, which keeps the proportion honest at
-   * every granularity. */
-  const proportionalPast = Math.max(90, (chartData.futureStart - chartData.holdoutStart) * 4);
-  const lo = Math.max(0, chartData.holdoutStart - proportionalPast);
+  const lo = Math.max(0, chartData.holdoutStart - pastDays);
   const hi = Math.min(chartData.dates.length, chartData.futureStart + futureDays);
   const cut = <T,>(a: T[]) => a.slice(lo, hi);
 
@@ -565,14 +561,43 @@ export default function PredictiveVolumeChart({ months = "all", from, to, weathe
   const dates = agg ? agg.dates : dailyDates;
   const isoDates = agg ? agg.isoDates : dailyIso;
   const baseActual = agg ? agg.baseActual : dailyActual;
+
+  // Rainfall bars are sky-blue and the actual line was also blue, so two unrelated
+  // quantities shared a hue. Actual moves to a neutral slate that reads as
+  // "observation" against the saturated model colours.
+  const actualColor = T.isDark ? "#cbd5e1" : "#334155";
   const rainfall = agg ? agg.rainfall : dailyRain;
+  // Bar HEIGHT is the bucket mean; bar COLOUR comes from the bucket's wettest
+  // day. The band thresholds are PAGASA DAILY advisories, so colouring by a
+  // weekly mean described an intensity no day necessarily reached: over
+  // 2022-2025, 60.6% of weeks fell in a different band from their wettest day,
+  // and 6.3% were painted below "Heavy" while containing a day above 30 mm.
+  // At Daily granularity the two arrays are identical.
+  const rainfallPeak = agg ? agg.rainfallPeak : dailyRain;
   const models = agg ? agg.models : dailyModels;
   const holdoutStart = agg ? agg.holdoutStart : dailyHoldoutStart;
   const futureStart = agg ? agg.futureStart : dailyFutureStart;
-
   const isAggregated = agg != null;
+
+  // Every aggregated value on this chart is a MEAN of its days, never a total.
+  // Naming that once here keeps the axis titles, the banner and the rainfall
+  // caption consistent — "per period" told the reader nothing about which
+  // period or which statistic.
+  const bucketDays = granularity === "Weekly" ? 7 : granularity === "Monthly" ? 30 : 1;
+  const meanLabel =
+    granularity === "Weekly" ? "7-day mean"
+    : granularity === "Monthly" ? "monthly mean"
+    : "";
+  const bucketNoun = granularity === "Weekly" ? "week" : granularity === "Monthly" ? "month" : "day";
   const drillIndex = drillDate ? isoDates.indexOf(drillDate) : -1;
   const drillLabel = drillIndex >= 0 ? dates[drillIndex] : drillDate ?? "";
+
+  // Holt-Winters and Holts Linear are univariate (no weather variant). Their line
+  // is identical whether Weather is on or off, so showing it while Weather is ON
+  // would falsely imply a weather-aware prediction — suppress it instead.
+  const visibleModels = showWeather
+    ? selected.filter((k) => k !== "HoltWinters" && k !== "HoltsLinear")
+    : selected;
 
   // Clicking a point (or its x-axis label) opens that day's hourly breakdown
   const openDay = (index: number) => {
@@ -682,9 +707,7 @@ export default function PredictiveVolumeChart({ months = "all", from, to, weathe
     { max: 7.5, label: "Light", color: "rgba(56, 189, 248, 0.45)" },
     { max: 15, label: "Moderate", color: "rgba(14, 165, 233, 0.65)" },
     { max: 30, label: "Heavy", color: "rgba(2, 132, 199, 0.8)" },
-    // Teal rather than navy: the old value sat almost on top of the volume
-    // line's blue, so the tallest bars read as part of the volume series.
-    { max: Infinity, label: "Intense", color: "rgba(13, 148, 136, 0.9)" },
+    { max: Infinity, label: "Intense", color: "rgba(30, 64, 175, 0.9)" },
   ];
   const rainBand = (mm: number) => RAIN_BANDS.find((b) => mm < b.max) ?? RAIN_BANDS[RAIN_BANDS.length - 1];
 
@@ -693,8 +716,11 @@ export default function PredictiveVolumeChart({ months = "all", from, to, weathe
       name: "Rainfall (mm)",
       type: "bar",
       yAxisIndex: 1,
-      data: rainfall.map((mm) =>
-        mm == null ? null : { value: mm, itemStyle: { color: rainBand(mm).color } }
+      data: rainfall.map((mm, i) =>
+        mm == null ? null : {
+          value: mm,
+          itemStyle: { color: rainBand(rainfallPeak[i] ?? mm).color },
+        }
       ),
       barMaxWidth: 16,
       z: 2,
@@ -704,24 +730,50 @@ export default function PredictiveVolumeChart({ months = "all", from, to, weathe
 
   // Only worth spending a second label line on the year when the window actually
   // crosses one — at the 80/20 split it usually does, at "3 mo" it usually doesn't.
-  // Which indices get a date label. A plain fixed stride left the Future block
-  // undated: at 594 points the stride is 50, so the last tick landed on index 550
-  // while the forecast began at 566 — the entire projection had no date under it.
-  // The first forecast day and the final day are therefore always labelled, and any
-  // stride tick that would collide with them is dropped instead of overlapping.
+  //
+  // Ticks are snapped to MONTH BOUNDARIES, not strided by index. The old version
+  // labelled every ceil(n/12)-th data point, which put dates on arbitrary days
+  // ("Feb 21, Mar 28, May 2" — a 35-day stride aligned with nothing) and, worse,
+  // reshuffled the entire axis whenever granularity changed, because the point
+  // count changed with it. Month starts exist at the same calendar positions in
+  // Daily, Weekly and Monthly, so the axis now holds still when you toggle.
   const labelIndices = (() => {
     const n = dates.length;
     const keep = new Set<number>();
     if (n === 0) return keep;
-    const stride = Math.max(1, Math.ceil(n / 12));
-    for (let i = 0; i < n; i += stride) keep.add(i);
+
+    // First index of each calendar month present in the window.
+    const monthStarts: number[] = [];
+    let prevYm = "";
+    for (let i = 0; i < n; i++) {
+      const ym = isoDates[i]?.slice(0, 7) ?? "";
+      if (ym && ym !== prevYm) {
+        monthStarts.push(i);
+        prevYm = ym;
+      }
+    }
+
+    // Thin to ~12 ticks: monthly, else quarterly, half-yearly and so on.
+    if (monthStarts.length > 0) {
+      const step = monthStarts.length <= 12 ? 1 : Math.ceil(monthStarts.length / 12);
+      for (let i = 0; i < monthStarts.length; i += step) keep.add(monthStarts[i]);
+    } else {
+      // A window too short to contain a month boundary would otherwise render a
+      // bare axis, so fall back to the old index stride.
+      const stride = Math.max(1, Math.ceil(n / 12));
+      for (let i = 0; i < n; i += stride) keep.add(i);
+    }
+
+    // The forecast block must be dated at both ends. Previously a fixed stride
+    // left it undated entirely: at 594 points the last tick landed on index 550
+    // while the forecast began at 566.
     const mustLabel = [futureStart, n - 1].filter((i) => i >= 0 && i < n);
     const mustSet = new Set(mustLabel);
-    const minGap = Math.max(2, Math.floor(stride * 0.6));
+    const minGap = Math.max(2, Math.floor(n / 24));
     for (const m of mustLabel) {
-      // Only thin the regular stride ticks. Guarding mustSet matters because the
-      // start and end of the forecast sit close together, and without it the
-      // second forced label silently deleted the first.
+      // Only thin the regular ticks. Guarding mustSet matters because the start
+      // and end of the forecast sit close together, and without it the second
+      // forced label silently deleted the first.
       for (const k of Array.from(keep)) {
         if (!mustSet.has(k) && Math.abs(k - m) < minGap) keep.delete(k);
       }
@@ -743,12 +795,19 @@ export default function PredictiveVolumeChart({ months = "all", from, to, weathe
       formatter: (params: unknown) => {
         const items = params as { name: string; marker: string; seriesName: string; value: number | null }[];
         if (!items || items.length === 0) return "";
-        let tip = `<b>${items[0].name}</b>${isAggregated ? " · period average" : ""}<br/>`;
+        let tip = `<b>${items[0].name}</b>${isAggregated ? ` · ${meanLabel} (average of the ${bucketNoun}'s days)` : ""}<br/>`;
         items.forEach((p) => {
           if (p.value != null) {
             if (p.seriesName === "Rainfall (mm)") {
               const mm = Number(p.value);
-              tip += `${p.marker} Rainfall: <b>${mm.toFixed(1)} mm</b> \u00B7 ${rainBand(mm).label}<br/>`;
+              {
+                // Aggregated: give the mean AND the day that set the colour,
+                // so the tooltip can never contradict the bar it describes.
+                const pk = rainfallPeak[(p as { dataIndex?: number }).dataIndex ?? -1];
+                tip += isAggregated && pk != null
+                  ? `${p.marker} Rainfall: <b>${mm.toFixed(1)} mm/day</b> mean, wettest day <b>${pk.toFixed(1)} mm</b> - ${rainBand(pk).label}<br/>`
+                  : `${p.marker} Rainfall: <b>${mm.toFixed(1)} mm</b> \u00B7 ${rainBand(mm).label}<br/>`;
+              }
             } else {
               tip += `${p.marker} ${p.seriesName}: <b>${fmtVeh(Number(p.value))}</b><br/>`;
             }
@@ -759,33 +818,32 @@ export default function PredictiveVolumeChart({ months = "all", from, to, weathe
         }</span>`;
       },
     },
+    graphic: isAggregated
+      ? [{
+          type: "text", right: 18, top: 8, silent: true,
+          style: {
+            text: `every point = ${meanLabel}`,
+            fontSize: 11, fontWeight: 600, fill: T.textMuted,
+          },
+        }]
+      : [],
     legend: {
-      /* The forecast is its own series and needs its own key, or the dashed
-         line in the Future band is unexplained. Named "Forecast" against the
-         fitted line's "Prediction", which is the distinction that matters:
-         one is the model scored on days that happened, the other is the part
-         that has not happened yet. */
       data: [
         "Actual Volume",
-        ...selected.flatMap((k) => [
-          `${metricsMeta[k].label} Prediction`,
-          `${metricsMeta[k].label} Forecast`,
-        ]),
+        ...visibleModels.map((k) => `${metricsMeta[k].label} Prediction`),
         ...(showWeather ? ["Rainfall (mm)"] : []),
       ],
       bottom: 0,
       icon: "circle",
       itemGap: 16,
       textStyle: { fontSize: 12, color: T.chartText },
+      // Names the statistic on every series in the place readers actually look.
+      // Formatter is display-only: the underlying seriesName values still drive
+      // tooltip matching and the click-to-drill handler, so renaming them here
+      // cannot break either.
+      formatter: (name: string) => (isAggregated ? `${name}  · ${meanLabel}` : name),
     },
     dataZoom: [
-      /* Full width. The chart's subject is the split — how much data trained
-         the model, how much it was tested on, and what it forecasts — and that
-         proportion only reads if all three zones are on screen at once.
-         An earlier attempt opened on the tail to make the forecast bigger; it
-         made the forecast legible by hiding the training period that gives it
-         meaning, which is a worse trade. The forecast is found by its dashed
-         line and its green band instead. */
       { type: "slider", start: 0, end: 100, height: 18, bottom: 44,
         borderColor: T.border, fillerColor: T.isDark ? "rgba(56,118,245,0.18)" : "rgba(37,99,235,0.08)",
         handleStyle: { color: "#3876f5" }, textStyle: { color: T.textMuted, fontSize: 10 },
@@ -820,7 +878,7 @@ export default function PredictiveVolumeChart({ months = "all", from, to, weathe
     yAxis: [
       {
         type: "value",
-        name: isAggregated ? "Avg Daily Volume (per period)" : "Total Vehicle Volume",
+        name: isAggregated ? `Avg daily volume — ${meanLabel}` : "Total Vehicle Volume",
         nameLocation: "middle",
         nameGap: 60,
         axisLabel: { color: T.chartText, formatter: (val: number) => `${(val / 1000).toFixed(0)}k` },
@@ -829,7 +887,7 @@ export default function PredictiveVolumeChart({ months = "all", from, to, weathe
       },
       {
         type: "value",
-        name: showWeather ? "Daily rainfall (mm)" : "",
+        name: showWeather ? (isAggregated ? `Avg daily rainfall, mm — ${meanLabel}` : "Daily rainfall (mm)") : "",
         nameLocation: "middle",
         nameGap: 50,
         nameTextStyle: { color: T.isDark ? "#38bdf8" : "#0284c7", fontSize: 11, fontWeight: "bold" },
@@ -838,16 +896,12 @@ export default function PredictiveVolumeChart({ months = "all", from, to, weathe
         axisLine: { show: showWeather, lineStyle: { color: T.isDark ? "#38bdf8" : "#0284c7" } },
         splitLine: { show: false },
         min: 0,
-        /* Headroom of 3x, so the heaviest bar fills about a third of the plot
-           and the rain reads as a strip along the bottom.
-
-           At 1.2x the tallest bar climbed to ~83% of the height, straight
-           through the volume line, and the "Intense" band is a navy close
-           enough to the volume blue that the two were hard to tell apart. That
-           is a secondary series obscuring the primary one. The axis still
-           labels true millimetres — this changes how tall the bars are drawn,
-           not what they say. */
-        max: (value: { max: number }) => Math.ceil(value.max * 3) || 10,
+        // Headroom of 1.2 let the wettest day draw a bar across ~83% of the plot,
+        // so rainfall crossed straight through the volume lines and dominated a
+        // chart that is primarily about volume. At 4x the bars stay inside the
+        // bottom quarter and read as a weather strip under the series. The axis
+        // is still truthful — only the headroom changed, not the values.
+        max: (value: { max: number }) => Math.ceil(value.max * 4) || 10,
       },
     ],
     series: [
@@ -861,8 +915,11 @@ export default function PredictiveVolumeChart({ months = "all", from, to, weathe
         symbol: "circle",
         symbolSize: dates.length > 400 ? 0 : 5,
         z: 3,
-        lineStyle: { width: dates.length > 400 ? 1 : 2.5, color: ACTUAL_COLOR },
-        itemStyle: { color: ACTUAL_COLOR },
+        // Dark slate at full weight — this is the treatment that made the series
+        // legible. Still thinner at daily density, where ~880 points would
+        // otherwise fuse into a solid block.
+        lineStyle: { width: dates.length > 400 ? 1.6 : 2.6, color: actualColor },
+        itemStyle: { color: actualColor },
         emphasis: { scale: 2.2 },
         markArea: {
           silent: true,
@@ -931,58 +988,25 @@ export default function PredictiveVolumeChart({ months = "all", from, to, weathe
           ],
         },
       },
-      /* Each model draws twice: what it fitted against days it could be scored
-         on, and what it forecasts for days that have not happened.
-
-         They were one line before, in one weight, so the reader could not see
-         where hindsight stopped and prediction began — the most important
-         boundary on the chart, and the one the Past/Present/Future bands are
-         there to mark. The forecast is dashed and drawn heavier, and the two
-         share a point at the boundary so the line stays continuous. */
-      ...selected.flatMap((key) => {
-        const colour = metricsMeta[key].color;
-        const fitted = models[key].map((v, i) => (i <= futureStart ? v : null));
-        const forecast = models[key].map((v, i) => (i >= futureStart ? v : null));
-        const dense = dates.length > 400;
-
-        return [
-          {
-            name: `${metricsMeta[key].label} Prediction`,
-            type: "line" as const,
-            yAxisIndex: 0,
-            data: fitted,
-            smooth: true,
-            connectNulls: true,
-            symbol: "circle",
-            symbolSize: 5,
-            lineStyle: { width: dense ? 1.2 : 2.2, color: colour },
-            itemStyle: { color: colour },
-            emphasis: { scale: 2.2 },
-          },
-          {
-            name: `${metricsMeta[key].label} Forecast`,
-            type: "line" as const,
-            yAxisIndex: 0,
-            data: forecast,
-            smooth: true,
-            connectNulls: true,
-            symbol: "circle",
-            symbolSize: 6,
-            // Heavier than the fitted line even when the series is dense: it is
-            // the shortest stretch on the chart and the one worth finding.
-            lineStyle: { width: dense ? 2.4 : 3.2, color: colour, type: "dashed" as const },
-            itemStyle: { color: colour },
-            emphasis: { scale: 2.4 },
-            z: 5,
-          },
-        ];
-      }),
+      ...visibleModels.map((key) => ({
+        name: `${metricsMeta[key].label} Prediction`,
+        type: "line" as const,
+        yAxisIndex: 0,
+        data: models[key],
+        smooth: true,
+        connectNulls: true,
+        symbol: "circle",
+        symbolSize: 5,
+        lineStyle: { width: dates.length > 400 ? 1.2 : 2.2, color: metricsMeta[key].color },
+        itemStyle: { color: metricsMeta[key].color },
+        emphasis: { scale: 2.2 },
+      })),
       ...weatherSeries,
     ],
   };
 
   // ---------- Hourly drill-down ----------
-  const anyHourly = selected.map((k) => hourlyByModel[k]).find(Boolean);
+  const anyHourly = visibleModels.map((k) => hourlyByModel[k]).find(Boolean);
   const hourLabels = Array.from({ length: 24 }, (_, h) => fmtHour(h));
   const hasActualHours = Boolean(anyHourly?.hours.some((h) => h.actual != null));
 
@@ -1041,7 +1065,7 @@ export default function PredictiveVolumeChart({ months = "all", from, to, weathe
         legend: {
           data: [
             ...(hasActualHours ? ["Actual Volume"] : []),
-            ...selected.filter((k) => hourlyByModel[k]?.hours.some((h) => h.predicted != null)).map((k) => `${metricsMeta[k].label} Prediction`),
+            ...visibleModels.filter((k) => hourlyByModel[k]?.hours.some((h) => h.predicted != null)).map((k) => `${metricsMeta[k].label} Prediction`),
             ...(showWeather ? ["Rainfall (mm)", "Temperature (\u00B0C)"] : []),
           ],
           bottom: 0,
@@ -1098,7 +1122,7 @@ export default function PredictiveVolumeChart({ months = "all", from, to, weathe
                 },
               ]
             : []),
-          ...selected
+          ...visibleModels
             .filter((k) => hourlyByModel[k]?.hours.some((h) => h.predicted != null))
             .map((k) => ({
               name: `${metricsMeta[k].label} Prediction`,
@@ -1203,7 +1227,7 @@ export default function PredictiveVolumeChart({ months = "all", from, to, weathe
               <div style={{ fontSize: "0.72rem", color: "var(--text-secondary)", textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: "4px" }}>Day Actual</div>
               <div style={{ fontSize: "1.1rem", fontWeight: 700, color: "var(--text-primary)" }}>{anyHourly.dayActual != null ? fmtVeh(anyHourly.dayActual) : "—"}</div>
             </div>
-            {selected.map((k) => {
+            {visibleModels.map((k) => {
               const h = hourlyByModel[k];
               return (
                 <div key={k} style={{ background: "var(--bg-surface-hover)", padding: "12px 14px", borderRadius: "8px", border: "1px solid #e2e8f0" }}>
@@ -1236,7 +1260,14 @@ export default function PredictiveVolumeChart({ months = "all", from, to, weathe
             Traffic Volume Walk-Forward Forecast
           </h3>
           <p style={{ color: "var(--text-secondary)", fontSize: "0.82rem", margin: "4px 0 0 0" }}>
-            Click any point to view that day&apos;s hourly breakdown · Toggle models to overlay predictions
+            {isAggregated ? (
+              <>
+                Every point is a <b style={{ color: "#1d4ed8" }}>{meanLabel}</b> — the average of that{" "}
+                {bucketNoun}&apos;s days, not a total · Toggle models to overlay predictions
+              </>
+            ) : (
+              <>Click any point to view that day&apos;s hourly breakdown · Toggle models to overlay predictions</>
+            )}
           </p>
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: "12px", flexWrap: "wrap" }}>
@@ -1267,12 +1298,46 @@ export default function PredictiveVolumeChart({ months = "all", from, to, weathe
         </div>
       </div>
 
-      {/* Zone window & Granularity controls */}
+      {/* Zone window & Granularity controls.
+          Two explicit rows: what you can CHANGE on top, what the chart currently
+          SHOWS underneath. Previously all five items sat in one wrapping flex,
+          so Past/Present/Future broke across lines at common widths and left
+          "Future" stranded alone. */}
       <div style={{
-        display: "flex", alignItems: "center", gap: "20px", flexWrap: "wrap",
-        padding: "10px 14px", borderRadius: "10px", background: "var(--bg-surface-hover)",
+        display: "flex", flexDirection: "column", gap: "7px",
+        padding: "9px 16px", borderRadius: "10px", background: "var(--bg-surface-hover)",
         border: "1px solid var(--border-default)", fontSize: "0.76rem",
       }}>
+        {/* Row 1 — controls */}
+        <div style={{
+          display: "flex", alignItems: "center", gap: "18px", flexWrap: "wrap",
+          justifyContent: "space-between",
+        }}>
+        {/* Aggregation notice. The adviser's point was that a reader should know
+            instantly what a point represents; the axis title alone is too easy to
+            skip past, and the old wording ("per period") named neither the period
+            nor the statistic. Shown only when the values ARE aggregated, so it
+            never becomes furniture the eye learns to ignore. */}
+        {isAggregated && (
+          <span
+            title={`Each plotted point is the arithmetic mean of the ${bucketDays} days in its ${bucketNoun} — for volume, for every model line, and for rainfall. Totals are never plotted: a sum would make a short ${bucketNoun} look like a dip.`}
+            style={{
+              display: "inline-flex", alignItems: "center", gap: "7px",
+              padding: "4px 11px", borderRadius: "999px",
+              background: "#1d4ed8", border: "1px solid #1d4ed8",
+              color: "#ffffff", fontSize: "0.78rem", fontWeight: 700,
+              whiteSpace: "nowrap", letterSpacing: "0.01em",
+              boxShadow: "0 1px 6px rgba(29,78,216,0.30)",
+            }}
+          >
+            <span style={{ fontSize: "0.85rem", lineHeight: 1 }}>⌀</span>
+            Each point = {meanLabel}
+            <span style={{ fontWeight: 500, color: "#bfdbfe" }}>
+              averaged, not totalled
+            </span>
+          </span>
+        )}
+
         {/* GRANULARITY control pill */}
         <span style={{ display: "inline-flex", alignItems: "center", gap: "8px" }}>
           <b style={{ color: "#3b82f6", letterSpacing: "0.04em", fontSize: "0.75rem", textTransform: "uppercase" }}>
@@ -1296,10 +1361,10 @@ export default function PredictiveVolumeChart({ months = "all", from, to, weathe
               <button
                 key={g}
                 onClick={() => {
-                  /* The window no longer depends on granularity: it is sized
-                     from the holdout where `lo` is computed, so every view
-                     shows the same split in the same proportion. */
                   setGranularity(g);
+                  // Daily stays zoomed because 2,400 raw points is unreadable;
+                  // the aggregated views bucket the data so they can show it all.
+                  setPastDays(g === "Daily" ? 90 : ALL_PAST);
                 }}
                 title={
                   g === "Daily"
@@ -1319,10 +1384,33 @@ export default function PredictiveVolumeChart({ months = "all", from, to, weathe
           </div>
         </span>
 
+        </div>
+
+        {/* Row 2 — what the chart is currently showing. Kept together so the
+            three zones always read as one group. */}
+        <div style={{
+          display: "flex", alignItems: "center", gap: "18px", flexWrap: "wrap",
+          justifyContent: "space-between",
+          paddingTop: "8px", borderTop: "1px solid var(--border-default)",
+        }}>
         {/* Past */}
         <span style={{ display: "inline-flex", alignItems: "center", gap: "8px" }}>
           <span style={{ width: 10, height: 10, borderRadius: 2, background: "rgba(37,99,235,0.25)" }} />
           <b style={{ color: "var(--text-primary)" }}>Past</b>
+          {/* Without this the band reads as "the 80%", when the selected range may
+              be drawing only its final weeks. State both numbers. */}
+          <span style={{ color: "var(--text-secondary)" }}>
+            {chartData.split
+              ? `${chartData.split.trainDays.toLocaleString()}d trained${
+                  chartData.split.trainPct != null ? ` · ${chartData.split.trainPct}%` : ""
+                }`
+              : `${chartData.holdoutStart}d shown`}
+            {chartData.split && chartData.holdoutStart < chartData.split.trainDays && (
+              <span style={{ color: "var(--color-warning)" }}>
+                {" · "}showing last {chartData.holdoutStart.toLocaleString()}d
+              </span>
+            )}
+          </span>
         </span>
 
         {/* Present */}
@@ -1330,7 +1418,8 @@ export default function PredictiveVolumeChart({ months = "all", from, to, weathe
           <span style={{ width: 10, height: 10, borderRadius: 2, background: "rgba(249,115,22,0.35)" }} />
           <b style={{ color: "var(--text-primary)" }}>Present</b>
           <span style={{ color: "var(--text-secondary)" }}>
-            {chartData.futureStart - chartData.holdoutStart}d scored · fixed by evaluation
+            {chartData.futureStart - chartData.holdoutStart}d scored
+            {chartData.split?.holdoutPct != null ? ` · ${chartData.split.holdoutPct}%` : ""} · fixed by evaluation
           </span>
         </span>
 
@@ -1341,6 +1430,8 @@ export default function PredictiveVolumeChart({ months = "all", from, to, weathe
           {[
             { label: "2 wk", d: 14 },
             { label: "1 mo", d: 28 },
+            { label: "2 mo", d: 60 },
+            { label: "3 mo", d: 90 },
           ].map((item) => (
             <button key={item.label} onClick={() => setFutureDays(item.d)}
               disabled={item.d > chartData.dates.length - chartData.futureStart}
@@ -1353,9 +1444,56 @@ export default function PredictiveVolumeChart({ months = "all", from, to, weathe
                 opacity: item.d > chartData.dates.length - chartData.futureStart ? 0.4 : 1,
               }}>{item.label}</button>
           ))}
-          <span style={{ color: "var(--text-secondary)" }}>· validated at 14d</span>
+          {/* Just the model's property. What a longer projection is worth is
+              explained by the banner below, which appears in exactly the same
+              condition — repeating WMAPE/MASE here only crowded the range
+              picker with numbers the reader has not asked for yet. */}
+          <span style={{ color: "var(--text-secondary)" }}>· validated at {VALIDATED_HORIZON}d</span>
         </span>
+        </div>
       </div>
+
+      {futureDays > VALIDATED_HORIZON && (
+        <div style={{
+          display: "flex", alignItems: "flex-start", gap: 10, padding: "9px 14px",
+          borderRadius: 10, background: "rgba(249,115,22,0.08)",
+          border: "1px solid rgba(249,115,22,0.28)", fontSize: "0.75rem",
+          color: "var(--text-secondary)", lineHeight: 1.5,
+        }}>
+          <span style={{ fontSize: "0.9rem", lineHeight: 1 }}>⚠</span>
+          <span>
+            Beyond {VALIDATED_HORIZON} days only{" "}
+            <b style={{ color: "var(--text-primary)" }}>{horizonAcc[0]?.model ?? "the accepted model"}</b> was
+            measured, by a separate rolling-origin run at h={horizonAcc[horizonAcc.length - 1]?.hHi ?? 90}.
+            {/* Read from gold.ml_horizon_accuracy rather than typed in, so a
+                re-run of the study updates this sentence instead of leaving a
+                stale figure next to a live chart. */}
+            {horizonAcc.length > 1 && (
+              <>
+                {" "}Error rises then flattens (d{horizonAcc[0].hLo}-{horizonAcc[0].hHi}{" "}
+                {horizonAcc[0].wmape?.toFixed(2)}% → d{horizonAcc[horizonAcc.length - 1].hLo}-
+                {horizonAcc[horizonAcc.length - 1].hHi}{" "}
+                {horizonAcc[horizonAcc.length - 1].wmape?.toFixed(2)}% WMAPE)
+              </>
+            )}{" "}
+            because it is structural — trend plus weekly and yearly seasonality — so it does not compound
+            its own errors.{" "}
+            {(() => {
+              const b = horizonBucketFor(futureDays);
+              return b?.mase != null && b.mase > 0.95 ? (
+                <>
+                  At the {b.hLo}-{b.hHi} day range it clears the seasonal-naive benchmark by only{" "}
+                  <b style={{ color: "var(--color-warning)" }}>{(1 - b.mase).toFixed(3)} MASE</b>, so treat
+                  that stretch as indicative rather than reliable.{" "}
+                </>
+              ) : null;
+            })()}
+            The rejected models are still drawn if you toggle them, but nothing validates them at this
+            range and <b style={{ color: "var(--text-primary)" }}>SARIMAX collapses to implausible values</b>{" "}
+            past a few weeks. Weather across the whole projection is day-of-year climatology, not a forecast.
+          </span>
+        </div>
+      )}
 
       <div style={{ height: "450px", width: "100%", cursor: "pointer" }}>
         <DashboardChart option={dailyOption} height={450} onEvents={{ click: onChartClick as (p: never) => void }} />
@@ -1369,7 +1507,9 @@ export default function PredictiveVolumeChart({ months = "all", from, to, weathe
           padding: "10px 14px", borderRadius: "10px", background: "var(--bg-surface-hover)",
           border: "1px solid var(--border-default)", fontSize: "0.75rem", color: "var(--text-secondary)",
         }}>
-          <span style={{ fontWeight: 700, color: "var(--text-primary)" }}>Daily rainfall</span>
+          <span style={{ fontWeight: 700, color: "var(--text-primary)" }}>
+            {isAggregated ? `Rainfall — ${meanLabel}` : "Daily rainfall"}
+          </span>
           {RAIN_BANDS.map((b, i) => (
             <span key={b.label} style={{ display: "inline-flex", alignItems: "center", gap: "6px" }}>
               <span style={{
@@ -1385,7 +1525,9 @@ export default function PredictiveVolumeChart({ months = "all", from, to, weathe
             </span>
           ))}
           <span style={{ color: "var(--text-secondary)", borderLeft: "1px solid var(--border-default)", paddingLeft: "14px" }}>
-            Taller bar = wetter day. Heavy rain typically coincides with lower traffic volume.
+            {isAggregated
+              ? `Bar HEIGHT = the ${bucketNoun}'s mean. Bar COLOUR = its wettest single day, because these bands are daily rain advisories — so a calm-looking ${bucketNoun} can still be flagged for one severe day.`
+              : "Taller bar = wetter day. Heavy rain typically coincides with lower traffic volume."}
           </span>
         </div>
       )}

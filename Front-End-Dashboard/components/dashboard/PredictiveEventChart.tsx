@@ -10,6 +10,14 @@ type RawRow = {
   baseline: number | string;
   surge: number | string | null;
   uplift: number | string | null;
+  upliftLo?: number | string | null;
+  upliftHi?: number | string | null;
+  nEvents?: number | null;
+  material?: boolean | null;
+  method?: string | null;
+  anchorExit?: string | null;
+  firstEvent?: string | null;
+  lastEvent?: string | null;
 };
 
 type Row = {
@@ -36,6 +44,9 @@ const BACKEND = process.env.NEXT_PUBLIC_BACKEND_URL ?? "http://localhost:4000";
 
 export default function PredictiveEventChart() {
   const [raw, setRaw] = useState<RawRow[] | null>(null);
+  // Out-of-sample result from eval_event_surge.py. The uplift table itself is
+  // descriptive; this is the separate check that it predicts unseen events.
+  const [val, setVal] = useState<{ model: string; wmape: number | null; accepted: boolean; diagnosis: string | null }[]>([]);
   const [showAllOthers, setShowAllOthers] = useState(false);
 
   useEffect(() => {
@@ -45,6 +56,7 @@ export default function PredictiveEventChart() {
       .then((json) => {
         if (cancelled || !json.success || !json.data?.events?.length) return;
         setRaw(json.data.events as RawRow[]);
+        if (Array.isArray(json.data?.eventSurgeMetrics)) setVal(json.data.eventSurgeMetrics);
       })
       .catch((err) => console.error("Failed to fetch ML event surge forecast", err));
     return () => {
@@ -56,7 +68,11 @@ export default function PredictiveEventChart() {
     if (!raw || raw.length === 0) return null;
 
     const affected: Row[] = raw
-      .filter((d) => d.surge != null)
+      // `material` is set by build_event_surge.py: the lower quartile of the
+      // observed uplift must still be above normal. An exit whose IQR straddles
+      // 1.0 rose on some event days and fell on others, which is noise, not an
+      // effect — listing it as "affected" would overstate the corridor's spread.
+      .filter((d) => d.surge != null && d.material !== false)
       .map((d) => {
         const baseline = Number(d.baseline);
         const surge = Number(d.surge);
@@ -70,14 +86,20 @@ export default function PredictiveEventChart() {
     affected.forEach((r) => (r.shareOfSurge = totalAdded > 0 ? (r.added / totalAdded) * 100 : 0));
 
     const rest = raw
-      .filter((d) => d.surge == null)
+      .filter((d) => d.surge == null || d.material === false)
       .map((d) => ({ exit: d.exit, baseline: Number(d.baseline) }))
       .sort((a, b) => b.baseline - a.baseline);
 
     return {
       affected,
-      // ECharts lays a category axis out bottom-up
-      rows: [...affected].reverse(),
+      // ECharts lays a category axis out bottom-up.
+      //
+      // Only the exits carrying a MEANINGFUL share are plotted. Thirteen bars,
+      // seven of them under 4% of the surge, buried the two that carry half of
+      // it — the long tail cost as much vertical space as the finding. The rest
+      // are still listed below the chart, so nothing disappears.
+      rows: [...affected.filter((r) => r.shareOfSurge >= 4)].reverse(),
+      minorAffected: affected.filter((r) => r.shareOfSurge < 4),
       otherExits: rest.filter((r) => !NON_EXIT.test(r.exit)),
       otherPoints: rest.filter((r) => NON_EXIT.test(r.exit)),
       totalAdded,
@@ -95,7 +117,7 @@ export default function PredictiveEventChart() {
     );
   }
 
-  const { affected, rows, otherExits, otherPoints, totalAdded, affectedBaseline, eventName, totalPlazas } = model;
+  const { affected, rows, minorAffected, otherExits, otherPoints, totalAdded, affectedBaseline, eventName, totalPlazas } = model;
   const top = affected[0];
   const multiple = top.surge / top.baseline;
 
@@ -157,8 +179,10 @@ export default function PredictiveEventChart() {
           distance: 10,
           formatter: (params: unknown) => {
             const r = rows[(params as { dataIndex: number }).dataIndex];
-            return `{add|+${fmtVeh(r.added)}}  {pct|+${r.pct.toFixed(0)}%}
-{ctx|${fmtVeh(r.baseline)} → ${fmtVeh(r.surge)} · ${(r.surge / r.baseline).toFixed(1)}× normal}`;
+            // The "50,890 -> 63,119 · 1.2x normal" second line repeated on
+            // every bar and is already in the tooltip. The bar carries the
+            // two numbers a reader actually scans for.
+            return `{add|+${fmtVeh(r.added)}}  {pct|+${r.pct.toFixed(0)}%}`;
           },
           rich: {
             add: { color: SURGE_COLOR, fontWeight: 800, fontSize: 13, lineHeight: 17 },
@@ -217,6 +241,11 @@ export default function PredictiveEventChart() {
     </div>
   );
 
+  // Provenance travels on the rows; take it from the first that has it.
+  const meta = (raw ?? []).find((r) => r.nEvents != null) ?? null;
+  const champ = val.find((v) => !/baseline/i.test(v.model)) ?? null;
+  const noAdj = val.find((v) => /no event/i.test(v.model)) ?? null;
+  const others = val.filter((v) => !/baseline/i.test(v.model) && v.model !== champ?.model);
   const impactHeight = Math.max(rows.length * 56 + 62, 220);
   const VISIBLE_OTHERS = 8;
   const shownOthers = showAllOthers ? otherExits : otherExits.slice(0, VISIBLE_OTHERS);
@@ -226,21 +255,49 @@ export default function PredictiveEventChart() {
       <div>
         <h3 style={{ fontSize: "1.05rem", color: "#0f172a", fontWeight: 700, margin: 0, letterSpacing: "-0.01em", display: "flex", alignItems: "center", gap: "8px" }}>
           Event Surge Impact by Exit
-          <span style={{ fontSize: "0.72rem", padding: "2px 8px", background: "#f1f5f9", borderRadius: "999px", border: "1px solid #dce2ef", color: "#475569", fontWeight: 600 }}>
-            Prophet
+          {/* This said "Prophet". No Prophet model ever touched this panel — the
+              badge was a hardcoded string sitting above three hand-typed rows.
+              It now states what the numbers actually are. */}
+          <span style={{ fontSize: "0.72rem", padding: "2px 8px", background: "#ecfdf5", borderRadius: "999px", border: "1px solid #a7f3d0", color: "#047857", fontWeight: 600 }}>
+            Observed{meta?.nEvents ? ` · ${meta.nEvents} past event days` : ""}
           </span>
+          {/* The uplift table is descriptive. This badge reports the SEPARATE
+              out-of-sample test — earlier events fitted, later events held out —
+              so the panel states plainly what has and has not been validated. */}
+          {champ?.wmape != null && (
+            <span
+              title={champ.diagnosis ?? undefined}
+              style={{
+                fontSize: "0.72rem", padding: "2px 8px", borderRadius: "999px", fontWeight: 600,
+                background: champ.accepted ? "#eff6ff" : "#fef2f2",
+                border: `1px solid ${champ.accepted ? "#bfdbfe" : "#fecaca"}`,
+                color: champ.accepted ? "#1d4ed8" : "#b91c1c",
+              }}
+            >
+              {champ.accepted ? "✓ tested" : "failed test"} · {champ.wmape.toFixed(1)}% error on held-out events
+            </span>
+          )}
         </h3>
         <p style={{ color: "#64748b", fontSize: "0.82rem", margin: "4px 0 0 0" }}>
-          Extra vehicles <b>{eventName}</b> is forecast to add at each exit, ranked · baseline = observed 90-day average
+          Extra vehicles on past <b>{eventName}</b> days, ranked
+          <span
+            style={{ cursor: "help" }}
+            title={`Baseline is the same weekday and month on non-event days, so events cannot inflate their own baseline.${
+              meta?.firstEvent && meta?.lastEvent ? ` Events span ${meta.firstEvent} to ${meta.lastEvent}.` : ""
+            }`}
+          >
+            {" "}· method ⓘ
+          </span>
         </p>
       </div>
 
       {/* Plain-language read, so the card lands without decoding the bars */}
       <div style={{ padding: "11px 14px", background: "#fff1f2", border: "1px solid #fecdd3", borderRadius: "8px", fontSize: "0.86rem", color: "#9f1239", lineHeight: 1.5 }}>
-        <b>{top.exit}</b> takes {top.shareOfSurge.toFixed(0)}% of the event traffic — {multiple.toFixed(1)}× a normal day
-        (+{fmtVeh(top.added)} vehicles). {affected.length - 1} other {affected.length - 1 === 1 ? "exit sees" : "exits see"} a
-        smaller rise; the remaining {totalPlazas - affected.length} toll points run normally. Prioritise lane management and
-        booth staffing at {top.exit}.
+        {/* Was four clauses ending in a recommendation. The "exits affected"
+            count is already a KPI card directly below, so the banner keeps only
+            the single fact a reader needs first. */}
+        <b>{top.exit}</b> takes {top.shareOfSurge.toFixed(0)}% of the event surge — {multiple.toFixed(1)}× a
+        normal day, +{fmtVeh(top.added)} vehicles.
       </div>
 
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(165px, 1fr))", gap: "10px" }}>
@@ -272,6 +329,47 @@ export default function PredictiveEventChart() {
           ))}
         </div>
       </div>
+
+      {champ?.wmape != null && (
+        <details style={{ fontSize: "0.72rem", color: "#64748b" }}>
+          {/* This was an always-visible paragraph naming every candidate and its
+              score. All of it is still here, but a reader who just wants to know
+              which exits are affected no longer has to scroll past it. */}
+          <summary style={{ cursor: "pointer", color: "#475569", fontWeight: 600 }}>
+            How this was validated
+          </summary>
+          <p style={{ margin: "6px 0 0", lineHeight: 1.55 }}>
+            Per-exit uplift is fitted on earlier events and scored on later ones it never saw
+            ({champ.diagnosis}), reaching{" "}
+            <b style={{ color: "#334155" }}>{champ.wmape.toFixed(2)}% WMAPE</b>
+            {noAdj?.wmape != null && <> against <b style={{ color: "#334155" }}>{noAdj.wmape.toFixed(2)}%</b> for
+              ignoring the event entirely</>}
+            .{" "}
+            {others.length > 0 && (
+              <>
+                Ranked against{" "}
+                {others.map((o, i) => (
+                  <span key={o.model}>
+                    {i > 0 && ", "}
+                    {o.model} {o.wmape?.toFixed(2)}%
+                  </span>
+                ))}
+                .{" "}
+              </>
+            )}
+            Event days are inferred from the arena exit&apos;s own spikes, not a supplied calendar, and this
+            describes what past events did rather than what one future event will do.
+          </p>
+        </details>
+      )}
+
+      {minorAffected.length > 0 && (
+        <p style={{ fontSize: "0.72rem", color: "#64748b", margin: 0 }}>
+          <b style={{ color: "#334155" }}>{minorAffected.length} smaller rises</b> not charted (each under 4% of
+          the surge, {minorAffected.reduce((a, r) => a + r.shareOfSurge, 0).toFixed(0)}% combined):{" "}
+          {minorAffected.map((r) => `${r.exit} +${fmtVeh(r.added)}`).join(" · ")}
+        </p>
+      )}
 
       {otherExits.length > 0 && (
         <div>

@@ -843,8 +843,8 @@ export default function TrafficPage() {
                 weather={weather}
               />
             </div>
-            <div className={styles.spanFull}><PredictiveCongestionChart /></div>
-            <div className={styles.spanFull}><PredictiveEventChart /></div>
+            <div className={styles.spanHalf}><PredictiveCongestionChart /></div>
+            <div className={styles.spanHalf}><PredictiveEventChart /></div>
           </>
         ) : (
           <article className={`${styles.chartCard} ${styles.chart1}`}>

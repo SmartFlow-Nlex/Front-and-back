@@ -8,25 +8,25 @@
   display: flex;
   align-items: center;
   gap: 12px;
-  background: var(--bg-surface);
+  background: #ffffff;
   border: 1px solid var(--border-strong);
   border-radius: 8px;
   padding: 6px 12px;
   font-size: 0.8rem;
   font-weight: 500;
-  color: var(--text-secondary);
+  color: #3b465b;
   cursor: pointer;
   transition: all 0.2s ease;
   box-shadow: 0 1px 2px rgba(0,0,0,0.04);
 }
 
 .triggerBtn:hover {
-  border-color: var(--border-strong);
-  background: var(--bg-surface-hover);
+  border-color: #c4ccdf;
+  background: #f8fafc;
 }
 
 .triggerBtn.active {
-  border-color: var(--kpi-1, var(--brand-primary));
+  border-color: #3b82f6;
   box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.15);
 }
 
@@ -37,15 +37,15 @@
 }
 
 .dash {
-  color: var(--text-muted);
+  color: #94a3b8;
 }
 
 .popover {
   position: absolute;
   top: calc(100% + 8px);
   left: 0;
-  background: var(--bg-surface);
-  border: 1px solid var(--border-default);
+  background: #ffffff;
+  border: 1px solid #e2e8f0;
   border-radius: 12px;
   box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.1), 0 8px 10px -6px rgba(0, 0, 0, 0.05);
   padding: 16px;
@@ -77,7 +77,7 @@
   border: none;
   font-size: 0.95rem;
   font-weight: 600;
-  color: var(--text-primary);
+  color: #1e293b;
   cursor: pointer;
   padding: 4px 8px;
   border-radius: 6px;
@@ -103,7 +103,7 @@
   border: none;
   font-size: 0.9rem;
   font-weight: 500;
-  color: var(--text-primary);
+  color: #334155;
   cursor: pointer;
   border-radius: 6px;
   transition: all 0.15s ease;
@@ -117,13 +117,13 @@
 }
 
 .gridItemBtn.selected {
-  background: var(--kpi-1, var(--brand-primary));
+  background: #3b82f6;
   color: #ffffff;
 }
 
 .navBtn {
   background: transparent;
-  border: 1px solid var(--border-default);
+  border: 1px solid #e2e8f0;
   border-radius: 6px;
   width: 28px;
   height: 28px;
@@ -131,13 +131,13 @@
   align-items: center;
   justify-content: center;
   cursor: pointer;
-  color: var(--text-muted);
+  color: #64748b;
   transition: all 0.2s ease;
 }
 
 .navBtn:hover {
   background: var(--bg-surface-hover);
-  color: var(--text-primary);
+  color: #0f172a;
 }
 
 .daysGrid {
@@ -151,7 +151,7 @@
   text-align: center;
   font-size: 0.7rem;
   font-weight: 600;
-  color: var(--text-muted);
+  color: #64748b;
   text-transform: uppercase;
   padding: 4px 0;
 }
@@ -161,7 +161,7 @@
   background: transparent;
   border: none;
   font-size: 0.85rem;
-  color: var(--text-primary);
+  color: #334155;
   cursor: pointer;
   border-radius: 6px;
   transition: all 0.15s ease;
@@ -174,30 +174,30 @@
 }
 
 .dayBtn.disabled {
-  color: var(--text-muted);
+  color: #cbd5e1;
   cursor: not-allowed;
 }
 
 .dayBtn.selected {
-  background: var(--kpi-1, var(--brand-primary));
+  background: #3b82f6;
   color: #ffffff;
   font-weight: 600;
 }
 
 .dayBtn.inRange {
-  background: var(--color-info-bg);
+  background: #eff6ff;
   border-radius: 0;
 }
 
 .dayBtn.rangeStart {
-  background: var(--kpi-1, var(--brand-primary));
+  background: #3b82f6;
   color: white;
   border-top-right-radius: 0;
   border-bottom-right-radius: 0;
 }
 
 .dayBtn.rangeEnd {
-  background: var(--kpi-1, var(--brand-primary));
+  background: #3b82f6;
   color: white;
   border-top-left-radius: 0;
   border-bottom-left-radius: 0;
@@ -217,53 +217,19 @@
 }
 
 .presetBtn {
-  background: var(--bg-surface-hover);
-  border: 1px solid var(--border-default);
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
   border-radius: 16px;
   padding: 4px 10px;
   font-size: 0.7rem;
   font-weight: 500;
-  color: var(--text-secondary);
+  color: #475569;
   cursor: pointer;
   transition: all 0.2s ease;
 }
 
 .presetBtn:hover {
-  background: var(--color-info-bg);
-  border-color: var(--color-info-border);
-  color: var(--kpi-1, var(--brand-primary));
+  background: #eff6ff;
+  border-color: #bfdbfe;
+  color: #1d4ed8;
 }
-
-/* Today, so the calendar has a landmark. Outline rather than fill, or it would
-   compete with the selected range. */
-.dayBtn.today {
-  outline: 1.5px solid var(--brand-primary);
-  outline-offset: -2px;
-  font-weight: 700;
-}
-
-/* The start day while an end is being chosen. A range needs two days, so this
-   one is not a legal second click. */
-.dayBtn:disabled {
-  opacity: 0.35;
-  cursor: not-allowed;
-}
-.dayBtn:disabled:hover { background: transparent; }
-
-/* Says which half of the range the next click sets. Without it the first click
-   arms a selection with no visible sign, and the second lands as a surprise. */
-.hint {
-  margin: 8px 0 0;
-  padding: 7px 10px;
-  border-radius: 8px;
-  background: var(--bg-surface-hover);
-  font-size: 0.72rem;
-  font-weight: 600;
-  color: var(--text-secondary);
-  text-align: center;
-}
-
-/* Four presets now, so the row wraps rather than squeezing. */
-.presets { flex-wrap: wrap; }
-
-.triggerIcon { color: var(--text-muted); }

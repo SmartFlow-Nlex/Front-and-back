@@ -4,6 +4,7 @@ import { db } from "../config/db.js";
 // corridor's one authoritative exit list. See its own doc comment for why km
 // is derived instead of hardcoded.
 import { searchExitsInDb } from "./map-comparison.service.js";
+import { buildExitToExitSegments, segmentIndexForKm } from "../lib/exit-segments.js";
 
 // ---------------------------------------------------------------------------
 // Incident analytics for the descriptive dashboard.
@@ -762,28 +763,29 @@ const DAILY_WET_SQL = `
   GROUP BY d
 `;
 
-// Daily vehicle volume for the incident forecast chart's exposure overlay.
+// Daily vehicle volume for the incident forecast chart's exposure overlay —
+// observed history only, deliberately NOT the traffic module's volume
+// forecast: this tab is about the incident forecast, and volume already has
+// its own home (the Traffic module's own predictive tabs). Extending this
+// line across the Future band would put a second, unrelated forecast on a
+// chart whose Future band is about incidents, so the overlay stops wherever
+// actual_volume runs out instead of borrowing a prediction to fill the rest.
 //
-// Read from gold.ml_predictive_volume because that one table spans both sides of
-// the chart: actual_volume covers observed history and the is_future rows carry
-// the traffic module's forecast, so the overlay continues across the Future band
-// instead of stopping dead at the last observed day. COALESCE walks the traffic
-// candidates in the same order the incident trainer does — pred_xgboost is NULL
-// across the future window even though it is populated historically, so naming a
-// single column would blank the forecast half.
+// Read from gold.ml_predictive_volume rather than gold.daily_traffic_volume
+// so history matches the same scale the incident trainer's volume feature
+// uses — the two series correlate at 0.9998 but differ by a constant factor
+// of ~4.4, and mixing them would put a step change in the middle of the line.
 //
-// Same scale throughout, which matters: gold.daily_traffic_volume reports the
-// same series ~4.4x larger, and mixing the two would put a step change in the
-// middle of the line for no reason the reader could see.
+// split_label = '80_20': the traffic module stores each date TWICE here (an
+// '80_20' row and a '90_10' row, one per train/test split it evaluates).
+// actual_volume is identical between the two (verified), so this filter is
+// just to avoid fetching the same value twice per date, not to pick a winner.
 const DAILY_VOLUME_SQL = `
-  SELECT forecast_date::text AS date,
-         COALESCE(actual_volume, pred_lstm, pred_prophet, pred_sarimax,
-                  pred_holtwinters, pred_holts_linear, pred_xgboost)::float AS volume,
-         (actual_volume IS NULL) AS is_forecast
+  SELECT forecast_date::text AS date, actual_volume::float AS volume
   FROM gold.ml_predictive_volume
   WHERE forecast_date >= $1::date AND forecast_date <= $2::date
-    AND COALESCE(actual_volume, pred_lstm, pred_prophet, pred_sarimax,
-                 pred_holtwinters, pred_holts_linear, pred_xgboost) IS NOT NULL
+    AND split_label = '80_20'
+    AND actual_volume IS NOT NULL
   ORDER BY forecast_date ASC
 `;
 
@@ -1119,6 +1121,79 @@ function buildCorridorForecast(
   return { corridorForecast, unclassifiedLocationShare: unclassified / totalSeen };
 }
 
+export type KmSegmentForecastPoint = {
+  segmentStart: number;
+  segmentEnd: number;
+  label: string;
+  historicalCount: number;
+  historicalShare: number;
+  predictedIncidents: number;
+};
+
+// Prefers a literal "Km N" figure in the location text over the resolved
+// exit's own km — that reading is more precise (an exact position, not
+// "nearest interchange"), and it's exactly what resolveExitForLocation
+// itself discards once it has picked a nearest exit. Falls back to the
+// matched exit's km for a name-only location ("Balintawak"), same source of
+// truth corridorForecast uses for the same rows.
+function resolveKmForLocation(
+  location: string,
+  exits: { exit_id: number; exit_name: string; km: number }[]
+): number | null {
+  const kmMatch = location.match(LOCATION_KM_RE);
+  if (kmMatch) {
+    const km = Number(kmMatch[1]);
+    if (Number.isFinite(km)) return km;
+  }
+  return resolveExitForLocation(location, exits)?.km ?? null;
+}
+
+function buildKmSegmentForecast(
+  locationRows: { location: string | null }[],
+  exitRows: { exit_id: number; exit_name: string; km: number }[],
+  totalPredicted: number
+): { kmSegmentForecast: KmSegmentForecastPoint[] | null; unclassifiedLocationShare: number | null } {
+  if (exitRows.length < 2 || locationRows.length === 0) {
+    return { kmSegmentForecast: null, unclassifiedLocationShare: null };
+  }
+
+  const segments = buildExitToExitSegments(exitRows);
+  const counts = new Map<number, number>();
+  let unclassified = 0;
+  for (const row of locationRows) {
+    if (!row.location) continue;
+    const km = resolveKmForLocation(row.location, exitRows);
+    if (km == null || km < 0) {
+      unclassified++;
+      continue;
+    }
+    const segmentIdx = segmentIndexForKm(km, segments);
+    counts.set(segmentIdx, (counts.get(segmentIdx) ?? 0) + 1);
+  }
+
+  const totalClassified = Array.from(counts.values()).reduce((s, v) => s + v, 0);
+  const totalSeen = totalClassified + unclassified;
+  if (totalSeen === 0) return { kmSegmentForecast: null, unclassifiedLocationShare: null };
+
+  // Every segment across the whole corridor, not just the ones with a count
+  // — a 0-incident stretch is itself part of "seeing the whole corridor by
+  // km," the thing a pure exit list can't show.
+  const kmSegmentForecast: KmSegmentForecastPoint[] = segments.map((seg, i) => {
+    const historicalCount = counts.get(i) ?? 0;
+    const historicalShare = totalClassified > 0 ? historicalCount / totalClassified : 0;
+    return {
+      segmentStart: seg.segmentStart,
+      segmentEnd: seg.segmentEnd,
+      label: seg.label,
+      historicalCount,
+      historicalShare,
+      predictedIncidents: Math.round(totalPredicted * historicalShare * 100) / 100,
+    };
+  });
+
+  return { kmSegmentForecast, unclassifiedLocationShare: unclassified / totalSeen };
+}
+
 // Joins one predictions result set onto its actuals/wet lookups and keeps
 // only validation-type rows with a known ground truth — there's nothing to
 // score a future row or an unobserved day against.
@@ -1310,6 +1385,13 @@ export function buildIncidentPredictiveResponse(
     exitRows,
     totalPredictedForCorridor
   );
+  // Same rows, same total, grouped by fixed km buckets instead of nearest
+  // exit — see buildKmSegmentForecast's own doc comment for why that's a
+  // meaningfully different (more granular) view, not a duplicate of the
+  // exit one. unclassifiedLocationShare comes out numerically identical to
+  // the exit version (same "did this location resolve at all" test), so
+  // only one is kept on the response rather than two names for one number.
+  const { kmSegmentForecast } = buildKmSegmentForecast(locationRows, exitRows, totalPredictedForCorridor);
 
   // The pipeline's own comparison table — now used only as a fallback for a
   // model whose Range+Weather slice has zero scored rows (e.g. a 3-month
@@ -1445,6 +1527,12 @@ export function buildIncidentPredictiveResponse(
       metrics: (metadata.metrics as Record<string, unknown> | undefined) ?? null,
       scoredDays:
         (metadata.evaluation as { holdout_days?: number } | undefined)?.holdout_days ?? null,
+      // How many rows the champion actually trained on — the walk-forward
+      // chart's "Past" band annotates itself with this (real figure from the
+      // training run, not a count of whatever's currently drawn) the same
+      // way PredictiveVolumeChart's does.
+      trainedDays:
+        (metadata.evaluation as { train_rows?: number } | undefined)?.train_rows ?? null,
     },
     weatherMetrics,
     // Predicted incidents per exit/corridor — an apportionment of
@@ -1454,6 +1542,11 @@ export function buildIncidentPredictiveResponse(
     // separately trained per-location model. Null when the exit list or the
     // location data needed to build it wasn't available.
     corridorForecast,
+    // Same apportionment, grouped by fixed 5km corridor segments instead of
+    // nearest exit — see buildKmSegmentForecast's doc comment. Null under
+    // the identical conditions corridorForecast is (no exit list, or no
+    // usable location rows in the current Range).
+    kmSegmentForecast,
     unclassifiedLocationShare,
     // How many of the published future days corridorForecast was actually
     // apportioned over — echoes filters.futureDays (clamped to what's
@@ -1581,7 +1674,7 @@ export async function getIncidentPredictiveFromDb(
       ]),
       // Bounded by the same window as the rainfall lookup so the exposure
       // overlay covers exactly the days the chart can draw.
-      db.query<{ date: string; volume: string | number | null; is_forecast: boolean }>(DAILY_VOLUME_SQL, [
+      db.query<{ date: string; volume: string | number | null }>(DAILY_VOLUME_SQL, [
         wetLowerBound,
         anchors.maxForecastDate,
       ]),
@@ -1646,199 +1739,6 @@ export async function getIncidentPredictiveFromDb(
     );
   } catch (error) {
     console.error("Failed to fetch ML incident forecast:", error);
-    return null;
-  }
-}
-
-// ---------------------------------------------------------------------------
-// Feature-evidence panels — "Does weather predict incidents?" / "Does traffic
-// volume predict incidents?" Mirrors traffic.service.ts's own
-// getWeatherEvidenceFromDb: a live correlation query plus a same-model
-// with/without comparison, so this dashboard can make the same kind of
-// evidence-based claim the traffic one already does. Two functions rather
-// than one parameterized by feature, because the correlation SQL genuinely
-// differs (weather has four variables and joins hourly_weather; volume has
-// one and joins gold.ml_predictive_volume) — but both share the same
-// with/without mechanism via pickPrediction/toAlignedValidationRows/
-// computeModelMetricsForModel, already used everywhere else on this endpoint.
-// ---------------------------------------------------------------------------
-
-export type IncidentFeatureCorrelation = {
-  variable: string;
-  label: string;
-  pearson: number | null;
-  spearman: number | null;
-  days: number;
-};
-
-export type IncidentFeatureModelComparison = {
-  model: string;
-  withFeature: number | null;
-  withoutFeature: number | null;
-  deltaPts: number | null;
-};
-
-export type IncidentFeatureEvidence = {
-  correlations: IncidentFeatureCorrelation[];
-  modelComparison: IncidentFeatureModelComparison[];
-};
-
-// LSTM/GRU are univariate (final_rnn_forecast in train_incident_models.py
-// never sees rain_mm or volume) — their _nv/_nw columns are always identical
-// to the primary, so including them here would silently count two models
-// that can never show a difference. Traffic excludes its own univariate
-// candidates (Holt-Winters, Holts Linear) from the same comparison for the
-// same reason.
-const FEATURE_EVIDENCE_ELIGIBLE_MODELS = INCIDENT_MODELS.filter((m) => m.key !== "LSTM" && m.key !== "GRU");
-
-// Shared by both evidence panels: scores every eligible model's WMAPE over
-// the full holdout with the named feature on vs off, using the exact same
-// pickPrediction selection the chart/metrics table/corridor card already
-// apply — so "helps" here can never disagree with what those already show.
-async function computeIncidentFeatureModelComparison(
-  feature: "volume" | "weather"
-): Promise<IncidentFeatureModelComparison[] | null> {
-  if (!db) return null;
-  const anchors = await getIncidentPredictiveAnchors();
-  if (!anchors || !anchors.validationStart) return null;
-
-  const [actualsRes, predsRes] = await Promise.all([
-    db.query<DailyActualRow>(
-      `SELECT d::text AS date, total FROM ml_daily_actuals WHERE d >= $1::date AND d < $2::date ORDER BY d ASC`,
-      [anchors.validationStart, anchors.futureStart ?? anchors.maxForecastDate]
-    ),
-    db.query<PredictiveIncidentRow>(
-      `SELECT forecast_date::text AS date, prediction_type, predicted_incident_count, champion_model,
-              same_day_last_year, rainfall_mm, ${INCIDENT_MODEL_COLUMNS_SQL}, ${INCIDENT_MODEL_COLUMNS_NV_SQL}, ${INCIDENT_MODEL_COLUMNS_NW_SQL}
-       FROM ml_predictive_incidents WHERE prediction_type = 'validation' ORDER BY forecast_date ASC`
-    ),
-  ]);
-
-  const actualByDate = new Map(actualsRes.rows.map((r) => [r.date, Number(r.total)]));
-  const eligibleModels = FEATURE_EVIDENCE_ELIGIBLE_MODELS.filter((m) =>
-    predsRes.rows.some((p) => p[m.column] != null)
-  );
-  if (eligibleModels.length === 0) return [];
-
-  // isWet plays no role in this comparison — an empty map rather than a real
-  // wet/dry lookup, since toAlignedValidationRows requires the parameter but
-  // this call site never reads the field it populates.
-  const emptyWet = new Map<string, boolean>();
-  const withRows = toAlignedValidationRows(predsRes.rows, actualByDate, emptyWet, eligibleModels, true, true);
-  const withoutRows = toAlignedValidationRows(
-    predsRes.rows,
-    actualByDate,
-    emptyWet,
-    eligibleModels,
-    feature === "volume" ? false : true,
-    feature === "weather" ? false : true
-  );
-
-  return eligibleModels.map((m) => {
-    const withFeature = computeModelMetricsForModel(withRows, m.key, null).wmape;
-    const withoutFeature = computeModelMetricsForModel(withoutRows, m.key, null).wmape;
-    return {
-      model: m.key,
-      withFeature,
-      withoutFeature,
-      // Positive => the feature-aware version scores a lower (better) WMAPE,
-      // i.e. the feature demonstrably helps — same sign convention as
-      // traffic's own deltaPts.
-      deltaPts: withFeature != null && withoutFeature != null ? Number((withoutFeature - withFeature).toFixed(3)) : null,
-    };
-  });
-}
-
-/**
- * Evidence for whether WEATHER predicts incidents. Mirrors
- * getWeatherEvidenceFromDb in traffic.service.ts almost exactly — same four
- * variables, same station-averaging-before-aggregating correction — joined to
- * ml_daily_actuals (this module's own daily series) instead of
- * gold.daily_traffic_volume_corrected.
- */
-export async function getIncidentWeatherEvidenceFromDb(): Promise<IncidentFeatureEvidence | null> {
-  if (!db) return null;
-  try {
-    const CTE = `
-      WITH hourly AS (
-        SELECT (timestamp_utc + interval '8 hours')::date AS ds, timestamp_utc AS hr,
-               AVG(temperature) t, AVG(rainfall) r, AVG(wind_speed) w, AVG(humidity) h
-        FROM public.hourly_weather GROUP BY 1, 2
-      ), wx AS (
-        SELECT ds, AVG(t) avg_temp, SUM(r) total_rain, AVG(w) avg_wind, AVG(h) avg_humidity
-        FROM hourly GROUP BY ds
-      ), joined AS (
-        SELECT a.total::float AS y, wx.*
-        FROM ml_daily_actuals a JOIN wx ON wx.ds = a.d
-      ), ranked AS (
-        SELECT RANK() OVER (ORDER BY y) ry,
-               RANK() OVER (ORDER BY total_rain)   r_rain,
-               RANK() OVER (ORDER BY avg_wind)     r_wind,
-               RANK() OVER (ORDER BY avg_temp)     r_temp,
-               RANK() OVER (ORDER BY avg_humidity) r_hum
-        FROM joined
-      )`;
-    const { rows } = await db.query(`${CTE}
-      SELECT (SELECT COUNT(*) FROM joined)::int AS days,
-             (SELECT CORR(y, total_rain)   FROM joined) AS p_rain,
-             (SELECT CORR(y, avg_wind)     FROM joined) AS p_wind,
-             (SELECT CORR(y, avg_temp)     FROM joined) AS p_temp,
-             (SELECT CORR(y, avg_humidity) FROM joined) AS p_hum,
-             (SELECT CORR(ry, r_rain) FROM ranked) AS s_rain,
-             (SELECT CORR(ry, r_wind) FROM ranked) AS s_wind,
-             (SELECT CORR(ry, r_temp) FROM ranked) AS s_temp,
-             (SELECT CORR(ry, r_hum)  FROM ranked) AS s_hum`);
-    const r = rows[0];
-    const num = (v: unknown) => (v === null || v === undefined ? null : Number(v));
-    const correlations: IncidentFeatureCorrelation[] = [
-      { variable: "avg_humidity", label: "Humidity",    pearson: num(r.p_hum),  spearman: num(r.s_hum),  days: r.days },
-      { variable: "total_rain",   label: "Rainfall",    pearson: num(r.p_rain), spearman: num(r.s_rain), days: r.days },
-      { variable: "avg_wind",     label: "Wind speed",  pearson: num(r.p_wind), spearman: num(r.s_wind), days: r.days },
-      { variable: "avg_temp",     label: "Temperature", pearson: num(r.p_temp), spearman: num(r.s_temp), days: r.days },
-    ].sort((a, b) => Math.abs(b.pearson ?? 0) - Math.abs(a.pearson ?? 0));
-
-    const modelComparison = (await computeIncidentFeatureModelComparison("weather")) ?? [];
-    return { correlations, modelComparison };
-  } catch (error) {
-    console.error("Database query failed for incident weather evidence:", error);
-    return null;
-  }
-}
-
-/**
- * Evidence for whether TRAFFIC VOLUME predicts incidents. Only one variable
- * (volume itself, not four) — joined to gold.ml_predictive_volume the same
- * way the exposure overlay and the training pipeline's own DAILY_VOLUME_SQL /
- * load_daily_volume do, restricted to actual_volume IS NOT NULL so the
- * correlation is only ever computed against observed volume, never a
- * forecasted figure standing in for one.
- */
-export async function getIncidentVolumeEvidenceFromDb(): Promise<IncidentFeatureEvidence | null> {
-  if (!db) return null;
-  try {
-    const { rows } = await db.query(`
-      WITH joined AS (
-        SELECT a.total::float AS y, v.actual_volume::float AS volume
-        FROM ml_daily_actuals a
-        JOIN gold.ml_predictive_volume v ON v.forecast_date = a.d
-        WHERE v.actual_volume IS NOT NULL
-      ), ranked AS (
-        SELECT RANK() OVER (ORDER BY y) ry, RANK() OVER (ORDER BY volume) r_vol FROM joined
-      )
-      SELECT (SELECT COUNT(*) FROM joined)::int AS days,
-             (SELECT CORR(y, volume) FROM joined) AS p_vol,
-             (SELECT CORR(ry, r_vol) FROM ranked) AS s_vol
-    `);
-    const r = rows[0];
-    const num = (v: unknown) => (v === null || v === undefined ? null : Number(v));
-    const correlations: IncidentFeatureCorrelation[] = [
-      { variable: "volume", label: "Vehicle volume", pearson: num(r.p_vol), spearman: num(r.s_vol), days: r.days },
-    ];
-
-    const modelComparison = (await computeIncidentFeatureModelComparison("volume")) ?? [];
-    return { correlations, modelComparison };
-  } catch (error) {
-    console.error("Database query failed for incident volume evidence:", error);
     return null;
   }
 }

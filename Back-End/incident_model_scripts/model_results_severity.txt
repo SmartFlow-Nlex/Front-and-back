@@ -1,0 +1,18 @@
+================================================================================
+  INCIDENT SEVERITY / CLEARANCE MODELS (per-incident)
+================================================================================
+
+  Severity — chronological holdout
+    OrdinalLogistic  accuracy=0.888  MAE_ordinal=0.116  n=1944  [SELECTED]
+    XGBoost          accuracy=0.888  MAE_ordinal=0.116  n=1944  
+
+  Cox PH — response-duration survival (a proxy for clearance time; see module docstring)
+    concordance index = 0.592
+    MAE (minutes)     = 43.52
+    n                 = 1944
+
+  Secondary incident risk — logistic regression
+    AUC       = 0.714
+    base rate = 2.8% of holdout incidents had a secondary incident follow
+    n         = 1944
+================================================================================

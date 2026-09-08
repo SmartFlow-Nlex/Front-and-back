@@ -12,7 +12,15 @@ import CustomSelect from "../../../components/dashboard/CustomSelect";
 import PageHeader from "../../../components/dashboard/PageHeader";
 import PredictiveIncidentChart from "../../../components/dashboard/PredictiveIncidentChart";
 import PredictiveCorridorChart from "../../../components/dashboard/PredictiveCorridorChart";
-import type { CorridorForecastPoint } from "../../../components/dashboard/incidentPredictive.shared";
+import IncidentSeverityModels from "../../../components/dashboard/IncidentSeverityModels";
+import SecondaryIncidentRiskPanel from "../../../components/dashboard/SecondaryIncidentRiskPanel";
+import PrescriptiveDeploymentPanel from "../../../components/dashboard/PrescriptiveDeploymentPanel";
+import InfoTooltip from "../../../components/dashboard/InfoTooltip";
+import SecondaryRiskMitigationPanel from "../../../components/dashboard/SecondaryRiskMitigationPanel";
+import IncidentTypePriorityPanel from "../../../components/dashboard/IncidentTypePriorityPanel";
+import VmsAdvisoryPanel from "../../../components/dashboard/VmsAdvisoryPanel";
+import ClearanceSimulatorPanel from "../../../components/dashboard/ClearanceSimulatorPanel";
+import type { CorridorForecastPoint, KmSegmentForecastPoint } from "../../../components/dashboard/incidentPredictive.shared";
 import DateRangePicker from "../traffic/components/DateRangePicker";
 import { rangeDays, grainBlockedReason, bestGrainFor, axisLabelFor, bucketLabelFor } from "../../../lib/granularity";
 import styles from "../traffic/traffic.module.css";
@@ -128,6 +136,7 @@ export default function IncidentPage() {
   // below it doesn't refetch /api/incident/predictive on its own.
   const [corridorData, setCorridorData] = useState<{
     corridorForecast: CorridorForecastPoint[] | null;
+    kmSegmentForecast: KmSegmentForecastPoint[] | null;
     unclassifiedLocationShare: number | null;
     forecastHorizon: number;
     forecastModelLabel: string | null;
@@ -682,6 +691,10 @@ export default function IncidentPage() {
     </div>
   );
 
+  // One-glance explanation of what a KPI tile actually measures — same
+  // portal-based popup used on every Predictive-tab card title.
+  const kpiInfo = (text: string) => <InfoTooltip text={text} />;
+
   // ---------- Predictive / Prescriptive share the same shell ----------
   if (activeTab !== "Descriptive") {
     return (
@@ -694,7 +707,15 @@ export default function IncidentPage() {
               {weatherFilter}
             </>
           )}
-          {activeTab === "Prescriptive" && <span className={styles.filterLabel}>Recommended resource allocation</span>}
+          {activeTab === "Prescriptive" && (
+            <>
+              {rangeFilter}
+              <span className={styles.filterLabel} style={{ color: "var(--text-muted)", fontWeight: 400 }}>
+                Applies to Resource Staging and VMS Advisory Routing — clearance-time recommendations come from a
+                trained model and don&apos;t change per Range.
+              </span>
+            </>
+          )}
           <span className={styles.spacer} />
           <div className={styles.modeTabs}>
             {(["Descriptive", "Predictive", "Prescriptive"] as const).map((t) => (
@@ -719,9 +740,10 @@ export default function IncidentPage() {
           </div>
         ) : null}
         {activeTab === "Predictive" && (
-          <div className={styles.spanFull}>
+          <div className={styles.spanHalf}>
             <PredictiveCorridorChart
               corridorForecast={corridorData?.corridorForecast ?? null}
+              kmSegmentForecast={corridorData?.kmSegmentForecast ?? null}
               unclassifiedLocationShare={corridorData?.unclassifiedLocationShare ?? null}
               forecastHorizon={corridorData?.forecastHorizon ?? 0}
               showVolume={corridorData?.showVolume ?? false}
@@ -731,17 +753,48 @@ export default function IncidentPage() {
             />
           </div>
         )}
-        {activeTab !== "Predictive" && (
-          <article className={`${styles.chartCard} ${styles.chart1}`}>
-            <div className={styles.chartHead}>
-              <div className={styles.headText}>
-                <h3>Recommended Resource Deployment</h3>
-              </div>
-            </div>
-            <div className={styles.chartBody}>
-              <DashboardChart option={prescriptiveResourceOption} height={280} />
-            </div>
-          </article>
+        {activeTab === "Predictive" && (
+          <div className={styles.spanHalf}>
+            <SecondaryIncidentRiskPanel />
+          </div>
+        )}
+        {activeTab === "Predictive" && (
+          <div className={styles.spanFull}>
+            <IncidentSeverityModels />
+          </div>
+        )}
+        {activeTab === "Prescriptive" && (
+          <div className={styles.spanFull}>
+            <PrescriptiveDeploymentPanel
+              months={rangeMode === "custom" ? "all" : rangeMode}
+              from={rangeMode === "custom" ? customFrom : undefined}
+              to={rangeMode === "custom" ? customTo : undefined}
+            />
+          </div>
+        )}
+        {activeTab === "Prescriptive" && (
+          <div className={styles.spanFull}>
+            <SecondaryRiskMitigationPanel />
+          </div>
+        )}
+        {activeTab === "Prescriptive" && (
+          <div className={styles.spanFull}>
+            <VmsAdvisoryPanel
+              months={rangeMode === "custom" ? "all" : rangeMode}
+              from={rangeMode === "custom" ? customFrom : undefined}
+              to={rangeMode === "custom" ? customTo : undefined}
+            />
+          </div>
+        )}
+        {activeTab === "Prescriptive" && (
+          <div className={styles.spanFull}>
+            <IncidentTypePriorityPanel />
+          </div>
+        )}
+        {activeTab === "Prescriptive" && (
+          <div className={styles.spanFull}>
+            <ClearanceSimulatorPanel />
+          </div>
         )}
       </section>
     );

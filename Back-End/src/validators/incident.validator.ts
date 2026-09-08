@@ -157,6 +157,7 @@ export const IncidentPredictiveResponseSchema = z.object({
     trainedAt: z.string().nullable(),
     metrics: z.record(z.string(), z.unknown()).nullable(),
     scoredDays: z.number().nullable(),
+    trainedDays: z.number().nullable(),
   }),
   weatherMetrics: IncidentPredictiveWeatherMetricsSchema,
   /**
@@ -172,6 +173,23 @@ export const IncidentPredictiveResponseSchema = z.object({
         exitId: z.number().int(),
         exitName: z.string(),
         km: z.number(),
+        historicalCount: z.number().int().nonnegative(),
+        historicalShare: z.number().min(0).max(1),
+        predictedIncidents: z.number().nonnegative(),
+      })
+    )
+    .nullable(),
+  // Same apportionment as corridorForecast, grouped by fixed 5km corridor
+  // segments instead of nearest exit — a finer, evenly-spaced view for the
+  // long inter-exit stretches (up to ~11.6km) the exit view snaps entirely
+  // to whichever endpoint is closest. Null under the identical conditions
+  // corridorForecast is.
+  kmSegmentForecast: z
+    .array(
+      z.object({
+        segmentStart: z.number().nonnegative(),
+        segmentEnd: z.number().nonnegative(),
+        label: z.string(),
         historicalCount: z.number().int().nonnegative(),
         historicalShare: z.number().min(0).max(1),
         predictedIncidents: z.number().nonnegative(),
@@ -226,34 +244,3 @@ export const IncidentPredictiveResponseSchema = z.object({
 });
 
 export type IncidentPredictiveResult = z.infer<typeof IncidentPredictiveResponseSchema>;
-
-// ---------------------------------------------------------------------------
-// Feature-evidence panels — "Does weather predict incidents?" / "Does traffic
-// volume predict incidents?" Same response shape for both (correlations +
-// modelComparison), so one Zod schema and one frontend component cover both.
-// The traffic module's own equivalent endpoint (weather-evidence) has no Zod
-// schema at all; this one is validated to match the rest of the incident
-// module's established convention instead.
-// ---------------------------------------------------------------------------
-
-export const IncidentFeatureEvidenceResponseSchema = z.object({
-  correlations: z.array(
-    z.object({
-      variable: z.string(),
-      label: z.string(),
-      pearson: z.number().nullable(),
-      spearman: z.number().nullable(),
-      days: z.number().int().nonnegative(),
-    })
-  ),
-  modelComparison: z.array(
-    z.object({
-      model: z.string(),
-      withFeature: z.number().nullable(),
-      withoutFeature: z.number().nullable(),
-      deltaPts: z.number().nullable(),
-    })
-  ),
-});
-
-export type IncidentFeatureEvidenceResult = z.infer<typeof IncidentFeatureEvidenceResponseSchema>;

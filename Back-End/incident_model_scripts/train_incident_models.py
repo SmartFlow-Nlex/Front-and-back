@@ -192,10 +192,23 @@ DAILY_RAIN_SQL = """
 # gold.daily_traffic_volume so history and forecast come from one table on one
 # scale — the two series correlate at 0.9998 but differ by a constant factor of
 # ~4.4, and mixing them would put a step change in the middle of the feature.
+#
+# split_label = '80_20': the traffic module now stores each date TWICE in this
+# table (an '80_20' row and a '90_10' row, one per train/test split protocol
+# it evaluates) — pinned to one so this join doesn't double every row (which
+# it silently did before this filter existed: a plain `pd.merge` against the
+# unfiltered table produced exactly 2 rows per date, corrupting `daily`
+# straight through training without erroring until the write step's
+# ON CONFLICT hit the resulting duplicate primary keys). actual_volume itself
+# doesn't depend on split_label (verified: identical across both rows for
+# every date checked), so this choice only matters for FUTURE_VOLUME_SQL
+# below, where pred_lstm genuinely differs by a percent or so between splits.
+# '80_20' picked as the more conventional default split ratio — no existing
+# convention elsewhere in the codebase to match, since split_label is new.
 DAILY_VOLUME_SQL = """
     SELECT forecast_date AS d, actual_volume::float AS volume
     FROM gold.ml_predictive_volume
-    WHERE actual_volume IS NOT NULL
+    WHERE actual_volume IS NOT NULL AND split_label = '80_20'
     ORDER BY 1
 """
 
@@ -209,8 +222,9 @@ FUTURE_VOLUME_SQL = """
            COALESCE(pred_lstm, pred_prophet, pred_sarimax,
                     pred_holtwinters, pred_holts_linear, pred_xgboost)::float AS volume
     FROM gold.ml_predictive_volume
-    WHERE is_future AND COALESCE(pred_lstm, pred_prophet, pred_sarimax,
-                                 pred_holtwinters, pred_holts_linear, pred_xgboost) IS NOT NULL
+    WHERE is_future AND split_label = '80_20'
+          AND COALESCE(pred_lstm, pred_prophet, pred_sarimax,
+                       pred_holtwinters, pred_holts_linear, pred_xgboost) IS NOT NULL
     ORDER BY 1
 """
 
@@ -247,7 +261,14 @@ load_dotenv(Path(__file__).resolve().parent.parent / ".env")
 def get_conn():
     dsn = os.environ.get("PGURL") or os.environ.get("POSTGRES_URL")
     if not dsn:
-        sys.exit("PGURL or POSTGRES_URL must be set (checked Back-End/.env)")
+        host = os.environ.get("PG_HOST")
+        if not host:
+            sys.exit("PGURL/POSTGRES_URL or PG_HOST must be set (checked Back-End/.env)")
+        dsn = (
+            f"host={host} port={os.environ.get('PG_PORT', 5432)} "
+            f"dbname={os.environ.get('PG_DATABASE')} user={os.environ.get('PG_USER')} "
+            f"password={os.environ.get('PG_PASSWORD')}"
+        )
     return psycopg2.connect(dsn, sslmode="require")
 
 
@@ -1116,6 +1137,25 @@ def ensure_schema(conn, commit: bool = True) -> None:
         conn.commit()
 
 
+def ensure_live_conn(conn):
+    """Training runs long enough (7 candidates including LSTM/GRU, then three
+    full refits) that the connection opened back at the start — idle the
+    whole time, since no query touches it during training — gets dropped by
+    the server before the write step ever sends anything. Ping it here and
+    open a fresh one if it's gone, rather than carrying a connection that's
+    been sitting idle for the entire training phase into the write."""
+    try:
+        with conn.cursor() as cur:
+            cur.execute("SELECT 1")
+        return conn
+    except psycopg2.OperationalError:
+        try:
+            conn.close()
+        except Exception:
+            pass
+        return get_conn()
+
+
 def write_to_db(conn, daily: pd.DataFrame, feat: pd.DataFrame, champion: str,
                  by_model: dict[str, dict], metadata: dict, rain_by_date: dict,
                  by_model_nv: dict[str, dict] | None = None,
@@ -1154,20 +1194,53 @@ def write_to_db(conn, daily: pd.DataFrame, feat: pd.DataFrame, champion: str,
                 *preds, num(rain_by_date.get(d)), *preds_nv, *preds_nw)
 
     with conn.cursor() as cur:
-        cur.execute("DELETE FROM ml_daily_actuals")
+        # Upsert, not DELETE-then-INSERT: this DB sits behind a pooler
+        # (Supabase/PgBouncer), and a delete-then-reinsert of the same key
+        # within one transaction turned out to be able to hit
+        # "duplicate key ... already exists" against a table that was just
+        # emptied — a pooler-level quirk, not a bug in the data (`daily` was
+        # verified duplicate-free). ON CONFLICT sidesteps it entirely: it's
+        # correct regardless of what's already in the table, so there's
+        # nothing left to race against. Old dates that legitimately fall out
+        # of range (the source data's start date moving forward) are swept
+        # up by the WHERE NOT IN below rather than a blanket DELETE first.
+        cur.execute("SELECT d FROM ml_daily_actuals")
+        existing_dates = {row[0] for row in cur.fetchall()}
+        new_dates = {row.d.date() for row in daily.itertuples()}
+        stale_dates = existing_dates - new_dates
+        if stale_dates:
+            cur.execute("DELETE FROM ml_daily_actuals WHERE d = ANY(%s)", (list(stale_dates),))
+        # Deduplicated defensively, keeping the LAST occurrence of any
+        # repeated date: `daily` is built by reindexing onto a unique
+        # DatetimeIndex so it should never carry a duplicate `d`, but a
+        # CardinalityViolation from Postgres ("cannot affect row a second
+        # time") means it did at least once — cheap enough to guard against
+        # unconditionally rather than trust the invariant blindly.
+        actuals_by_date = {row.d.date(): float(row.total) for row in daily.itertuples()}
+        if len(actuals_by_date) != len(daily):
+            print(f"  WARNING: daily had {len(daily)} rows but only {len(actuals_by_date)} distinct dates — deduplicated (kept last)")
         psycopg2.extras.execute_values(
-            cur, "INSERT INTO ml_daily_actuals (d, total) VALUES %s",
-            [(row.d.date(), float(row.total)) for row in daily.itertuples()],
+            cur,
+            "INSERT INTO ml_daily_actuals (d, total) VALUES %s "
+            "ON CONFLICT (d) DO UPDATE SET total = EXCLUDED.total",
+            list(actuals_by_date.items()),
         )
 
-        cur.execute("DELETE FROM ml_predictive_incidents")
+        cur.execute("DELETE FROM ml_predictive_incidents WHERE forecast_date < %s OR forecast_date > %s",
+                     (min(val_dates + future_dates), max(val_dates + future_dates)))
         pred_rows = [row_for(d, "validation") for d in val_dates]
         pred_rows += [row_for(d, "future") for d in future_dates]
+        update_cols = (
+            ["predicted_incident_count", "champion_model", "same_day_last_year"]
+            + model_cols + ["rainfall_mm"] + nv_cols + nw_cols
+        )
         psycopg2.extras.execute_values(
             cur,
             "INSERT INTO ml_predictive_incidents (forecast_date, prediction_type, "
             "predicted_incident_count, champion_model, same_day_last_year, "
-            + ", ".join(model_cols) + ", rainfall_mm, " + ", ".join(nv_cols) + ", " + ", ".join(nw_cols) + ") VALUES %s",
+            + ", ".join(model_cols) + ", rainfall_mm, " + ", ".join(nv_cols) + ", " + ", ".join(nw_cols) + ") VALUES %s "
+            "ON CONFLICT (forecast_date, prediction_type) DO UPDATE SET "
+            + ", ".join(f"{c} = EXCLUDED.{c}" for c in update_cols),
             pred_rows,
         )
 
@@ -1419,6 +1492,7 @@ def main() -> None:
             metadata["warning"] = "No model beat the naive seasonal (MASE<=1.0) baseline; champion is a fallback pick."
 
         print("Writing ml_daily_actuals, ml_predictive_incidents, ml_training_metadata (one transaction)...")
+        conn = ensure_live_conn(conn)
         write_to_db(conn, daily, feat, champion, by_model, metadata, rain_by_date, by_model_nv,
                     by_model_nw, dry=args.dry_write and not args.write_db)
         print("Rolled back (dry write)." if (args.dry_write and not args.write_db) else "Committed.")

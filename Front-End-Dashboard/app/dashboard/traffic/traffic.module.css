@@ -467,25 +467,55 @@
 }
 
 .kpiValue {
-  font-size: 1.6rem;
+  font-size: clamp(1.3rem, 1.05vw + 0.78rem, 1.6rem);
   font-weight: 800;
   letter-spacing: -0.02em;
   color: var(--text-primary, #1c2434);
   line-height: 1.1;
   /* Tabular so the row does not jitter horizontally as values update. */
   font-variant-numeric: tabular-nums;
-  white-space: nowrap;
+  /* Wraps rather than ellipsing. Most values are short numbers, but some are
+     names -- "Bocaue Barrier" was rendering as "Bocaue Barr..." on a tile
+     whose entire purpose is to say which plaza it is.
+     A viewport-based clamp cannot fix this: the tiles stay ~215px wide however
+     wide the window gets, so the font never shrinks when it needs to. Wrapping
+     is the honest fix. Numbers are single tokens with no break opportunity, so
+     "349,132" and "127.4M" still occupy one line; only multi-word values use
+     the second, and the hints below stay aligned because they are pinned to
+     the bottom of the tile. */
+  white-space: normal;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
   overflow: hidden;
-  text-overflow: ellipsis;
 }
 
 .kpiHint {
-  margin: 0;
+  /* Pinned to the bottom so the qualifying lines sit on one baseline across
+     the row, whatever height the value above them took. */
+  margin: auto 0 0;
+  padding-top: 2px;
   font-size: 0.71rem;
-  color: var(--kpi-accent, var(--text-muted));
-  white-space: nowrap;
+  line-height: 1.35;
+  /* Was var(--kpi-accent): the tile's own hue, on 11px text.
+     Six of the nine accents across the three dashboards failed WCAG AA on the
+     card (4.5:1 for text this size) and the three --kpi-3 tints failed at
+     about 2:1 -- traffic #8ab6f5 2.08, incident #e0b01f 2.02, emissions
+     #4cbd79 2.37 -- which is not a readable line of text, it is decoration
+     shaped like one. The accent still identifies the tile through the leading
+     bar and the icon, where it carries no reading load. Deltas inside the
+     hint keep their own green/red. */
+  color: var(--text-secondary);
+  /* Wraps to a second line rather than ellipsing. These lines are the tile's
+     explanation, so truncating them removes the only thing that says what the
+     number means: "4.8 vs 5.0 crashes/day, wet vs dry" was being shown as
+     "4.8 vs 5.0 crashes/day, wet vs ...". */
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
   overflow: hidden;
-  text-overflow: ellipsis;
 }
 
 /* Per-tile accents. Five slots; the first three come from the page ramp and the
@@ -499,7 +529,9 @@
 .deltaUp { color: #1d9d61; font-weight: 700; }
 .deltaDown { color: #d0483e; font-weight: 700; }
 
-.sparkBox { height: 26px; margin-top: 2px; }
+/* margin-top:auto for the same reason as .kpiHint - it is the bottom element
+   of the tiles that carry a sparkline instead of a hint line. */
+.sparkBox { height: 26px; margin-top: auto; padding-top: 6px; }
 
 /* ---------- Chart cards ---------- */
 .chartCard {

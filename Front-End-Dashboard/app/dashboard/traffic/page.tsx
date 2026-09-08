@@ -286,8 +286,12 @@ export default function TrafficPage() {
         ]
         : [{ name: "Volume", type: "line", data: rows.map((r) => r.total), symbol: rows.length <= 24 ? "circle" : "none", symbolSize: 7, itemStyle: { color: PAIR_A }, lineStyle: { width: 3, color: PAIR_A } }];
 
+    // Hoisted: the grid should reserve the bottom strip only when the legend is
+    // actually drawn in it, and both need the same answer.
+    const showLegend = (splitDirection && direction === "Both") || window > 0;
+
     return {
-      grid: { left: 52, right: splitDirection ? 44 : 16, top: 14, bottom: 52 },
+      grid: { left: 52, right: splitDirection ? 44 : 16, top: 14, bottom: showLegend ? 52 : 26 },
       xAxis: {
         type: "category",
         data: labels,
@@ -302,7 +306,7 @@ export default function TrafficPage() {
       // that needs it most, since two lines with no key are unreadable.
       // Split down to one carriageway leaves a single line, which its own end
       // label already names — a one-item legend would just be furniture.
-      legend: { show: (splitDirection && direction === "Both") || window > 0, bottom: 0, left: "center", itemWidth: 14, itemHeight: 8, itemGap: 18, padding: 0, textStyle: { fontSize: 11 } },
+      legend: { show: showLegend, bottom: 0, left: "center", itemWidth: 14, itemHeight: 8, itemGap: 18, padding: 0, textStyle: { fontSize: 11 } },
       series,
     };
   }, [data, grain, splitDirection, direction, trendRows]);
@@ -371,12 +375,16 @@ export default function TrafficPage() {
       rows: display,
       others,
       option: {
-        grid: { left: 120, right: 46, top: 8, bottom: 46 },
+        grid: { left: 120, right: 46, top: 8, bottom: 18 },
         xAxis: { type: "value", splitNumber: 3, axisLabel: { formatter: (v: number) => fmtCompact(v), fontSize: 10 } },
         // interval:0 — every plaza name must be readable, that IS the chart
         yAxis: { type: "category", data: display.map((r) => r.plaza), axisLabel: { interval: 0, fontSize: 10 }, axisTick: { show: false } },
         tooltip: { trigger: "axis", axisPointer: { type: "shadow" }, valueFormatter: (v) => `${fmtInt(Number(v))} vehicles` },
-        legend: { show: true, bottom: 0, left: "center", itemWidth: 14, itemHeight: 8, itemGap: 18, padding: 0, textStyle: { fontSize: 11 } },
+        /* No legend. There is one series, so it drew a single chip reading
+           "Volume by plaza" beneath a chart whose axis already says that, and
+           the bars are shaded on a four-step sequential ramp, so its lone
+           swatch matched no bar in particular and implied a category that does
+           not exist. The strip it held is returned to the plot. */
         series: [
           {
             name: "Volume by plaza",
@@ -490,7 +498,20 @@ export default function TrafficPage() {
             return tip;
           },
         },
-        legend: { show: true, bottom: 0, left: "center", itemWidth: 14, itemHeight: 8, itemGap: 18, padding: 0, textStyle: { fontSize: 11 } },
+        /* Named explicitly, and not clickable.
+           The legend listed every series it could find, so "Deviation" - the
+           series that draws the real bars - sat in the key beside the two
+           colour labels wearing a palette colour that appears on no bar.
+           Clicking made it worse: hiding "Deviation" blanked the chart, while
+           hiding either colour label did nothing at all, since those two
+           series carry no data. This is a key, not a filter, so it names the
+           two colours and ignores clicks. */
+        legend: {
+          show: true, bottom: 0, left: "center", itemWidth: 14, itemHeight: 8,
+          itemGap: 18, padding: 0, textStyle: { fontSize: 11 },
+          data: ["Above baseline", "Below baseline"],
+          selectedMode: false,
+        },
         series: [
           // Two zero-width entries purely so the legend can name what the two bar
           // colours mean; the real bars are the third series below.

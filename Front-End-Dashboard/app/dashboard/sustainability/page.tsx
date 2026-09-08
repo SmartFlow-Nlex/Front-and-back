@@ -232,7 +232,7 @@ export default function SustainabilityPage() {
     });
 
     return {
-      grid: { left: 62, right: 16, top: 10, bottom: 52 },
+      grid: { left: 62, right: 16, top: 10, bottom: classView === "All" ? 52 : 26 },
       xAxis: { type: "category", data: labels, axisLabel: { formatter: axisLabelFor(grain), interval: labelInterval, fontSize: 10, hideOverlap: true }, axisTick: { show: false } },
       yAxis: { type: "value", name: "tonnes CO₂", nameGap: 10, nameTextStyle: { fontSize: 9, align: "left" }, splitNumber: 3, axisLabel: { fontSize: 10, formatter: (v: number) => fmtCompact(v) } },
       tooltip: {
@@ -245,7 +245,11 @@ export default function SustainabilityPage() {
           return `<b>${bucketLabelFor(grain)(r.label)}</b><br/>${rows}<br/>Total: <b>${fmtInt(r.total)} t</b>`;
         },
       },
-      legend: { show: true, bottom: 0, left: "center", itemWidth: 14, itemHeight: 8, itemGap: 18, padding: 0, textStyle: { fontSize: 11 } },
+      /* Only while all three classes are drawn. Picking a single class filters
+         the series list down to one, and the legend then named the one line on
+         the chart -- which the Class control the reader just used already told
+         them. */
+      legend: { show: classView === "All", bottom: 0, left: "center", itemWidth: 14, itemHeight: 8, itemGap: 18, padding: 0, textStyle: { fontSize: 11 } },
       // Drawn from data already in hand: the response carries c1, c2 and c3 per
       // bucket, so this hides series rather than asking for different numbers.
       series: [mk(CLASS_SHORT[0], "c1", RAMP[0]), mk(CLASS_SHORT[1], "c2", RAMP[1]), mk(CLASS_SHORT[2], "c3", RAMP[2])]
@@ -436,7 +440,7 @@ export default function SustainabilityPage() {
     const labelInterval = (i: number) => i === 0 || boundaryKey(labels[i]) !== boundaryKey(labels[i - 1]);
     const avg = heavyShareRows.reduce((s, r) => s + r.share, 0) / heavyShareRows.length;
     return {
-      grid: { left: 44, right: 16, top: 10, bottom: 52 },
+      grid: { left: 44, right: 16, top: 10, bottom: 26 },
       xAxis: { type: "category", data: labels, axisLabel: { interval: labelInterval, fontSize: 10, hideOverlap: true }, axisTick: { show: false } },
       yAxis: {
         type: "value",
@@ -453,7 +457,8 @@ export default function SustainabilityPage() {
           return `<b>${r.label}</b><br/>Heavy-vehicle share: <b>${items[0].value}%</b><br/>${fmtInt(r.c2 + r.c3)} t of ${fmtInt(r.total)} t CO₂`;
         },
       },
-      legend: { show: true, bottom: 0, left: "center", itemWidth: 14, itemHeight: 8, itemGap: 18, padding: 0, textStyle: { fontSize: 11 } },
+      /* No legend: one line, on a chart whose title and y-axis both already
+         say it is the heavy-vehicle share. */
       series: [
         {
           name: "Heavy-vehicle share of CO₂",

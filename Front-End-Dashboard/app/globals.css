@@ -6074,3 +6074,48 @@ body {
   color: var(--text-secondary);
   line-height: 1.35;
 }
+
+/* ---------- Added for Predictive / Prescriptive components ---------- */
+.chart-card {
+  background: var(--bg-surface);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-lg);
+  padding: 16px;
+  min-height: 280px;
+  box-shadow: var(--shadow-card);
+  transition: box-shadow var(--transition-fast);
+}
+
+.chart-card.wide {
+  grid-column: 1 / -1;
+}
+
+.chart-card:hover {
+  box-shadow: var(--shadow-md);
+}
+
+.chart-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 10px;
+  gap: 8px;
+}
+
+.chart-head h3 {
+  margin: 0;
+  font-size: 0.95rem;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+.ds-rd-seg.seg-red    { background: #e04434; }
+.ds-rd-seg.seg-orange { background: #e08a2e; }
+.ds-rd-seg.seg-green  { background: #23a55a; }
+
+.ds-rd-scale-chip.lv-0 { background: #23a55a; }
+.ds-rd-scale-chip.lv-1,
+.ds-rd-scale-chip.lv-2 { background: #e08a2e; }
+.ds-rd-scale-chip.lv-3,
+.ds-rd-scale-chip.lv-4,
+.ds-rd-scale-chip.lv-5 { background: #e04434; }

@@ -631,6 +631,22 @@
   min-width: 0;
 }
 
+/* Two panels sharing a row, but ONLY where there is genuinely room.
+   The congestion map needs a ~150px label gutter plus 12 hour columns, and the
+   event chart has horizontal bars with exit names on them; below roughly 1800px
+   of viewport each half falls under ~740px and both become cramped rather than
+   compact. So the default is full width and the split is the exception. */
+.spanHalf {
+  grid-column: 1 / -1;
+  min-width: 0;
+}
+
+@media (min-width: 1800px) {
+  .spanHalf {
+    grid-column: span 6;
+  }
+}
+
 .chart1 { grid-column: 1 / -1; }
 .chart2 { grid-column: span 7; }
 .chart3 { grid-column: span 5; }

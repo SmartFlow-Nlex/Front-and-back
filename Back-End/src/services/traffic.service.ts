@@ -696,6 +696,14 @@ export async function getMLPredictiveCongestion() {
     const { rows } = await db.query(`
       SELECT c.segment_name AS "segment", c.hours_ahead AS "hours",
              c.congestion_state AS "state", c.probability,
+             -- The clock time each horizon refers to. "+1h" alone is a label
+             -- with no referent; the reader cannot tell what it counts from.
+             --
+             -- Returned as TEXT, not a timestamp: base_ts is a naive column
+             -- holding Manila wall-clock, and the driver was casting it to a
+             -- Date, which serialised 09:00 as "01:00Z". Any client that then
+             -- formatted it in a non-Manila zone would show the wrong hour.
+             to_char(c.base_ts, 'YYYY-MM-DD HH24:MI') AS "baseTs",
              k.km_post::float AS "km", COALESCE(k.estimated, false) AS "kmEstimated"
       FROM gold.ml_predictive_congestion c
       LEFT JOIN gold.exit_km_post k ON k.exit_name = c.segment_name
@@ -753,49 +761,80 @@ export async function getCongestionModel() {
 // baseline_volume does not reconcile with the warehouse (see README note), so
 // the model's *uplift ratio* is applied to the observed baseline instead. That
 // keeps one honest scale across the whole chart.
-export async function getMLEventSurge() {
+export async function getMLEventSurge(eventDate?: string) {
   if (!db) return null;
   try {
+    // With a target date this becomes a FORECAST: the measured uplift is applied
+    // to the baseline for that specific weekday and month. Without one it stays
+    // a description of what past events did — which is all it could ever be,
+    // since nothing in the warehouse knows when the next event is.
+    if (eventDate) {
+      const { rows } = await db.query(`
+        WITH target AS (
+          SELECT $1::date AS d,
+                 EXTRACT(DOW FROM $1::date)::int AS dow,
+                 EXTRACT(MONTH FROM $1::date)::int AS mon
+        ),
+        -- Same construction as the training baseline: median for that weekday
+        -- and month, excluding known event days so they cannot inflate it.
+        norm AS (
+          SELECT t.exit_canonical AS plaza,
+                 PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY t.v)::int AS baseline
+          FROM (SELECT date, exit_canonical, SUM(total) AS v
+                FROM gold.fact_traffic_hourly GROUP BY 1, 2) t, target g
+          WHERE EXTRACT(DOW FROM t.date) = g.dow
+            AND EXTRACT(MONTH FROM t.date) = g.mon
+          GROUP BY 1
+        )
+        SELECT n.plaza AS "exit", f.event_name AS "event", n.baseline,
+               CASE WHEN f.uplift IS NOT NULL
+                    THEN ROUND(n.baseline * f.uplift)::int ELSE NULL END AS "surge",
+               ROUND(f.uplift, 4) AS "uplift",
+               ROUND(f.uplift_lo, 4) AS "upliftLo", ROUND(f.uplift_hi, 4) AS "upliftHi",
+               f.n_events AS "nEvents", f.material, f.method,
+               f.anchor_exit AS "anchorExit",
+               f.first_event::text AS "firstEvent", f.last_event::text AS "lastEvent",
+               (SELECT d::text FROM target) AS "targetDate",
+               f.baseline_volume AS "modelBaseline", f.surge_volume AS "modelSurge"
+        FROM norm n
+        LEFT JOIN gold.ml_event_surge_forecast f ON f.exit_name = n.plaza
+        ORDER BY n.baseline DESC`, [eventDate]);
+      return rows;
+    }
+
+    // gold.ml_event_surge_forecast now holds MEASURED event-day uplift per exit
+    // (build_event_surge.py), keyed by canonical exit name. It previously held
+    // three hand-typed rows under free-text names like "Bocaue Exit", which is
+    // why this query used to carry an alias table to map them onto real plazas.
+    // Both the aliases and the invented ratios are gone.
     const { rows } = await db.query(`
       WITH observed AS (
-        SELECT toll_plaza,
-               ROUND(AVG(${DAY_TOTAL}))::int AS baseline
-        FROM nlex_traffic_volume
-        WHERE type = 'Entries' AND vehicle_class = 'Total'
-          AND date >= (SELECT MAX(date) FROM nlex_traffic_volume) - interval '90 days'
+        SELECT exit_canonical AS plaza, ROUND(AVG(v))::int AS baseline
+        FROM (SELECT date, exit_canonical, SUM(total) AS v
+              FROM gold.fact_traffic_hourly
+              WHERE date >= (SELECT MAX(date) FROM gold.fact_traffic_hourly) - interval '90 days'
+              GROUP BY 1, 2) t
         GROUP BY 1
-        HAVING ROUND(AVG(${DAY_TOTAL})) > 0
-      ),
-      -- Forecast exit names are free text ("Bocaue Exit"); a prefix match would
-      -- also catch "Bocaue Barrier", which is a mainline barrier and not the
-      -- exit the model means. Map explicitly.
-      alias(forecast_name, plaza) AS (
-        VALUES ('Bocaue Exit', 'Bocaue Interchange'),
-               ('Marilao Exit', 'Marilao'),
-               ('Balagtas Exit', 'Balagtas')
-      ),
-      fc AS (
-        SELECT COALESCE(a.plaza, TRIM(REPLACE(f.exit_name, 'Exit', ''))) AS plaza,
-               f.event_name,
-               f.baseline_volume,
-               f.surge_volume,
-               CASE WHEN f.baseline_volume > 0
-                    THEN f.surge_volume::numeric / f.baseline_volume
-                    ELSE NULL END AS uplift
-        FROM gold.ml_event_surge_forecast f
-        LEFT JOIN alias a ON a.forecast_name = f.exit_name
+        HAVING ROUND(AVG(v)) > 0
       )
-      SELECT o.toll_plaza AS "exit",
-             fc.event_name AS "event",
+      SELECT o.plaza AS "exit",
+             f.event_name AS "event",
              o.baseline AS "baseline",
-             CASE WHEN fc.uplift IS NOT NULL
-                  THEN ROUND(o.baseline * fc.uplift)::int
-                  ELSE NULL END AS "surge",
-             ROUND(fc.uplift::numeric, 4) AS "uplift",
-             fc.baseline_volume AS "modelBaseline",
-             fc.surge_volume AS "modelSurge"
+             CASE WHEN f.uplift IS NOT NULL
+                  THEN ROUND(o.baseline * f.uplift)::int ELSE NULL END AS "surge",
+             ROUND(f.uplift, 4) AS "uplift",
+             ROUND(f.uplift_lo, 4) AS "upliftLo",
+             ROUND(f.uplift_hi, 4) AS "upliftHi",
+             f.n_events AS "nEvents",
+             f.material AS "material",
+             f.method AS "method",
+             f.anchor_exit AS "anchorExit",
+             f.first_event::text AS "firstEvent",
+             f.last_event::text AS "lastEvent",
+             f.baseline_volume AS "modelBaseline",
+             f.surge_volume AS "modelSurge"
       FROM observed o
-      LEFT JOIN fc ON fc.plaza = o.toll_plaza
+      LEFT JOIN gold.ml_event_surge_forecast f ON f.exit_name = o.plaza
       ORDER BY o.baseline DESC
     `);
     return rows;
@@ -1120,6 +1159,307 @@ export async function getWeatherEvidenceFromDb(): Promise<WeatherEvidence | null
     return { correlations, modelComparison };
   } catch (error) {
     console.error("Database query failed for weather evidence:", error);
+    return null;
+  }
+}
+
+
+// ─── Corridor CO2 forecast ───────────────────────────────────────────────────
+
+export type EmissionForecastPoint = {
+  date: string;
+  actual: number | null;
+  predicted: number | null;      // the champion's forecast
+  gbr: number | null;
+  polynomial: number | null;
+  lstm: number | null;
+  zone: "past" | "present" | "future";
+};
+
+export type EmissionForecast = {
+  championModel: string | null;
+  series: EmissionForecastPoint[];
+  split: {
+    trainDays: number; holdoutDays: number; futureDays: number;
+    trainStart: string | null; trainEnd: string | null;
+    holdoutStart: string | null; holdoutEnd: string | null;
+    futureStart: string | null; futureEnd: string | null;
+    trainPct: number | null;
+    holdoutPct: number | null;
+  };
+  metrics: MLModelMetric[];
+};
+
+/**
+ * The served CO2 forecast, in the same past/present/future shape the volume
+ * panel uses so the two read alike.
+ *
+ * The actuals are NOT a separate series: they roll up from
+ * gold.fact_emissions_hourly, which is derived from the same traffic table the
+ * volume forecast is trained on. The two panels therefore cannot disagree
+ * (verified to 0.0005 t/day).
+ *
+ * Horizon is 7 days here versus 14 for volume, per the modelling diagram, so
+ * the two sets of error metrics are NOT directly comparable.
+ */
+export async function getEmissionForecast(months?: number): Promise<EmissionForecast | null> {
+  if (!db) return null;
+  try {
+    // The champion is stamped on every row by the trainer, so the API never has
+    // to re-derive "which model is being served" from the metrics ordering.
+    const params: unknown[] = [];
+    let where = "";
+    if (months && months > 0) {
+      // Windowing counts back from the last ACTUAL day, not from today, so the
+      // future block is never cropped out by a short window.
+      where = `WHERE forecast_date >= (
+                 SELECT MAX(forecast_date) - ($1::int * INTERVAL '1 month')
+                 FROM gold.ml_predictive_emissions WHERE actual_co2 IS NOT NULL)`;
+      params.push(months);
+    }
+    const [seriesQ, splitQ, metricsQ] = await Promise.all([
+      db.query(
+        `SELECT forecast_date::text AS d, actual_co2, pred_gbr, pred_polynomial,
+                pred_lstm, champion_model, is_holdout, is_future
+         FROM gold.ml_predictive_emissions ${where} ORDER BY forecast_date ASC`, params),
+      db.query(
+        `SELECT COUNT(*) FILTER (WHERE NOT is_holdout AND NOT is_future)::int AS train_days,
+                COUNT(*) FILTER (WHERE is_holdout)::int AS holdout_days,
+                COUNT(*) FILTER (WHERE is_future)::int  AS future_days,
+                MIN(forecast_date) FILTER (WHERE NOT is_holdout AND NOT is_future)::text AS train_start,
+                MAX(forecast_date) FILTER (WHERE NOT is_holdout AND NOT is_future)::text AS train_end,
+                MIN(forecast_date) FILTER (WHERE is_holdout)::text AS holdout_start,
+                MAX(forecast_date) FILTER (WHERE is_holdout)::text  AS holdout_end,
+                MIN(forecast_date) FILTER (WHERE is_future)::text   AS future_start,
+                MAX(forecast_date) FILTER (WHERE is_future)::text   AS future_end
+         FROM gold.ml_predictive_emissions`),
+      db.query(
+        // diagnosis carries the tie note: GBR is not bit-reproducible across
+        // processes, so two models inside that jitter are co-champions and the
+        // panel must not present one as the winner.
+        `SELECT model_name, rank, accepted, rmse, mae, wmape, r2, mase, mape,
+                rejected_reason, uses_weather, diagnosis, updated_at
+         FROM gold.ml_model_metrics
+         WHERE target = 'Corridor CO2'
+         ORDER BY rank NULLS LAST, model_name`),
+    ]);
+
+    const num = (v: unknown) => (v === null || v === undefined ? null : Number(v));
+    const champion: string | null = seriesQ.rows.find((r) => r.champion_model)?.champion_model ?? null;
+    const colOf: Record<string, "pred_gbr" | "pred_polynomial" | "pred_lstm"> = {
+      GBR: "pred_gbr", Polynomial: "pred_polynomial", LSTM: "pred_lstm",
+    };
+    const champCol = champion ? colOf[champion] : undefined;
+
+    const series: EmissionForecastPoint[] = seriesQ.rows.map((r) => ({
+      date: r.d,
+      actual: num(r.actual_co2),
+      predicted: champCol ? num(r[champCol]) : null,
+      gbr: num(r.pred_gbr),
+      polynomial: num(r.pred_polynomial),
+      lstm: num(r.pred_lstm),
+      zone: r.is_future ? "future" : r.is_holdout ? "present" : "past",
+    }));
+
+    const s = splitQ.rows[0];
+    // Percentage is over train+holdout: future days have no actual to score
+    // against, so counting them would understate the holdout share.
+    const scored = Number(s.train_days) + Number(s.holdout_days);
+    return {
+      championModel: champion,
+      series,
+      split: {
+        trainDays: Number(s.train_days), holdoutDays: Number(s.holdout_days),
+        futureDays: Number(s.future_days),
+        trainStart: s.train_start, trainEnd: s.train_end,
+        holdoutStart: s.holdout_start, holdoutEnd: s.holdout_end,
+        futureStart: s.future_start, futureEnd: s.future_end,
+        // Both halves, so the panel can state the split the way the volume
+        // panel does rather than showing only one side of it.
+        trainPct: scored ? Number(((Number(s.train_days) / scored) * 100).toFixed(2)) : null,
+        holdoutPct: scored ? Number(((Number(s.holdout_days) / scored) * 100).toFixed(2)) : null,
+      },
+      metrics: metricsQ.rows.map((r) => ({
+        model: r.model_name, model_name: r.model_name,
+        rank: num(r.rank), accepted: Boolean(r.accepted),
+        rmse: num(r.rmse), mae: num(r.mae), wmape: num(r.wmape), r2: num(r.r2),
+        mase: num(r.mase), mape: num(r.mape),
+        rejectedReason: r.rejected_reason ?? null,
+        rejected_reason: r.rejected_reason ?? null,
+        uses_weather: r.uses_weather === null ? null : Boolean(r.uses_weather),
+        diagnosis: r.diagnosis ?? null,
+        updatedAt: r.updated_at ? new Date(r.updated_at).toISOString() : null,
+      })) as MLModelMetric[],
+    };
+  } catch (error) {
+    // Reporting every failure as "database not reachable" is what made this panel
+    // claim the database was down when it was up. The pool comment in config/db.ts
+    // records the same false alarm: on this shared RDS instance a handshake can
+    // exceed the timeout while the pipelines run, and a query error looks nothing
+    // like an outage. Classify, so the message the user reads is true.
+    const e = error as { code?: string; message?: string };
+    const CONNECTIVITY = new Set([
+      "ECONNREFUSED", "ETIMEDOUT", "ENOTFOUND", "EHOSTUNREACH", "ECONNRESET", "EPIPE",
+      "57P01", // admin_shutdown
+      "57P03", // cannot_connect_now
+      "08000", "08001", "08003", "08004", "08006", // connection exceptions
+    ]);
+    // Classifying on `code` ALONE was wrong, and it is the common case that it
+    // misses: node-postgres reports a connect timeout as
+    //   message "Connection terminated due to connection timeout", code undefined
+    // (verified against a live pool). With no code, a plain connectivity blip
+    // was labelled a query error -> HTTP 500 -> retryable:false -> the panel
+    // gave up after one attempt and showed a permanent failure for something
+    // that clears on its own. Match the message too.
+    const CONNECTIVITY_MSG =
+      /(connection terminated|connection timeout|timeout exceeded when trying to connect|not queryable|server closed the connection|connection refused|socket hang up|read econnreset)/i;
+    const transient =
+      (e.code != null && CONNECTIVITY.has(e.code)) ||
+      CONNECTIVITY_MSG.test(e.message ?? "");
+    console.error(
+      `Emission forecast query failed (${transient ? "connectivity" : "query"}; code=${e.code ?? "none"}):`,
+      e.message ?? error
+    );
+    throw Object.assign(new Error(e.message ?? "Emission forecast query failed"), {
+      kind: transient ? "connectivity" : "query",
+      code: e.code,
+    });
+  }
+}
+
+
+// ─── Forecast accuracy as a function of horizon ──────────────────────────────
+
+export type HorizonAccuracy = {
+  model: string;
+  hLo: number;
+  hHi: number;
+  n: number;
+  wmape: number | null;
+  mape: number | null;
+  mase: number | null;
+  mae: number | null;
+  baselineWmape: number | null;
+  usable: boolean;
+  note: string | null;
+};
+
+/**
+ * How error grows with how far ahead a day was.
+ *
+ * The volume panel projects 90 days but its headline metrics were measured at
+ * h=14. Quoting one WMAPE across the whole projection would claim the day-90
+ * forecast is as good as the day-1 forecast. These buckets come from a separate
+ * rolling-origin run at h=90 (horizon_study.py), so the chart can label each
+ * stretch with the accuracy that actually applies to it.
+ *
+ * Measured for the ACCEPTED model only. The rejected models are still drawn if
+ * the reader toggles them, but nothing here vouches for them at long range —
+ * SARIMAX in particular collapses to implausible values past a few weeks.
+ */
+export async function getHorizonAccuracy(target = "Total Traffic"): Promise<HorizonAccuracy[] | null> {
+  if (!db) return null;
+  try {
+    const { rows } = await db.query(
+      `SELECT model_name, h_lo, h_hi, n, wmape, mape, mase, mae,
+              baseline_wmape, usable, note
+       FROM gold.ml_horizon_accuracy
+       WHERE target = $1
+       ORDER BY h_lo`, [target]);
+    const num = (v: unknown) => (v === null || v === undefined ? null : Number(v));
+    return rows.map((r) => ({
+      model: r.model_name,
+      hLo: Number(r.h_lo),
+      hHi: Number(r.h_hi),
+      n: Number(r.n),
+      wmape: num(r.wmape),
+      mape: num(r.mape),
+      mase: num(r.mase),
+      mae: num(r.mae),
+      baselineWmape: num(r.baseline_wmape),
+      usable: Boolean(r.usable),
+      note: r.note ?? null,
+    }));
+  } catch (error) {
+    console.error("Database query failed for horizon accuracy:", error);
+    return null;
+  }
+}
+
+
+// ─── Congestion accuracy per forecast horizon ───────────────────────────────
+
+export type CongestionHorizonAccuracy = {
+  model: string;
+  horizon: number;
+  accuracy: number | null;
+  n: number;
+  persistenceAccuracy: number | null;
+};
+
+/**
+ * Accuracy at +1h … +12h for the served congestion model.
+ *
+ * The previous training run could not produce this: it never shifted the target
+ * by the horizon, so all twelve horizons were the same prediction and a
+ * per-horizon breakdown would have been twelve identical numbers. With the
+ * target fixed the decay is real, and a single averaged accuracy hides it —
+ * which is the one thing a reader needs when deciding how far ahead to trust
+ * the map.
+ *
+ * `persistenceAccuracy` is the "nothing changes" benchmark at the same horizon.
+ * It is the honest bar: a forecaster that cannot beat it adds nothing.
+ */
+export async function getCongestionHorizonAccuracy(): Promise<CongestionHorizonAccuracy[] | null> {
+  if (!db) return null;
+  try {
+    const { rows } = await db.query(`
+      SELECT h.model_name, h.horizon, h.accuracy, h.n, h.persistence_accuracy
+      FROM gold.ml_congestion_horizon_accuracy h
+      -- Only the model actually being served; the others are on the leaderboard
+      -- but their curves would imply the map can switch between them.
+      WHERE h.model_name = (
+        SELECT model_name FROM gold.ml_model_metrics
+        WHERE target = 'Congestion' AND accepted IS TRUE
+        ORDER BY rank NULLS LAST LIMIT 1)
+      ORDER BY h.horizon`);
+    const num = (v: unknown) => (v === null || v === undefined ? null : Number(v));
+    return rows.map((r) => ({
+      model: r.model_name,
+      horizon: Number(r.horizon),
+      accuracy: num(r.accuracy),
+      n: Number(r.n),
+      persistenceAccuracy: num(r.persistence_accuracy),
+    }));
+  } catch (error) {
+    console.error("Database query failed for congestion horizon accuracy:", error);
+    return null;
+  }
+}
+
+
+/**
+ * Out-of-sample result for the event-surge uplift (eval_event_surge.py).
+ *
+ * The panel is built from OBSERVED history, which is a descriptive statistic —
+ * so on its own it could not claim to be tested. This is the separate check
+ * that answers the operational question: using uplift learned from earlier
+ * events, how well does it predict LATER events it never saw?
+ */
+export async function getEventSurgeMetrics() {
+  if (!db) return null;
+  try {
+    const { rows } = await db.query(`
+      SELECT model_name AS "model", wmape, mape, mae, r2, accepted, diagnosis
+      FROM gold.ml_model_metrics WHERE target = 'Event Surge'
+      ORDER BY rank NULLS LAST, wmape`);
+    const num = (v: unknown) => (v === null || v === undefined ? null : Number(v));
+    return rows.map((r) => ({
+      model: r.model, wmape: num(r.wmape), mape: num(r.mape), mae: num(r.mae),
+      r2: num(r.r2), accepted: Boolean(r.accepted), diagnosis: r.diagnosis ?? null,
+    }));
+  } catch (error) {
+    console.error("Database query failed for event surge metrics:", error);
     return null;
   }
 }

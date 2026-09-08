@@ -28,12 +28,36 @@ export type MetricRow = {
   uses_weather: boolean | null;
   aic: number | null;
   bic: number | null;
+  /** Trainer's note. A value starting "tied with" means this model is not
+   *  separable from the leader, so a rank badge would overstate the result. */
+  diagnosis?: string | null;
 };
 
-export type NarrativeModelKey = "LSTM" | "Prophet" | "HoltWinters" | "SARIMAX" | "HoltsLinear";
+export type NarrativeModelKey = string;
 
-/** UI key -> model_name as stored in gold.ml_model_metrics */
-const DB_NAME: Record<NarrativeModelKey, string> = {
+/**
+ * The volume module's vocabulary. Kept as the DEFAULT so that panel is
+ * unaffected, but every map is overridable: the emissions panel forecasts a
+ * different quantity with a different model family, and hardcoding one module's
+ * model names here would have meant either a second copy of this component or a
+ * narrative that named models the reader is not looking at.
+ */
+export type NarrativeVocab = {
+  /** UI key -> model_name as stored in gold.ml_model_metrics */
+  dbName: Record<string, string>;
+  label: Record<string, string>;
+  color: Record<string, string>;
+  /** Describes the method, not this run. */
+  howItWorks: Record<string, string>;
+  /** Models with a weather-free twin, enabling a with/without comparison. */
+  noWeatherTwin?: Partial<Record<string, string>>;
+  /** Unit suffix for MAE, e.g. "veh" or "t". Omit for none. */
+  maeUnit?: string;
+  /** How MAE/RMSE are rendered. Volume counts are integers; tonnes are not. */
+  fmtMagnitude?: (n: number | null | undefined) => string | null;
+};
+
+const DB_NAME: Record<string, string> = {
   LSTM: "LSTM",
   Prophet: "Prophet",
   HoltWinters: "HoltWinters",
@@ -41,15 +65,14 @@ const DB_NAME: Record<NarrativeModelKey, string> = {
   HoltsLinear: "Holts_Linear",
 };
 
-/** Models that were also trained without weather, enabling a with/without comparison */
-const NO_WEATHER_TWIN: Partial<Record<NarrativeModelKey, string>> = {
+const NO_WEATHER_TWIN: Partial<Record<string, string>> = {
   Prophet: "Prophet_nw",
   SARIMAX: "SARIMAX_nw",
   LSTM: "LSTM_nw",
 };
 
 /** Same hues the chart uses, so a chip reads as the same model as its line. */
-const COLOR: Record<NarrativeModelKey, string> = {
+const COLOR: Record<string, string> = {
   LSTM: "#16a34a",
   Prophet: "#f59e0b",
   HoltWinters: "#8b5cf6",
@@ -57,7 +80,7 @@ const COLOR: Record<NarrativeModelKey, string> = {
   HoltsLinear: "#db2777",
 };
 
-const LABEL: Record<NarrativeModelKey, string> = {
+const LABEL: Record<string, string> = {
   LSTM: "LSTM",
   Prophet: "Prophet",
   HoltWinters: "Holt-Winters",
@@ -66,12 +89,17 @@ const LABEL: Record<NarrativeModelKey, string> = {
 };
 
 /** Describes the method, not this run — hence static. */
-const HOW_IT_WORKS: Record<NarrativeModelKey, string> = {
+const HOW_IT_WORKS: Record<string, string> = {
   LSTM: "Neural network. Predicts one day at a time and feeds its own output back, so early errors compound across the horizon.",
   Prophet: "Splits the series into trend, weekly and yearly seasonality, then adds them back together.",
   HoltWinters: "Exponential smoothing over level, trend and a 7-day seasonal index, weighted toward recent days.",
   SARIMAX: "Seasonal ARIMA (1,1,1)(1,1,1,7) — autocorrelation plus a weekly cycle, with weather as optional inputs.",
   HoltsLinear: "Level and trend only. No seasonal term, so it cannot represent the weekly cycle at all.",
+};
+
+const VOLUME_VOCAB: NarrativeVocab = {
+  dbName: DB_NAME, label: LABEL, color: COLOR, howItWorks: HOW_IT_WORKS,
+  noWeatherTwin: NO_WEATHER_TWIN, maeUnit: "veh",
 };
 
 const fmt2 = (n: number | null | undefined) =>
@@ -96,10 +124,16 @@ export default function ModelNarrative({
   windowStart,
   windowEnd,
   horizonDays,
+  vocab = VOLUME_VOCAB,
+  quantityNote,
 }: {
   selected: NarrativeModelKey[];
   metrics: MetricRow[];
-  showWeather: boolean;
+  showWeather?: boolean;
+  /** Model names, colours and descriptions. Defaults to the volume module's. */
+  vocab?: NarrativeVocab;
+  /** Appended to the closing caveat, for module-specific limitations. */
+  quantityNote?: string;
   scoredDays: number | null;
   windowStart: string | null;
   windowEnd: string | null;
@@ -111,15 +145,22 @@ export default function ModelNarrative({
 
   if (!metrics || metrics.length === 0) return null;
 
+  const { dbName: DBN, label: LBL, color: CLR, howItWorks: HOW } = vocab;
+  const TWIN = vocab.noWeatherTwin ?? {};
+  const fmtMag = vocab.fmtMagnitude ?? fmtInt;
+
   const byName = new Map(metrics.map((m) => [m.model_name, m]));
 
   // With Weather OFF the prose must describe the weather-free twin, otherwise it
   // would narrate a different forecast than the one currently drawn.
   const rowFor = (k: NarrativeModelKey): MetricRow | undefined => {
-    const twin = NO_WEATHER_TWIN[k];
+    const twin = TWIN[k];
     if (!showWeather && twin && byName.has(twin)) return byName.get(twin);
-    return byName.get(DB_NAME[k]);
+    return byName.get(DBN[k]);
   };
+
+  const rankedCount = metrics.filter((m) => m.rank != null).length || metrics.length;
+  const isTied = (r: MetricRow) => typeof r.diagnosis === "string" && r.diagnosis.startsWith("tied with");
 
   const accepted = metrics
     .filter((m) => m.accepted)
@@ -162,7 +203,7 @@ export default function ModelNarrative({
               return (
                 <span
                   key={k}
-                  title={isAcc ? `Accepted — rank ${r.rank} of ${metrics.length}` : r.rejected_reason ?? "Rejected"}
+                  title={isAcc ? `Accepted — rank ${r.rank} of ${rankedCount}` : r.rejected_reason ?? "Rejected"}
                   style={{
                     display: "inline-flex", alignItems: "center", gap: 7,
                     padding: "5px 11px", borderRadius: 8, fontSize: "0.735rem",
@@ -170,10 +211,10 @@ export default function ModelNarrative({
                     border: `1px solid ${isAcc ? "var(--color-success-border)" : "var(--border-default)"}`,
                   }}
                 >
-                  <span style={{ width: 8, height: 8, borderRadius: "50%", background: COLOR[k] }} />
-                  <b style={{ color: "var(--text-primary)" }}>{LABEL[k]}</b>
+                  <span style={{ width: 8, height: 8, borderRadius: "50%", background: CLR[k] }} />
+                  <b style={{ color: "var(--text-primary)" }}>{LBL[k]}</b>
                   <span style={{ fontWeight: 700, fontSize: "0.66rem", color: isAcc ? "var(--color-success)" : "var(--text-muted)" }}>
-                    {isAcc ? `RANK #${r.rank}` : "REJECTED"}
+                    {isAcc ? (isTied(r) ? "CO-CHAMPION" : `RANK #${r.rank}`) : "REJECTED"}
                   </span>
                   {r.wmape != null && (
                     <span style={{ color: "var(--text-secondary)" }}>{r.wmape.toFixed(2)}%</span>
@@ -215,7 +256,7 @@ export default function ModelNarrative({
               forecasting {horizonDays} days ahead
             </>
           ) : null}
-          {showWeather ? " · weather-driven variants" : " · weather-free variants"}
+          {showWeather === undefined ? null : showWeather ? " · weather-driven variants" : " · weather-free variants"}
         </p>
 
         {selected.map((k) => {
@@ -223,20 +264,20 @@ export default function ModelNarrative({
         if (!r) {
           return (
             <article key={k} style={{ fontSize: "0.85rem", color: "var(--text-secondary)" }}>
-              <b style={{ color: "var(--text-primary)" }}>{LABEL[k]}</b> — no stored metrics for this model yet.
+              <b style={{ color: "var(--text-primary)" }}>{LBL[k]}</b> — no stored metrics for this model yet.
             </article>
           );
         }
 
         const isAcc = !!r.accepted;
         const wmape = fmt2(r.wmape);
-        const mae = fmtInt(r.mae);
-        const rmse = fmtInt(r.rmse);
+        const mae = fmtMag(r.mae);
+        const rmse = fmtMag(r.rmse);
 
         // With vs without weather, only when both variants exist
-        const twinName = NO_WEATHER_TWIN[k];
+        const twinName = TWIN[k];
         const twin = twinName ? byName.get(twinName) : undefined;
-        const base = byName.get(DB_NAME[k]);
+        const base = byName.get(DBN[k]);
         let weatherLine: string | null = null;
         if (twin && base && base.wmape != null && twin.wmape != null) {
           const delta = twin.wmape - base.wmape; // > 0 => weather version is better
@@ -252,20 +293,22 @@ export default function ModelNarrative({
             : null;
 
         const verdictLine = isAcc
-          ? `Accepted${r.rank != null ? ` — rank #${r.rank} of ${metrics.length}` : ""}.`
+          ? isTied(r)
+            ? `Accepted — ${r.diagnosis}.`
+            : `Accepted${r.rank != null ? ` — rank #${r.rank} of ${rankedCount}` : ""}.`
           : r.rejected_reason
           ? `Rejected — ${r.rejected_reason}.`
           : "Rejected.";
 
         const vsBest =
-          best && best.wmape != null && r.wmape != null && r.model_name !== best.model_name
+          !isTied(r) && best && best.wmape != null && r.wmape != null && r.model_name !== best.model_name
             ? ` ${(r.wmape - best.wmape).toFixed(2)} pts behind ${best.model_name.replace("_nw", " (no weather)")} at ${best.wmape.toFixed(2)}%.`
             : "";
 
         // Compact stat strip — scannable, and keeps the prose down to verdicts.
         const stats: { label: string; value: string; tone?: string }[] = [];
-        if (wmape) stats.push({ label: "WMAPE", value: `${wmape}%`, tone: COLOR[k] });
-        if (mae) stats.push({ label: "MAE", value: `${mae} veh` });
+        if (wmape) stats.push({ label: "WMAPE", value: `${wmape}%`, tone: CLR[k] });
+        if (mae) stats.push({ label: "MAE", value: vocab.maeUnit ? `${mae} ${vocab.maeUnit}` : mae });
         if (rmse) stats.push({ label: "RMSE", value: rmse });
         if (r.r2 != null && isFinite(r.r2)) stats.push({ label: "R²", value: r.r2.toFixed(3) });
         if (r.mase != null && isFinite(r.mase))
@@ -283,7 +326,7 @@ export default function ModelNarrative({
             }}
           >
             <div style={{ display: "flex", alignItems: "center", gap: 9, flexWrap: "wrap" }}>
-              <b style={{ fontSize: "0.9rem", color: "var(--text-primary)" }}>{LABEL[k]}</b>
+              <b style={{ fontSize: "0.9rem", color: "var(--text-primary)" }}>{LBL[k]}</b>
               <span
                 style={{
                   fontSize: "0.64rem", fontWeight: 700, padding: "2px 7px", borderRadius: 999,
@@ -291,12 +334,12 @@ export default function ModelNarrative({
                   color: isAcc ? "var(--color-success)" : "var(--text-secondary)",
                 }}
               >
-                {isAcc ? `RANK #${r.rank ?? "—"}` : "REJECTED"}
+                {isAcc ? (isTied(r) ? "CO-CHAMPION" : `RANK #${r.rank ?? "—"}`) : "REJECTED"}
               </span>
               {!showWeather && twinName && r.model_name === twinName && (
                 <span style={{ fontSize: "0.66rem", color: "var(--text-muted)" }}>weather-free</span>
               )}
-              <span style={{ fontSize: "0.78rem", color: "var(--text-secondary)" }}>{HOW_IT_WORKS[k]}</span>
+              <span style={{ fontSize: "0.78rem", color: "var(--text-secondary)" }}>{HOW[k]}</span>
             </div>
 
             {/* Numbers as a strip rather than buried in a sentence */}
@@ -341,6 +384,7 @@ export default function ModelNarrative({
         All figures are out-of-sample: each was produced by a model refit on data ending before the
         days it predicted. Accuracy beyond {horizonDays} days ahead is not covered by these numbers,
         and the Future band is a projection rather than a validated forecast.
+        {quantityNote ? <> {quantityNote}</> : null}
       </p>
       </div>
       )}

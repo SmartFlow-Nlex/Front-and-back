@@ -1,6 +1,10 @@
 import type { Request, Response } from "express";
 import { TrafficQuerySchema, IncidentQuerySchema, ForecastQuerySchema, HourlyForecastQuerySchema, AnalyticsQuerySchema } from "../validators/traffic.validator.js";
-import { getTrafficVolumesFromDb, getDirectionalFlowFromDb, getVehicleClassDistributionFromDb, getTrafficAnalyticsFromDb, getMLPredictiveVolume, getMLPredictiveVolumeHourly, getMLPredictiveCongestion, getMLEventSurge, getMLModelMetrics, getWeatherEvidenceFromDb, getSplitSummary, getCongestionModel } from "../services/traffic.service.js";
+import { getTrafficVolumesFromDb, getDirectionalFlowFromDb, getVehicleClassDistributionFromDb, getTrafficAnalyticsFromDb, getMLPredictiveVolume, getMLPredictiveVolumeHourly, getMLPredictiveCongestion, getMLEventSurge, getMLModelMetrics, getWeatherEvidenceFromDb, getSplitSummary, getCongestionModel,
+  getHorizonAccuracy,
+  getCongestionHorizonAccuracy,
+  getEventSurgeMetrics
+} from "../services/traffic.service.js";
 
 // GET /api/traffic/analytics — descriptive dashboard aggregates
 export const getTrafficAnalytics = async (req: Request, res: Response) => {
@@ -73,15 +77,20 @@ export const getForecast = async (req: Request, res: Response) => {
   const query = ForecastQuerySchema.parse(req.query);
   
   // Fetch real ML predictions from AWS PostgreSQL DB
-  const [volumes, congestion, events, modelMetrics, congestionModel, split] = await Promise.all([
+  const [volumes, congestion, events, modelMetrics, congestionModel, split, horizonAccuracy, congestionHorizon, eventMetrics] = await Promise.all([
     getMLPredictiveVolume({ months: query.months, from: query.from, to: query.to, split: query.split }),
     getMLPredictiveCongestion(),
-    getMLEventSurge(),
+    getMLEventSurge(query.eventDate),
     getMLModelMetrics(query.split),
     getCongestionModel(),
     // Counted over the full table, NOT the windowed rows above, so the chart can
     // distinguish "what was trained on" from "what is currently drawn".
-    getSplitSummary(query.split)
+    getSplitSummary(query.split),
+    // What each stretch of the projection is actually worth. The headline
+    // metrics are h=14; the chart now draws up to 90 days.
+    getHorizonAccuracy("Total Traffic"),
+    getCongestionHorizonAccuracy(),
+    getEventSurgeMetrics()
   ]);
 
   if (!volumes && !congestion && !events) {
@@ -106,6 +115,9 @@ export const getForecast = async (req: Request, res: Response) => {
       // toggle knows what it is currently showing.
       splitLabel: query.split,
       congestionModel: congestionModel ?? null,
+      horizonAccuracy: horizonAccuracy ?? [],
+      congestionHorizonAccuracy: congestionHorizon ?? [],
+      eventSurgeMetrics: eventMetrics ?? [],
       modelMetrics: modelMetrics ?? [],
       volumes: volumes || [],
       congestion: congestion || [],

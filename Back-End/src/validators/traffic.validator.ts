@@ -18,6 +18,10 @@ export const ForecastQuerySchema = z.object({
   // Chronological split arm. Both are stored — the manuscript (p86) commits to
   // evaluating 80/20 and 90/10 — and 80/20 is the default served.
   split: z.enum(["80_20", "90_10"]).optional().default("80_20"),
+  // A scheduled event date turns the surge panel from a description of past
+  // events into a forecast for a specific day. Optional: with no date the panel
+  // falls back to the historical average, which is all it can honestly show.
+  eventDate: isoDate.optional(),
 });
 
 export const HourlyForecastQuerySchema = z.object({

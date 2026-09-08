@@ -38,6 +38,13 @@ PG = ("host=smartflow-db.choym2mcymec.ap-southeast-1.rds.amazonaws.com port=5432
       "dbname=nlex_capstone user=postgres password=Hanszy123! sslmode=require")
 
 HORIZON, STEP, N_ORIGINS, SEASON = 7, 7, 42, 7
+# The diagram specifies a 7-day forecast and 7 days is what is VALIDATED, but a
+# horizon study (co2_horizon_study.py) scored the champion out to 90 days and
+# found it still clears both gates from d15 onward. The SERVED projection is
+# therefore 90 days, with measured per-horizon accuracy stored alongside so the
+# panel can state what each stretch is worth rather than implying the 7-day
+# figure holds throughout.
+FUTURE_DAYS = 90
 LAGS = [1, 2, 3, 7, 14, 28]
 
 
@@ -129,19 +136,69 @@ def fit_lstm(tr, fut):
 
 MODELS = {"GBR": fit_gbr, "Polynomial": fit_poly, "LSTM": fit_lstm}
 
+# Models that read weather. LSTM is univariate (it sees only y), so the previous
+# blanket uses_weather=true was simply wrong for it.
+USES_WEATHER = {"GBR": True, "Polynomial": True, "LSTM": False}
+
+# WMAPE gap below which two models are NOT meaningfully separated. GBR is not
+# bit-reproducible across processes (floating-point summation order in the split
+# search moves it ~0.1pp between identical runs), so ranking on a smaller gap
+# than this is false precision.
+TIE_MARGIN_WMAPE = 0.15
+
+
+def climatize(tr, fut):
+    """Replace the forecast window's weather with what a forecaster would have.
+
+    rain/temp are NOT lagged features, so predicting day t+3 originally handed
+    the model day t+3's OBSERVED rainfall - a value that does not exist yet at
+    forecast time. Training rows keep observed weather, since history genuinely
+    is known; only the forecast window is substituted, using day-of-year
+    climatology computed from the TRAINING data alone, so nothing past the
+    origin is consulted.
+
+    Measured cost of removing the leak: Polynomial WMAPE 6.6729 -> 6.7899,
+    GBR 6.7762 -> 6.7801, LSTM unchanged (univariate). All still clear every
+    gate; the point is that the published figure is now one the model could
+    actually achieve in deployment.
+    """
+    clim = tr.assign(k=tr.ds.dt.dayofyear).groupby("k")[["rain", "temp"]].mean()
+    out = fut.copy()
+    for col in ("rain", "temp"):
+        fallback = float(tr[col].mean())
+        out[col] = [
+            float(clim[col].loc[k]) if k in clim.index else fallback
+            for k in fut.ds.dt.dayofyear
+        ]
+    return out
+
 banner(f"STEP 3: Rolling-origin evaluation ({N_ORIGINS} origins, h={HORIZON}d)")
+import os, pickle
+CACHE = "emissions_preds.pkl"
+CACHE_KEY = ("climatology-weather-v2", len(d), str(d.ds.max().date()), N_ORIGINS, HORIZON, tuple(MODELS))
+_cached = None
+if os.path.exists(CACHE):
+    with open(CACHE, "rb") as fh:
+        k, v = pickle.load(fh)
+    if k == CACHE_KEY:
+        _cached = v
+        print(f"  reusing cached predictions ({CACHE}) - series and protocol unchanged")
+
 preds = {k: {} for k in MODELS}
 preds["SeasonalNaive"] = {}
 preds["Climatology"] = {}
 fails = {k: 0 for k in MODELS}
 
-for oi, cut in enumerate(origins, 1):
+if _cached is not None:
+    preds, fails = _cached
+for oi, cut in enumerate([] if _cached is not None else origins, 1):
     tr, fut = d.iloc[:cut], d.iloc[cut:cut + HORIZON]
     if len(fut) < HORIZON:
         break
+    fut_known = climatize(tr, fut)      # never observed future weather
     for name, fn in MODELS.items():
         try:
-            yh = fn(tr, fut)
+            yh = fn(tr, fut_known)
             for ds, v in zip(fut.ds, yh):
                 preds[name][ds] = float(v)
         except Exception:
@@ -154,6 +211,10 @@ for oi, cut in enumerate(origins, 1):
         preds["Climatology"][ds] = float(doy.get(ds.dayofyear, tr.y.mean()))
     if oi % 10 == 0 or oi == 1:
         print(f"  origin {oi}/{N_ORIGINS}  train={cut}d  predict {fut.ds.iloc[0].date()} -> {fut.ds.iloc[-1].date()}")
+
+if _cached is None:
+    with open(CACHE, "wb") as fh:
+        pickle.dump((CACHE_KEY, (preds, fails)), fh)
 
 banner("STEP 4: Results")
 truth = d.set_index("ds").y
@@ -187,6 +248,29 @@ res["is_candidate"] = res.model.isin(MODELS)
 res["accepted"] = res.is_candidate & (res.wmape < base) & (res.mase < 1.0)
 res["rank"] = np.where(res.is_candidate, res.groupby("is_candidate").cumcount() + 1, None)
 
+# Which candidates are statistically indistinguishable from the leader?
+_best_wmape = res[res.is_candidate].wmape.min()
+res["tied_with_best"] = res.is_candidate & ((res.wmape - _best_wmape).abs() <= TIE_MARGIN_WMAPE)
+TIED = list(res[res.tied_with_best].model)
+
+
+def _diagnosis(r):
+    if not r.is_candidate:
+        return "baseline, not a candidate"
+    if len(TIED) > 1 and r.tied_with_best:
+        others = [m for m in TIED if m != r.model]
+        return (f"tied with {', '.join(others)} - within {TIE_MARGIN_WMAPE}pp WMAPE, "
+                f"the measured run-to-run jitter, so the ordering between them is "
+                f"not meaningful")
+    return None
+
+
+res["diagnosis"] = res.apply(_diagnosis, axis=1)
+if len(TIED) > 1:
+    detail = ", ".join(f"{m} {res[res.model == m].wmape.iloc[0]:.4f}%" for m in TIED)
+    print(f"\n  TIE ({detail}) - within {TIE_MARGIN_WMAPE}pp WMAPE.")
+    print("  Ordering between these is not meaningful; they are co-champions.")
+
 print("\n  VERDICT")
 for r in res[res.is_candidate].itertuples():
     why = []
@@ -197,6 +281,11 @@ for r in res[res.is_candidate].itertuples():
 if fails: print(f"\n  failed origins: {fails}")
 
 banner("STEP 5: Writing to AWS")
+try:
+    conn.cursor().execute("SELECT 1")
+except Exception:
+    print("  connection went idle during training - reconnecting")
+    conn = psycopg2.connect(PG)
 cur = conn.cursor()
 cur.execute("DELETE FROM gold.ml_model_metrics WHERE target = 'Corridor CO2'")
 for r in res.itertuples():
@@ -210,15 +299,200 @@ for r in res.itertuples():
         reason = "baseline, not a candidate"
     cur.execute("""
         INSERT INTO gold.ml_model_metrics
-          (model_name,target,rmse,mae,wmape,r2,mase,mape,rank,accepted,rejected_reason,uses_weather,updated_at)
-        VALUES (%s,'Corridor CO2',%s,%s,%s,%s,%s,%s,%s,%s,%s,true,now())""",
+          (model_name,target,rmse,mae,wmape,r2,mase,mape,rank,accepted,rejected_reason,uses_weather,diagnosis,updated_at)
+        VALUES (%s,'Corridor CO2',%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,now())""",
         (r.model, r.rmse, r.mae, r.wmape, r.r2, r.mase, r.mape,
-         int(r.rank) if r.is_candidate else None, bool(r.accepted), reason))
+         int(r.rank) if r.is_candidate else None, bool(r.accepted), reason,
+         USES_WEATHER.get(r.model, False), r.diagnosis))
 
 champ = res[res.accepted]
 champ_name = champ.model.iloc[0] if len(champ) else None
 print(f"  ml_model_metrics: {len(res)} rows under target='Corridor CO2'")
 print(f"  champion: {champ_name or 'none accepted'}")
+
+banner("STEP 6: Writing the served forecast")
+
+# The panel needs the same shape as gold.ml_predictive_volume: a past context
+# stretch, the scored holdout, and an unscored future block.
+_acc = res[res.accepted]
+if _acc.empty:
+    raise SystemExit("no accepted model - refusing to serve a forecast")
+CHAMPION = _acc.iloc[0].model            # res is sorted by WMAPE, so this is rank 1
+print(f"  champion: {CHAMPION}  (WMAPE {_acc.iloc[0].wmape:.2f}%, MASE {_acc.iloc[0].mase:.3f})")
+FUT = FUTURE_DAYS
+last = d.ds.max()
+fut_ds = pd.date_range(last + pd.Timedelta(days=1), periods=FUT, freq="D")
+
+# Future weather is day-of-year climatology, not observation — the same
+# assumption the volume module makes, and stated on the panel.
+# Future weather is day-of-year climatology, not observation - the same
+# assumption the scored window now uses, and stated on the panel.
+clim = d.assign(k=d.ds.dt.dayofyear).groupby("k")[["rain", "temp"]].mean()
+
+
+def project(mname, mfn, hist0=None, horizon_ds=None, clim_tbl=None):
+    """Roll one model forward past the end of `hist0` (default: all data).
+
+    Also used by the horizon study below, so the accuracy that gets published is
+    measured on the exact procedure that produces the served line.
+
+    Every candidate is projected, not just the leader. Storing a future for the
+    champion alone left the panel with no forecast line whenever the reader
+    selected another model - and with Polynomial and GBR tied, "the champion"
+    is not even a well-defined single model any more.
+
+    LSTM is recursive by construction (it feeds its own output back inside
+    fit_lstm), so it is called once for the whole window. The feature-based
+    models need the loop: day 2's lag-1 IS day 1's prediction.
+    """
+    base = d if hist0 is None else hist0
+    window = fut_ds if horizon_ds is None else horizon_ds
+    ctab = clim if clim_tbl is None else clim_tbl
+
+    if mname == "LSTM":
+        return [float(v) for v in mfn(base, pd.DataFrame({"ds": list(window)}))]
+
+    hist, out = base.copy(), []
+    for ds in window:
+        k = ds.dayofyear
+        r = ctab.loc[k] if k in ctab.index else base[["rain", "temp"]].mean()
+        ys = hist.y.values
+        row = {
+            "ds": ds, "dow": ds.dayofweek, "is_weekend": int(ds.dayofweek >= 5),
+            "month": ds.month, "t": len(hist),
+            "rain": float(r["rain"]), "temp": float(r["temp"]),
+            "heavy_share": float(hist.heavy.iloc[-1] / hist.veh.iloc[-1]),
+            "roll7": float(ys[-7:].mean()), "roll28": float(ys[-28:].mean()),
+        }
+        for L in LAGS:
+            row[f"lag{L}"] = float(ys[-L])
+        yhat = float(mfn(hist, pd.DataFrame([row]))[0])
+        out.append(yhat)
+        row["y"] = yhat                       # feeds the next day's lags
+        hist = pd.concat(
+            [hist, pd.DataFrame([{**row, "veh": hist.veh.iloc[-1],
+                                  "heavy": hist.heavy.iloc[-1]}])],
+            ignore_index=True)
+    return out
+
+
+fut_pred = {}
+for _n, _f in MODELS.items():
+    try:
+        fut_pred[_n] = project(_n, _f)
+        print(f"  {_n:<12} {fut_ds[0].date()} .. {fut_ds[-1].date()}  "
+              f"mean {np.mean(fut_pred[_n]):.1f} t/day")
+    except Exception as e:
+        fut_pred[_n] = [None] * FUT
+        print(f"  {_n:<12} projection FAILED: {e}")
+
+cur.execute("""
+  CREATE TABLE IF NOT EXISTS gold.ml_predictive_emissions (
+    id serial PRIMARY KEY,
+    forecast_date date NOT NULL,
+    actual_co2 numeric(12,3),
+    pred_gbr numeric(12,3), pred_polynomial numeric(12,3), pred_lstm numeric(12,3),
+    champion_model text,
+    is_holdout boolean DEFAULT false, is_future boolean DEFAULT false,
+    updated_at timestamptz DEFAULT now())""")
+cur.execute("""COMMENT ON TABLE gold.ml_predictive_emissions IS
+  'Daily corridor CO2 (tonnes) with walk-forward forecasts. Actuals roll up from gold.fact_emissions_hourly, which is derived from the same traffic series the volume forecast uses, so the two panels cannot disagree. Horizon 7d (per the modelling diagram), unlike the volume module''s 14d - metrics are therefore not directly comparable.'""")
+cur.execute("TRUNCATE gold.ml_predictive_emissions RESTART IDENTITY")
+
+scored = set(preds[CHAMPION])
+for r in d.itertuples():
+    cur.execute("""INSERT INTO gold.ml_predictive_emissions
+        (forecast_date, actual_co2, pred_gbr, pred_polynomial, pred_lstm, champion_model, is_holdout, is_future)
+        VALUES (%s,%s,%s,%s,%s,%s,%s,false)""",
+        (r.ds.date(), float(r.y),
+         preds["GBR"].get(r.ds), preds["Polynomial"].get(r.ds), preds["LSTM"].get(r.ds),
+         CHAMPION, r.ds in scored))
+for i, ds in enumerate(fut_ds):
+    cur.execute("""INSERT INTO gold.ml_predictive_emissions
+        (forecast_date, actual_co2, pred_gbr, pred_polynomial, pred_lstm,
+         champion_model, is_holdout, is_future)
+        VALUES (%s,NULL,%s,%s,%s,%s,false,true)""",
+        (ds.date(), fut_pred["GBR"][i], fut_pred["Polynomial"][i],
+         fut_pred["LSTM"][i], CHAMPION))
+conn.commit()
+# Per-horizon accuracy, measured by co2_horizon_study.py: rolling origin, 9
+# origins, fit once per origin then rolled forward recursively (each prediction
+# becomes the next day's lag), climatology weather throughout.
+cur.execute("""
+  CREATE TABLE IF NOT EXISTS gold.ml_horizon_accuracy (
+    id serial PRIMARY KEY, target text NOT NULL, model_name text NOT NULL,
+    h_lo int NOT NULL, h_hi int NOT NULL, n int,
+    wmape numeric(10,4), mape numeric(10,4), mase numeric(10,4), mae numeric(14,2),
+    baseline_wmape numeric(10,4), usable boolean, note text,
+    updated_at timestamptz DEFAULT now())""")
+cur.execute("DELETE FROM gold.ml_horizon_accuracy WHERE target='Corridor CO2'")
+# MEASURED HERE, not transcribed. An earlier version pasted the numbers from a
+# separate study script, which meant the table on the dashboard could silently
+# disagree with the model actually being served after any retrain. The study now
+# runs inline, through the same project() used for the served line.
+banner("Horizon study: how far ahead is the projection worth anything?")
+HZ_H, HZ_STEP, HZ_N = FUTURE_DAYS, 30, 9
+hz_origins = [len(d) - (HZ_N - i) * HZ_STEP - HZ_H for i in range(HZ_N)]
+hz_origins = [o for o in hz_origins if o > 400]
+print(f"  {len(hz_origins)} origins, h={HZ_H}d, champion {CHAMPION}")
+
+hz_rows = []
+for oi, cut in enumerate(hz_origins, 1):
+    tr_o, fut_o = d.iloc[:cut], d.iloc[cut:cut + HZ_H]
+    if len(fut_o) < HZ_H:
+        continue
+    clim_o = tr_o.assign(k=tr_o.ds.dt.dayofyear).groupby("k")[["rain", "temp"]].mean()
+    yh = project(CHAMPION, MODELS[CHAMPION], hist0=tr_o,
+                 horizon_ds=list(fut_o.ds), clim_tbl=clim_o)
+    lw = tr_o.y.values[-SEASON:]
+    doy_o = tr_o.assign(k=tr_o.ds.dt.dayofyear).groupby("k").y.mean()
+    for i in range(HZ_H):
+        a = float(fut_o.y.iloc[i])
+        hz_rows.append({
+            "h": i + 1, "a": a, "f": float(yh[i]),
+            "sn": float(lw[i % SEASON]),
+            "cl": float(doy_o.get(fut_o.ds.iloc[i].dayofyear, tr_o.y.mean())),
+        })
+    print(f"    origin {oi}/{len(hz_origins)}  {fut_o.ds.iloc[0].date()} -> {fut_o.ds.iloc[-1].date()}")
+
+hz = pd.DataFrame(hz_rows)
+_ins = d.y.values[:hz_origins[0]]
+hz_scale = np.mean(np.abs(_ins[SEASON:] - _ins[:-SEASON]))
+BUCKETS = [(1, 7), (8, 14), (15, 30), (31, 60), (61, 90)]
+BUCKETS = [(lo, hi) for lo, hi in BUCKETS if lo <= HZ_H]
+
+print(f"\n  MASE denominator (seasonal naive on {len(_ins)} training days): {hz_scale:.2f} t")
+print(f"  {'range':<10}{'WMAPE%':>9}{'MAPE%':>8}{'MASE':>8}{'MAE t':>9}{'baseline%':>11}   verdict")
+CO2_HORIZON = []
+for lo, hi in BUCKETS:
+    g = hz[(hz.h >= lo) & (hz.h <= hi)]
+    if g.empty:
+        continue
+    e = (g.a - g.f).abs()
+    wm = e.sum() / g.a.sum() * 100
+    mp = (e / g.a).mean() * 100
+    ms = e.mean() / hz_scale
+    base = min((g.a - g.sn).abs().sum() / g.a.sum() * 100,
+               (g.a - g.cl).abs().sum() / g.a.sum() * 100)
+    ok = bool(wm < base and ms < 1.0)
+    note = ("validated range" if hi <= HORIZON else
+            "weakest stretch - loses to repeating last week" if not ok else
+            "beyond the validated range but still clears both gates")
+    CO2_HORIZON.append((lo, hi, wm, mp, ms, e.mean(), base, ok, note))
+    print(f"  {f'd{lo}-{hi}':<10}{wm:>9.2f}{mp:>8.2f}{ms:>8.3f}{e.mean():>9.1f}{base:>11.2f}"
+          f"   {'USABLE' if ok else 'FAILS GATES'}")
+
+for lo, hi, wm, mp, ms, mae_, bw, ok, note in CO2_HORIZON:
+    cur.execute("""INSERT INTO gold.ml_horizon_accuracy
+        (target, model_name, h_lo, h_hi, n, wmape, mape, mase, mae, baseline_wmape, usable, note)
+        VALUES ('Corridor CO2',%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)""",
+        (CHAMPION, lo, hi, int(((hz.h >= lo) & (hz.h <= hi)).sum()),
+         float(wm), float(mp), float(ms), float(mae_), float(bw), ok, note))
+conn.commit()
+
+cur.execute("SELECT COUNT(*) FILTER (WHERE NOT is_holdout AND NOT is_future), COUNT(*) FILTER (WHERE is_holdout), COUNT(*) FILTER (WHERE is_future) FROM gold.ml_predictive_emissions")
+pa, ho, fu = cur.fetchone()
+print(f"  ml_predictive_emissions: {pa:,} PAST + {ho:,} PRESENT + {fu} FUTURE")
 
 json.dump({
     "generated": str(pd.Timestamp.now().date()),

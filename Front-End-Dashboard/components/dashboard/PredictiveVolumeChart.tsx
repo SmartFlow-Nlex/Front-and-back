@@ -73,6 +73,20 @@ const ACTUAL_COLOR = "#2563eb";
 // ReferenceError, was swallowed by the catch, and the chart sat on "Loading…".
 const BACKEND = process.env.NEXT_PUBLIC_BACKEND_URL ?? "http://localhost:4000";
 const VALIDATED_HORIZON = 14; // must match retrain_honest.py HORIZON
+
+type HorizonBucket = {
+  model: string;
+  hLo: number;
+  hHi: number;
+  n: number;
+  wmape: number | null;
+  mape: number | null;
+  mase: number | null;
+  mae: number | null;
+  baselineWmape: number | null;
+  usable: boolean;
+  note: string | null;
+};
 // Show every stored training day. The blue line is meant to BE the trained
 // dataset, and only at full width do the 80/20 proportions read correctly.
 const ALL_PAST = 100000;
@@ -173,6 +187,10 @@ export default function PredictiveVolumeChart({ months = "all", from, to, weathe
   // Raw metric rows, kept unmodified so the narrative can read fields the
   // metrics TABLE does not display (rejected_reason, aic/bic, the _nw twins).
   const [rawMetrics, setRawMetrics] = useState<MetricRow[]>([]);
+  // Error as a function of how far ahead a day is. Served from
+  // gold.ml_horizon_accuracy, measured by a rolling-origin run at h=90 — NOT
+  // extrapolated from the h=14 headline figure.
+  const [horizonAcc, setHorizonAcc] = useState<HorizonBucket[]>([]);
   const [showAllMetrics, setShowAllMetrics] = useState(false);
   const [showWeather, setShowWeather] = useState(true);
 
@@ -303,6 +321,9 @@ export default function PredictiveVolumeChart({ months = "all", from, to, weathe
 
         const metricsData = json.data.modelMetrics ?? json.data.metrics;
         if (metricsData) setRawMetrics(metricsData as MetricRow[]);
+        if (Array.isArray(json.data.horizonAccuracy)) {
+          setHorizonAcc(json.data.horizonAccuracy as HorizonBucket[]);
+        }
 
         setChartData({
           // The year MUST be part of the category value, not just its label. Zone
@@ -367,6 +388,12 @@ export default function PredictiveVolumeChart({ months = "all", from, to, weathe
   };
 
   // ---------- Shared chrome ----------
+  // The bucket the LAST projected day falls in — the weakest point of the
+  // chosen window, which is the honest one to quote.
+  const horizonBucketFor = (days: number): HorizonBucket | null =>
+    horizonAcc.find((b) => days >= b.hLo && days <= b.hHi) ??
+    (horizonAcc.length ? horizonAcc[horizonAcc.length - 1] : null);
+
   const modelToolbar = (
     <div style={{ display: "flex", alignItems: "center", gap: "8px", flex: "0 1 auto", minWidth: 0 }}>
       <svg width="15" height="15" viewBox="0 0 16 16" fill="none" style={{ color: "var(--text-muted)", flex: "none" }}>
@@ -1403,6 +1430,8 @@ export default function PredictiveVolumeChart({ months = "all", from, to, weathe
           {[
             { label: "2 wk", d: 14 },
             { label: "1 mo", d: 28 },
+            { label: "2 mo", d: 60 },
+            { label: "3 mo", d: 90 },
           ].map((item) => (
             <button key={item.label} onClick={() => setFutureDays(item.d)}
               disabled={item.d > chartData.dates.length - chartData.futureStart}
@@ -1415,10 +1444,56 @@ export default function PredictiveVolumeChart({ months = "all", from, to, weathe
                 opacity: item.d > chartData.dates.length - chartData.futureStart ? 0.4 : 1,
               }}>{item.label}</button>
           ))}
-          <span style={{ color: "var(--text-secondary)" }}>· validated at 14d</span>
+          {/* Just the model's property. What a longer projection is worth is
+              explained by the banner below, which appears in exactly the same
+              condition — repeating WMAPE/MASE here only crowded the range
+              picker with numbers the reader has not asked for yet. */}
+          <span style={{ color: "var(--text-secondary)" }}>· validated at {VALIDATED_HORIZON}d</span>
         </span>
         </div>
       </div>
+
+      {futureDays > VALIDATED_HORIZON && (
+        <div style={{
+          display: "flex", alignItems: "flex-start", gap: 10, padding: "9px 14px",
+          borderRadius: 10, background: "rgba(249,115,22,0.08)",
+          border: "1px solid rgba(249,115,22,0.28)", fontSize: "0.75rem",
+          color: "var(--text-secondary)", lineHeight: 1.5,
+        }}>
+          <span style={{ fontSize: "0.9rem", lineHeight: 1 }}>⚠</span>
+          <span>
+            Beyond {VALIDATED_HORIZON} days only{" "}
+            <b style={{ color: "var(--text-primary)" }}>{horizonAcc[0]?.model ?? "the accepted model"}</b> was
+            measured, by a separate rolling-origin run at h={horizonAcc[horizonAcc.length - 1]?.hHi ?? 90}.
+            {/* Read from gold.ml_horizon_accuracy rather than typed in, so a
+                re-run of the study updates this sentence instead of leaving a
+                stale figure next to a live chart. */}
+            {horizonAcc.length > 1 && (
+              <>
+                {" "}Error rises then flattens (d{horizonAcc[0].hLo}-{horizonAcc[0].hHi}{" "}
+                {horizonAcc[0].wmape?.toFixed(2)}% → d{horizonAcc[horizonAcc.length - 1].hLo}-
+                {horizonAcc[horizonAcc.length - 1].hHi}{" "}
+                {horizonAcc[horizonAcc.length - 1].wmape?.toFixed(2)}% WMAPE)
+              </>
+            )}{" "}
+            because it is structural — trend plus weekly and yearly seasonality — so it does not compound
+            its own errors.{" "}
+            {(() => {
+              const b = horizonBucketFor(futureDays);
+              return b?.mase != null && b.mase > 0.95 ? (
+                <>
+                  At the {b.hLo}-{b.hHi} day range it clears the seasonal-naive benchmark by only{" "}
+                  <b style={{ color: "var(--color-warning)" }}>{(1 - b.mase).toFixed(3)} MASE</b>, so treat
+                  that stretch as indicative rather than reliable.{" "}
+                </>
+              ) : null;
+            })()}
+            The rejected models are still drawn if you toggle them, but nothing validates them at this
+            range and <b style={{ color: "var(--text-primary)" }}>SARIMAX collapses to implausible values</b>{" "}
+            past a few weeks. Weather across the whole projection is day-of-year climatology, not a forecast.
+          </span>
+        </div>
+      )}
 
       <div style={{ height: "450px", width: "100%", cursor: "pointer" }}>
         <DashboardChart option={dailyOption} height={450} onEvents={{ click: onChartClick as (p: never) => void }} />

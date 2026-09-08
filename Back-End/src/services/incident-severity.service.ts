@@ -15,21 +15,23 @@ import { buildExitToExitSegments, segmentIndexForKm } from "../lib/exit-segments
 // ml_incident_severity_metadata — written by
 // Back-End/incident_model_scripts/train_incident_severity_models.py
 // (Ordinal Logistic + XGBoost for severity, Cox PH for the clearance
-// survival curve, a small logistic regression for secondary-incident risk).
-// See that script's module docstring for two data caveats that shape every
-// number this returns: `severity` is derived from injury/fatality counts
-// (the source column is 100% NULL), and "clearance time" is really the
-// report-to-response duration — no scene-cleared timestamp exists in the
-// warehouse.
+// survival curve, a small logistic regression for secondary-incident risk),
+// trained on accident_data (silver.nlex_accident_events_clean), not the
+// older road/moto-crash tables. `severity` is derived from real recorded
+// injury/fatality counts, and "clearance time" is a real
+// site_cleared - event_start_date elapsed time — see that script's module
+// docstring for the two data gaps this closes relative to the old source.
 
 const SEVERITY_LABEL: Record<number, string> = { 0: "Property Damage Only", 1: "Injury", 2: "Fatal" };
 
 // dimension: "baseline" (the one reference curve, shown regardless of which
-// toggle is active), "severity" (PDO/Injury/Fatal), "source" (Road/Moto
-// Crash), or "both" (the 2x3 cross of the two) — see
-// train_incident_severity_models.py's fit_cox_ph for why these are separate
-// toggled views rather than every curve on one chart, and for n: sample
-// size behind this one curve, as low as 25 for the thinnest "both" cells.
+// toggle is active), "severity" (PDO/Injury/Fatal), "damage_to_property" (No
+// Property Damage / Property Damage — replaced the old road/moto "source"
+// split when this moved to accident_data), "km", or "both" (the 2x3 cross of
+// severity x damage_to_property) — see train_incident_severity_models.py's
+// fit_cox_ph for why these are separate toggled views rather than every
+// curve on one chart, and for n: sample size behind this one curve, as low
+// as 15 for the thinnest "both" cells.
 export type SurvivalCurvePoint = { group: string; dimension: string; timeMin: number; survivalProbability: number; n: number };
 
 export type SeverityBreakdownRow = {
@@ -57,13 +59,14 @@ export type SecondaryRiskByExit = {
 };
 
 // Same rows as SecondaryRiskByExit, grouped by km position instead of
-// nearest exit — quantile bins (equal incident COUNT, unequal km width),
-// not fixed-width ones. km_value turns out to hold only a handful of
-// distinct values across this data (verified directly against
-// train_incident_severity_models.py's training set — 19 total), so a fixed
-// 5km grid the way the corridor chart uses would leave several bins
-// completely empty here; quantile bins guarantee every segment has
-// comparable evidence behind it instead.
+// nearest exit — quantile bins (equal incident COUNT, unequal km width).
+// km_value is near-continuous in accident_data (946 distinct values,
+// verified directly against train_incident_severity_models.py's training
+// set — StartKM is recorded to the nearest 100m), so a fixed grid would work
+// reasonably well here too; quantile bins are kept for the same guarantee
+// they gave the old, coarser data: every segment has comparable evidence
+// behind it, regardless of how incidents happen to cluster along the
+// corridor.
 export type SecondaryRiskByKmSegment = {
   label: string;
   kmStart: number;

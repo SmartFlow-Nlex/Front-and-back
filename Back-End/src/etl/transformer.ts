@@ -219,6 +219,156 @@ function transformStalledVehicle(rows: RawRow[]): TransformResult {
   return { tableName: "nlex_stalled_vehicles", columns, rows: transformed, skipped };
 }
 
+/**
+ * breakdown_data's `deployments` column is a Python-repr string of a list of
+ * dicts, not valid JSON, e.g.:
+ *   [{'service': 'AAP', 'dispatch_time': '2022-01-01 10:36:00', ...}]
+ * Two wrinkles, both verified against all 5 years (156,939 rows) of real
+ * source data:
+ *   1. Multi-entry lists separate dict items with a bare newline ("}\n {")
+ *      instead of a comma — inserting the comma back resolves every one of
+ *      the 2,695 rows that otherwise fail to parse, and afterward the parsed
+ *      list length matches the row's own deployment_count column exactly
+ *      (0 mismatches across all 48,196 rows that carry deployments).
+ *   2. A `remarks` value containing a literal apostrophe (7 rows) gets
+ *      wrapped in double quotes instead of single quotes by whatever
+ *      produced this export (the same thing Python's own repr() does) — so
+ *      values must be matched in EITHER quote style; keys are always
+ *      single-quoted.
+ * A general Python-literal parser would need to handle far more than this;
+ * since the field set is fixed and known, a targeted per-field regex
+ * extractor is simpler and safer than quote-swapping the whole string.
+ */
+function parseDeployments(raw: unknown): string | null {
+  if (raw === null || raw === undefined || raw === "") return null;
+
+  const normalized = String(raw).replace(/\}\s*\n?\s*\{/g, "}, {");
+  const blocks = normalized.match(/\{[^{}]*\}/g);
+  if (!blocks) return null;
+
+  const FIELDS = [
+    "service", "dispatch_time", "arrival_time", "departure_time",
+    "response_time_min", "service_time_min", "remarks",
+  ];
+
+  const deployments = blocks.map((block) => {
+    const record: Record<string, string | null> = {};
+    for (const field of FIELDS) {
+      const match = block.match(new RegExp(`'${field}':\\s*(?:'([^']*)'|"([^"]*)")`));
+      record[field] = match ? (match[1] ?? match[2] ?? "") : null;
+    }
+    return record;
+  });
+
+  return JSON.stringify(deployments);
+}
+
+/**
+ * accident_data: one row per accident event. Unlike the older road/moto
+ * crash upload format, injuries/fatalities and a real scene-cleared
+ * timestamp (SiteCleared) are genuine recorded values here, not always-empty
+ * columns — see train_incident_severity_models.py's module docstring for
+ * why that distinction matters. StartKM arrives in meters (e.g. 82500 = Km
+ * 82+500); bronze keeps it raw, silver derives km_value = start_km / 1000.
+ */
+function transformAccidentData(rows: RawRow[]): TransformResult {
+  const columns = [
+    "event_number", "event_start_date", "event_type", "event_status", "direction",
+    "location", "sub_location", "start_km", "type_of_event", "main_cause", "sub_cause",
+    "detection", "weather_condition", "damage_to_property", "property",
+    "number_of_vehicles", "number_of_injured", "number_of_fatality",
+    "blockage_cleared", "site_cleared", "deployment_count", "injury_record_count", "vehicle_record_count",
+  ];
+
+  let skipped = 0;
+  const transformed: any[][] = [];
+
+  for (const row of rows) {
+    const eventStartDate = row.event_start_date as string | null;
+    const startKm = toNumOrNull(row.startkm);
+    if (!eventStartDate || startKm === null) { skipped++; continue; }
+
+    transformed.push([
+      toNumOrNull(row.eventnumber),
+      eventStartDate,
+      row.eventtype ?? null,
+      row.eventstatus ?? null,
+      row.direction ?? null,
+      row.location ?? null,
+      row.sublocation ?? null,
+      startKm,
+      row.typeofevent ?? null,
+      row.maincause ?? null,
+      row.subcause ?? null,
+      row.detection ?? null,
+      row.weathercondition ?? null,
+      row.damagetoproperty ?? null,
+      row.property ?? null,
+      toInt(row.numberofvehicles),
+      toInt(row.numberofinjured),
+      toInt(row.numberoffatality),
+      row.blockagecleared ?? null,
+      row.sitecleared ?? null,
+      toInt(row.deployment_count),
+      toInt(row.injury_record_count),
+      toInt(row.vehicle_record_count),
+    ]);
+  }
+
+  return { tableName: "bronze.nlex_accident_data", columns, rows: transformed, skipped };
+}
+
+/**
+ * breakdown_data: one row per vehicle-breakdown event, with an embedded
+ * per-service (AAP/Patrol Vehicle/RAMFA/...) dispatch log in `deployments`
+ * — see parseDeployments() above for why that field needs special handling.
+ * MaterialTraffic is dropped: 100% NULL across all 5 years of source data.
+ */
+function transformBreakdownData(rows: RawRow[]): TransformResult {
+  const columns = [
+    "event_number", "event_encoded_date", "event_type", "event_status", "direction",
+    "location", "sub_location", "start_km", "sloop", "vehicle", "vehicle_number",
+    "type_of_vehicle", "vehicle_class", "plate_number", "driver", "main_cause", "sub_cause",
+    "detection", "trouble_description", "detail_entry_count", "deployment_count", "deployments",
+  ];
+
+  let skipped = 0;
+  const transformed: any[][] = [];
+
+  for (const row of rows) {
+    const eventDate = row.event_encoded_date as string | null;
+    const startKm = toNumOrNull(row.startkm);
+    if (!eventDate || startKm === null) { skipped++; continue; }
+
+    transformed.push([
+      toNumOrNull(row.eventnumber),
+      eventDate,
+      row.eventtype ?? null,
+      row.eventstatus ?? null,
+      row.direction ?? null,
+      row.location ?? null,
+      row.sublocation ?? null,
+      startKm,
+      toNumOrNull(row.sloop),
+      row.vehicle ?? null,
+      row.number === null || row.number === undefined ? null : String(row.number),
+      row.typeofvehicle ?? null,
+      row.vehicleclass ?? null,
+      row.platenumber ?? null,
+      row.driver ?? null,
+      row.maincause ?? null,
+      row.subcause ?? null,
+      row.detection ?? null,
+      row.troubledescription ?? null,
+      toInt(row.detail_entry_count),
+      toInt(row.deployment_count),
+      parseDeployments(row.deployments),
+    ]);
+  }
+
+  return { tableName: "bronze.nlex_breakdown_data", columns, rows: transformed, skipped };
+}
+
 function transformEmissions(rows: RawRow[]): TransformResult {
   // Theoretical (modelled, per-class grams) vs measured (OpenWeather AQI).
   const hasGrams = rows[0] && ("co2_grams" in rows[0] || "co_grams" in rows[0]);
@@ -300,6 +450,10 @@ export function transformData(rows: RawRow[], datasetType: DatasetType): Transfo
       return transformCrash(rows, "motorcycle_crash");
     case "stalled_vehicle":
       return transformStalledVehicle(rows);
+    case "accident_data":
+      return transformAccidentData(rows);
+    case "breakdown_data":
+      return transformBreakdownData(rows);
     case "emissions":
       return transformEmissions(rows);
     default:

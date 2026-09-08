@@ -20,6 +20,7 @@ import SecondaryRiskMitigationPanel from "../../../components/dashboard/Secondar
 import IncidentTypePriorityPanel from "../../../components/dashboard/IncidentTypePriorityPanel";
 import VmsAdvisoryPanel from "../../../components/dashboard/VmsAdvisoryPanel";
 import ClearanceSimulatorPanel from "../../../components/dashboard/ClearanceSimulatorPanel";
+import EventBreakdownPanel from "../../../components/dashboard/EventBreakdownPanel";
 import type { CorridorForecastPoint, KmSegmentForecastPoint } from "../../../components/dashboard/incidentPredictive.shared";
 import DateRangePicker from "../traffic/components/DateRangePicker";
 import { rangeDays, grainBlockedReason, bestGrainFor, axisLabelFor, bucketLabelFor } from "../../../lib/granularity";
@@ -749,12 +750,12 @@ export default function IncidentPage() {
           </div>
         )}
         {activeTab === "Prescriptive" && (
-          <div className={styles.spanFull}>
+          <div className={styles.spanHalf}>
             <SecondaryRiskMitigationPanel />
           </div>
         )}
         {activeTab === "Prescriptive" && (
-          <div className={styles.spanFull}>
+          <div className={styles.spanHalf}>
             <VmsAdvisoryPanel
               months={rangeMode === "custom" ? "all" : rangeMode}
               from={rangeMode === "custom" ? customFrom : undefined}
@@ -763,12 +764,12 @@ export default function IncidentPage() {
           </div>
         )}
         {activeTab === "Prescriptive" && (
-          <div className={styles.spanFull}>
+          <div className={styles.spanHalf}>
             <IncidentTypePriorityPanel />
           </div>
         )}
         {activeTab === "Prescriptive" && (
-          <div className={styles.spanFull}>
+          <div className={styles.spanHalf}>
             <ClearanceSimulatorPanel />
           </div>
         )}
@@ -992,6 +993,9 @@ export default function IncidentPage() {
         </div>
         <div className={styles.chartBody}>{chartFrame(weatherChart, "No weather data in range", onWeatherClick)}</div>
       </article>
+
+      {/* Row F — accident vs. breakdown events, dispatch response times */}
+      <EventBreakdownPanel />
 
       {/* Click-to-inspect detail modal */}
       {detail && (

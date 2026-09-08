@@ -366,28 +366,13 @@ export default function IncidentSeverityModels() {
 
   return (
     <article className="chart-card wide" style={{ padding: "24px", display: "flex", flexDirection: "column", gap: "14px" }}>
-      <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: "12px" }}>
-        <div style={{ flex: 1, minWidth: 0 }}>
-          <h3 style={{ fontSize: "1.05rem", color: "#0f172a", fontWeight: 700, margin: 0, letterSpacing: "-0.01em" }}>
-            Time to Clear, by{" "}
-            {view === "severity" ? "Severity" : view === "source" ? "Incident Source" : view === "both" ? "Severity and Source" : "Corridor Position"}
-            <InfoTooltip text="How quickly incidents clear (report-to-response duration — the best available proxy, since no scene-cleared timestamp exists), broken down by severity, source, or corridor position. Each curve is the probability an incident is still unresolved at a given number of minutes since it was reported; steeper curve / lower bar = clears faster." />
-          </h3>
-          <p style={{ color: "#64748b", fontSize: "0.82rem", margin: "4px 0 0 0" }}>
-            {view === "km" ? (
-              <>
-                Quantile bins (equal incident count, unequal km width), not fixed-width ones — km position holds
-                only a handful of distinct values in this data, so an even grid would leave several bins empty.
-              </>
-            ) : (
-              <>
-                Hover the legend or a curve to trace it against the others.
-                {view === "both" && " Some crossed groups are thin (as few as 25 incidents) — hover a curve to see its n."}
-              </>
-            )}
-          </p>
-        </div>
-        <div style={{ display: "inline-flex", gap: "2px", padding: "3px", background: "var(--bg-surface, #fff)", border: "1px solid #dce2ef", borderRadius: "999px", flexShrink: 0 }}>
+      <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: "12px", flexWrap: "wrap" }}>
+        <h3 style={{ fontSize: "1.05rem", color: "#0f172a", fontWeight: 700, margin: 0, letterSpacing: "-0.01em" }}>
+          Time to Clear, by{" "}
+          {view === "severity" ? "Severity" : view === "source" ? "Incident Source" : view === "both" ? "Severity and Source" : "Corridor Position"}
+          <InfoTooltip text="How quickly incidents clear (report-to-response duration — the best available proxy, since no scene-cleared timestamp exists), broken down by severity, source, or corridor position. Each curve is the probability an incident is still unresolved at a given number of minutes since it was reported; steeper curve / lower bar = clears faster. Weather and traffic volume are trained covariates inside this same model (weather condition, and a real train/test volume feature — see the model's own coefficient table), not separate views here, since neither one groups the corridor into categories the way severity, source, or position do." />
+        </h3>
+        <div style={{ display: "inline-flex", gap: "2px", padding: "3px", background: "var(--bg-surface, #fff)", border: "1px solid #dce2ef", borderRadius: "999px", flexShrink: 0, flexWrap: "wrap" }}>
           {(["severity", "source", "both", "km"] as const).map((v) => (
             <button
               key={v}
@@ -404,6 +389,19 @@ export default function IncidentSeverityModels() {
           ))}
         </div>
       </div>
+      <p style={{ color: "#64748b", fontSize: "0.82rem", margin: 0 }}>
+        {view === "km" ? (
+          <>
+            Quantile bins (equal incident count, unequal km width), not fixed-width ones — km position holds
+            only a handful of distinct values in this data, so an even grid would leave several bins empty.
+          </>
+        ) : (
+          <>
+            Hover the legend or a curve to trace it against the others.
+            {view === "both" && " Some crossed groups are thin (as few as 25 incidents) — hover a curve to see its n."}
+          </>
+        )}
+      </p>
       {view !== "both" && fastest && slowest && fastest.group !== slowest.group && (
         <div style={{ padding: "10px 14px", borderRadius: "10px", background: "#eef2ff", border: "1px solid #c7d2fe" }}>
           <p style={{ margin: 0, fontSize: "0.85rem", color: "#312e81" }}>

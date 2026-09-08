@@ -10,38 +10,47 @@ pipeline and train_incident_spatial_models.py's per-exit one:
      pre-incident context only (cause, type, weather, corridor position,
      time). Champion = whichever holds up better on a chronological holdout.
 
-  2. Cox Proportional Hazards — survival-analyses the response DURATION
-     (see the caveat below on what this duration actually measures), the
-     source for the clearance survival curve and the predicted-clearance-time
-     output.
+  2. Cox Proportional Hazards — survival-analyses the CLEARANCE duration
+     (site_cleared - event_start_date, a real elapsed time now — see the
+     data-source note below), the source for the clearance survival curve
+     and the predicted-clearance-time output.
 
   3. A small logistic regression scoring "secondary incident risk": did
-     another incident start nearby, before this one's response window
+     another incident start nearby, before this one's clearance window
      closed? That label doesn't exist in the source data — it is derived
      here from a spatiotemporal self-join (see label_secondary_incidents()).
 
-Data source and a real gap in it, stated up front:
-  nlex_road_crashes / nlex_motorcycle_crashes carry a `severity` column, but
-  it is 100% NULL on every row in this warehouse (verified: 8,641 + 1,077
-  rows, zero non-null). Severity is therefore DERIVED here from recorded
-  injury/fatality counts (0 -> PDO, injuries only -> Injury, any fatality ->
-  Fatal) — the standard KABCO-style taxonomy, not an invented metric. Those
-  same injury/fatality columns are consequences of the crash, not causes, so
-  they are excluded from the FEATURE set below on pain of leaking the label
-  into its own predictors.
+Data source (rebuilt on the accident_data event export — see below for the
+two gaps this closes relative to the old nlex_road_crashes/
+nlex_motorcycle_crashes source):
+  silver.nlex_accident_events_clean carries REAL, recorded
+  number_of_injured / number_of_fatality counts (unlike nlex_road_crashes /
+  nlex_motorcycle_crashes, whose `severity` column is 100% NULL on every
+  row). Severity is still DERIVED from those counts (0 -> PDO, injuries only
+  -> Injury, any fatality -> Fatal, the standard KABCO-style taxonomy), but
+  the counts themselves are now genuine, not an always-empty placeholder.
+  Those same injury/fatality columns are consequences of the accident, not
+  causes, so they stay excluded from the FEATURE set below on pain of
+  leaking the label into its own predictors.
 
-  Neither table has a "cleared_time"/"road reopened" column — only
-  `reported_time` and `response_time`, the same pair
-  src/services/incident.service.ts's RESPONSE_MIN already computes minutes
-  from for the descriptive dashboard. What this script calls `duration_min`
-  is that same response-time gap, and it is a proxy for "time to clear",
-  not a confirmed scene-cleared timestamp. Every caption downstream says
-  "response duration" for this reason.
+  This table also carries a real scene-cleared timestamp, site_cleared —
+  unlike the old tables, which had no clearance column at all (only
+  reported_time/response_time, the same pair
+  src/services/incident.service.ts's RESPONSE_MIN computes minutes from for
+  the descriptive dashboard, and which this script used to reuse as a
+  "time to clear" proxy). `duration_min` below is now
+  site_cleared - event_start_date: a real elapsed-time-to-clear, not a
+  proxy — every caption downstream can honestly say "clearance time"
+  instead of "response duration".
 
-Only nlex_road_crashes and nlex_motorcycle_crashes feed this script.
-nlex_stalled_vehicles is excluded: it carries no severity information and a
-different (much sparser) feature set, and mixing a table with no severity at
-all into a severity model would just be rows of missing labels.
+Only accident_data (silver.nlex_accident_events_clean) feeds this script.
+breakdown_data (silver.nlex_breakdown_events_clean) is excluded: mechanical
+breakdowns carry no injury/fatality information at all, so mixing it in
+would just be rows of missing severity labels — the same reason
+nlex_stalled_vehicles was excluded from the old version of this script. Its
+per-service dispatch/response records (`deployments`) feed a separate,
+purely descriptive analysis (getEventBreakdownFromDb / /api/incident/event-breakdown)
+rather than this trained-model pipeline.
 
 Usage:
     python train_incident_severity_models.py                 # train + report only
@@ -80,9 +89,9 @@ HOLDOUT_FRACTION = 0.2
 # secondary-incident label. NLEX's 20 exits average ~4km apart, so 2km is
 # roughly "the same immediate stretch of corridor", not the whole highway.
 SECONDARY_KM_RADIUS = 2.0
-# Extra minutes added past a primary incident's own response duration before
+# Extra minutes added past a primary incident's own clearance duration before
 # its "secondary incident" window closes — a following incident during the
-# response itself, plus a short tail while the scene is still being cleared.
+# clearance itself, plus a short tail after the scene is reported cleared.
 SECONDARY_BUFFER_MIN = 30
 
 
@@ -113,25 +122,19 @@ def get_conn():
 # ---------------------------------------------------------------------------
 # Data loading
 # ---------------------------------------------------------------------------
-_D = "CASE WHEN date LIKE '%/%' THEN to_date(date, 'MM/DD/YYYY') ELSE date::date END"
-POOLED_INCIDENTS_SQL = f"""
-    SELECT {_D} AS d, reported_time, response_time, cause_of_accident, type_of_accident,
-           weather_condition, km_value,
-           COALESCE(injuries_male, 0) + COALESCE(injuries_female, 0) AS injuries,
-           COALESCE(fatalities_male, 0) + COALESCE(fatalities_female, 0) AS fatalities,
-           'road' AS source
-    FROM nlex_road_crashes
-    WHERE date IS NOT NULL AND km_value IS NOT NULL
-      AND reported_time IS NOT NULL AND response_time IS NOT NULL
-    UNION ALL
-    SELECT {_D} AS d, reported_time, response_time, cause_of_accident, type_of_accident,
-           weather_condition, km_value,
-           COALESCE(injuries_male, 0) + COALESCE(injuries_female, 0),
-           COALESCE(fatalities_male, 0) + COALESCE(fatalities_female, 0),
-           'moto'
-    FROM nlex_motorcycle_crashes
-    WHERE date IS NOT NULL AND km_value IS NOT NULL
-      AND reported_time IS NOT NULL AND response_time IS NOT NULL
+# event_start_date/site_cleared are already full, trustworthy timestamps (no
+# date/time-of-day split to reconstruct, unlike the old road/moto tables) —
+# see build_features for what that simplifies. clearance_min is silver's own
+# derivation (NULLed, not row-dropped, when outside 0-1440 minutes).
+POOLED_INCIDENTS_SQL = """
+    SELECT event_start_date::date AS d, event_start_date, site_cleared, clearance_min,
+           main_cause, sub_cause, type_of_event, weather_condition,
+           damage_to_property, km_value, number_of_vehicles,
+           number_of_injured AS injuries, number_of_fatality AS fatalities,
+           'accident' AS source
+    FROM silver.nlex_accident_events_clean
+    WHERE event_start_date IS NOT NULL AND km_value IS NOT NULL
+      AND site_cleared IS NOT NULL
 """
 
 
@@ -146,38 +149,63 @@ def load_incidents(conn) -> pd.DataFrame:
     return df
 
 
+# split_label = '80_20': mirrors train_incident_models.py's own
+# DAILY_VOLUME_SQL, kept in sync by hand — that table stores each date twice
+# (an '80_20' and a '90_10' row), and an unfiltered join silently doubles
+# every value. See that script's own doc comment for the full incident.
+DAILY_VOLUME_SQL = """
+    SELECT forecast_date AS d, actual_volume::float AS volume
+    FROM gold.ml_predictive_volume
+    WHERE actual_volume IS NOT NULL AND split_label = '80_20'
+    ORDER BY 1
+"""
+
+
+def load_daily_volume(conn) -> pd.DataFrame:
+    """Volume covers 2022-01-01 onward; accident_data starts right around the
+    same date, so coverage is now high (89.0% of accidents, verified) rather
+    than the ~28%-missing gap the old road/moto-crash source (which ran back
+    to 2020) had — but it is not total, and the remaining gap is not papered
+    over with an imputed value. Rows outside coverage carry volume=NaN and
+    are excluded from any grouping that needs it, the same way a handful of
+    null predicted_clearance_min rows already get excluded from that average
+    elsewhere in this pipeline rather than filled in."""
+    df = pd.read_sql(DAILY_VOLUME_SQL, conn)
+    df["d"] = pd.to_datetime(df["d"])
+    return df
+
+
 # ---------------------------------------------------------------------------
 # Feature/label construction
 # ---------------------------------------------------------------------------
 def build_features(df: pd.DataFrame, holidays: set) -> pd.DataFrame:
     out = df.copy()
 
-    # reported_time/response_time carry a date component that is not
-    # trustworthy on its own (the same reason RESPONSE_MIN in
-    # incident.service.ts truncates both to ::time before differencing) — the
-    # authoritative date is `d`. duration_min re-derives that exact formula
-    # (mod 1440, so a response past midnight still reads as a small positive
-    # gap rather than a large negative one), and full_reported_at re-anchors
-    # reported_time's time-of-day onto `d` so every downstream timestamp
-    # comparison (the secondary-incident window, the holdout split) uses a
-    # date that is actually correct.
-    reported_t = pd.to_datetime(out["reported_time"]).dt.time
-    response_t = pd.to_datetime(out["response_time"]).dt.time
-    reported_sec = reported_t.map(lambda t: t.hour * 3600 + t.minute * 60 + t.second)
-    response_sec = response_t.map(lambda t: t.hour * 3600 + t.minute * 60 + t.second)
-    out["duration_min"] = ((response_sec - reported_sec + 86400) % 86400) / 60.0
-    # A handful of exact-zero durations are plausible (immediate response
-    # logged to the same minute); Cox PH's log-hazard blows up at exactly
-    # zero, so this floors them at 30 seconds rather than dropping real rows.
-    out["duration_min"] = out["duration_min"].clip(lower=0.5)
+    # event_start_date/site_cleared are already full, trustworthy timestamps
+    # (unlike the old reported_time/response_time pair, which carried only a
+    # time-of-day and had to be re-anchored onto `d` by hand) — clearance_min
+    # is silver's own site_cleared - event_start_date derivation, already
+    # NULLed there when it fell outside 0-1440 minutes. A handful of
+    # exact-zero durations are plausible (an immediate clear logged to the
+    # same minute); Cox PH's log-hazard blows up at exactly zero, so this
+    # floors them at 30 seconds rather than dropping real rows.
+    out["duration_min"] = out["clearance_min"].clip(lower=0.5)
+    out["event_start_date"] = pd.to_datetime(out["event_start_date"])
+    out["hour_of_day"] = out["event_start_date"].dt.hour
 
-    out["full_reported_at"] = out["d"] + pd.to_timedelta(reported_sec, unit="s")
-    out["hour_of_day"] = reported_sec // 3600
+    # Log-transformed to match train_incident_models.py's own log_volume
+    # feature (same corridor-wide daily total, same reasoning: incident
+    # counts/response times relate to volume multiplicatively, not linearly).
+    # NaN on any incident date that predates volume tracking (2022-01-01) —
+    # left as NaN rather than filled, since fit_cox_ph filters on it directly
+    # rather than silently training on a guessed value.
+    out["log_volume"] = np.log1p(out["volume"])
 
-    # Severity: derived, not read — see the module docstring for why (the
-    # source `severity` column is entirely NULL). injuries/fatalities are
-    # kept on the frame for this derivation only; build_design_matrix below
-    # excludes both from the feature set.
+    # Severity: derived from real recorded injury/fatality counts (0 -> PDO,
+    # injuries only -> Injury, any fatality -> Fatal, KABCO-style) — see the
+    # module docstring for how this differs from the old, always-NULL source
+    # column. injuries/fatalities are kept on the frame for this derivation
+    # only; build_design_matrix below excludes both from the feature set.
     out["severity_code"] = np.select(
         [out["fatalities"] > 0, out["injuries"] > 0],
         [2, 1],
@@ -192,23 +220,32 @@ def build_features(df: pd.DataFrame, holidays: set) -> pd.DataFrame:
     out["doy_sin"] = np.sin(2 * np.pi * doy / 365.25)
     out["doy_cos"] = np.cos(2 * np.pi * doy / 365.25)
 
-    return out.sort_values("full_reported_at").reset_index(drop=True)
+    # duration_min is NaN on the handful of rows silver already NULLed as
+    # outside a plausible 0-1440-minute clearance window — not dropped here
+    # (severity classification and secondary-incident labeling don't need a
+    # valid duration), the same "filter locally, at the model that actually
+    # needs the value" approach fit_cox_ph already uses for volume below.
+    return out.sort_values("event_start_date").reset_index(drop=True)
 
 
 def label_secondary_incidents(df: pd.DataFrame) -> pd.Series:
-    """For each incident, did another incident (source table irrelevant —
-    both pools share one corridor) start within SECONDARY_KM_RADIUS of it and
-    within [its own report time, its own report time + response duration +
-    SECONDARY_BUFFER_MIN]?
+    """For each incident, did another incident start within
+    SECONDARY_KM_RADIUS of it and within [its own report time, its own
+    report time + clearance duration + SECONDARY_BUFFER_MIN]?
 
     O(n log n) via a time-sorted search rather than an O(n^2) pairwise scan:
-    df is already sorted by full_reported_at (build_features' last step), so
+    df is already sorted by event_start_date (build_features' last step), so
     for each row the candidate window is a contiguous slice found by
     searchsorted, and only THAT slice is checked against the km radius.
     """
-    times = df["full_reported_at"].values
+    times = df["event_start_date"].values
     kms = df["km_value"].values
-    window_end = (df["full_reported_at"] + pd.to_timedelta(df["duration_min"] + SECONDARY_BUFFER_MIN, unit="m")).values
+    # duration_min is NaN on the rare row silver couldn't derive a plausible
+    # clearance for (see build_features) — falls back to just the buffer
+    # window rather than propagating NaT, so those incidents still get a
+    # secondary-incident check instead of silently never being flagged.
+    duration = df["duration_min"].fillna(0)
+    window_end = (df["event_start_date"] + pd.to_timedelta(duration + SECONDARY_BUFFER_MIN, unit="m")).values
 
     has_secondary = np.zeros(len(df), dtype=bool)
     lo_idx = np.searchsorted(times, times, side="right")  # first candidate strictly after this row
@@ -222,11 +259,28 @@ def label_secondary_incidents(df: pd.DataFrame) -> pd.Series:
     return pd.Series(has_secondary, index=df.index, name="had_secondary")
 
 
-CATEGORICAL_COLS = ["cause_of_accident", "type_of_accident", "weather_condition", "source"]
-NUMERIC_COLS = ["km_value", "hour_of_day", "dow", "is_weekend", "is_holiday", "doy_sin", "doy_cos"]
+# `source` and `damage_to_property` are deliberately excluded: source is now
+# constant ('accident' — see POOLED_INCIDENTS_SQL, kept only as gold-table
+# metadata) and damage_to_property is an outcome of the incident, not
+# pre-incident context (same leakage reasoning that excludes
+# injuries/fatalities below) — it's used only as a Cox-curve grouping
+# dimension, not a model feature (see fit_cox_ph).
+#
+# `main_cause` is ALSO excluded, not just redundant-but-harmless: it's a
+# strict coarsening of `sub_cause` (verified — every one of the 20 sub_cause
+# values maps to exactly one main_cause, 0 exceptions), so one-hot-encoding
+# both together makes their combined dummy columns perfectly collinear.
+# statsmodels' OrderedModel actively rejects that ("There should not be a
+# constant in the model" — an implicit-constant rank check, not a literal
+# constant column) rather than silently dropping the redundant df like
+# XGBoost would. sub_cause alone carries at least as much signal.
+CATEGORICAL_COLS = ["sub_cause", "type_of_event", "weather_condition"]
+NUMERIC_COLS = ["km_value", "number_of_vehicles", "hour_of_day", "dow", "is_weekend", "is_holiday", "doy_sin", "doy_cos"]
 
 
-def build_design_matrix(df: pd.DataFrame, dummy_columns: list[str] | None = None) -> pd.DataFrame:
+def build_design_matrix(
+    df: pd.DataFrame, dummy_columns: list[str] | None = None, numeric_cols: list[str] | None = None
+) -> pd.DataFrame:
     """Pre-incident-context features only — no injuries/fatalities/duration/
     severity_code/had_secondary, all of which are outcomes of the incident,
     not context available before or at the moment it was reported.
@@ -234,9 +288,20 @@ def build_design_matrix(df: pd.DataFrame, dummy_columns: list[str] | None = None
     `dummy_columns` pins the one-hot column set (fit on train, reindexed onto
     validation/holdout) so a category absent from one split can't silently
     shift every other column's position in X.
+
+    `numeric_cols` overrides the module-level NUMERIC_COLS — used by
+    fit_cox_ph to add log_volume for the rows that actually have it, without
+    forcing severity/secondary-risk (which run on the full, not
+    volume-filtered, dataset) to carry a column full of NaN for the ~28% of
+    incidents that predate volume tracking.
+
+    Keeps df's own index on the result (order-preserving, so a caller that
+    filtered df to a subset can reindex predictions back onto the original
+    frame afterward) rather than resetting to 0..n-1.
     """
+    cols = numeric_cols if numeric_cols is not None else NUMERIC_COLS
     X = pd.get_dummies(df[CATEGORICAL_COLS], drop_first=True)
-    X = pd.concat([df[NUMERIC_COLS].reset_index(drop=True), X.reset_index(drop=True)], axis=1)
+    X = pd.concat([df[cols], X], axis=1)
     X = X.astype(float)
     if dummy_columns is not None:
         X = X.reindex(columns=dummy_columns, fill_value=0.0)
@@ -247,17 +312,14 @@ def build_design_matrix(df: pd.DataFrame, dummy_columns: list[str] | None = None
 # Model 1: Severity — Ordinal Logistic Regression vs XGBoost
 # ---------------------------------------------------------------------------
 SEVERITY_LABELS = {0: "Property Damage Only", 1: "Injury", 2: "Fatal"}
-SOURCE_LABELS = {"road": "Road Crash", "moto": "Motorcycle Crash"}
+# Replaces the old road-vs-motorcycle SOURCE_LABELS: with a single accident
+# source table there's no source split left to report, but damage_to_property
+# is a real, validated 2-way split in this data (median clearance 4min vs
+# 12min — see the module docstring / migration notes) and fills the same
+# role for the Cox-curve cross-comparison below.
+DAMAGE_LABELS = {"NO": "No Property Damage", "YES": "Property Damage"}
 
 
-# Verified against a real run: OrdinalLogistic and XGBoost land on the exact
-# same holdout predictions (100% row agreement), which traces to `source`
-# alone — motorcycle crashes are 76.6% injury-involved here against 8.2% for
-# cars (riders have none of a car's physical protection), a signal so
-# dominant that neither model finds enough elsewhere to move off the
-# moto->Injury / road->PDO split it induces. Not a bug and not leakage
-# (source is known at report time); it does mean most of both models'
-# "skill" over the majority-class baseline reduces to that one split.
 def fit_severity_models(train: pd.DataFrame, holdout: pd.DataFrame) -> dict:
     X_train = build_design_matrix(train)
     X_holdout = build_design_matrix(holdout, dummy_columns=list(X_train.columns))
@@ -290,7 +352,7 @@ def fit_severity_models(train: pd.DataFrame, holdout: pd.DataFrame) -> dict:
     xgb_metrics = metrics_for(xgb_pred)
     champion = "OrdinalLogistic" if ordinal_metrics["accuracy"] >= xgb_metrics["accuracy"] else "XGBoost"
 
-    holdout_predictions = holdout[["d", "full_reported_at", "km_value", "source", "severity_code"]].copy()
+    holdout_predictions = holdout[["d", "event_start_date", "km_value", "source", "severity_code"]].copy()
     holdout_predictions["pred_ordinal"] = ordinal_pred
     holdout_predictions["pred_xgboost"] = xgb_pred
     holdout_predictions["pred_champion"] = ordinal_pred if champion == "OrdinalLogistic" else xgb_pred
@@ -307,60 +369,88 @@ def fit_severity_models(train: pd.DataFrame, holdout: pd.DataFrame) -> dict:
 # Model 2: Cox PH — response-duration survival, feeds the clearance curve
 # ---------------------------------------------------------------------------
 def fit_cox_ph(train: pd.DataFrame, holdout: pd.DataFrame) -> dict:
-    X_train = build_design_matrix(train)
-    X_holdout = build_design_matrix(holdout, dummy_columns=list(X_train.columns))
+    # weather_condition is already in CATEGORICAL_COLS (100% coverage, no
+    # filtering needed) — already a trained covariate here, moving every
+    # predicted_clearance_min below. Volume is not, and can't just be added
+    # to NUMERIC_COLS: accident_data starts 2021-12-31/2022-01-01, almost
+    # exactly when volume tracking does, so coverage is now high (89.0% —
+    # 19,076 of 21,428 incidents, verified) but not total, and Cox PH can't
+    # fit through a NaN column.
+    #
+    # Rather than impute a guessed volume for those rows (fabricating a
+    # feature value the incident never actually had) or drop them from every
+    # model in this script (severity/secondary-risk don't need volume and
+    # would lose real training data for no reason), the Cox regression is
+    # fit and scored on the volume-covered subset only — a real train/test
+    # split on the rows that genuinely have the feature, honestly reported
+    # via cox_n/cox_coverage below rather than silently smaller. Holdout
+    # rows outside that coverage simply get predicted_clearance_min=None:
+    # an honest "can't score this one," not a value borrowed from a model
+    # that never saw a comparable row. A row with no valid duration_min
+    # (silver NULLed it — see build_features) is excluded from this fit for
+    # the same reason: Cox PH cannot fit a NaN duration.
+    cox_numeric_cols = NUMERIC_COLS + ["log_volume"]
+    train_covered = train[train["volume"].notna() & train["duration_min"].notna()]
+    holdout_covered = holdout[holdout["volume"].notna() & holdout["duration_min"].notna()]
+
+    X_train = build_design_matrix(train_covered, numeric_cols=cox_numeric_cols)
+    X_holdout_covered = build_design_matrix(holdout_covered, dummy_columns=list(X_train.columns), numeric_cols=cox_numeric_cols)
 
     cox_train = X_train.copy()
-    cox_train["duration_min"] = train["duration_min"].values
-    # No censoring signal exists in this data (every historical incident has
-    # a recorded response_time) — event=1 throughout. A genuinely open,
-    # not-yet-responded-to incident would be the honest place to introduce
-    # censoring, and there are none of those in a historical training table.
+    cox_train["duration_min"] = train_covered["duration_min"].values
+    # No censoring signal exists in this data (train_covered already requires
+    # a valid duration_min, i.e. a real recorded site_cleared) — event=1
+    # throughout. A genuinely open, not-yet-cleared incident would be the
+    # honest place to introduce censoring, and there are none of those in a
+    # historical training table.
     cox_train["event"] = 1.0
 
     cph = CoxPHFitter(penalizer=0.1)  # small L2 penalty: several one-hot columns are near-collinear (cause x type)
     cph.fit(cox_train, duration_col="duration_min", event_col="event")
 
-    pred_median = cph.predict_median(X_holdout)
+    pred_median_covered = cph.predict_median(X_holdout_covered)
     # predict_median returns inf when a row's estimated survival never drops
     # below 0.5 within the observed follow-up window — falls back to that
     # row's expected value (still finite) rather than leaving an
     # unusable infinity in what gets written to the DB.
-    pred_expectation = cph.predict_expectation(X_holdout)
-    pred_clearance = pred_median.where(np.isfinite(pred_median), pred_expectation)
+    pred_expectation_covered = cph.predict_expectation(X_holdout_covered)
+    pred_clearance_covered = pred_median_covered.where(np.isfinite(pred_median_covered), pred_expectation_covered)
+    # Reindexed back onto the FULL holdout (build_design_matrix keeps the
+    # input's own index, so this lines up row-for-row) — every holdout row
+    # gets a slot, volume-covered or not, which is what write_to_db's
+    # positional loop over the full holdout requires; rows outside coverage
+    # land as NaN here and become a null predicted_clearance_min there.
+    pred_clearance = pred_clearance_covered.reindex(holdout.index)
 
     finite_mask = np.isfinite(pred_clearance.values)
     mae = float(mean_absolute_error(
         holdout["duration_min"].values[finite_mask], pred_clearance.values[finite_mask]
     )) if finite_mask.any() else None
+    cox_n = int(len(train_covered)) + int(len(holdout_covered))
 
     # Representative survival curves for the clearance-survival-curve
     # visualization: the corridor-wide baseline, plus one curve per severity
-    # class and one per source. Built from the EMPIRICAL data (Kaplan-Meier),
-    # not from the Cox model, and that choice is load-bearing, not stylistic:
+    # class and one per damage_to_property value. Built from the EMPIRICAL
+    # data (Kaplan-Meier), not from the Cox model, and that choice is
+    # load-bearing, not stylistic:
     #
-    # An earlier version of this built each group's curve by averaging that
-    # group's covariates into one "representative profile" and scoring THAT
-    # through cph.predict_survival_function — a known statistical trap for a
-    # non-linear model. It was caught by cross-checking: it put Road/Motorcycle
-    # medians at 53/50min, versus the model's own per-row predict_median on
-    # actual holdout rows (87/49min, matching the raw group medians almost
-    # exactly, source coefficient p=1.2e-52) and the exact raw medians
-    # themselves (87/53min, computed with zero censoring so this IS the true
-    # Kaplan-Meier answer, not an approximation). Averaging-then-predicting
-    # was quietly wrong by ~34 minutes on this split; averaging individual
-    # per-row survival curves together (the textbook-correct fix for THAT
-    # specific mistake) reproduced the same wrong ~53min, which means the
-    # distortion runs deeper than the aggregation step alone. Sidestepped
-    # entirely by not routing the group curves through the regularized,
-    # heavily-collinear covariate model at all: with event=1 on every row
-    # (no incident here is still open), Kaplan-Meier collapses to the plain
-    # empirical survival function, which is simple, exact by construction,
-    # and unaffected by whatever the model's fit does elsewhere. The Cox
-    # model itself is untouched for what it's actually suited to — the
-    # per-incident predicted_clearance_min above, the concordance KPI, and
-    # the coefficient table — this only changes how the DISPLAYED group
-    # curves are built.
+    # A prior version of this script (over the old road/moto-crash source)
+    # built each group's curve by averaging that group's covariates into one
+    # "representative profile" and scoring THAT through
+    # cph.predict_survival_function — a known statistical trap for a
+    # non-linear model, caught there by cross-checking averaged-then-predicted
+    # medians against the model's own per-row predict_median on real holdout
+    # rows and against the exact raw (zero-censoring) medians: averaging first
+    # was quietly wrong by tens of minutes. That risk is structural to Cox PH,
+    # not specific to the old data, so the same fix carries forward here:
+    # group curves are never routed through the regularized, collinear
+    # covariate model. With event=1 on every row (no incident here is still
+    # open), Kaplan-Meier collapses to the plain empirical survival function,
+    # which is simple, exact by construction, and unaffected by whatever the
+    # model's fit does elsewhere. The Cox model itself is untouched for what
+    # it's actually suited to — the per-incident predicted_clearance_min
+    # above, the concordance KPI, and the coefficient table — this only
+    # changes how the DISPLAYED group curves are built.
     def empirical_curve(durations: np.ndarray) -> tuple[list[float], list[float]]:
         d = np.sort(durations)
         n = len(d)
@@ -390,35 +480,29 @@ def fit_cox_ph(train: pd.DataFrame, holdout: pd.DataFrame) -> dict:
         if c:
             curves.append(c)
 
-    # A second factor alongside severity — source (road vs. motorcycle crash)
-    # turned out to be the single largest clearance-time split found anywhere
-    # in this data (87min vs 53min median, exact empirical values). Checked
-    # for the same "is this real" red flag that ruled out adding
-    # source=stalled-vehicle here (that table's response-time field turned
-    # out to be near-uniform random noise over 0-8 minutes): road and moto
-    # both show naturally shaped, wide-ranging durations (177 and 111
-    # distinct observed values respectively), so this is a real split, not
-    # an artifact — unlike stalled vehicles, which stay excluded from this
-    # entire script for exactly that reason.
-    for src, label in SOURCE_LABELS.items():
-        c = group_curve(train["source"] == src, label, "source")
+    # A second factor alongside severity — damage_to_property (NO/YES) — is a
+    # real, verified clearance-time split in this data: median 4min (NO,
+    # n=18,962) vs 12min (YES, n=2,466), mean 19.1 vs 50.9 (checked against
+    # the live warehouse). weather_condition was checked too and ruled out
+    # (Fair vs Rainy medians 5min vs 6min — not a real split), the same
+    # "is this real" scrutiny that rules stalled vehicles out of this script
+    # entirely (that table's response-time field is near-uniform random noise
+    # over 0-8 minutes, not a genuine duration signal).
+    for dmg, label in DAMAGE_LABELS.items():
+        c = group_curve(train["damage_to_property"] == dmg, label, "damage_to_property")
         if c:
             curves.append(c)
 
-    # Both factors crossed — 2 sources x 3 severities. Stalled vehicles can't
-    # join this cross even in principle: this whole script excludes them for
-    # having no severity data (source `severity` column is 100% NULL, and
-    # they're the one table with no injury/fatality columns to derive it
-    # from either), on top of the response-time issue that already rules
-    # them out of the source-only view above. Smallest cross cell in this
-    # data is n=25 (Motorcycle Fatal) — thin, but real; n travels with each
-    # curve's group label so the frontend can show it rather than let a
-    # 25-incident curve read with the same implied confidence as a
-    # 6,000-incident one.
-    for src, src_label in SOURCE_LABELS.items():
+    # Both factors crossed — 2 damage values x 3 severities. Smallest cross
+    # cell in the full ingested dataset is n=15 (Property Damage x Fatal,
+    # verified against the live warehouse) — thin, but real; n travels with
+    # each curve's group label so the frontend can show it rather than let a
+    # 15-incident curve read with the same implied confidence as a
+    # thousands-incident one.
+    for dmg, dmg_label in DAMAGE_LABELS.items():
         for code, sev_label in SEVERITY_LABELS.items():
-            mask = (train["source"] == src) & (train["severity_code"] == code)
-            c = group_curve(mask, f"{src_label} — {sev_label}", "both")
+            mask = (train["damage_to_property"] == dmg) & (train["severity_code"] == code)
+            c = group_curve(mask, f"{dmg_label} — {sev_label}", "both")
             if c:
                 curves.append(c)
 
@@ -427,15 +511,12 @@ def fit_cox_ph(train: pd.DataFrame, holdout: pd.DataFrame) -> dict:
     # overlaid survival curves (six "both" lines is already close to the
     # limit of what one chart can show).
     #
-    # NOT fixed-width km buckets, on purpose: km_value turns out to hold only
-    # 19 distinct values across all 7,774 training incidents (verified
-    # directly), not a continuous position — this data was already snapped
-    # to coarse waypoints upstream, the same way corridorForecast's own
-    # location-to-exit resolution works. Fixed 5km bins against 19 discrete
-    # values leaves entire bins empty (Km 35-55 and Km 60-65 are all exactly
-    # 0 in this run) while others hold thousands — informative about the
-    # data's own resolution, but a bad chart. Quantile bins instead — equal
-    # INCIDENT COUNT per segment, unequal km width — guarantee every segment
+    # km_value is now near-continuous (946 distinct values across ~21K
+    # accidents, verified — StartKM is recorded to the nearest 100m, not
+    # snapped to coarse waypoints the way the old crash tables were), so
+    # fixed-width bins would be a reasonable option here too; quantile bins
+    # are kept anyway for the same guarantee they gave the old, coarser data
+    # — equal INCIDENT COUNT per segment, unequal km width — so every segment
     # has comparable statistical power, and the label states the actual km
     # range each one covers so the unequal width is never hidden.
     KM_QUANTILE_GROUPS = 4
@@ -456,6 +537,12 @@ def fit_cox_ph(train: pd.DataFrame, holdout: pd.DataFrame) -> dict:
         "concordance_index": float(cph.concordance_index_),
         "mae_minutes": mae,
         "n": int(len(holdout)),
+        # The model now trains and scores on the volume-covered subset only
+        # (see the doc comment at the top of this function) — cox_n/
+        # cox_coverage_pct report that real, smaller sample honestly rather
+        # than letting the headline "n" above imply the full holdout was used.
+        "cox_n": cox_n,
+        "cox_coverage_pct": float(cox_n / (len(train) + len(holdout)) * 100),
         "pred_clearance": pred_clearance,
         "curves": curves,
         "coefficients": cph.summary.reset_index().rename(columns={"index": "variable"}).to_dict("records"),
@@ -518,16 +605,20 @@ def ensure_schema(conn, commit: bool = True) -> None:
             );
 
             -- Which factor a curve is grouped by ('baseline' / 'severity' /
-            -- 'source' / 'both') — lets the dashboard offer toggled views
-            -- instead of every curve on one chart. Added via ALTER because
-            -- the table predates the source-crossed curves.
+            -- 'damage_to_property' / 'km' / 'both') — lets the dashboard
+            -- offer toggled views instead of every curve on one chart. Added
+            -- via ALTER because the table predates the crossed curves; the
+            -- dimension's own values changed from 'source' to
+            -- 'damage_to_property' when this script moved to accident_data
+            -- (see fit_cox_ph), which needed no schema change — dimension
+            -- and group_label were already plain TEXT.
             ALTER TABLE gold.ml_incident_survival_curve
                 ADD COLUMN IF NOT EXISTS dimension TEXT NOT NULL DEFAULT 'severity';
 
             -- How many incidents this one curve is built from — the 'both'
-            -- (severity x source) cross has cells as thin as 25, and a
-            -- reader has no way to know that unless every curve states its
-            -- own sample size.
+            -- (severity x damage_to_property) cross has cells as thin as 15,
+            -- and a reader has no way to know that unless every curve states
+            -- its own sample size.
             ALTER TABLE gold.ml_incident_survival_curve
                 ADD COLUMN IF NOT EXISTS n INT;
 
@@ -557,7 +648,7 @@ def write_to_db(conn, holdout: pd.DataFrame, severity_out: dict, cox_out: dict,
     rows = []
     for i in range(len(preds)):
         rows.append((
-            preds.loc[i, "d"].date(), preds.loc[i, "full_reported_at"], float(preds.loc[i, "km_value"]),
+            preds.loc[i, "d"].date(), preds.loc[i, "event_start_date"], float(preds.loc[i, "km_value"]),
             preds.loc[i, "source"], int(preds.loc[i, "severity_code"]), int(preds.loc[i, "pred_champion"]),
             severity_out["champion"], num(clearance.iloc[i]), num(secondary_scores[i]), bool(actual_secondary.iloc[i]),
         ))
@@ -607,10 +698,13 @@ def print_report(severity_out: dict, cox_out: dict, secondary_out: dict) -> str:
         tag = "[SELECTED]" if name == severity_out["champion"] else ""
         L.append(f"    {name:<16} accuracy={m['accuracy']:.3f}  MAE_ordinal={m['MAE_ordinal']:.3f}  n={m['n']}  {tag}")
     L.append("")
-    L.append("  Cox PH — response-duration survival (a proxy for clearance time; see module docstring)")
+    L.append("  Cox PH — clearance-time survival (site_cleared - event_start_date; see module docstring)")
     L.append(f"    concordance index = {cox_out['concordance_index']:.3f}")
     L.append(f"    MAE (minutes)     = {cox_out['mae_minutes']:.2f}" if cox_out["mae_minutes"] is not None else "    MAE (minutes)     = n/a")
-    L.append(f"    n                 = {cox_out['n']}")
+    L.append(f"    n (holdout)       = {cox_out['n']}")
+    L.append(f"    trained+scored on = {cox_out['cox_n']} incidents with known daily volume "
+              f"({cox_out['cox_coverage_pct']:.1f}% of all incidents — volume now a real covariate, "
+              f"alongside weather, cause, type, and corridor position)")
     L.append("")
     L.append("  Secondary incident risk — logistic regression")
     L.append(f"    AUC       = {secondary_out['auc']:.3f}" if secondary_out["auc"] is not None else "    AUC       = n/a")
@@ -628,9 +722,16 @@ def main() -> None:
 
     conn = get_conn()
     try:
-        print("Loading road + motorcycle crashes...")
+        print("Loading accident events...")
         raw = load_incidents(conn)
-        print(f"  {len(raw)} incidents (road + motorcycle only; stalled vehicles excluded — no severity data)")
+        print(f"  {len(raw)} accidents (accident_data only; breakdown_data excluded — no severity data)")
+
+        volume = load_daily_volume(conn)
+        raw = raw.merge(volume, on="d", how="left")
+        covered = int(raw["volume"].notna().sum())
+        print(f"  {covered} of {len(raw)} incidents ({covered / len(raw) * 100:.1f}%) fall on a date with known "
+              f"traffic volume (tracking starts {volume['d'].min().date()}) and can feed volume into the Cox PH "
+              f"clearance model below; the rest are excluded from that fit rather than backfilled with a guess")
 
         holidays = load_holidays(conn)
         feat = build_features(raw, holidays)
@@ -638,7 +739,7 @@ def main() -> None:
         print("Labeling secondary incidents (spatiotemporal self-join)...")
         feat["had_secondary"] = label_secondary_incidents(feat)
         print(f"  {feat['had_secondary'].sum()} of {len(feat)} incidents ({feat['had_secondary'].mean() * 100:.1f}%) "
-              f"had another incident start within {SECONDARY_KM_RADIUS}km during their response window")
+              f"had another incident start within {SECONDARY_KM_RADIUS}km during their clearance window")
 
         cut = int(len(feat) * (1 - HOLDOUT_FRACTION))
         train, holdout = feat.iloc[:cut].reset_index(drop=True), feat.iloc[cut:].reset_index(drop=True)
@@ -668,7 +769,8 @@ def main() -> None:
             "severity": {"champion": severity_out["champion"], "metrics": severity_out["metrics"],
                          "feature_columns": severity_out["feature_columns"]},
             "cox_ph": {"concordance_index": cox_out["concordance_index"], "mae_minutes": cox_out["mae_minutes"],
-                       "n": cox_out["n"], "coefficients": cox_out["coefficients"]},
+                       "n": cox_out["n"], "cox_n": cox_out["cox_n"], "cox_coverage_pct": cox_out["cox_coverage_pct"],
+                       "coefficients": cox_out["coefficients"]},
             "secondary_risk": {"auc": secondary_out["auc"], "base_rate": secondary_out["base_rate"], "n": secondary_out["n"]},
             "secondary_km_radius": SECONDARY_KM_RADIUS,
             "secondary_buffer_min": SECONDARY_BUFFER_MIN,

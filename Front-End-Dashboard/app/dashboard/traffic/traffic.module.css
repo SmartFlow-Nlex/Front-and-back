@@ -392,11 +392,19 @@
 .kpiRow {
   grid-column: 1 / -1;
   display: grid;
-  /* auto-fit so five tiles wrap to 3+2 rather than being squeezed to unreadable
-     widths on a narrower window. */
-  grid-template-columns: repeat(auto-fit, minmax(196px, 1fr));
+  /* Counted columns rather than auto-fit.
+     auto-fit packs in as many 196px tracks as fit, which for a five-tile row
+     means the count is whatever the arithmetic lands on -- and between roughly
+     1000px and 1230px of window it lands on four, leaving a single tile alone
+     on a second row beside three empty columns. Naming the counts keeps the
+     row to shapes that look deliberate: 5, then 3+2, then 2+2+1. */
+  grid-template-columns: repeat(5, minmax(0, 1fr));
   gap: 14px;
   min-height: 0;
+}
+
+@media (max-width: 1320px) {
+  .kpiRow { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 }
 
 /* KPI tiles.
@@ -413,10 +421,13 @@
   background: var(--bg-surface, #fff);
   border: 1px solid var(--border-default);
   border-radius: var(--radius-lg, 14px);
-  padding: 15px 18px 14px 20px;
+  /* Even top and bottom. The old 15/14 split with a 3px flex gap made the
+     label sit slightly closer to the top edge than the hint did to the
+     bottom, which is visible when five tiles sit in a row. */
+  padding: 16px 18px 16px 20px;
   display: flex;
   flex-direction: column;
-  gap: 3px;
+  gap: 4px;
   min-width: 0;
   transition: border-color 160ms ease, box-shadow 160ms ease, transform 160ms ease;
 }
@@ -526,8 +537,39 @@
 .kpiRow > .kpiTile:nth-child(4) { --kpi-accent: var(--kpi-4); }
 .kpiRow > .kpiTile:nth-child(5) { --kpi-accent: var(--kpi-5); }
 
-.deltaUp { color: #1d9d61; font-weight: 700; }
-.deltaDown { color: #d0483e; font-weight: 700; }
+/* The change figure, as a badge rather than two coloured words in a sentence.
+   The trend is the second thing a reader wants off a KPI tile after the number
+   itself, and as plain inline text it had the same weight as the "vs previous
+   period" prose around it, so the row could not be scanned for movement.
+
+   Note these classes mean GOOD and BAD, not up and down: the pages apply
+   .deltaUp to a FALL in incidents and CO2, because less is better there. So
+   the badge carries no arrow -- an arrow keyed to the colour would point the
+   wrong way on three of the four tiles that use one. The sign already in the
+   number says the direction; the colour says whether that is good news.
+
+   Colours come from the tokens that were already darkened to clear AA, and
+   the tint is mixed from the same value so it follows the theme. */
+.deltaUp,
+.deltaDown {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 7px;
+  border-radius: 999px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  vertical-align: baseline;
+}
+
+.deltaUp {
+  color: var(--color-success);
+  background: color-mix(in srgb, var(--color-success) 13%, transparent);
+}
+
+.deltaDown {
+  color: var(--color-danger);
+  background: color-mix(in srgb, var(--color-danger) 13%, transparent);
+}
 
 /* margin-top:auto for the same reason as .kpiHint - it is the bottom element
    of the tiles that carry a sparkline instead of a hint line. */
@@ -903,7 +945,7 @@
 /* Mobile: stack everything */
 @media (max-width: 980px) {
   .filterRow { flex-wrap: wrap; position: static; margin: 0; padding: 0; }
-  .kpiRow { grid-template-columns: repeat(2, 1fr); }
+  .kpiRow { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 
   .chart1, .chart2, .chart3, .chart4, .chart5 {
     grid-column: 1 / -1;

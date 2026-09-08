@@ -1,4 +1,5 @@
 import { db } from "../config/db.js";
+import { searchExitsInDb } from "./map-comparison.service.js";
 
 /**
  * Live per-exit corridor status, from the same Waze feed the Live Map uses.
@@ -165,5 +166,151 @@ export async function getCorridorStatus() {
       stale: feedAgeMinutes == null || feedAgeMinutes > 30,
     },
     generatedAt: new Date().toISOString(),
+  };
+}
+
+/* ══════════════════════════════════════════════════════════════════════════════
+   MERGED CORRIDOR VIEW  (mobile clients)
+
+   getCorridorStatus() above returns only the exits Waze reported a jam on —
+   around ten rows out of forty exit/direction pairs. Rendering a corridor from
+   it takes three rules that are not in the payload:
+
+     1. absence means clear, so every pair starts green and is darkened only by
+        evidence;
+     2. the live rows join to the exit list by NAME, there being no exit id in
+        the feed;
+     3. a direction with no ramp is not clear, it is not a road — it draws as
+        bare tarmac and is left out of the tally.
+
+   The dashboard implements all three in the browser. A second client
+   reimplementing them is a second chance to get them wrong, and the failure is
+   quiet: the map still renders, it just disagrees with the dashboard about the
+   road. So this resolves them once, server-side, and hands back every exit in
+   both directions with its status already decided.
+
+   The panel's own numbers are the specification here — the tally counts pairs
+   with a ramp, which is why 20 exits give 40 pairs and the header adds up.
+══════════════════════════════════════════════════════════════════════════════ */
+
+export type DirectionStatus = {
+  status: SegmentStatus;
+  level: number | null;
+  speedKmh: number | null;
+  jamCount: number;
+  observedAt: string | null;
+  /** "Entry & Exit" | "Entry Only" | "Exit Only" | "No Access", null at a barrier. */
+  access: string | null;
+  /**
+   * Whether to draw this direction as road at all. False only for "No Access",
+   * where the exit has no ramp this way — paint it as bare tarmac rather than
+   * green, because nothing is flowing there to be clear.
+   *
+   * True at a toll barrier despite there being no ramp: a mainline barrier
+   * carries live traffic in both directions, so it is a road with a status.
+   * Bocaue Barrier is the corridor's only one. This mirrors the dashboard,
+   * whose tally likewise excludes just "No Access" — which is why 20 exits give
+   * 40 counted pairs.
+   */
+  hasRamp: boolean;
+};
+
+/**
+ * Per-direction access in words. Mirrors accessLabel() in the dashboard's
+ * lib/nlex-exits so both clients describe a ramp the same way.
+ */
+function accessLabel(
+  row: { nb_entry: boolean; nb_exit: boolean; sb_entry: boolean; sb_exit: boolean; node_type: string },
+  dir: "NB" | "SB",
+): string | null {
+  if (row.node_type === "toll-barrier") return null;
+  const entry = dir === "NB" ? row.nb_entry : row.sb_entry;
+  const exit = dir === "NB" ? row.nb_exit : row.sb_exit;
+  if (entry && exit) return "Entry & Exit";
+  if (entry) return "Entry Only";
+  if (exit) return "Exit Only";
+  return "No Access";
+}
+
+/**
+ * Label fixes for names the database stores title-cased, which mangles the
+ * initialisms. exit_name stays the match key — it is what the live feed joins
+ * on — so this is applied at the edge, as the dashboard does in displayExitName.
+ */
+const DISPLAY_NAMES: Record<string, string> = {
+  "cdv/ph arena": "CDV/PH Arena",
+  sctex: "SCTEX",
+};
+
+function displayExitName(name: string): string {
+  return DISPLAY_NAMES[name.toLowerCase().trim()] ?? name;
+}
+
+/** Both sides of the name join are nlex_exits.exit_name, so an exact match would
+    do; normalising anyway costs nothing and survives a change of case upstream. */
+function statusKey(name: string, dir: "NB" | "SB") {
+  return `${name.toLowerCase().trim()}-${dir}`;
+}
+
+const NO_JAMS = {
+  status: "clear" as SegmentStatus,
+  level: null,
+  speedKmh: null,
+  jamCount: 0,
+  observedAt: null,
+};
+
+export async function getCorridorStatusFull() {
+  // Both halves come from the same database; a null from either means the pool
+  // is not configured and the controller answers 503 rather than half a road.
+  const [live, exitRows] = await Promise.all([getCorridorStatus(), searchExitsInDb("")]);
+  if (!live || !exitRows) return null;
+
+  const bySegment = new Map(live.segments.map((s) => [statusKey(s.exit, s.direction), s]));
+
+  const counts = { congested: 0, slow: 0, clear: 0 };
+
+  const exits = exitRows.map((x: any) => {
+    const directions = {} as Record<"NB" | "SB", DirectionStatus>;
+
+    for (const dir of ["NB", "SB"] as const) {
+      const access = accessLabel(x, dir);
+      const seen = bySegment.get(statusKey(x.exit_name, dir));
+      const base = seen ?? NO_JAMS;
+
+      directions[dir] = {
+        status: base.status,
+        level: base.level,
+        speedKmh: base.speedKmh,
+        jamCount: base.jamCount,
+        observedAt: base.observedAt,
+        access,
+        hasRamp: access !== "No Access",
+      };
+
+      // A direction without a ramp is left out entirely, exactly as the panel
+      // does: a tally that disagreed with what is drawn would be worse than none.
+      if (access === "No Access") continue;
+      counts[base.status]++;
+    }
+
+    return {
+      exit_id: x.exit_id,
+      exit_name: x.exit_name,
+      display_name: displayExitName(x.exit_name),
+      km: x.km ?? null,
+      latitude: x.latitude,
+      longitude: x.longitude,
+      node_type: x.node_type,
+      directions,
+    };
+  });
+
+  return {
+    windowMinutes: live.windowMinutes,
+    generatedAt: live.generatedAt,
+    feed: live.feed,
+    counts,
+    exits,
   };
 }

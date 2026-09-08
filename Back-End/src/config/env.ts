@@ -6,6 +6,14 @@ dotenv.config();
 const envSchema = z.object({
   NODE_ENV: z.enum(["development", "test", "production"]).default("development"),
   PORT: z.coerce.number().default(4000),
+  // Comma-separated list of browser origins allowed to call the API. It was a
+  // single origin, which is all the Next.js dashboard needed; the mobile app
+  // adds a second client, and an Expo web build serves from its own port.
+  //
+  // Native mobile is unaffected either way — CORS is a browser rule, and a
+  // React Native fetch sends no Origin header at all. This exists so an Expo
+  // *web* build is not blocked, and so a second dev port does not require an
+  // edit here.
   FRONTEND_ORIGIN: z.string().default("http://localhost:3002"),
   CLIMATIQ_API_KEY: z.string().optional(),
 
@@ -59,4 +67,8 @@ function buildPostgresUrl(): string | undefined {
 export const env = {
   ...parsed,
   POSTGRES_URL: buildPostgresUrl(),
+  /** FRONTEND_ORIGIN split into the list the cors middleware expects. */
+  ALLOWED_ORIGINS: parsed.FRONTEND_ORIGIN.split(",")
+    .map((o) => o.trim())
+    .filter((o) => o.length > 0),
 };

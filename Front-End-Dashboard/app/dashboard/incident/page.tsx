@@ -710,7 +710,7 @@ export default function IncidentPage() {
           {activeTab === "Prescriptive" && (
             <>
               {rangeFilter}
-              <span className={styles.filterLabel} style={{ color: "var(--text-muted)", fontWeight: 400 }}>
+              <span className={styles.filterNote}>
                 Applies to Resource Staging and VMS Advisory Routing — clearance-time recommendations come from a
                 trained model and don&apos;t change per Range.
               </span>

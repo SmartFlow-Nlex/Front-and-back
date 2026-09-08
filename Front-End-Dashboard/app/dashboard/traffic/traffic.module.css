@@ -51,8 +51,27 @@
   font-size: 0.74rem;
   font-weight: 700;
   color: var(--text-secondary, #5b6474);
+  /* nowrap is right HERE: these are one-word controls -- Range, Weather,
+     Class, Status -- that must not break across lines beside their pills.
+     It is wrong for prose, which is what .filterNote below is for. */
   white-space: nowrap;
   letter-spacing: 0.02em;
+}
+
+/* An explanatory sentence in the filter row, as opposed to a control label.
+   The Prescriptive tab hung a two-sentence note on .filterLabel, which meant
+   ~140 characters of prose inheriting white-space:nowrap. A flex item that
+   cannot wrap also cannot shrink below its content, so it became one ~900px
+   box that pushed the mode tabs past the right edge and put a horizontal
+   scrollbar on the whole page. This wraps and yields instead. */
+.filterNote {
+  flex: 1 1 220px;
+  min-width: 0;
+  font-size: 0.74rem;
+  font-weight: 400;
+  line-height: 1.35;
+  color: var(--text-muted);
+  letter-spacing: 0.01em;
 }
 
 /* Segmented pill (global reusable) */
@@ -130,6 +149,9 @@
 /* Mode tabs (Descriptive / Predictive / Prescriptive) */
 .modeTabs {
   display: flex;
+  /* Never shrink and never be pushed: the tabs are how you leave this view, so
+     they are the last thing that should give way when the row is tight. */
+  flex: 0 0 auto;
   gap: 2px;
   background: var(--bg-surface, #fff);
   border: 1px solid var(--border-strong);

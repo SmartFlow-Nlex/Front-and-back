@@ -20,6 +20,7 @@ import SecondaryRiskMitigationPanel from "../../../components/dashboard/Secondar
 import IncidentTypePriorityPanel from "../../../components/dashboard/IncidentTypePriorityPanel";
 import VmsAdvisoryPanel from "../../../components/dashboard/VmsAdvisoryPanel";
 import ClearanceSimulatorPanel from "../../../components/dashboard/ClearanceSimulatorPanel";
+import EventBreakdownPanel from "../../../components/dashboard/EventBreakdownPanel";
 import type { CorridorForecastPoint, KmSegmentForecastPoint } from "../../../components/dashboard/incidentPredictive.shared";
 import DateRangePicker from "../traffic/components/DateRangePicker";
 import { rangeDays, grainBlockedReason, bestGrainFor, axisLabelFor, bucketLabelFor } from "../../../lib/granularity";
@@ -84,15 +85,6 @@ function weekStart(dateStr: string): string {
   dt.setDate(dt.getDate() - ((dt.getDay() + 6) % 7));
   return dt.toISOString().slice(0, 10);
 }
-
-// ---------- Prescriptive mock (unchanged tab) ----------
-const prescriptiveResourceOption: EChartsOption = {
-  grid: { left: 46, right: 20, top: 20, bottom: 36 },
-  xAxis: { type: "category", data: ["Ambulance", "Tow Truck", "Patrol", "Fire"] },
-  yAxis: { type: "value" },
-  tooltip: { trigger: "axis" },
-  series: [{ type: "bar", data: [3, 5, 8, 2], itemStyle: { color: "#4f7de5", borderRadius: [8, 8, 0, 0] } }],
-};
 
 export default function IncidentPage() {
   // Chart furniture follows the active theme; series hues stay fixed.
@@ -386,7 +378,7 @@ export default function IncidentPage() {
     return {
       rows: display,
       option: {
-        grid: { left: 84, right: 46, top: 8, bottom: 18 },
+        grid: { left: 84, right: 46, top: 8, bottom: 46 },
         xAxis: { type: "value", splitNumber: 3, axisLabel: { fontSize: 10 } },
         yAxis: { type: "category", data: display.map((r) => kmLabel(r.km_bin)), axisLabel: { interval: 0, fontSize: 10 }, axisTick: { show: false } },
         tooltip: {
@@ -397,10 +389,7 @@ export default function IncidentPage() {
             return `<b>${kmLabel(r.km_bin)}</b><br/>${fmtInt(r.total)} incidents · ${fmtInt(r.injuries)} injured · ${fmtInt(r.fatalities)} fatalities`;
           },
         },
-        /* No legend: one series, and the axis already says these are incidents
-           by segment. A single chip naming the only thing on the chart is
-           furniture, and the bars are shaded on a ramp, so its lone swatch
-           matched no bar in particular. */
+        legend: { show: true, bottom: 0, left: "center", itemWidth: 14, itemHeight: 8, itemGap: 18, padding: 0, textStyle: { fontSize: 11 } },
         series: [
           {
             name: "Incidents by segment",
@@ -426,7 +415,7 @@ export default function IncidentPage() {
     return {
       rows: display,
       option: {
-        grid: { left: 150, right: 42, top: 8, bottom: 18 },
+        grid: { left: 150, right: 42, top: 8, bottom: 46 },
         xAxis: { type: "value", splitNumber: 3, axisLabel: { fontSize: 10 } },
         yAxis: { type: "category", data: display.map((r) => (r.label.length > 24 ? `${r.label.slice(0, 24)}…` : r.label)), axisLabel: { interval: 0, fontSize: 10 }, axisTick: { show: false } },
         tooltip: {
@@ -437,8 +426,7 @@ export default function IncidentPage() {
             return `<b>${r.label}</b><br/>${fmtInt(r.total)} incidents · ${fmtInt(r.injuries)} injured · ${fmtInt(r.fatalities)} fatalities`;
           },
         },
-        /* No legend: one series named "Incidents" on a chart titled the same,
-           beneath a category axis that names every bar. */
+        legend: { show: true, bottom: 0, left: "center", itemWidth: 14, itemHeight: 8, itemGap: 18, padding: 0, textStyle: { fontSize: 11 } },
         series: [
           {
             name: "Incidents",
@@ -633,6 +621,10 @@ export default function IncidentPage() {
   const kpiValue = (v: string | null) =>
     loading && !data ? <KpiSkeleton /> : (v ?? "—");
 
+  // One-glance explanation of what a KPI tile actually measures — same
+  // portal-based popup used on every Predictive-tab card title.
+  const kpiInfo = (text: string) => <InfoTooltip text={text} />;
+
   // ---------- Global filter controls ----------
   // Rendered on both the Descriptive shell and the Predictive one so the strip
   // above the page means the same thing whichever tab is open. Defined once
@@ -670,30 +662,15 @@ export default function IncidentPage() {
       <svg width="15" height="15" viewBox="0 0 16 16" fill="none" style={{ color: "var(--text-muted)" }}><path d="M4.5 11.5a3 3 0 1 1 .4-5.97 4 4 0 0 1 7.75 1.1A2.5 2.5 0 0 1 12 11.5H4.5z" stroke="currentColor" strokeWidth="1.4" strokeLinejoin="round" /><path d="M6 13.2v1M9 13.2v1M12 13.2v1" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" /></svg>
       <span className={styles.filterLabel}>Weather</span>
       <div className={styles.segmented}>
-        {(["all", "dry", "wet"] as const).map((w) => {
-          // weatherApplicable comes from the Predictive chart's own response
-          // so only Dry/Wet on the Predictive tab can ever be disabled here.
-          const disabled = activeTab === "Predictive" && w !== "all" && !weatherApplicable;
-          return (
-            <button
-              key={w}
-              className={weather === w ? "active" : ""}
-              onClick={() => setWeather(w)}
-              disabled={disabled}
-              title={disabled ? "No scored validation days in the current Range for this weather — pick a wider Range" : undefined}
-            >
-              {weather === w && <svg width="12" height="12" viewBox="0 0 16 16" fill="none" style={{ marginRight: 4, marginBottom: -1 }}><path d="M3.5 8.5l3 3 6-7" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" /></svg>}
-              {w === "all" ? "All" : w === "dry" ? "Dry" : "Wet"}
-            </button>
-          );
-        })}
+        {(["all", "dry", "wet"] as const).map((w) => (
+          <button key={w} className={weather === w ? "active" : ""} onClick={() => setWeather(w)}>
+            {weather === w && <svg width="12" height="12" viewBox="0 0 16 16" fill="none" style={{ marginRight: 4, marginBottom: -1 }}><path d="M3.5 8.5l3 3 6-7" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" /></svg>}
+            {w === "all" ? "All" : w === "dry" ? "Dry" : "Wet"}
+          </button>
+        ))}
       </div>
     </div>
   );
-
-  // One-glance explanation of what a KPI tile actually measures — same
-  // portal-based popup used on every Predictive-tab card title.
-  const kpiInfo = (text: string) => <InfoTooltip text={text} />;
 
   // ---------- Predictive / Prescriptive share the same shell ----------
   if (activeTab !== "Descriptive") {
@@ -710,7 +687,7 @@ export default function IncidentPage() {
           {activeTab === "Prescriptive" && (
             <>
               {rangeFilter}
-              <span className={styles.filterNote}>
+              <span className={styles.filterLabel} style={{ color: "var(--text-muted)", fontWeight: 400 }}>
                 Applies to Resource Staging and VMS Advisory Routing — clearance-time recommendations come from a
                 trained model and don&apos;t change per Range.
               </span>
@@ -773,12 +750,12 @@ export default function IncidentPage() {
           </div>
         )}
         {activeTab === "Prescriptive" && (
-          <div className={styles.spanFull}>
+          <div className={styles.spanHalf}>
             <SecondaryRiskMitigationPanel />
           </div>
         )}
         {activeTab === "Prescriptive" && (
-          <div className={styles.spanFull}>
+          <div className={styles.spanHalf}>
             <VmsAdvisoryPanel
               months={rangeMode === "custom" ? "all" : rangeMode}
               from={rangeMode === "custom" ? customFrom : undefined}
@@ -787,12 +764,12 @@ export default function IncidentPage() {
           </div>
         )}
         {activeTab === "Prescriptive" && (
-          <div className={styles.spanFull}>
+          <div className={styles.spanHalf}>
             <IncidentTypePriorityPanel />
           </div>
         )}
         {activeTab === "Prescriptive" && (
-          <div className={styles.spanFull}>
+          <div className={styles.spanHalf}>
             <ClearanceSimulatorPanel />
           </div>
         )}
@@ -826,7 +803,10 @@ export default function IncidentPage() {
       <div className={styles.kpiRow}>
         <article className={styles.kpiTile}>
           <span className={styles.kpiIcon} aria-hidden="true"><AlertTriangle size={15} /></span>
-          <h3>Total Incidents</h3>
+          <h3>
+            Total Incidents
+            {kpiInfo("All logged incidents — road crashes, motorcycle crashes, and stalled vehicles — in the selected Range, compared to the equivalent prior period.")}
+          </h3>
           <div className={styles.kpiValue}>{kpiValue(data ? fmtInt(data.kpis.totalIncidents) : null)}</div>
           <p className={styles.kpiHint}>
             {derived ? (
@@ -837,19 +817,28 @@ export default function IncidentPage() {
         </article>
         <article className={styles.kpiTile}>
           <span className={styles.kpiIcon} aria-hidden="true"><HeartPulse size={15} /></span>
-          <h3>Injuries</h3>
+          <h3>
+            Injuries
+            {kpiInfo("Total people injured across all incidents in the Range, including incidents that also had a fatality.")}
+          </h3>
           <div className={styles.kpiValue}>{kpiValue(data ? fmtInt(data.kpis.injuries) : null)}</div>
           <p className={styles.kpiHint}>{data ? `${fmtInt(data.kpis.fatalities)} fatalities in range` : "—"}</p>
         </article>
         <article className={styles.kpiTile}>
           <span className={styles.kpiIcon} aria-hidden="true"><Timer size={15} /></span>
-          <h3>Avg Response Time</h3>
+          <h3>
+            Avg Response Time
+            {kpiInfo("Average minutes from an incident being reported to a responder arriving on scene, excluding outliers beyond 2 hours.")}
+          </h3>
           <div className={styles.kpiValue}>{kpiValue(data?.kpis.avgResponseMin != null ? `${data.kpis.avgResponseMin} min` : null)}</div>
           <p className={styles.kpiHint}>reported → responder on scene</p>
         </article>
         <article className={styles.kpiTile}>
           <span className={styles.kpiIcon} aria-hidden="true"><MapPin size={15} /></span>
-          <h3>Top Hotspot</h3>
+          <h3>
+            Top Hotspot
+            {kpiInfo("The 5km corridor segment with the most incidents in the Range, among segments whose location could be resolved.")}
+          </h3>
           <div className={styles.kpiValue}>{kpiValue(derived?.topHotspot ? kmLabel(derived.topHotspot.km_bin) : null)}</div>
           <p className={styles.kpiHint}>
             {derived?.topHotspot && derived.hotspotTotal > 0
@@ -859,7 +848,10 @@ export default function IncidentPage() {
         </article>
         <article className={styles.kpiTile}>
           <span className={styles.kpiIcon} aria-hidden="true"><CloudRain size={15} /></span>
-          <h3>Crash Rate in Rain</h3>
+          <h3>
+            Crash Rate in Rain
+            {kpiInfo("Road and motorcycle crashes per day during rainy hours vs. dry hours, normalized for how often each occurs. Above 1× means rain sees more crashes per hour of exposure.")}
+          </h3>
           <div className={styles.kpiValue}>{kpiValue(derived?.rainMultiplier != null ? `${derived.rainMultiplier.toFixed(2)}×` : null)}</div>
           <p className={styles.kpiHint}>
             {derived ? `${derived.wetRate.toFixed(1)} vs ${derived.dryRate.toFixed(1)} crashes/day, wet vs dry` : "—"}
@@ -871,7 +863,10 @@ export default function IncidentPage() {
       <article className={`${styles.chartCard} ${styles.chart1} ${styles.hero}`}>
         <div className={styles.chartHead}>
           <div className={styles.headText}>
-            <h3>Incident Trend</h3>
+            <h3>
+              Incident Trend
+              <InfoTooltip text="Incident counts over the selected Range, by type (road crashes, motorcycle crashes, stalled vehicles). Daily, weekly, or monthly — click a point to see that period's breakdown." />
+            </h3>
           </div>
         </div>
         <div className={styles.heroFilters}>
@@ -914,7 +909,10 @@ export default function IncidentPage() {
       <article className={`${styles.chartCard} ${styles.chart2}`}>
         <div className={styles.chartHead}>
           <div className={styles.headText}>
-            <h3>When Incidents Happen</h3>
+            <h3>
+              When Incidents Happen
+              <InfoTooltip text="Average incidents per day by hour (weekdays vs. weekends) or by day of week, normalized for how many of each day type are actually in the Range — so 5 weekdays vs. 2 weekend days compare fairly." />
+            </h3>
             {timeTakeaway && <p className={styles.subtitle}>{timeTakeaway}</p>}
           </div>
           <div className={styles.segmentedSmall}>
@@ -932,7 +930,10 @@ export default function IncidentPage() {
       <article className={`${styles.chartCard} ${styles.chart3}`}>
         <div className={styles.chartHead}>
           <div className={styles.headText}>
-            <h3>Hotspots by Km Segment</h3>
+            <h3>
+              Hotspots by Km Segment
+              <InfoTooltip text="Top 10 km segments by total located incidents in the Range. Hover a bar for its injury and fatality counts." />
+            </h3>
           </div>
           <button
             type="button"
@@ -955,7 +956,10 @@ export default function IncidentPage() {
       <article className={`${styles.chartCard} ${styles.chart4}`}>
         <div className={styles.chartHead}>
           <div className={styles.headText}>
-            <h3>{causeMode === "Causes" ? "Top Incident Causes" : "Top Accident Types"}</h3>
+            <h3>
+              {causeMode === "Causes" ? "Top Incident Causes" : "Top Accident Types"}
+              <InfoTooltip text="Top 9 logged causes or collision types by incident count in the Range, with injuries and fatalities on hover. Toggle between Causes and Types on the right." />
+            </h3>
           </div>
           <button
             type="button"
@@ -981,11 +985,17 @@ export default function IncidentPage() {
       <article className={`${styles.chartCard} ${styles.chart5}`}>
         <div className={styles.chartHead}>
           <div className={styles.headText}>
-            <h3>Incidents per Day: Dry vs Wet Weather</h3>
+            <h3>
+              Incidents per Day: Dry vs Wet Weather
+              <InfoTooltip text="Average incidents per day by type, dry vs. wet hours — normalized by hours of exposure (× 24) so rare wet hours compare fairly against far more abundant dry ones, not raw counts." />
+            </h3>
           </div>
         </div>
         <div className={styles.chartBody}>{chartFrame(weatherChart, "No weather data in range", onWeatherClick)}</div>
       </article>
+
+      {/* Row F — accident vs. breakdown events, dispatch response times */}
+      <EventBreakdownPanel />
 
       {/* Click-to-inspect detail modal */}
       {detail && (

@@ -3,7 +3,15 @@
  */
 import type { RawRow } from "./parser.js";
 
-export type DatasetType = "traffic_volume" | "road_crash" | "stalled_vehicle" | "motorcycle_crash" | "emissions" | "unknown";
+export type DatasetType =
+  | "traffic_volume"
+  | "road_crash"
+  | "stalled_vehicle"
+  | "motorcycle_crash"
+  | "emissions"
+  | "accident_data"
+  | "breakdown_data"
+  | "unknown";
 
 export interface ClassifyResult {
   type: DatasetType;
@@ -18,6 +26,12 @@ const STALLED_SIGNALS = ["vehicle_cause", "assistance_rendered", "entry_point", 
 const MOTORCYCLE_SIGNALS = ["cause_of_accident", "type_of_accident", "rider"];
 const EMISSION_SIGNALS = ["co2_grams", "co_grams", "no2_grams", "pm25_grams", "pm10_grams", "methodology_tier"];
 const EMISSION_AQI_SIGNALS = ["aqi", "co", "no2", "o3", "so2", "pm2_5", "pm10"];
+// Header normalization lowercases and strips separators but does NOT split
+// camelCase, so "EventNumber"/"StartKM"/"TypeOfEvent" arrive as a single
+// run-together token ("eventnumber"/"startkm"/"typeofevent") — these signals
+// are written against that exact normalized form, not a guessed snake_case.
+const ACCIDENT_DATA_SIGNALS = ["typeofevent", "numberofinjured", "numberoffatality", "blockagecleared", "sitecleared", "damagetoproperty"];
+const BREAKDOWN_DATA_SIGNALS = ["sloop", "platenumber", "vehicleclass", "troubledescription", "deployments", "typeofvehicle"];
 
 function countMatches(headers: string[], signals: string[]): number {
   const headerSet = new Set(headers);
@@ -36,6 +50,8 @@ export function classifyDataset(headers: string[], sampleRows: RawRow[]): Classi
     { type: "road_crash", score: countMatches(h, ROAD_CRASH_SIGNALS), total: ROAD_CRASH_SIGNALS.length },
     { type: "stalled_vehicle", score: countMatches(h, STALLED_SIGNALS), total: STALLED_SIGNALS.length },
     { type: "emissions", score: countMatches(h, EMISSION_SIGNALS), total: EMISSION_SIGNALS.length },
+    { type: "accident_data", score: countMatches(h, ACCIDENT_DATA_SIGNALS), total: ACCIDENT_DATA_SIGNALS.length },
+    { type: "breakdown_data", score: countMatches(h, BREAKDOWN_DATA_SIGNALS), total: BREAKDOWN_DATA_SIGNALS.length },
   ];
 
   // Check for AQI-based emissions (OpenWeather style)

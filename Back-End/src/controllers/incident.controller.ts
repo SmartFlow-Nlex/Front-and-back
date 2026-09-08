@@ -17,6 +17,7 @@ import {
 import { getIncidentSpatialFromDb } from "../services/incident-spatial.service.js";
 import { getIncidentSeverityFromDb } from "../services/incident-severity.service.js";
 import { getIncidentWeatherSpeedFromDb } from "../services/incident-weather-speed.service.js";
+import { getEventBreakdownFromDb } from "../services/incident-events.service.js";
 
 const IncidentAnalyticsQuerySchema = z.object({
   months: z.enum(["3", "12", "all"]).optional().default("12"),
@@ -174,6 +175,20 @@ export const getIncidentSeverity = async (_req: Request, res: Response) => {
       success: false,
       message: "Severity/clearance models unavailable: database not reachable or the pipeline hasn't written yet",
     });
+  }
+  res.json({ success: true, source: "database", data });
+};
+
+// GET /api/incident/event-breakdown — descriptive analytics over the
+// accident_data/breakdown_data event tables: EventType counts by month,
+// breakdown cause counts, and per-service/per-cause response-time stats
+// from breakdown_data's deployments records. A live SQL aggregation (like
+// /analytics), not a trained-model snapshot, so the 503 message doesn't
+// mention a pipeline.
+export const getEventBreakdown = async (_req: Request, res: Response) => {
+  const data = await getEventBreakdownFromDb();
+  if (!data) {
+    return res.status(503).json({ success: false, message: "Event breakdown analytics unavailable: database not reachable" });
   }
   res.json({ success: true, source: "database", data });
 };

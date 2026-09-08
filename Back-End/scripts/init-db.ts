@@ -121,12 +121,14 @@ const WAREHOUSE_READS = [
   // Built by `npm run seed-holidays` — if this is missing or empty, run that.
   "ph_holidays",
   "gold.ml_predictive_volume", "gold.ml_predictive_congestion", "gold.ml_event_surge_forecast",
+  "silver.nlex_accident_events_clean", "silver.nlex_breakdown_events_clean",
 ];
 
 /** Bronze tables the ETL writes into on upload. */
 const WAREHOUSE_WRITES = [
   "bronze.nlex_traffic_volume", "bronze.nlex_incidents",
   "bronze.nlex_theoretical_emissions", "bronze.nlex_emissions",
+  "bronze.nlex_accident_data", "bronze.nlex_breakdown_data",
 ];
 
 async function main() {

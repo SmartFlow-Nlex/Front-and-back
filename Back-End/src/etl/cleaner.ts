@@ -262,6 +262,48 @@ function cleanIncident(rows: RawRow[], type: "road_crash" | "stalled_vehicle" | 
   return { accepted, rejected, warnings };
 }
 
+/**
+ * accident_data / breakdown_data events: unlike cleanIncident()'s format,
+ * `location` here is a location-TYPE enum (Carriageway/Toll Plaza/
+ * Interchange/...), not a plaza name or a "Km 79+400" string — the corridor
+ * position lives in the separate `startkm` column, in METERS (e.g. 82500 =
+ * Km 82+500), so the corridor check keys off that instead of parsing text.
+ */
+function cleanAccidentBreakdownEvent(rows: RawRow[], type: "accident_data" | "breakdown_data"): CleanResult {
+  const accepted: RawRow[] = [];
+  const rejected: CleanResult["rejected"] = [];
+  const warnings: string[] = [];
+  const dateField = type === "accident_data" ? "event_start_date" : "event_encoded_date";
+
+  for (const row of rows) {
+    const rawKm = row.startkm;
+    const km = rawKm === null || rawKm === undefined || rawKm === "" ? null : Number(rawKm) / 1000;
+
+    if (km === null || Number.isNaN(km)) {
+      rejected.push({ row, reason: "Missing or invalid startkm value." });
+      continue;
+    }
+
+    if (!isNlexKmPost(km)) {
+      rejected.push({ row, reason: `Km ${km.toFixed(1)} is NOT in the NLEX corridor (Km ${NLEX_KM_MIN}-${NLEX_KM_MAX}).` });
+      continue;
+    }
+
+    if (!row[dateField]) {
+      rejected.push({ row, reason: `Missing ${dateField} value.` });
+      continue;
+    }
+
+    accepted.push(row);
+  }
+
+  if (rejected.length > 0) {
+    warnings.push(`${rejected.length} row(s) rejected — non-NLEX locations or invalid data.`);
+  }
+
+  return { accepted, rejected, warnings };
+}
+
 function cleanEmissions(rows: RawRow[]): CleanResult {
   const accepted: RawRow[] = [];
   const rejected: CleanResult["rejected"] = [];
@@ -313,6 +355,9 @@ export function cleanData(rows: RawRow[], datasetType: DatasetType): CleanResult
     case "motorcycle_crash":
     case "stalled_vehicle":
       return cleanIncident(rows, datasetType);
+    case "accident_data":
+    case "breakdown_data":
+      return cleanAccidentBreakdownEvent(rows, datasetType);
     case "emissions":
       return cleanEmissions(rows);
     default:

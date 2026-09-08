@@ -378,7 +378,7 @@ export default function IncidentPage() {
     return {
       rows: display,
       option: {
-        grid: { left: 84, right: 46, top: 8, bottom: 46 },
+        grid: { left: 84, right: 46, top: 8, bottom: 18 },
         xAxis: { type: "value", splitNumber: 3, axisLabel: { fontSize: 10 } },
         yAxis: { type: "category", data: display.map((r) => kmLabel(r.km_bin)), axisLabel: { interval: 0, fontSize: 10 }, axisTick: { show: false } },
         tooltip: {
@@ -389,7 +389,10 @@ export default function IncidentPage() {
             return `<b>${kmLabel(r.km_bin)}</b><br/>${fmtInt(r.total)} incidents · ${fmtInt(r.injuries)} injured · ${fmtInt(r.fatalities)} fatalities`;
           },
         },
-        legend: { show: true, bottom: 0, left: "center", itemWidth: 14, itemHeight: 8, itemGap: 18, padding: 0, textStyle: { fontSize: 11 } },
+        /* No legend: one series, and the axis already says these are incidents
+           by segment. A single chip naming the only thing on the chart is
+           furniture, and the bars are shaded on a ramp, so its lone swatch
+           matches no bar in particular. */
         series: [
           {
             name: "Incidents by segment",
@@ -415,7 +418,7 @@ export default function IncidentPage() {
     return {
       rows: display,
       option: {
-        grid: { left: 150, right: 42, top: 8, bottom: 46 },
+        grid: { left: 150, right: 42, top: 8, bottom: 18 },
         xAxis: { type: "value", splitNumber: 3, axisLabel: { fontSize: 10 } },
         yAxis: { type: "category", data: display.map((r) => (r.label.length > 24 ? `${r.label.slice(0, 24)}…` : r.label)), axisLabel: { interval: 0, fontSize: 10 }, axisTick: { show: false } },
         tooltip: {
@@ -426,7 +429,8 @@ export default function IncidentPage() {
             return `<b>${r.label}</b><br/>${fmtInt(r.total)} incidents · ${fmtInt(r.injuries)} injured · ${fmtInt(r.fatalities)} fatalities`;
           },
         },
-        legend: { show: true, bottom: 0, left: "center", itemWidth: 14, itemHeight: 8, itemGap: 18, padding: 0, textStyle: { fontSize: 11 } },
+        /* No legend: one series named "Incidents" on a chart titled the same,
+           beneath a category axis that names every bar. */
         series: [
           {
             name: "Incidents",

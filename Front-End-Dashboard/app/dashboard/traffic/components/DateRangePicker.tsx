@@ -8,6 +8,14 @@ interface DateRangePickerProps {
   startDate: string;
   endDate: string;
   onChange: (start: string, end: string) => void;
+  /* The span the warehouse actually holds, as YYYY-MM-DD.
+     Every caller already passed these from data.meta, and the component
+     declared neither, so all three dashboards failed to typecheck and the
+     bounds were dropped on the floor at runtime -- days with no data behind
+     them were selectable. The stylesheet has carried a .dayBtn.disabled rule
+     the whole time, so the state was designed and just never wired up. */
+  minDate?: string;
+  maxDate?: string;
 }
 
 const MONTHS = [
@@ -25,7 +33,7 @@ function formatDate(d: Date): string {
   return `${y}-${m}-${dd}`;
 }
 
-export default function DateRangePicker({ startDate, endDate, onChange }: DateRangePickerProps) {
+export default function DateRangePicker({ startDate, endDate, onChange, minDate, maxDate }: DateRangePickerProps) {
   const [isOpen, setIsOpen] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
 
@@ -57,7 +65,14 @@ export default function DateRangePicker({ startDate, endDate, onChange }: DateRa
     return () => document.removeEventListener("mousedown", handleClickOutside);
   }, []);
 
+  /* String compare is safe and exact here: every date in this component is
+     zero-padded YYYY-MM-DD, which sorts lexicographically the same way it
+     sorts chronologically. */
+  const outOfRange = (day: string) =>
+    (minDate != null && day < minDate) || (maxDate != null && day > maxDate);
+
   const handleDayClick = (dayStr: string) => {
+    if (outOfRange(dayStr)) return;
     if (!selStart || (selStart && selEnd)) {
       // Start new selection
       setSelStart(dayStr);
@@ -174,7 +189,10 @@ export default function DateRangePicker({ startDate, endDate, onChange }: DateRa
                   inRange = true; // Preview range (backwards)
                 }
 
+                const disabled = outOfRange(dayStr);
+
                 let classes = styles.dayBtn;
+                if (disabled) classes += ` ${styles.disabled}`;
                 if (isStart) classes += ` ${styles.rangeStart}`;
                 if (isEnd) classes += ` ${styles.rangeEnd}`;
                 if (inRange) classes += ` ${styles.inRange}`;
@@ -185,8 +203,13 @@ export default function DateRangePicker({ startDate, endDate, onChange }: DateRa
                   <button
                     key={dayStr}
                     className={classes}
+                    disabled={disabled}
+                    aria-disabled={disabled}
                     onClick={() => handleDayClick(dayStr)}
-                    onMouseEnter={() => setHoverDate(dayStr)}
+                    // A disabled day must not drive the hover preview either,
+                    // or dragging across it paints a range that cannot be
+                    // selected.
+                    onMouseEnter={() => !disabled && setHoverDate(dayStr)}
                     onMouseLeave={() => setHoverDate(null)}
                   >
                     {d.getDate()}
@@ -227,21 +250,28 @@ export default function DateRangePicker({ startDate, endDate, onChange }: DateRa
             </div>
           )}
 
+          {/* Counted back from the newest day the data holds, not from today.
+              The warehouse currently ends 2025-12-31 while the clock reads
+              2026, so both presets were selecting a window that is entirely
+              in the future of the data and returning an empty chart. They
+              fall back to today only when no bound was supplied. */}
           <div className={styles.presets}>
-            <button className={styles.presetBtn} onClick={() => {
-              const e = new Date();
-              const s = new Date();
-              s.setDate(e.getDate() - 7);
-              onChange(formatDate(s), formatDate(e));
-              setIsOpen(false);
-            }}>Last 7 days</button>
-            <button className={styles.presetBtn} onClick={() => {
-              const e = new Date();
-              const s = new Date();
-              s.setDate(e.getDate() - 30);
-              onChange(formatDate(s), formatDate(e));
-              setIsOpen(false);
-            }}>Last 30 days</button>
+            {[7, 30].map((n) => (
+              <button
+                key={n}
+                className={styles.presetBtn}
+                onClick={() => {
+                  const end = maxDate ? new Date(maxDate) : new Date();
+                  const start = new Date(end);
+                  start.setDate(end.getDate() - (n - 1));
+                  const lo = formatDate(start);
+                  onChange(minDate && lo < minDate ? minDate : lo, formatDate(end));
+                  setIsOpen(false);
+                }}
+              >
+                Last {n} days
+              </button>
+            ))}
           </div>
         </div>
       )}

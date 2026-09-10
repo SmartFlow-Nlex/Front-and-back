@@ -451,17 +451,25 @@ export function EventInterventionPanel() {
                   const days = Math.round((d.getTime() - Date.now()) / 86400000);
                   const extra = u.exits.reduce((s, x) => s + (x.surge - x.baseline), 0);
                   const active = i === sel;
+                  /* Multi-day runs (LANY Nov 7-8, New Year Dec 30-31) arrive as one
+                     row per day because the forecast is per day -- Saturday's
+                     baseline is not Sunday's. They are grouped visually under one
+                     event heading so the reader sees "LANY, two nights", not two
+                     unrelated concerts. */
+                  const prev = upcoming[i - 1];
+                  const newEvent = !prev || prev.title !== u.title;
                   return (
                     <tr key={u.date} onClick={() => setSel(i)} style={{
                       cursor: "pointer", borderBottom: "1px solid var(--border-default)",
+                      borderTop: newEvent && i > 0 ? "2px solid var(--border-strong)" : undefined,
                       background: active ? "color-mix(in srgb, var(--brand-primary) 7%, transparent)" : undefined,
                     }}>
                       <td style={{ padding: "6px 8px", fontWeight: 700, whiteSpace: "nowrap" }}>
                         {d.toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric", year: "numeric" })}
                       </td>
-                      <td style={{ padding: "6px 8px" }}>
-                        {u.title}
-                        {u.isDerived && <span style={{ fontSize: "0.68rem", color: "var(--text-muted)" }}> · recurring, inferred</span>}
+                      <td style={{ padding: "6px 8px", color: newEvent ? undefined : "var(--text-muted)" }}>
+                        {newEvent ? <b>{u.title}</b> : <span style={{ fontSize: "0.72rem" }}>↳ same event, day {upcoming.slice(0, i + 1).filter((x) => x.title === u.title).length}</span>}
+                        {newEvent && u.isDerived && <span style={{ fontSize: "0.68rem", color: "var(--text-muted)" }}> · recurring, inferred</span>}
                       </td>
                       <td style={{ padding: "6px 8px", textAlign: "right", fontVariantNumeric: "tabular-nums", whiteSpace: "nowrap" }}>
                         {days >= 0 ? `${days} day${days === 1 ? "" : "s"}` : "today"}
@@ -483,8 +491,12 @@ export function EventInterventionPanel() {
           </div>
 
           <Banner>
-            <b>{new Date(`${ev.date}T00:00:00`).toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric", year: "numeric" })} — {ev.title}</b>
+            <span style={{ display: "block", fontSize: "0.68rem", fontWeight: 700, letterSpacing: "0.06em", textTransform: "uppercase", color: "var(--text-muted)", marginBottom: 2 }}>
+              During this event — prediction by exit
+            </span>
+            <b>{ev.title}</b>
             {ev.isDerived && <span style={{ fontSize: "0.72rem", color: "var(--text-muted)" }}> (recurring, inferred)</span>}
+            {" "}on <b>{new Date(`${ev.date}T00:00:00`).toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric", year: "numeric" })}</b>
             {evLead != null && evLead >= 0 && <> · in <b>{evLead} day{evLead === 1 ? "" : "s"}</b></>}.{" "}
             Expect <b>+{fmtInt(evTotal)}</b> vehicles across {ev.exits.length} exits versus a normal{" "}
             {new Date(`${ev.date}T00:00:00`).toLocaleDateString("en-US", { weekday: "long" })} in{" "}

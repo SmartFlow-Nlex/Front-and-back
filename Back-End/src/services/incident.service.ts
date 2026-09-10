@@ -8,11 +8,12 @@ import { buildExitToExitSegments, segmentIndexForKm } from "../lib/exit-segments
 
 // ---------------------------------------------------------------------------
 // Incident analytics for the descriptive dashboard.
-// Sources: nlex_road_crashes, nlex_motorcycle_crashes, nlex_stalled_vehicles
-// (operations logs with Km-post locations), plus hourly_weather for exposure.
+// Sources: silver.nlex_accident_events_clean and
+// silver.nlex_breakdown_events_clean — the client's own operations exports,
+// plus hourly_weather for exposure.
 // ---------------------------------------------------------------------------
 
-export type IncidentSource = "all" | "road" | "moto" | "stalled";
+export type IncidentSource = "all" | "accident" | "breakdown";
 
 export type IncidentWeather = "all" | "dry" | "wet";
 
@@ -28,37 +29,59 @@ type CacheEntry = { at: number; data: unknown };
 const incidentCache = new Map<string, CacheEntry>();
 const CACHE_TTL_MS = 10 * 60 * 1000;
 
-// Unified incident log. Dates are stored as text in two formats.
-// Response minutes are computed mod 24h to survive midnight wrap, capped at 120.
+// Unified incident log, sourced from the client's own operations exports
+// (silver.nlex_accident_events_clean / silver.nlex_breakdown_events_clean).
+// These replaced the generated nlex_road_crashes / nlex_motorcycle_crashes /
+// nlex_stalled_vehicles tables, whose severity column was 100% NULL and which
+// carried no clearance timestamp at all.
+//
+// The two sources answer different questions, so several columns are
+// one-sided by nature rather than by omission:
+//   * itype (collision type) and weather_condition are accident-only
+//   * vehicle (type_of_vehicle) is breakdown-only — the client's accident
+//     export carries vehicle COUNTS but never a type, so crashes genuinely
+//     cannot be split by vehicle
+//   * casualties are accident-only; a breakdown is a stalled vehicle, not a
+//     collision, so 0 is the true value and not a placeholder
 const INCIDENTS_CTE = `
   incidents AS (
-    SELECT CASE WHEN date LIKE '%/%' THEN to_date(date, 'MM/DD/YYYY') ELSE date::date END AS d, reported_time AS rt, response_time AS resp,
-           location, cause_of_accident AS cause, type_of_accident AS itype,
+    SELECT event_start_date::date AS d, event_start_date::time AS rt,
+           clearance_min::numeric AS clr,
+           location, main_cause AS cause, type_of_event AS itype,
            weather_condition,
-           COALESCE(injuries_male, 0) + COALESCE(injuries_female, 0) AS inj,
-           COALESCE(fatalities_male, 0) + COALESCE(fatalities_female, 0) AS fat,
-           'road' AS src
-    FROM nlex_road_crashes WHERE date IS NOT NULL
+           number_of_injured AS inj, number_of_fatality AS fat,
+           'accident' AS src, NULL::text AS vehicle, km_value AS km,
+           CASE WHEN direction ILIKE '%NB' THEN 'NB'
+                WHEN direction ILIKE '%SB' THEN 'SB'
+                WHEN direction ILIKE '%EB' THEN 'EB'
+                WHEN direction ILIKE '%WB' THEN 'WB'
+                ELSE direction END AS dir
+    FROM silver.nlex_accident_events_clean
     UNION ALL
-    SELECT CASE WHEN date LIKE '%/%' THEN to_date(date, 'MM/DD/YYYY') ELSE date::date END, reported_time, response_time,
-           location, cause_of_accident, type_of_accident, weather_condition,
-           COALESCE(injuries_male, 0) + COALESCE(injuries_female, 0),
-           COALESCE(fatalities_male, 0) + COALESCE(fatalities_female, 0),
-           'moto'
-    FROM nlex_motorcycle_crashes WHERE date IS NOT NULL
-    UNION ALL
-    SELECT CASE WHEN date LIKE '%/%' THEN to_date(date, 'MM/DD/YYYY') ELSE date::date END, reported_time, responded_time,
-           location, vehicle_cause, 'Stalled vehicle', NULL, 0, 0, 'stalled'
-    FROM nlex_stalled_vehicles WHERE date IS NOT NULL
+    SELECT event_encoded_date::date, event_encoded_date::time,
+           NULL::numeric,
+           location, main_cause, NULL::text,
+           NULL::text,
+           0, 0,
+           'breakdown', type_of_vehicle, km_value,
+           CASE WHEN direction ILIKE '%NB' THEN 'NB'
+                WHEN direction ILIKE '%SB' THEN 'SB'
+                WHEN direction ILIKE '%EB' THEN 'EB'
+                WHEN direction ILIKE '%WB' THEN 'WB'
+                ELSE direction END AS dir
+    FROM silver.nlex_breakdown_events_clean
   )`;
 
-const RESPONSE_MIN = `
-  CASE WHEN rt IS NOT NULL AND resp IS NOT NULL THEN
-    MOD((EXTRACT(EPOCH FROM (resp::time - rt::time)) / 60)::int + 1440, 1440)
-  END`;
+// Scene-clearance minutes, already validated to the 0-1440 range in silver.
+// This replaces the old response-time arithmetic: the generated tables
+// recorded when a unit responded, the client export records when the scene
+// was cleared (SiteCleared). Different metric, so it is labelled clearance.
+const CLEARANCE_MIN = `clr`;
 
 const HOUR_OF = `EXTRACT(hour FROM rt::time)::int`;
-const KM_OF = `(regexp_match(location, 'Km\\s*(\\d+)'))[1]::int`;
+// km_value is a real numeric column on both silver tables, so the old
+// regexp_match over the free-text location string is no longer needed.
+const KM_OF = `km`;
 
 export async function getIncidentAnalyticsFromDb(filters: IncidentAnalyticsFilters) {
   if (!db) return null;
@@ -69,7 +92,10 @@ export async function getIncidentAnalyticsFromDb(filters: IncidentAnalyticsFilte
 
   try {
     const bounds = await db.query(
-      `SELECT min(CASE WHEN date LIKE '%/%' THEN to_date(date, 'MM/DD/YYYY') ELSE date::date END)::text AS lo, max(CASE WHEN date LIKE '%/%' THEN to_date(date, 'MM/DD/YYYY') ELSE date::date END)::text AS hi FROM nlex_road_crashes`
+      `SELECT MIN(d)::text AS lo, MAX(d)::text AS hi FROM (
+         SELECT event_start_date::date AS d FROM silver.nlex_accident_events_clean
+         UNION ALL SELECT event_encoded_date::date FROM silver.nlex_breakdown_events_clean
+       ) q`
     );
     const minDate: string = bounds.rows[0].lo;
     const maxDate: string = bounds.rows[0].hi;
@@ -83,8 +109,16 @@ export async function getIncidentAnalyticsFromDb(filters: IncidentAnalyticsFilte
     } else {
       // Month ranges anchor at the default year (2025), clamped to available data:
       // "12 mo" opens as calendar 2025, "3 mo" as Jan-Apr 2025.
+      //
+      // "All" is the exception and must start at minDate. Anchoring it to 2025
+      // too meant "All" silently reported 2025 onwards only — with the client
+      // export running from 2022-01-01 that hid 111,989 of 176,819 events (63%)
+      // on every view, which reads as missing data rather than a range default.
       const anchor = "2025-01-01";
-      lo = anchor < minDate ? minDate : anchor > maxDate ? minDate : anchor;
+      lo =
+        filters.months === "all"
+          ? minDate
+          : anchor < minDate ? minDate : anchor > maxDate ? minDate : anchor;
       hi =
         filters.months === "all"
           ? maxDate
@@ -124,14 +158,20 @@ export async function getIncidentAnalyticsFromDb(filters: IncidentAnalyticsFilte
         GROUP BY 1, 2
       )`;
 
-    const [trend, hotspot, heatmap, causes, types, weatherExposure, weatherIncidents, jamSpeedWx, kpi] =
+    const [trend, hotspot, heatmap, causes, types, vehicles, weatherExposure, weatherIncidents, jamSpeedWx, kpi] =
       await Promise.all([
-        // Daily counts by source (client rolls up to weekly/monthly)
+        // Daily counts, split BOTH ways in a single pass so the client can
+        // switch the trend between incident type and carriageway without a
+        // refetch. Rolling up to weekly/monthly stays a client-side concern.
         db.query(
           `WITH ${INCIDENTS_CTE}, ${WXALL_CTE}
-           SELECT d::text, COUNT(*) FILTER (WHERE src = 'road')::int AS road,
-                  COUNT(*) FILTER (WHERE src = 'moto')::int AS moto,
-                  COUNT(*) FILTER (WHERE src = 'stalled')::int AS stalled
+           SELECT d::text,
+                  COUNT(*) FILTER (WHERE src = 'accident')::int  AS accident,
+                  COUNT(*) FILTER (WHERE src = 'breakdown')::int AS breakdown,
+                  COUNT(*) FILTER (WHERE dir = 'NB')::int AS nb,
+                  COUNT(*) FILTER (WHERE dir = 'SB')::int AS sb,
+                  COUNT(*) FILTER (WHERE dir = 'EB')::int AS eb,
+                  COUNT(*) FILTER (WHERE dir = 'WB')::int AS wb
            FROM incidents WHERE ${WHERE} GROUP BY 1 ORDER BY 1`,
           params
         ),
@@ -139,12 +179,11 @@ export async function getIncidentAnalyticsFromDb(filters: IncidentAnalyticsFilte
         db.query(
           `WITH ${INCIDENTS_CTE}, ${WXALL_CTE}
            SELECT (FLOOR(${KM_OF} / 5) * 5)::int AS km_bin, COUNT(*)::int AS total,
-                  COUNT(*) FILTER (WHERE src = 'road')::int AS road,
-                  COUNT(*) FILTER (WHERE src = 'moto')::int AS moto,
-                  COUNT(*) FILTER (WHERE src = 'stalled')::int AS stalled,
+                  COUNT(*) FILTER (WHERE src = 'accident')::int AS accident,
+                  COUNT(*) FILTER (WHERE src = 'breakdown')::int AS breakdown,
                   SUM(inj)::int AS injuries, SUM(fat)::int AS fatalities
            FROM incidents
-           WHERE ${WHERE} AND location ~ 'Km\\s*\\d+'
+           WHERE ${WHERE} AND km IS NOT NULL
            GROUP BY 1 ORDER BY 2 DESC`,
           params
         ),
@@ -164,12 +203,24 @@ export async function getIncidentAnalyticsFromDb(filters: IncidentAnalyticsFilte
            GROUP BY 1 ORDER BY 2 DESC LIMIT 12`,
           params
         ),
-        // Top accident types with severity (crashes only — stalled vehicles have no type)
+        // Top collision types with severity. Accident-only by nature: a breakdown
+        // has no collision type, so including them would just add a NULL bucket.
         db.query(
           `WITH ${INCIDENTS_CTE}, ${WXALL_CTE}
            SELECT itype AS label, COUNT(*)::int AS total, SUM(inj)::int AS injuries, SUM(fat)::int AS fatalities
-           FROM incidents WHERE ${WHERE} AND itype IS NOT NULL AND src <> 'stalled'
+           FROM incidents WHERE ${WHERE} AND itype IS NOT NULL AND src = 'accident'
            GROUP BY 1 ORDER BY 2 DESC LIMIT 12`,
+          params
+        ),
+        // Breakdown vehicle mix — the drill-down that replaces the old
+        // road/moto/stalled split. Breakdown-only: the client's accident export
+        // carries vehicle counts but no vehicle type, so crashes cannot be split
+        // this way. This is where Motorcycle survives as a real category.
+        db.query(
+          `WITH ${INCIDENTS_CTE}, ${WXALL_CTE}
+           SELECT vehicle AS label, COUNT(*)::int AS total
+           FROM incidents WHERE ${WHERE} AND src = 'breakdown' AND vehicle IS NOT NULL
+           GROUP BY 1 ORDER BY 2 DESC`,
           params
         ),
         // Weather exposure: wet vs dry hours in range (expressway-wide avg rainfall)
@@ -209,7 +260,7 @@ export async function getIncidentAnalyticsFromDb(filters: IncidentAnalyticsFilte
              COUNT(*) FILTER (WHERE d >= $1::date - ($2::date - $1::date + 1) AND d < $1::date AND ($3::text IS NULL OR src = $3) AND ${WEATHER_OK})::int AS prev_total,
              SUM(inj) FILTER (WHERE ${WHERE})::int AS injuries,
              SUM(fat) FILTER (WHERE ${WHERE})::int AS fatalities,
-             ROUND(AVG(${RESPONSE_MIN}) FILTER (WHERE ${WHERE} AND ${RESPONSE_MIN} BETWEEN 0 AND 120)::numeric, 1)::float AS avg_response_min,
+             ROUND(AVG(${CLEARANCE_MIN}) FILTER (WHERE ${WHERE} AND ${CLEARANCE_MIN} IS NOT NULL)::numeric, 1)::float AS avg_clearance_min,
              COUNT(*) FILTER (WHERE ${WHERE} AND weather_condition = 'Rainy')::int AS rainy_crashes,
              COUNT(*) FILTER (WHERE ${WHERE} AND weather_condition IS NOT NULL)::int AS weather_known
            FROM incidents`,
@@ -217,10 +268,10 @@ export async function getIncidentAnalyticsFromDb(filters: IncidentAnalyticsFilte
         ),
       ]);
 
-    const wxInc = { wet: { road: 0, moto: 0, stalled: 0 }, dry: { road: 0, moto: 0, stalled: 0 } };
+    const wxInc = { wet: { accident: 0, breakdown: 0 }, dry: { accident: 0, breakdown: 0 } };
     for (const r of weatherIncidents.rows) {
       const bucket = r.wet ? wxInc.wet : wxInc.dry;
-      bucket[r.src as "road" | "moto" | "stalled"] = r.n;
+      bucket[r.src as "accident" | "breakdown"] = r.n;
     }
     const jamWx = { wet: null as { speed: number; jam_level: number } | null, dry: null as { speed: number; jam_level: number } | null };
     for (const r of jamSpeedWx.rows) {
@@ -235,7 +286,7 @@ export async function getIncidentAnalyticsFromDb(filters: IncidentAnalyticsFilte
         prevTotalIncidents: kpi.rows[0].prev_total,
         injuries: kpi.rows[0].injuries ?? 0,
         fatalities: kpi.rows[0].fatalities ?? 0,
-        avgResponseMin: kpi.rows[0].avg_response_min,
+        avgClearanceMin: kpi.rows[0].avg_clearance_min,
         rainyCrashes: kpi.rows[0].rainy_crashes,
         weatherKnown: kpi.rows[0].weather_known,
       },
@@ -244,6 +295,7 @@ export async function getIncidentAnalyticsFromDb(filters: IncidentAnalyticsFilte
       heatmap: heatmap.rows,
       causes: causes.rows,
       types: types.rows,
+      vehicles: vehicles.rows,
       weather: {
         wetHours: weatherExposure.rows[0].wet_hours,
         dryHours: weatherExposure.rows[0].dry_hours,
@@ -287,9 +339,8 @@ export type IncidentHourlyPoint = {
   temperatureC: number | null;
   /** null (not false) when rainfallMm is null — unknown weather, not dry weather. */
   isWet: boolean | null;
-  road: number;
-  moto: number;
-  stalled: number;
+  accident: number;
+  breakdown: number;
   total: number;
 };
 
@@ -344,9 +395,8 @@ export async function getIncidentHourlyFromDb(date: string) {
                 ROUND(wx.rain::numeric, 3)::float                 AS rainfall_mm,
                 ROUND(wx.temp::numeric, 1)::float                 AS temperature_c,
                 (wx.rain > 0.3)                                   AS is_wet,
-                COUNT(i.d) FILTER (WHERE i.src = 'road')::int     AS road,
-                COUNT(i.d) FILTER (WHERE i.src = 'moto')::int     AS moto,
-                COUNT(i.d) FILTER (WHERE i.src = 'stalled')::int  AS stalled,
+                COUNT(i.d) FILTER (WHERE i.src = 'accident')::int  AS accident,
+                COUNT(i.d) FILTER (WHERE i.src = 'breakdown')::int AS breakdown,
                 COUNT(i.d)::int                                   AS total
          FROM hrs
          LEFT JOIN wx ON wx.h = hrs.h
@@ -361,11 +411,11 @@ export async function getIncidentHourlyFromDb(date: string) {
       // Last logged day per source table, so the caller can tell an honest zero
       // from an out-of-range day.
       db.query(
-        `SELECT 'road' AS src, max(${DATE_OF()})::text AS last_logged FROM nlex_road_crashes WHERE date IS NOT NULL
+        `SELECT 'accident' AS src, MAX(event_start_date)::date::text AS last_logged
+           FROM silver.nlex_accident_events_clean
          UNION ALL
-         SELECT 'moto', max(${DATE_OF()})::text FROM nlex_motorcycle_crashes WHERE date IS NOT NULL
-         UNION ALL
-         SELECT 'stalled', max(${DATE_OF()})::text FROM nlex_stalled_vehicles WHERE date IS NOT NULL`
+         SELECT 'breakdown', MAX(event_encoded_date)::date::text
+           FROM silver.nlex_breakdown_events_clean`
       ),
       // Every model's predicted DAILY total for this date. Absent for days
       // outside the walk-forward window (ml_predictive_incidents holds only
@@ -407,9 +457,8 @@ export async function getIncidentHourlyFromDb(date: string) {
       rainfall_mm: number | null;
       temperature_c: number | null;
       is_wet: boolean | null;
-      road: number;
-      moto: number;
-      stalled: number;
+      accident: number;
+      breakdown: number;
       total: number;
     };
     const hours: IncidentHourlyPoint[] = (hourly.rows as HourRow[]).map((r) => ({
@@ -417,9 +466,8 @@ export async function getIncidentHourlyFromDb(date: string) {
       rainfallMm: r.rainfall_mm,
       temperatureC: r.temperature_c,
       isWet: r.is_wet,
-      road: r.road,
-      moto: r.moto,
-      stalled: r.stalled,
+      accident: r.accident,
+      breakdown: r.breakdown,
       total: r.total,
     }));
 
@@ -531,7 +579,7 @@ export async function getIncidentHourlyFromDb(date: string) {
 //
 // Note the scope difference: fact_incident_log holds the recent live feed,
 // whereas the /analytics endpoint reports multi-year history from the
-// nlex_road_crashes / nlex_motorcycle_crashes / nlex_stalled_vehicles tables.
+// silver.nlex_accident_events_clean / silver.nlex_breakdown_events_clean tables.
 
 /** Classifies each incident hour as wet/dry using expressway-average rainfall. */
 const WX_CTE = `

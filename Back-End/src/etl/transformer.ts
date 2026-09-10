@@ -15,6 +15,11 @@
 import type { RawRow } from "./parser.js";
 import type { DatasetType } from "./classifier.js";
 import { extractKmPost } from "./cleaner.js";
+import {
+  REFRESH_ACCIDENT_SILVER,
+  REFRESH_BREAKDOWN_SILVER,
+  type SilverRefresh,
+} from "./silver-refresh.js";
 
 export interface TransformResult {
   tableName: string;
@@ -23,6 +28,12 @@ export interface TransformResult {
   skipped: number;
   /** Set when a materialized view must be refreshed for the load to become visible. */
   refreshMaterializedView?: string;
+  /**
+   * Set when a silver table must be rebuilt for the load to become visible.
+   * The materialized-view field above cannot express this: accident/breakdown
+   * silver is a plain table (DROP + CREATE TABLE AS), not a matview.
+   */
+  refreshSilver?: SilverRefresh;
 }
 
 const DAY_NAMES = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
@@ -315,7 +326,11 @@ function transformAccidentData(rows: RawRow[]): TransformResult {
     ]);
   }
 
-  return { tableName: "bronze.nlex_accident_data", columns, rows: transformed, skipped };
+  return {
+    tableName: "bronze.nlex_accident_data",
+    columns, rows: transformed, skipped,
+    refreshSilver: REFRESH_ACCIDENT_SILVER,
+  };
 }
 
 /**
@@ -366,7 +381,11 @@ function transformBreakdownData(rows: RawRow[]): TransformResult {
     ]);
   }
 
-  return { tableName: "bronze.nlex_breakdown_data", columns, rows: transformed, skipped };
+  return {
+    tableName: "bronze.nlex_breakdown_data",
+    columns, rows: transformed, skipped,
+    refreshSilver: REFRESH_BREAKDOWN_SILVER,
+  };
 }
 
 function transformEmissions(rows: RawRow[]): TransformResult {

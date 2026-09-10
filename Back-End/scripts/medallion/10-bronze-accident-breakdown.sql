@@ -29,6 +29,14 @@
 -- loader, same as bronze.nlex_incidents — never dropped by this file).
 -- Silver: DROP + CREATE TABLE AS, idempotent and safe to re-run after every
 -- bulk load, same idiom as 06-silver-remaining.sql.
+--
+-- KEEP IN SYNC: the two silver definitions below are duplicated in
+-- src/etl/silver-refresh.ts, which the ETL loader now runs automatically
+-- after every accident/breakdown upload (previously an upload landed in
+-- bronze and the charts kept reading a stale silver snapshot until someone
+-- ran this file by hand). This file still has to build silver on a fresh
+-- database where that code has never run, so both copies must exist.
+-- Change one, change the other.
 
 BEGIN;
 

@@ -50,9 +50,8 @@ type HourPoint = {
   rainfallMm: number | null;
   temperatureC: number | null;
   isWet: boolean | null;
-  road: number;
-  moto: number;
-  stalled: number;
+  accident: number;
+  breakdown: number;
   total: number;
 };
 
@@ -75,16 +74,15 @@ type HourlyData = {
   dayActual: number;
   models: ModelSeries[];
   hours: HourPoint[];
-  sourceCoverage: Record<"road" | "moto" | "stalled", { lastLogged: string | null; covered: boolean }>;
+  sourceCoverage: Record<"accident" | "breakdown", { lastLogged: string | null; covered: boolean }>;
   hasIncidentLog: boolean;
   weather: { hoursRecorded: number; wetHours: number; dryHours: number; totalRainfallMm: number; threshold: number };
   totals: { all: number; wet: number; dry: number; unknownWeather: number };
 };
 
-const SOURCE_LABEL: Record<"road" | "moto" | "stalled", string> = {
-  road: "Road crashes",
-  moto: "Motorcycle crashes",
-  stalled: "Stalled vehicles",
+const SOURCE_LABEL: Record<"accident" | "breakdown", string> = {
+  accident: "Accidents",
+  breakdown: "Breakdowns",
 };
 
 const CHIPS: { key: WeatherFilter; label: string }[] = [
@@ -211,7 +209,7 @@ function HourlyIncidentContent() {
   const passes = (h: HourPoint) => (weather === "all" ? true : h.isWet === (weather === "wet"));
 
   const missingSources = data
-    ? (Object.keys(data.sourceCoverage) as ("road" | "moto" | "stalled")[]).filter((k) => !data.sourceCoverage[k].covered)
+    ? (Object.keys(data.sourceCoverage) as ("accident" | "breakdown")[]).filter((k) => !data.sourceCoverage[k].covered)
     : [];
 
   const modelsWithPrediction = data?.models.filter((m) => m.dayPredicted != null) ?? [];
@@ -248,7 +246,7 @@ function HourlyIncidentContent() {
               tip += `${it.marker} ${it.seriesName}: <b>${it.value}${unit}</b><br/>`;
             });
             if (passes(h) && h.total > 0) {
-              tip += `<span style="color:#94a3b8;font-size:11px">Road ${h.road} · Moto ${h.moto} · Stalled ${h.stalled}</span>`;
+              tip += `<span style="color:#94a3b8;font-size:11px">Accidents ${h.accident} · Breakdowns ${h.breakdown}</span>`;
             }
             return tip;
           },
@@ -519,7 +517,7 @@ function HourlyIncidentContent() {
               <span style={{ flexShrink: 0 }}>⚠️</span>
               <span>
                 No incident log covers this date — the operations log ends{" "}
-                <b>{data.sourceCoverage.stalled.lastLogged ?? "earlier"}</b>. Weather and the model curves are shown;
+                <b>{data.sourceCoverage.breakdown.lastLogged ?? "earlier"}</b>. Weather and the model curves are shown;
                 the absent bars mean <b>no data</b>, not zero incidents.
               </span>
             </div>

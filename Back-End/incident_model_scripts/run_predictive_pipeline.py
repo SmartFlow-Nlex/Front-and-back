@@ -49,16 +49,20 @@ FEATURE_COLS = [
 ]
 HOLIDAY_DATES: set = set()
 
-# Daily incident counts from the three operations logs, matching INCIDENTS_CTE in
-# src/services/incident.service.ts. `date` is TEXT in two formats.
-_D = "CASE WHEN date LIKE '%/%' THEN to_date(date, 'MM/DD/YYYY') ELSE date::date END"
-DAILY_COUNTS_SQL = f"""
+# Daily incident counts from the client's own operations exports
+# (silver.nlex_accident_events_clean / silver.nlex_breakdown_events_clean),
+# matching INCIDENTS_CTE in src/services/incident.service.ts so the forecast
+# counts exactly the incidents the descriptive dashboard shows.
+#
+# These replaced the generated nlex_road_crashes / nlex_motorcycle_crashes /
+# nlex_stalled_vehicles tables. No date coercion is needed any more: the
+# silver tables store real timestamps, where the generated tables stored
+# `date` as TEXT in two different formats and needed a CASE to parse it.
+DAILY_COUNTS_SQL = """
     WITH all_incidents AS (
-        SELECT {_D} AS d FROM nlex_road_crashes        WHERE date IS NOT NULL
+        SELECT event_start_date::date   AS d FROM silver.nlex_accident_events_clean
         UNION ALL
-        SELECT {_D} AS d FROM nlex_motorcycle_crashes  WHERE date IS NOT NULL
-        UNION ALL
-        SELECT {_D} AS d FROM nlex_stalled_vehicles    WHERE date IS NOT NULL
+        SELECT event_encoded_date::date AS d FROM silver.nlex_breakdown_events_clean
     )
     SELECT d, COUNT(*)::float AS total
     FROM all_incidents

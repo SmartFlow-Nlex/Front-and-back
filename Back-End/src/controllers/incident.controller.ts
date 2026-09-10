@@ -23,7 +23,7 @@ const IncidentAnalyticsQuerySchema = z.object({
   months: z.enum(["3", "12", "all"]).optional().default("12"),
   from: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
   to: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
-  source: z.enum(["all", "road", "moto", "stalled"]).optional().default("all"),
+  source: z.enum(["all", "accident", "breakdown"]).optional().default("all"),
   weather: z.enum(["all", "dry", "wet"]).optional().default("all"),
 });
 

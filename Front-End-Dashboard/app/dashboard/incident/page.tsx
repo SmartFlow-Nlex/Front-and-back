@@ -32,10 +32,9 @@ const BACKEND = process.env.NEXT_PUBLIC_BACKEND_URL ?? "http://localhost:4000";
 const DOW_LABELS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 const DOW_ORDER = [1, 2, 3, 4, 5, 6, 0];
 
-const SOURCE_LABEL: Record<"road" | "moto" | "stalled", string> = {
-  road: "Road crashes",
-  moto: "Motorcycle crashes",
-  stalled: "Stalled vehicles",
+const SOURCE_LABEL: Record<"accident" | "breakdown", string> = {
+  accident: "Accidents",
+  breakdown: "Breakdowns",
 };
 
 // ---------- Data contract ----------
@@ -47,19 +46,27 @@ type Analytics = {
     prevTotalIncidents: number;
     injuries: number;
     fatalities: number;
-    avgResponseMin: number | null;
+    avgClearanceMin: number | null;
     rainyCrashes: number;
     weatherKnown: number;
   };
-  dailyTrend: { d: string; road: number; moto: number; stalled: number }[];
-  hotspots: { km_bin: number; total: number; road: number; moto: number; stalled: number; injuries: number; fatalities: number }[];
+  /**
+   * Both splits arrive together so the trend can switch between incident
+   * type and carriageway without refetching. nb+sb+eb+wb equals
+   * accident+breakdown — they are two cuts of the same rows.
+   */
+  dailyTrend: { d: string; accident: number; breakdown: number;
+                nb: number; sb: number; eb: number; wb: number }[];
+  hotspots: { km_bin: number; total: number; accident: number; breakdown: number; injuries: number; fatalities: number }[];
   heatmap: { dow: number; hour: number; v: number }[];
   causes: { label: string; total: number; injuries: number; fatalities: number }[];
   types: { label: string; total: number; injuries: number; fatalities: number }[];
+  /** Breakdown vehicle mix. Breakdown-only — the accident export has no vehicle type. */
+  vehicles: { label: string; total: number }[];
   weather: {
     wetHours: number;
     dryHours: number;
-    incidents: { wet: Record<"road" | "moto" | "stalled", number>; dry: Record<"road" | "moto" | "stalled", number> };
+    incidents: { wet: Record<"accident" | "breakdown", number>; dry: Record<"accident" | "breakdown", number> };
     jam: { wet: { speed: number; jam_level: number } | null; dry: { speed: number; jam_level: number } | null };
   };
 };
@@ -68,7 +75,9 @@ type Granularity = "daily" | "weekly" | "monthly";
 type RangeMode = "3" | "12" | "all" | "custom";
 type WeatherFilter = "all" | "dry" | "wet";
 /** Matches the source enum the incident endpoint validates against. */
-type SourceFilter = "all" | "road" | "moto" | "stalled";
+type SourceFilter = "all" | "accident" | "breakdown";
+/** What the Incident Trend lines are split by. */
+type TrendView = "type" | "direction";
 type Detail = { title: string; subtitle?: string; rows: [string, string][]; note?: string };
 
 // ---------- Formatting ----------
@@ -110,6 +119,7 @@ export default function IncidentPage() {
   const [hotspotSort, setHotspotSort] = useState<"desc" | "asc">("desc");
   const [causeSort, setCauseSort] = useState<"desc" | "asc">("desc");
   const [grain, setGrain] = useState<Granularity>("monthly");
+  const [trendView, setTrendView] = useState<TrendView>("type");
   const [timeView, setTimeView] = useState<"hour" | "dow">("hour");
   const [causeMode, setCauseMode] = useState<"Causes" | "Types">("Causes");
   const [allHotspotsOpen, setAllHotspotsOpen] = useState(false);
@@ -209,10 +219,12 @@ export default function IncidentPage() {
     const hotspotTotal = hotspots.reduce((s, h) => s + h.total, 0);
     const topHotspot = hotspots[0] ?? null;
 
-    // Crash rate per day of each weather, wet vs dry (crashes = road + moto).
+    // Accident rate per day of each weather, wet vs dry. Accidents only: a
+    // breakdown is a stalled vehicle, not a crash, so folding it in would
+    // dilute the rain signal with events rain does not cause.
     // Exposure-normalized: wet hours are far rarer than dry, so raw counts can't be compared.
-    const wetCrashes = weather.incidents.wet.road + weather.incidents.wet.moto;
-    const dryCrashes = weather.incidents.dry.road + weather.incidents.dry.moto;
+    const wetCrashes = weather.incidents.wet.accident;
+    const dryCrashes = weather.incidents.dry.accident;
     const wetRate = weather.wetHours > 0 ? (wetCrashes / weather.wetHours) * 24 : 0;
     const dryRate = weather.dryHours > 0 ? (dryCrashes / weather.dryHours) * 24 : 0;
     const rainMultiplier = dryRate > 0 ? wetRate / dryRate : null;
@@ -221,19 +233,25 @@ export default function IncidentPage() {
   }, [data]);
 
     // ---------- Trend ----------
-  type TrendRow = { label: string; road: number; moto: number; stalled: number; total: number };
+  type TrendRow = { label: string; accident: number; breakdown: number;
+                    nb: number; sb: number; eb: number; wb: number; total: number };
+  type TrendKey = Exclude<keyof TrendRow, "label" | "total">;
   const trendRows = useMemo<TrendRow[]>(() => {
     if (!data) return [];
     const keyOf = grain === "daily" ? (d: string) => d : grain === "weekly" ? weekStart : (d: string) => d.slice(0, 7);
-    const acc = new Map<string, { road: number; moto: number; stalled: number }>();
+    const zero = () => ({ accident: 0, breakdown: 0, nb: 0, sb: 0, eb: 0, wb: 0 });
+    const acc = new Map<string, ReturnType<typeof zero>>();
     for (const r of data.dailyTrend) {
       const k = keyOf(r.d);
-      const cur = acc.get(k) ?? { road: 0, moto: 0, stalled: 0 };
-      acc.set(k, { road: cur.road + r.road, moto: cur.moto + r.moto, stalled: cur.stalled + r.stalled });
+      const cur = acc.get(k) ?? zero();
+      acc.set(k, {
+        accident: cur.accident + r.accident, breakdown: cur.breakdown + r.breakdown,
+        nb: cur.nb + r.nb, sb: cur.sb + r.sb, eb: cur.eb + r.eb, wb: cur.wb + r.wb,
+      });
     }
     return [...acc.entries()]
       .sort(([a], [b]) => (a < b ? -1 : 1))
-      .map(([label, v]) => ({ label, ...v, total: v.road + v.moto + v.stalled }));
+      .map(([label, v]) => ({ label, ...v, total: v.accident + v.breakdown }));
   }, [data, grain]);
 
   const trendOption = useMemo<EChartsOption | null>(() => {
@@ -242,7 +260,7 @@ export default function IncidentPage() {
     const boundaryKey = grain === "monthly" ? (l: string) => l : (l: string) => l.slice(0, 7);
     const labelInterval = (i: number) => i === 0 || boundaryKey(labels[i]) !== boundaryKey(labels[i - 1]);
 
-    const mk = (name: string, key: "road" | "moto" | "stalled", color: string) => ({
+    const mk = (name: string, key: TrendKey, color: string) => ({
       name,
       type: "line" as const,
       data: trendRows.map((r) => r[key]),
@@ -252,7 +270,18 @@ export default function IncidentPage() {
       lineStyle: { width: 2.5, color },
     });
 
-    const series = [mk("Road crashes", "road", RAMP[2]), mk("Motorcycle crashes", "moto", RAMP[1]), mk("Stalled vehicles", "stalled", RAMP[0])];
+    // Direction uses the 4-step sequential ramp because the four carriageways
+    // are one ordered family, not four unrelated categories; incident type
+    // keeps the two outer nominal steps for maximum separation.
+    const series =
+      trendView === "direction"
+        ? [
+            mk("Northbound", "nb", SEQ[3]),
+            mk("Southbound", "sb", SEQ[2]),
+            mk("Eastbound", "eb", SEQ[1]),
+            mk("Westbound", "wb", SEQ[0]),
+          ]
+        : [mk("Accidents", "accident", RAMP[2]), mk("Breakdowns", "breakdown", RAMP[0])];
 
     return {
       grid: { left: 52, right: 16, top: 10, bottom: 52 },
@@ -262,7 +291,7 @@ export default function IncidentPage() {
       legend: { show: true, bottom: 0, left: "center", itemWidth: 14, itemHeight: 8, itemGap: 18, padding: 0, textStyle: { fontSize: 11 } },
       series,
     };
-  }, [trendRows, grain]);
+  }, [trendRows, grain, trendView]);
 
   // Weekday/weekend hourly profile + day-of-week averages, normalized per day
   // so 5 weekdays vs 2 weekend days compare fairly.
@@ -448,8 +477,8 @@ export default function IncidentPage() {
     if (!data || !derived) return null;
     const w = data.weather;
     if (w.wetHours === 0 && w.dryHours === 0) return null;
-    const cats = ["Road crashes", "Motorcycle crashes", "Stalled vehicles"] as const;
-    const keys = ["road", "moto", "stalled"] as const;
+    const cats = ["Accidents", "Breakdowns"] as const;
+    const keys = ["accident", "breakdown"] as const;
     // Per day of that weather = incidents / hours-of-exposure × 24, so rare wet
     // hours compare fairly against abundant dry hours.
     const rate = (n: number, hours: number) => (hours > 0 ? Number(((n / hours) * 24).toFixed(1)) : 0);
@@ -490,9 +519,11 @@ export default function IncidentPage() {
       subtitle: `Incidents · ${periodWord}ly`,
       rows: [
         ["Total incidents", fmtInt(r.total)],
-        ["Road crashes", fmtInt(r.road)],
-        ["Motorcycle crashes", fmtInt(r.moto)],
-        ["Stalled vehicles", fmtInt(r.stalled)],
+        ...(trendView === "direction"
+          ? ([["Northbound", fmtInt(r.nb)], ["Southbound", fmtInt(r.sb)],
+              ["Eastbound", fmtInt(r.eb)], ["Westbound", fmtInt(r.wb)]] as [string, string][])
+          : ([["Accidents", fmtInt(r.accident)],
+              ["Breakdowns", fmtInt(r.breakdown)]] as [string, string][])),
         ["vs range average", avg > 0 ? fmtPct(((r.total - avg) / avg) * 100) : "—"],
         ["Rank in range", `#${rank} of ${totals.length} ${periodWord}s`],
       ],
@@ -541,9 +572,8 @@ export default function IncidentPage() {
       subtitle: "Incident hotspot (5-km segment)",
       rows: [
         ["Total incidents", fmtInt(r.total)],
-        ["Road crashes", fmtInt(r.road)],
-        ["Motorcycle crashes", fmtInt(r.moto)],
-        ["Stalled vehicles", fmtInt(r.stalled)],
+        ["Accidents", fmtInt(r.accident)],
+        ["Breakdowns", fmtInt(r.breakdown)],
         ["Injuries", fmtInt(r.injuries)],
         ["Fatalities", fmtInt(r.fatalities)],
         ["Share of located incidents", derived.hotspotTotal > 0 ? `${((r.total / derived.hotspotTotal) * 100).toFixed(1)}%` : "—"],
@@ -578,7 +608,7 @@ export default function IncidentPage() {
 
   const onWeatherClick = (p: { dataIndex: number; seriesName?: string }) => {
     if (!data || !derived) return;
-    const keys = ["road", "moto", "stalled"] as const;
+    const keys = ["accident", "breakdown"] as const;
     const k = keys[p.dataIndex];
     const w = data.weather;
     setDetail({
@@ -809,7 +839,7 @@ export default function IncidentPage() {
           <span className={styles.kpiIcon} aria-hidden="true"><AlertTriangle size={15} /></span>
           <h3>
             Total Incidents
-            {kpiInfo("All logged incidents — road crashes, motorcycle crashes, and stalled vehicles — in the selected Range, compared to the equivalent prior period.")}
+            {kpiInfo("All logged incidents — accidents and vehicle breakdowns from the client operations export — in the selected Range, compared to the equivalent prior period.")}
           </h3>
           <div className={styles.kpiValue}>{kpiValue(data ? fmtInt(data.kpis.totalIncidents) : null)}</div>
           <p className={styles.kpiHint}>
@@ -831,11 +861,11 @@ export default function IncidentPage() {
         <article className={styles.kpiTile}>
           <span className={styles.kpiIcon} aria-hidden="true"><Timer size={15} /></span>
           <h3>
-            Avg Response Time
-            {kpiInfo("Average minutes from an incident being reported to a responder arriving on scene, excluding outliers beyond 2 hours.")}
+            Avg Clearance Time
+            {kpiInfo("Average minutes from an accident starting to the scene being cleared (SiteCleared in the client export). Accidents only — the breakdown export records no clearance timestamp.")}
           </h3>
-          <div className={styles.kpiValue}>{kpiValue(data?.kpis.avgResponseMin != null ? `${data.kpis.avgResponseMin} min` : null)}</div>
-          <p className={styles.kpiHint}>reported → responder on scene</p>
+          <div className={styles.kpiValue}>{kpiValue(data?.kpis.avgClearanceMin != null ? `${data.kpis.avgClearanceMin} min` : null)}</div>
+          <p className={styles.kpiHint}>incident start → scene cleared</p>
         </article>
         <article className={styles.kpiTile}>
           <span className={styles.kpiIcon} aria-hidden="true"><MapPin size={15} /></span>
@@ -854,7 +884,7 @@ export default function IncidentPage() {
           <span className={styles.kpiIcon} aria-hidden="true"><CloudRain size={15} /></span>
           <h3>
             Crash Rate in Rain
-            {kpiInfo("Road and motorcycle crashes per day during rainy hours vs. dry hours, normalized for how often each occurs. Above 1× means rain sees more crashes per hour of exposure.")}
+            {kpiInfo("Accidents per day during rainy hours vs. dry hours, normalized for how often each occurs. Above 1× means rain sees more accidents per hour of exposure. Breakdowns are excluded — rain does not cause a vehicle to stall.")}
           </h3>
           <div className={styles.kpiValue}>{kpiValue(derived?.rainMultiplier != null ? `${derived.rainMultiplier.toFixed(2)}×` : null)}</div>
           <p className={styles.kpiHint}>
@@ -869,7 +899,7 @@ export default function IncidentPage() {
           <div className={styles.headText}>
             <h3>
               Incident Trend
-              <InfoTooltip text="Incident counts over the selected Range, by type (road crashes, motorcycle crashes, stalled vehicles). Daily, weekly, or monthly — click a point to see that period's breakdown." />
+              <InfoTooltip text="Incident counts over the selected Range, split into accidents and vehicle breakdowns. Daily, weekly, or monthly — click a point to see that period's breakdown." />
             </h3>
           </div>
         </div>
@@ -881,9 +911,8 @@ export default function IncidentPage() {
               onChange={(v) => setSource(v as SourceFilter)}
               options={[
                 { label: "All types", value: "all" },
-                { label: "Road crashes", value: "road" },
-                { label: "Motorcycle crashes", value: "moto" },
-                { label: "Stalled vehicles", value: "stalled" },
+                { label: "Accidents", value: "accident" },
+                { label: "Breakdowns", value: "breakdown" },
               ]}
             />
           </div>
@@ -901,6 +930,18 @@ export default function IncidentPage() {
                 >
                   {grain === g && <svg width="10" height="10" viewBox="0 0 16 16" fill="none" style={{ marginRight: 4, marginBottom: -1 }}><path d="M3.5 8.5l3 3 6-7" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" /></svg>}
                   {g.charAt(0).toUpperCase() + g.slice(1)}
+                </button>
+              ))}
+            </div>
+          </div>
+          <div className={styles.heroFilterDivider} />
+          <div className={styles.heroFilterGroup}>
+            <span className={styles.heroFilterLabel}>Split by</span>
+            <div className={styles.segmentedSmall}>
+              {([["type", "Incident type"], ["direction", "Direction"]] as const).map(([v, label]) => (
+                <button key={v} className={trendView === v ? "active" : ""} onClick={() => setTrendView(v)}>
+                  {trendView === v && <svg width="10" height="10" viewBox="0 0 16 16" fill="none" style={{ marginRight: 4, marginBottom: -1 }}><path d="M3.5 8.5l3 3 6-7" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" /></svg>}
+                  {label}
                 </button>
               ))}
             </div>
@@ -1052,7 +1093,7 @@ export default function IncidentPage() {
             <div className={styles.plazaTableWrap}>
               <table className={styles.plazaTable}>
                 <thead>
-                  <tr><th>#</th><th>Segment</th><th>Total</th><th>Road</th><th>Moto</th><th>Stalled</th><th>Injured</th><th>Fatal</th></tr>
+                  <tr><th>#</th><th>Segment</th><th>Total</th><th>Accidents</th><th>Breakdowns</th><th>Injured</th><th>Fatal</th></tr>
                 </thead>
                 <tbody>
                   {data.hotspots.map((r, i) => (
@@ -1060,9 +1101,8 @@ export default function IncidentPage() {
                       <td className={styles.plazaRank}>{i + 1}</td>
                       <td>{kmLabel(r.km_bin)}</td>
                       <td className={styles.plazaNum}>{fmtInt(r.total)}</td>
-                      <td className={styles.plazaNum}>{fmtInt(r.road)}</td>
-                      <td className={styles.plazaNum}>{fmtInt(r.moto)}</td>
-                      <td className={styles.plazaNum}>{fmtInt(r.stalled)}</td>
+                      <td className={styles.plazaNum}>{fmtInt(r.accident)}</td>
+                      <td className={styles.plazaNum}>{fmtInt(r.breakdown)}</td>
                       <td className={styles.plazaNum}>{fmtInt(r.injuries)}</td>
                       <td className={styles.plazaNum}>{fmtInt(r.fatalities)}</td>
                     </tr>

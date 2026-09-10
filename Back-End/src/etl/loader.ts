@@ -103,6 +103,24 @@ export async function loadData(transformResult: TransformResult): Promise<LoadRe
     }
   }
 
+  // Same problem, different shape: accident/breakdown silver is a plain table
+  // rebuilt from bronze (DROP + CREATE TABLE AS), not a materialized view, so
+  // REFRESH cannot reach it. Without this the ETL reports rows inserted while
+  // every chart keeps reading the previous snapshot. Once after the batches.
+  if (totalInserted > 0 && transformResult.refreshSilver) {
+    const { label, sql } = transformResult.refreshSilver;
+    try {
+      await db.query(sql);
+    } catch (err: any) {
+      errors.push(
+        `Rows loaded into ${transformResult.tableName}, but rebuilding ` +
+          `'${label}' failed: ${err.message}. The new rows will not appear on ` +
+          `the dashboard until it is rebuilt by hand (npx tsx ` +
+          `scripts/run-sql.ts scripts/medallion/10-bronze-accident-breakdown.sql).`
+      );
+    }
+  }
+
   return {
     tableName,
     rowsInserted: totalInserted,

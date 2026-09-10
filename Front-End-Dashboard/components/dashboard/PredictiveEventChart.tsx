@@ -38,7 +38,6 @@ type UpcomingExit = { exit: string; baseline: number; surge: number; surgeLo: nu
 type UpcomingEvent = { date: string; title: string; isDerived: boolean; capacity: number | null; exits: UpcomingExit[] };
 
 const SURGE_COLOR = "#e11d48";
-const SHARE_COLORS = ["#e11d48", "#fb7185", "#fecdd3", "#a3a3a3"];
 
 const fmtVeh = (n: number) => Math.round(n).toLocaleString("en-US");
 const fmtK = (n: number) => (n >= 1000 ? `${(n / 1000).toFixed(0)}k` : String(n));
@@ -228,53 +227,6 @@ export default function PredictiveEventChart() {
     ],
   };
 
-  // Where the surge concentrates — one 100% bar, labelled in the key below so
-  // slivers do not go unexplained.
-  const shareOption: EChartsOption = {
-    grid: { left: 0, right: 0, top: 2, bottom: 2 },
-    tooltip: {
-      trigger: "item",
-      backgroundColor: "rgba(255,255,255,0.97)",
-      borderColor: "#e2e8f0",
-      borderWidth: 1,
-      textStyle: { color: "#334155" },
-      formatter: (params: unknown) => {
-        const p = params as { seriesName: string; value: number };
-        const r = affected.find((x) => x.exit === p.seriesName);
-        return `<b>${p.seriesName}</b><br/>${p.value.toFixed(0)}% of the surge${r ? `<br/>+${fmtVeh(r.added)} vehicles` : ""}`;
-      },
-    },
-    xAxis: { type: "value", max: 100, show: false },
-    yAxis: { type: "category", data: [""], show: false },
-    series: affected.map((r, i) => ({
-      name: r.exit,
-      type: "bar" as const,
-      stack: "share",
-      barWidth: 22,
-      data: [r.shareOfSurge],
-      itemStyle: {
-        color: SHARE_COLORS[i % SHARE_COLORS.length],
-        borderRadius: i === 0 ? [5, 0, 0, 5] : i === affected.length - 1 ? [0, 5, 5, 0] : 0,
-      },
-      label: {
-        show: r.shareOfSurge > 14,
-        position: "inside" as const,
-        formatter: `${r.shareOfSurge.toFixed(0)}%`,
-        color: i === 0 ? "#fff" : "#7f1d1d",
-        fontSize: 11,
-        fontWeight: 800,
-      },
-    })),
-  };
-
-  const kpi = (label: string, value: string, sub: string, tone?: string) => (
-    <div style={{ background: "#f8fafc", border: "1px solid #e2e8f0", borderRadius: "8px", padding: "11px 13px" }}>
-      <div style={{ fontSize: "0.68rem", color: "#64748b", textTransform: "uppercase", letterSpacing: "0.05em", fontWeight: 600 }}>{label}</div>
-      <div style={{ fontSize: "1.1rem", fontWeight: 700, color: tone ?? "#0f172a", margin: "2px 0 1px" }}>{value}</div>
-      <div style={{ fontSize: "0.72rem", color: "#94a3b8" }}>{sub}</div>
-    </div>
-  );
-
   // Provenance travels on the rows; take it from the first that has it.
   const meta = (raw ?? []).find((r) => r.nEvents != null) ?? null;
   const chosenDate = chosen ? new Date(`${chosen.date}T00:00:00`).toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric", year: "numeric" }) : "";
@@ -286,219 +238,191 @@ export default function PredictiveEventChart() {
   const impactHeight = Math.max(rows.length * 56 + 62, 220);
   const VISIBLE_OTHERS = 8;
   const shownOthers = showAllOthers ? otherExits : otherExits.slice(0, VISIBLE_OTHERS);
+  // How concentrated the surge is: the share the two biggest exits carry
+  // between them. Replaces a stacked strip plus a thirteen-item key that said
+  // the same thing at ten times the height.
+  const top2Share = affected.slice(0, 2).reduce((a, r) => a + r.shareOfSurge, 0);
+  const shortTitle = (t: string) => t.split(" - ")[0];
+
+  /* Layout, from top: what am I looking at (title, mode, controls) -> the one
+     sentence that is the finding -> four numbers -> the chart -> everything
+     else behind a single disclosure. The previous card stacked ten regions --
+     a banner, four tiles and a share legend all restating the top exit -- and
+     read as a pile. Each fact now appears once, at the level it earns. */
+  const stat = (value: string, label: string, tone?: string) => (
+    <div style={{ display: "flex", flexDirection: "column", gap: 1, minWidth: 0 }}>
+      <span style={{ fontSize: "1.05rem", fontWeight: 800, color: tone ?? "#0f172a", letterSpacing: "-0.01em", fontVariantNumeric: "tabular-nums", lineHeight: 1.1 }}>{value}</span>
+      <span style={{ fontSize: "0.68rem", color: "#64748b", whiteSpace: "nowrap" }}>{label}</span>
+    </div>
+  );
 
   return (
-    <article className="chart-card wide" style={{ padding: "24px", display: "flex", flexDirection: "column", gap: "16px", marginTop: "24px" }}>
-      <div>
-        <h3 style={{ fontSize: "1.05rem", color: "#0f172a", fontWeight: 700, margin: 0, letterSpacing: "-0.01em", display: "flex", alignItems: "center", gap: "8px" }}>
+    <article className="chart-card wide" style={{ padding: "22px 24px", display: "flex", flexDirection: "column", gap: "14px", marginTop: "24px" }}>
+      {/* Row 1: title on the left, provenance on the right. */}
+      <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
+        <h3 style={{ fontSize: "1.05rem", color: "#0f172a", fontWeight: 700, margin: 0, letterSpacing: "-0.01em" }}>
           Event Surge Impact by Exit
-          {/* This said "Prophet". No Prophet model ever touched this panel — the
-              badge was a hardcoded string sitting above three hand-typed rows.
-              It now states what the numbers actually are. */}
+        </h3>
+        <div style={{ display: "flex", gap: 6, flexWrap: "wrap", justifyContent: "flex-end" }}>
           {chosen ? (
-            <span style={{ fontSize: "0.72rem", padding: "2px 8px", background: "#fff1f2", borderRadius: "999px", border: "1px solid #fecdd3", color: "#9f1239", fontWeight: 600 }}>
+            <span style={{ fontSize: "0.7rem", padding: "2px 8px", background: "#fff1f2", borderRadius: "999px", border: "1px solid #fecdd3", color: "#9f1239", fontWeight: 600, whiteSpace: "nowrap" }}>
               Forecast · {chosenDate}
             </span>
           ) : (
-            <span style={{ fontSize: "0.72rem", padding: "2px 8px", background: "#ecfdf5", borderRadius: "999px", border: "1px solid #a7f3d0", color: "#047857", fontWeight: 600 }}>
+            <span style={{ fontSize: "0.7rem", padding: "2px 8px", background: "#ecfdf5", borderRadius: "999px", border: "1px solid #a7f3d0", color: "#047857", fontWeight: 600, whiteSpace: "nowrap" }}>
               Observed{meta?.nEvents ? ` · ${meta.nEvents} past event days` : ""}
             </span>
           )}
-          {/* The uplift table is descriptive. This badge reports the SEPARATE
-              out-of-sample test — earlier events fitted, later events held out —
-              so the panel states plainly what has and has not been validated. */}
           {champ?.wmape != null && (
             <span
               title={champ.diagnosis ?? undefined}
               style={{
-                fontSize: "0.72rem", padding: "2px 8px", borderRadius: "999px", fontWeight: 600,
+                fontSize: "0.7rem", padding: "2px 8px", borderRadius: "999px", fontWeight: 600, whiteSpace: "nowrap",
                 background: champ.accepted ? "#eff6ff" : "#fef2f2",
                 border: `1px solid ${champ.accepted ? "#bfdbfe" : "#fecaca"}`,
                 color: champ.accepted ? "#1d4ed8" : "#b91c1c",
               }}
             >
-              {champ.accepted ? "✓ tested" : "failed test"} · {champ.wmape.toFixed(1)}% error on held-out events
+              {champ.accepted ? "✓ tested" : "failed test"} · {champ.wmape.toFixed(1)}% error held-out
             </span>
           )}
-        </h3>
-        <p style={{ color: "#64748b", fontSize: "0.82rem", margin: "4px 0 0 0" }}>
-          {chosen ? (
-            <>
-              During <b style={{ color: "#0f172a" }}>{chosen.title}</b>
-              {chosen.isDerived && <span title="A recurring event the ETL inferred from prior years, not an announced date."> (recurring, inferred)</span>}
-              {" "}on <b>{chosenDateLong}</b>{chosenLead != null && chosenLead >= 0 && <> · in {chosenLead} day{chosenLead === 1 ? "" : "s"}</>}: expected extra vehicles per exit, ranked
-            </>
-          ) : (
-            <>Extra vehicles on past <b>{eventName}</b> days, ranked</>
-          )}
-          <span
-            style={{ cursor: "help" }}
-            title={`Baseline is the same weekday and month on non-event days, so events cannot inflate their own baseline.${
-              meta?.firstEvent && meta?.lastEvent ? ` Events span ${meta.firstEvent} to ${meta.lastEvent}.` : ""
-            }`}
-          >
-            {" "}· method ⓘ
-          </span>
-        </p>
+        </div>
       </div>
 
-      {/* What the card is showing: what past events did, or the forecast for a
-          specific upcoming day. Multi-day runs appear once per day because the
-          numbers differ by weekday; the day index says which night it is. */}
-      {upcoming.length > 0 && (
-        <div style={{ display: "flex", alignItems: "center", gap: "6px", flexWrap: "wrap" }}>
-          <span style={{ fontSize: "0.7rem", color: "#64748b", textTransform: "uppercase", letterSpacing: "0.05em", fontWeight: 600, marginRight: 4 }}>Show</span>
-          {[null, ...upcoming.map((_, i) => i)].map((i) => {
-            const u = i == null ? null : upcoming[i];
-            const active = i === selUpcoming;
-            const nth = u ? upcoming.slice(0, i! + 1).filter((x) => x.title === u.title).length : 0;
-            const multi = u ? upcoming.filter((x) => x.title === u.title).length > 1 : false;
-            const d = u ? new Date(`${u.date}T00:00:00`) : null;
-            return (
-              <button key={u ? u.date : "past"} onClick={() => setSelUpcoming(i)} title={u?.title} style={{
-                padding: "4px 10px", borderRadius: "999px", fontSize: "0.72rem", fontWeight: 600, cursor: "pointer", whiteSpace: "nowrap",
-                border: `1px solid ${active ? SURGE_COLOR : "#dce2ef"}`,
-                background: active ? SURGE_COLOR : "#fff",
-                color: active ? "#fff" : "#475569",
-              }}>
-                {u && d
-                  ? `${d.toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" })} · ${u.title.split(" - ")[0]}${multi ? ` (day ${nth})` : ""}`
-                  : "Past events (observed)"}
-              </button>
-            );
-          })}
-        </div>
-      )}
+      {/* Row 2: what is shown. A select, not seven pills -- the pills wrapped to
+          three lines and pushed the finding below the fold. */}
+      <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", fontSize: "0.8rem", color: "#64748b" }}>
+        <label style={{ display: "inline-flex", alignItems: "center", gap: 8 }}>
+          <span style={{ fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.05em", fontSize: "0.68rem" }}>Showing</span>
+          <select
+            value={selUpcoming == null ? "" : String(selUpcoming)}
+            onChange={(e) => setSelUpcoming(e.target.value === "" ? null : Number(e.target.value))}
+            style={{
+              font: "inherit", fontWeight: 600, color: "#0f172a", background: "#fff",
+              border: "1px solid #dce2ef", borderRadius: 8, padding: "5px 10px", cursor: "pointer", maxWidth: 360,
+            }}
+          >
+            <option value="">Past events — what {eventName === "the upcoming event" ? "event" : eventName} days did</option>
+            {upcoming.map((u, i) => {
+              const nth = upcoming.slice(0, i + 1).filter((x) => x.title === u.title).length;
+              const multi = upcoming.filter((x) => x.title === u.title).length > 1;
+              const d = new Date(`${u.date}T00:00:00`);
+              return (
+                <option key={u.date} value={String(i)}>
+                  {d.toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric", year: "numeric" })} — {shortTitle(u.title)}{multi ? ` (day ${nth})` : ""}
+                </option>
+              );
+            })}
+          </select>
+        </label>
+        <span
+          style={{ cursor: "help" }}
+          title={`Baseline is the same weekday and month on non-event days, so events cannot inflate their own baseline.${
+            meta?.firstEvent && meta?.lastEvent ? ` Events span ${meta.firstEvent} to ${meta.lastEvent}.` : ""
+          }`}
+        >
+          method ⓘ
+        </span>
+      </div>
 
-      {/* Plain-language read, so the card lands without decoding the bars */}
-      <div style={{ padding: "11px 14px", background: "#fff1f2", border: "1px solid #fecdd3", borderRadius: "8px", fontSize: "0.86rem", color: "#9f1239", lineHeight: 1.5 }}>
-        {/* Was four clauses ending in a recommendation. The "exits affected"
-            count is already a KPI card directly below, so the banner keeps only
-            the single fact a reader needs first. */}
+      {/* Row 3: the finding, in one sentence, event first. */}
+      <div style={{ padding: "12px 14px", background: "#fff1f2", border: "1px solid #fecdd3", borderRadius: "10px", fontSize: "0.88rem", color: "#9f1239", lineHeight: 1.5 }}>
         {chosen ? (
-          <>On <b>{chosenDate}</b> ({chosen.title.split(" - ")[0]}), expect <b>+{fmtVeh(totalAdded)}</b> extra vehicles across {affected.length} exits;{" "}
-          <b>{top.exit}</b> takes {top.shareOfSurge.toFixed(0)}% of it — {multiple.toFixed(1)}× its normal{" "}
-          {new Date(`${chosen.date}T00:00:00`).toLocaleDateString("en-US", { weekday: "long" })}, +{fmtVeh(top.added)} vehicles.</>
+          <>
+            During <b>{shortTitle(chosen.title)}</b>
+            {chosen.isDerived && <span title="A recurring event the ETL inferred from prior years, not an announced date." style={{ opacity: 0.8 }}> (inferred)</span>}
+            {" "}on <b>{chosenDateLong}</b>
+            {chosenLead != null && chosenLead >= 0 && <> · in {chosenLead} day{chosenLead === 1 ? "" : "s"}</>}: expect{" "}
+            <b>+{fmtVeh(totalAdded)}</b> extra vehicles. <b>{top.exit}</b> takes {top.shareOfSurge.toFixed(0)}% of it,{" "}
+            {multiple.toFixed(1)}× its normal {new Date(`${chosen.date}T00:00:00`).toLocaleDateString("en-US", { weekday: "long" })}.
+          </>
         ) : (
-          <><b>{top.exit}</b> takes {top.shareOfSurge.toFixed(0)}% of the event surge — {multiple.toFixed(1)}× a
-          normal day, +{fmtVeh(top.added)} vehicles.</>
+          <>
+            On a <b>{eventName}</b> day, <b>{top.exit}</b> takes {top.shareOfSurge.toFixed(0)}% of the surge —{" "}
+            {multiple.toFixed(1)}× a normal day, +{fmtVeh(top.added)} vehicles.
+          </>
         )}
       </div>
 
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(165px, 1fr))", gap: "10px" }}>
-        {kpi("Extra vehicles", `+${fmtVeh(totalAdded)}`, "across affected exits", SURGE_COLOR)}
-        {kpi("Uplift at those exits", `+${((totalAdded / affectedBaseline) * 100).toFixed(0)}%`, "vs their normal-day volume", SURGE_COLOR)}
-        {kpi("Hardest hit", top.exit, `${multiple.toFixed(1)}× normal · ${top.shareOfSurge.toFixed(0)}% of the surge`)}
-        {kpi("Exits affected", `${affected.length} of ${totalPlazas}`, chosen ? "toll points with a material uplift; the rest run normally" : "toll points; the rest run normally")}
+      {/* Row 4: the numbers, once each, on one line. */}
+      {/* Two by two, not auto-fit: in a half-width card four stats wrapped 3+1
+          and left the last one orphaned on its own line. */}
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", gap: "10px 16px", padding: "10px 14px", background: "#f8fafc", border: "1px solid #e2e8f0", borderRadius: 10 }}>
+        {stat(`+${fmtVeh(totalAdded)}`, "extra vehicles", SURGE_COLOR)}
+        {stat(`${affected.length} of ${totalPlazas}`, "exits with a material rise")}
+        {stat(`+${((totalAdded / affectedBaseline) * 100).toFixed(0)}%`, "uplift at those exits", SURGE_COLOR)}
+        {stat(`${top2Share.toFixed(0)}%`, `carried by the top ${Math.min(2, affected.length)}`)}
       </div>
 
+      {/* Row 5: the chart, with the room the strip and tiles were taking. */}
       <div style={{ width: "100%", height: `${impactHeight}px` }}>
         <DashboardChart option={impactOption} height={impactHeight} />
       </div>
 
-      <div>
-        <div style={{ fontSize: "0.7rem", color: "#64748b", textTransform: "uppercase", letterSpacing: "0.05em", fontWeight: 600, marginBottom: "6px" }}>
-          Where the surge lands
-        </div>
-        <div style={{ width: "100%", height: "26px" }}>
-          <DashboardChart option={shareOption} height={26} />
-        </div>
-        {/* Key — every slice is named here, including ones too thin to label */}
-        <div style={{ display: "flex", flexWrap: "wrap", gap: "14px", marginTop: "8px" }}>
-          {affected.map((r, i) => (
-            <span key={r.exit} style={{ display: "inline-flex", alignItems: "center", gap: "6px", fontSize: "0.76rem", color: "#64748b", whiteSpace: "nowrap" }}>
-              <span style={{ width: 10, height: 10, borderRadius: "3px", background: SHARE_COLORS[i % SHARE_COLORS.length] }} />
-              <b style={{ color: "#334155" }}>{r.exit}</b> {r.shareOfSurge.toFixed(0)}%
-              <span style={{ color: "#cbd5e1" }}>+{fmtVeh(r.added)}</span>
-            </span>
-          ))}
-        </div>
-      </div>
+      {/* Row 6: everything a reader may want and nobody needs first. */}
+      <details style={{ fontSize: "0.76rem", color: "#64748b", borderTop: "1px solid #eef2f7", paddingTop: 10 }}>
+        <summary style={{ cursor: "pointer", color: "#475569", fontWeight: 600, listStyle: "none", display: "flex", gap: 14, flexWrap: "wrap" }}>
+          <span>Details</span>
+          {minorAffected.length > 0 && <span style={{ color: "#94a3b8" }}>{minorAffected.length} smaller rises not charted</span>}
+          {otherExits.length > 0 && <span style={{ color: "#94a3b8" }}>{otherExits.length} exits unchanged</span>}
+          {champ?.wmape != null && <span style={{ color: "#94a3b8" }}>how this was validated</span>}
+        </summary>
 
-      {champ?.wmape != null && (
-        <details style={{ fontSize: "0.72rem", color: "#64748b" }}>
-          {/* This was an always-visible paragraph naming every candidate and its
-              score. All of it is still here, but a reader who just wants to know
-              which exits are affected no longer has to scroll past it. */}
-          <summary style={{ cursor: "pointer", color: "#475569", fontWeight: 600 }}>
-            How this was validated
-          </summary>
-          <p style={{ margin: "6px 0 0", lineHeight: 1.55 }}>
-            Per-exit uplift is fitted on earlier events and scored on later ones it never saw
-            ({champ.diagnosis}), reaching{" "}
-            <b style={{ color: "#334155" }}>{champ.wmape.toFixed(2)}% WMAPE</b>
-            {noAdj?.wmape != null && <> against <b style={{ color: "#334155" }}>{noAdj.wmape.toFixed(2)}%</b> for
-              ignoring the event entirely</>}
-            .{" "}
-            {others.length > 0 && (
-              <>
-                Ranked against{" "}
-                {others.map((o, i) => (
-                  <span key={o.model}>
-                    {i > 0 && ", "}
-                    {o.model} {o.wmape?.toFixed(2)}%
+        <div style={{ display: "grid", gap: 12, marginTop: 10 }}>
+          {minorAffected.length > 0 && (
+            <p style={{ margin: 0, lineHeight: 1.55 }}>
+              <b style={{ color: "#334155" }}>Smaller rises</b> (each under 4% of the surge, {minorAffected.reduce((a, r) => a + r.shareOfSurge, 0).toFixed(0)}% combined):{" "}
+              {minorAffected.map((r) => `${r.exit} +${fmtVeh(r.added)}`).join(" · ")}
+            </p>
+          )}
+
+          {otherExits.length > 0 && (
+            <div>
+              <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 12, marginBottom: 6 }}>
+                <b style={{ color: "#334155" }}>Exits with no forecast change</b>
+                {otherExits.length > VISIBLE_OTHERS && (
+                  <button
+                    onClick={() => setShowAllOthers((v) => !v)}
+                    style={{ border: "1px solid #dce2ef", background: "#fff", borderRadius: "999px", padding: "2px 10px", fontSize: "0.7rem", fontWeight: 600, color: "#475569", cursor: "pointer" }}
+                  >
+                    {showAllOthers ? "Show fewer" : `Show all ${otherExits.length}`}
+                  </button>
+                )}
+              </div>
+              <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+                {shownOthers.map((o) => (
+                  <span key={o.exit} title={`${o.exit} — ${fmtVeh(o.baseline)} vehicles/day, no event surge forecast`} style={{
+                    display: "inline-flex", alignItems: "center", gap: 6, padding: "3px 9px", borderRadius: "999px",
+                    background: "#fff", border: "1px solid #e2e8f0", fontSize: "0.72rem", color: "#64748b", whiteSpace: "nowrap",
+                  }}>
+                    {o.exit}<span style={{ color: "#cbd5e1" }}>{fmtVeh(o.baseline)}</span>
                   </span>
                 ))}
-                .{" "}
-              </>
-            )}
-            The uplift was fitted on event days inferred from the arena exit&apos;s own spikes.{" "}
-            {chosen
-              ? <>The day shown applies that uplift to the exit&apos;s normal volume for the same weekday and month; the uplift is one figure per exit and does not yet vary with the act or its announced capacity.</>
-              : <>&ldquo;Past events&rdquo; describes what those days did; pick an upcoming date above to see the forecast for it.</>}
-          </p>
-        </details>
-      )}
-
-      {minorAffected.length > 0 && (
-        <p style={{ fontSize: "0.72rem", color: "#64748b", margin: 0 }}>
-          <b style={{ color: "#334155" }}>{minorAffected.length} smaller rises</b> not charted (each under 4% of
-          the surge, {minorAffected.reduce((a, r) => a + r.shareOfSurge, 0).toFixed(0)}% combined):{" "}
-          {minorAffected.map((r) => `${r.exit} +${fmtVeh(r.added)}`).join(" · ")}
-        </p>
-      )}
-
-      {otherExits.length > 0 && (
-        <div>
-          <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: "12px", marginBottom: "6px" }}>
-            <div style={{ fontSize: "0.7rem", color: "#64748b", textTransform: "uppercase", letterSpacing: "0.05em", fontWeight: 600 }}>
-              Other exits · no forecast change
+              </div>
+              {otherPoints.length > 0 && (
+                <p style={{ fontSize: "0.72rem", color: "#94a3b8", margin: "8px 0 0", lineHeight: 1.5 }}>
+                  Excludes {otherPoints.length} mainline barriers, ramps and spur roads ({otherPoints.slice(0, 3).map((x) => x.exit).join(", ")}
+                  {otherPoints.length > 3 ? "…" : ""}), which are toll points rather than exits. <b>Bocaue Barrier</b> is a
+                  mainline barrier, separate from the <b>Bocaue Interchange</b> exit.
+                </p>
+              )}
             </div>
-            {otherExits.length > VISIBLE_OTHERS && (
-              <button
-                onClick={() => setShowAllOthers((v) => !v)}
-                style={{ border: "1px solid #dce2ef", background: "#fff", borderRadius: "999px", padding: "3px 11px", fontSize: "0.72rem", fontWeight: 600, color: "#475569", cursor: "pointer" }}
-              >
-                {showAllOthers ? "Show fewer" : `Show all ${otherExits.length}`}
-              </button>
-            )}
-          </div>
-          <div style={{ display: "flex", flexWrap: "wrap", gap: "6px" }}>
-            {shownOthers.map((o) => (
-              <span
-                key={o.exit}
-                title={`${o.exit} — ${fmtVeh(o.baseline)} vehicles/day, no event surge forecast`}
-                style={{
-                  display: "inline-flex", alignItems: "center", gap: "6px",
-                  padding: "3px 9px", borderRadius: "999px",
-                  background: "#f8fafc", border: "1px solid #e2e8f0",
-                  fontSize: "0.72rem", color: "#64748b", whiteSpace: "nowrap",
-                }}
-              >
-                {o.exit}
-                <span style={{ color: "#cbd5e1" }}>{fmtVeh(o.baseline)}</span>
-              </span>
-            ))}
-          </div>
-          {otherPoints.length > 0 && (
-            <p style={{ fontSize: "0.72rem", color: "#94a3b8", margin: "8px 0 0 0", lineHeight: 1.5 }}>
-              Excludes {otherPoints.length} mainline barriers, ramps and spur roads ({otherPoints.slice(0, 3).map((p) => p.exit).join(", ")}
-              {otherPoints.length > 3 ? "…" : ""}), which are toll points rather than exits. Note <b>Bocaue Barrier</b> is a
-              mainline barrier and is separate from the <b>Bocaue Interchange</b> exit above.
+          )}
+
+          {champ?.wmape != null && (
+            <p style={{ margin: 0, lineHeight: 1.55 }}>
+              <b style={{ color: "#334155" }}>Validation.</b> Per-exit uplift is fitted on earlier events and scored on later ones it never saw
+              ({champ.diagnosis}), reaching <b style={{ color: "#334155" }}>{champ.wmape.toFixed(2)}% WMAPE</b>
+              {noAdj?.wmape != null && <> against <b style={{ color: "#334155" }}>{noAdj.wmape.toFixed(2)}%</b> for ignoring the event</>}.
+              {others.length > 0 && <> Ranked against {others.map((o) => `${o.model} ${o.wmape?.toFixed(2)}%`).join(", ")}.</>}{" "}
+              The uplift was fitted on event days inferred from the arena exit&apos;s own spikes.{" "}
+              {chosen
+                ? <>The day shown applies that uplift to the exit&apos;s normal volume for the same weekday and month; the uplift is one figure per exit and does not yet vary with the act or its announced capacity.</>
+                : <>&ldquo;Past events&rdquo; describes what those days did; choose an upcoming date above to see the forecast for it.</>}
             </p>
           )}
         </div>
-      )}
+      </details>
     </article>
   );
 }

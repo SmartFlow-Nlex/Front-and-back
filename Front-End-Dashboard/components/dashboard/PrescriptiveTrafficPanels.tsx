@@ -349,18 +349,15 @@ export function CongestionResponsePanel() {
 export function EventInterventionPanel() {
   const { data, error } = useForecast();
   const ranked = useMemo(() => (data ? topsisRank(data.events) : []), [data]);
-  // Which upcoming event day is open below. Index, not date, so it survives a
-  // refetch that returns the same list.
-  const [sel, setSel] = useState(0);
 
   if (error) return <Empty msg={`Forecast unavailable: ${error}`} />;
   if (!data) return <Empty msg="Loading forecast…" />;
   if (ranked.length === 0) return <Empty msg="No event surge forecast available." />;
 
-  const upcoming = data.upcomingEvents ?? [];
-  const ev = upcoming[Math.min(sel, Math.max(0, upcoming.length - 1))] ?? null;
-  const evTotal = ev ? ev.exits.reduce((s, x) => s + (x.surge - x.baseline), 0) : 0;
-  const evLead = ev ? Math.round((new Date(`${ev.date}T00:00:00`).getTime() - Date.now()) / 86400000) : null;
+  // The next scheduled Arena day, named so the plan can say what it is for.
+  // The per-exit forecast for it lives on the Predictive tab's Event Surge
+  // card, where a prediction belongs; this panel is the action on it.
+  const next = (data.upcomingEvents ?? [])[0] ?? null;
 
   const top = ranked.slice(0, 3);
   const totalExtra = top.reduce((s, r) => s + r.extraVehicles, 0);
@@ -376,6 +373,11 @@ export function EventInterventionPanel() {
         <b>Event traffic management plan: {top.map((r) => r.exit).join(", ")}.</b>{" "}
         On an event day these three exits carry <b>{fmtInt(totalExtra)}</b> extra vehicles between them.
         Deploy patrol and advisory resources here first{anchor ? <> — the surge is anchored on {anchor}</> : null}.
+        {next && (
+          <> Next up: <b>{next.title.split(" - ")[0]}</b> on{" "}
+          <b>{new Date(`${next.date}T00:00:00`).toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric" })}</b>
+          {next.isDerived ? " (recurring, inferred)" : ""}.</>
+        )}
       </Banner>
 
       <div style={{ overflowX: "auto" }}>
@@ -412,130 +414,10 @@ export function EventInterventionPanel() {
           specific date -- the measured uplift applied to that weekday-in-that-
           month's baseline, the same construction the Predictive tab uses when
           given a date. */}
-      {/* Never vanish silently. If the schedule is empty or the field is missing
-          from the payload -- an older backend, a failed query -- say so, so an
-          empty section reads as "nothing scheduled" and not as "feature gone". */}
-      {(upcoming.length === 0 || !ev) && (
-        <div style={{ paddingTop: 6, borderTop: "1px solid var(--border-default)", fontSize: "0.78rem", color: "var(--text-muted)" }}>
-          <span style={{ fontSize: "0.72rem", fontWeight: 700, letterSpacing: "0.06em", textTransform: "uppercase" }}>Upcoming at the Arena</span>
-          <div style={{ marginTop: 4 }}>
-            No upcoming Arena events were returned. Either none are scheduled in <code>philippine_arena_events</code> from today
-            onward, or the backend serving this page predates the <code>upcomingEvents</code> field.
-          </div>
-        </div>
-      )}
-      {upcoming.length > 0 && ev && (
-        <div style={{ display: "grid", gap: 10, paddingTop: 6, borderTop: "1px solid var(--border-default)" }}>
-          <span style={{ fontSize: "0.72rem", fontWeight: 700, letterSpacing: "0.06em", textTransform: "uppercase", color: "var(--text-muted)" }}>
-            Upcoming at the Arena — what to be ready for
-          </span>
-
-          {/* The whole horizon at once: an operator planning a roster needs to
-              see every date and what is on, not one at a time behind a pill.
-              Clicking a row opens its per-exit detail below. */}
-          <div style={{ overflowX: "auto" }}>
-            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "0.78rem" }}>
-              <thead>
-                <tr style={{ textAlign: "left", color: "var(--text-muted)", borderBottom: "1px solid var(--border-default)" }}>
-                  <th style={{ padding: "6px 8px", fontWeight: 700 }}>Date</th>
-                  <th style={{ padding: "6px 8px", fontWeight: 700 }}>Event</th>
-                  <th style={{ padding: "6px 8px", fontWeight: 700, textAlign: "right" }}>In</th>
-                  <th style={{ padding: "6px 8px", fontWeight: 700, textAlign: "right" }}>Capacity</th>
-                  <th style={{ padding: "6px 8px", fontWeight: 700, textAlign: "right" }}>Expected extra</th>
-                  <th style={{ padding: "6px 8px", fontWeight: 700 }}>Most affected</th>
-                </tr>
-              </thead>
-              <tbody>
-                {upcoming.map((u, i) => {
-                  const d = new Date(`${u.date}T00:00:00`);
-                  const days = Math.round((d.getTime() - Date.now()) / 86400000);
-                  const extra = u.exits.reduce((s, x) => s + (x.surge - x.baseline), 0);
-                  const active = i === sel;
-                  /* Multi-day runs (LANY Nov 7-8, New Year Dec 30-31) arrive as one
-                     row per day because the forecast is per day -- Saturday's
-                     baseline is not Sunday's. They are grouped visually under one
-                     event heading so the reader sees "LANY, two nights", not two
-                     unrelated concerts. */
-                  const prev = upcoming[i - 1];
-                  const newEvent = !prev || prev.title !== u.title;
-                  return (
-                    <tr key={u.date} onClick={() => setSel(i)} style={{
-                      cursor: "pointer", borderBottom: "1px solid var(--border-default)",
-                      borderTop: newEvent && i > 0 ? "2px solid var(--border-strong)" : undefined,
-                      background: active ? "color-mix(in srgb, var(--brand-primary) 7%, transparent)" : undefined,
-                    }}>
-                      <td style={{ padding: "6px 8px", fontWeight: 700, whiteSpace: "nowrap" }}>
-                        {d.toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric", year: "numeric" })}
-                      </td>
-                      <td style={{ padding: "6px 8px", color: newEvent ? undefined : "var(--text-muted)" }}>
-                        {newEvent ? <b>{u.title}</b> : <span style={{ fontSize: "0.72rem" }}>↳ same event, day {upcoming.slice(0, i + 1).filter((x) => x.title === u.title).length}</span>}
-                        {newEvent && u.isDerived && <span style={{ fontSize: "0.68rem", color: "var(--text-muted)" }}> · recurring, inferred</span>}
-                      </td>
-                      <td style={{ padding: "6px 8px", textAlign: "right", fontVariantNumeric: "tabular-nums", whiteSpace: "nowrap" }}>
-                        {days >= 0 ? `${days} day${days === 1 ? "" : "s"}` : "today"}
-                      </td>
-                      <td style={{ padding: "6px 8px", textAlign: "right", fontVariantNumeric: "tabular-nums", color: "var(--text-secondary)" }}>
-                        {u.capacity != null ? fmtInt(u.capacity) : "—"}
-                      </td>
-                      <td style={{ padding: "6px 8px", textAlign: "right", fontVariantNumeric: "tabular-nums", fontWeight: 800, color: "var(--color-danger)" }}>
-                        +{fmtInt(extra)}
-                      </td>
-                      <td style={{ padding: "6px 8px", color: "var(--text-secondary)", whiteSpace: "nowrap" }}>
-                        {u.exits[0] ? <>{u.exits[0].exit} <span style={{ fontSize: "0.68rem" }}>+{fmtInt(u.exits[0].surge - u.exits[0].baseline)}</span></> : "—"}
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
-
-          <Banner>
-            <span style={{ display: "block", fontSize: "0.68rem", fontWeight: 700, letterSpacing: "0.06em", textTransform: "uppercase", color: "var(--text-muted)", marginBottom: 2 }}>
-              During this event — prediction by exit
-            </span>
-            <b>{ev.title}</b>
-            {ev.isDerived && <span style={{ fontSize: "0.72rem", color: "var(--text-muted)" }}> (recurring, inferred)</span>}
-            {" "}on <b>{new Date(`${ev.date}T00:00:00`).toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric", year: "numeric" })}</b>
-            {evLead != null && evLead >= 0 && <> · in <b>{evLead} day{evLead === 1 ? "" : "s"}</b></>}.{" "}
-            Expect <b>+{fmtInt(evTotal)}</b> vehicles across {ev.exits.length} exits versus a normal{" "}
-            {new Date(`${ev.date}T00:00:00`).toLocaleDateString("en-US", { weekday: "long" })} in{" "}
-            {new Date(`${ev.date}T00:00:00`).toLocaleDateString("en-US", { month: "long" })}
-            {ev.exits[0] && <>; the largest rise is <b>{ev.exits[0].exit}</b> at +{fmtInt(ev.exits[0].surge - ev.exits[0].baseline)}</>}.
-          </Banner>
-
-          <div style={{ overflowX: "auto" }}>
-            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "0.78rem" }}>
-              <thead>
-                <tr style={{ textAlign: "left", color: "var(--text-muted)", borderBottom: "1px solid var(--border-default)" }}>
-                  <th style={{ padding: "6px 8px", fontWeight: 700 }}>Exit</th>
-                  <th style={{ padding: "6px 8px", fontWeight: 700, textAlign: "right" }}>Normal day</th>
-                  <th style={{ padding: "6px 8px", fontWeight: 700, textAlign: "right" }}>Event day</th>
-                  <th style={{ padding: "6px 8px", fontWeight: 700, textAlign: "right" }}>Extra</th>
-                  <th style={{ padding: "6px 8px", fontWeight: 700, textAlign: "right" }}>Range</th>
-                </tr>
-              </thead>
-              <tbody>
-                {ev.exits.slice(0, 8).map((x) => (
-                  <tr key={x.exit} style={{ borderBottom: "1px solid var(--border-default)" }}>
-                    <td style={{ padding: "6px 8px", fontWeight: 600 }}>{x.exit}</td>
-                    <td style={{ padding: "6px 8px", textAlign: "right", fontVariantNumeric: "tabular-nums", color: "var(--text-secondary)" }}>{fmtInt(x.baseline)}</td>
-                    <td style={{ padding: "6px 8px", textAlign: "right", fontVariantNumeric: "tabular-nums", fontWeight: 700 }}>{fmtInt(x.surge)}</td>
-                    <td style={{ padding: "6px 8px", textAlign: "right", fontVariantNumeric: "tabular-nums", fontWeight: 800, color: "var(--color-danger)" }}>+{fmtInt(x.surge - x.baseline)}</td>
-                    <td style={{ padding: "6px 8px", textAlign: "right", fontVariantNumeric: "tabular-nums", color: "var(--text-muted)" }}>{fmtInt(x.surgeLo)}–{fmtInt(x.surgeHi)}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </div>
-      )}
-
       <Foot>
         Criteria weighted 0.40 vehicles / 0.25 uplift / 0.20 evidence / 0.15 interval width. &ldquo;Estimate&rdquo; reads the
-        uplift interval: firm under ±0.025, fair under ±0.06. Upcoming-event figures apply each exit&apos;s measured uplift to
-        the median of its same-weekday, same-month volume; &ldquo;Range&rdquo; is that uplift&apos;s confidence interval. Only
-        exits whose uplift is material are listed.
+        uplift interval: firm under ±0.025, fair under ±0.06. The per-exit forecast for each upcoming Arena date is on the
+        Predictive tab&apos;s Event Surge card; this ranking is the deployment order for whichever date is chosen there.
       </Foot>
     </Shell>
   );

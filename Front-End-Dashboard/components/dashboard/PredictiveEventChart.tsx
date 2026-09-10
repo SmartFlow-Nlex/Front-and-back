@@ -29,6 +29,14 @@ type Row = {
   shareOfSurge: number;
 };
 
+// One upcoming Arena event DAY with its dated per-exit forecast, as served on
+// /api/traffic/forecast.upcomingEvents (see getUpcomingEventSurge). Baseline is
+// that exit's median volume on the same weekday in the same month, times the
+// measured uplift -- the same construction the observed rows use, applied to a
+// real date.
+type UpcomingExit = { exit: string; baseline: number; surge: number; surgeLo: number; surgeHi: number; uplift: number; nEvents: number };
+type UpcomingEvent = { date: string; title: string; isDerived: boolean; capacity: number | null; exits: UpcomingExit[] };
+
 const SURGE_COLOR = "#e11d48";
 const SHARE_COLORS = ["#e11d48", "#fb7185", "#fecdd3", "#a3a3a3"];
 
@@ -48,6 +56,11 @@ export default function PredictiveEventChart() {
   // descriptive; this is the separate check that it predicts unseen events.
   const [val, setVal] = useState<{ model: string; wmape: number | null; accepted: boolean; diagnosis: string | null }[]>([]);
   const [showAllOthers, setShowAllOthers] = useState(false);
+  // The schedule of upcoming Arena days, and which one is open. null means the
+  // card shows what PAST events did (the observed uplift); an index means it
+  // shows the forecast for that specific day.
+  const [upcoming, setUpcoming] = useState<UpcomingEvent[]>([]);
+  const [selUpcoming, setSelUpcoming] = useState<number | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -57,6 +70,7 @@ export default function PredictiveEventChart() {
         if (cancelled || !json.success || !json.data?.events?.length) return;
         setRaw(json.data.events as RawRow[]);
         if (Array.isArray(json.data?.eventSurgeMetrics)) setVal(json.data.eventSurgeMetrics);
+        if (Array.isArray(json.data?.upcomingEvents)) setUpcoming(json.data.upcomingEvents as UpcomingEvent[]);
       })
       .catch((err) => console.error("Failed to fetch ML event surge forecast", err));
     return () => {
@@ -64,7 +78,27 @@ export default function PredictiveEventChart() {
     };
   }, []);
 
+  const chosen = selUpcoming != null ? upcoming[selUpcoming] ?? null : null;
+
+  /* When an upcoming day is chosen, its dated rows take the place of the
+     observed ones and everything below -- bars, share, KPIs, banner -- follows
+     with no second code path. Exits the forecast does not list (uplift not
+     material) are kept from the observed set with surge nulled, so the "no
+     forecast change" list beneath stays populated and nothing disappears. */
+  const effectiveRaw = useMemo<RawRow[] | null>(() => {
+    if (!raw) return null;
+    if (!chosen) return raw;
+    const dated = new Map(chosen.exits.map((x) => [x.exit, x]));
+    return raw.map((r) => {
+      const x = dated.get(r.exit);
+      return x
+        ? { ...r, event: chosen.title, baseline: x.baseline, surge: x.surge, uplift: x.uplift, material: true, nEvents: x.nEvents }
+        : { ...r, baseline: r.baseline, surge: null, material: false };
+    });
+  }, [raw, chosen]);
+
   const model = useMemo(() => {
+    const raw = effectiveRaw;
     if (!raw || raw.length === 0) return null;
 
     const affected: Row[] = raw
@@ -107,7 +141,7 @@ export default function PredictiveEventChart() {
       eventName: raw.find((d) => d.event)?.event ?? "the upcoming event",
       totalPlazas: raw.length,
     };
-  }, [raw]);
+  }, [effectiveRaw]);
 
   if (!model) {
     return (
@@ -243,6 +277,9 @@ export default function PredictiveEventChart() {
 
   // Provenance travels on the rows; take it from the first that has it.
   const meta = (raw ?? []).find((r) => r.nEvents != null) ?? null;
+  const chosenDate = chosen ? new Date(`${chosen.date}T00:00:00`).toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric", year: "numeric" }) : "";
+  const chosenDateLong = chosen ? new Date(`${chosen.date}T00:00:00`).toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric", year: "numeric" }) : "";
+  const chosenLead = chosen ? Math.round((new Date(`${chosen.date}T00:00:00`).getTime() - Date.now()) / 86400000) : null;
   const champ = val.find((v) => !/baseline/i.test(v.model)) ?? null;
   const noAdj = val.find((v) => /no event/i.test(v.model)) ?? null;
   const others = val.filter((v) => !/baseline/i.test(v.model) && v.model !== champ?.model);
@@ -258,9 +295,15 @@ export default function PredictiveEventChart() {
           {/* This said "Prophet". No Prophet model ever touched this panel — the
               badge was a hardcoded string sitting above three hand-typed rows.
               It now states what the numbers actually are. */}
-          <span style={{ fontSize: "0.72rem", padding: "2px 8px", background: "#ecfdf5", borderRadius: "999px", border: "1px solid #a7f3d0", color: "#047857", fontWeight: 600 }}>
-            Observed{meta?.nEvents ? ` · ${meta.nEvents} past event days` : ""}
-          </span>
+          {chosen ? (
+            <span style={{ fontSize: "0.72rem", padding: "2px 8px", background: "#fff1f2", borderRadius: "999px", border: "1px solid #fecdd3", color: "#9f1239", fontWeight: 600 }}>
+              Forecast · {chosenDate}
+            </span>
+          ) : (
+            <span style={{ fontSize: "0.72rem", padding: "2px 8px", background: "#ecfdf5", borderRadius: "999px", border: "1px solid #a7f3d0", color: "#047857", fontWeight: 600 }}>
+              Observed{meta?.nEvents ? ` · ${meta.nEvents} past event days` : ""}
+            </span>
+          )}
           {/* The uplift table is descriptive. This badge reports the SEPARATE
               out-of-sample test — earlier events fitted, later events held out —
               so the panel states plainly what has and has not been validated. */}
@@ -279,7 +322,15 @@ export default function PredictiveEventChart() {
           )}
         </h3>
         <p style={{ color: "#64748b", fontSize: "0.82rem", margin: "4px 0 0 0" }}>
-          Extra vehicles on past <b>{eventName}</b> days, ranked
+          {chosen ? (
+            <>
+              During <b style={{ color: "#0f172a" }}>{chosen.title}</b>
+              {chosen.isDerived && <span title="A recurring event the ETL inferred from prior years, not an announced date."> (recurring, inferred)</span>}
+              {" "}on <b>{chosenDateLong}</b>{chosenLead != null && chosenLead >= 0 && <> · in {chosenLead} day{chosenLead === 1 ? "" : "s"}</>}: expected extra vehicles per exit, ranked
+            </>
+          ) : (
+            <>Extra vehicles on past <b>{eventName}</b> days, ranked</>
+          )}
           <span
             style={{ cursor: "help" }}
             title={`Baseline is the same weekday and month on non-event days, so events cannot inflate their own baseline.${
@@ -291,20 +342,54 @@ export default function PredictiveEventChart() {
         </p>
       </div>
 
+      {/* What the card is showing: what past events did, or the forecast for a
+          specific upcoming day. Multi-day runs appear once per day because the
+          numbers differ by weekday; the day index says which night it is. */}
+      {upcoming.length > 0 && (
+        <div style={{ display: "flex", alignItems: "center", gap: "6px", flexWrap: "wrap" }}>
+          <span style={{ fontSize: "0.7rem", color: "#64748b", textTransform: "uppercase", letterSpacing: "0.05em", fontWeight: 600, marginRight: 4 }}>Show</span>
+          {[null, ...upcoming.map((_, i) => i)].map((i) => {
+            const u = i == null ? null : upcoming[i];
+            const active = i === selUpcoming;
+            const nth = u ? upcoming.slice(0, i! + 1).filter((x) => x.title === u.title).length : 0;
+            const multi = u ? upcoming.filter((x) => x.title === u.title).length > 1 : false;
+            const d = u ? new Date(`${u.date}T00:00:00`) : null;
+            return (
+              <button key={u ? u.date : "past"} onClick={() => setSelUpcoming(i)} title={u?.title} style={{
+                padding: "4px 10px", borderRadius: "999px", fontSize: "0.72rem", fontWeight: 600, cursor: "pointer", whiteSpace: "nowrap",
+                border: `1px solid ${active ? SURGE_COLOR : "#dce2ef"}`,
+                background: active ? SURGE_COLOR : "#fff",
+                color: active ? "#fff" : "#475569",
+              }}>
+                {u && d
+                  ? `${d.toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" })} · ${u.title.split(" - ")[0]}${multi ? ` (day ${nth})` : ""}`
+                  : "Past events (observed)"}
+              </button>
+            );
+          })}
+        </div>
+      )}
+
       {/* Plain-language read, so the card lands without decoding the bars */}
       <div style={{ padding: "11px 14px", background: "#fff1f2", border: "1px solid #fecdd3", borderRadius: "8px", fontSize: "0.86rem", color: "#9f1239", lineHeight: 1.5 }}>
         {/* Was four clauses ending in a recommendation. The "exits affected"
             count is already a KPI card directly below, so the banner keeps only
             the single fact a reader needs first. */}
-        <b>{top.exit}</b> takes {top.shareOfSurge.toFixed(0)}% of the event surge — {multiple.toFixed(1)}× a
-        normal day, +{fmtVeh(top.added)} vehicles.
+        {chosen ? (
+          <>On <b>{chosenDate}</b> ({chosen.title.split(" - ")[0]}), expect <b>+{fmtVeh(totalAdded)}</b> extra vehicles across {affected.length} exits;{" "}
+          <b>{top.exit}</b> takes {top.shareOfSurge.toFixed(0)}% of it — {multiple.toFixed(1)}× its normal{" "}
+          {new Date(`${chosen.date}T00:00:00`).toLocaleDateString("en-US", { weekday: "long" })}, +{fmtVeh(top.added)} vehicles.</>
+        ) : (
+          <><b>{top.exit}</b> takes {top.shareOfSurge.toFixed(0)}% of the event surge — {multiple.toFixed(1)}× a
+          normal day, +{fmtVeh(top.added)} vehicles.</>
+        )}
       </div>
 
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(165px, 1fr))", gap: "10px" }}>
         {kpi("Extra vehicles", `+${fmtVeh(totalAdded)}`, "across affected exits", SURGE_COLOR)}
         {kpi("Uplift at those exits", `+${((totalAdded / affectedBaseline) * 100).toFixed(0)}%`, "vs their normal-day volume", SURGE_COLOR)}
         {kpi("Hardest hit", top.exit, `${multiple.toFixed(1)}× normal · ${top.shareOfSurge.toFixed(0)}% of the surge`)}
-        {kpi("Exits affected", `${affected.length} of ${totalPlazas}`, "toll points; the rest run normally")}
+        {kpi("Exits affected", `${affected.length} of ${totalPlazas}`, chosen ? "toll points with a material uplift; the rest run normally" : "toll points; the rest run normally")}
       </div>
 
       <div style={{ width: "100%", height: `${impactHeight}px` }}>
@@ -357,8 +442,10 @@ export default function PredictiveEventChart() {
                 .{" "}
               </>
             )}
-            Event days are inferred from the arena exit&apos;s own spikes, not a supplied calendar, and this
-            describes what past events did rather than what one future event will do.
+            The uplift was fitted on event days inferred from the arena exit&apos;s own spikes.{" "}
+            {chosen
+              ? <>The day shown applies that uplift to the exit&apos;s normal volume for the same weekday and month; the uplift is one figure per exit and does not yet vary with the act or its announced capacity.</>
+              : <>&ldquo;Past events&rdquo; describes what those days did; pick an upcoming date above to see the forecast for it.</>}
           </p>
         </details>
       )}

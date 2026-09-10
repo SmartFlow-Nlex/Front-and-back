@@ -111,7 +111,7 @@ export async function getTrafficAnalyticsFromDb(filters: AnalyticsFilters) {
     const NB_SB = `COALESCE(SUM(${DAY_TOTAL}) FILTER (WHERE direction = 'NB'), 0)::bigint AS nb,
                    COALESCE(SUM(${DAY_TOTAL}) FILTER (WHERE direction = 'SB'), 0)::bigint AS sb`;
 
-    const [daily, hourly, byPlaza, hourDow, speedByHour, eventImpact, holidayImpact, holidayYearly, kpi, plazaList] =
+    const [daily, hourly, byPlaza, hourDow, speedByHour, eventImpact, holidayImpact, holidayYearly, kpi, plazaList, plazaHour] =
       await Promise.all([
         // Daily NB/SB volume
         wet === null
@@ -420,6 +420,30 @@ export async function getTrafficAnalyticsFromDb(filters: AnalyticsFilters) {
             ),
         // All plaza names for the filter control
         db.query(`SELECT DISTINCT toll_plaza AS plaza FROM nlex_traffic_volume ORDER BY 1`),
+        // Average volume per plaza x hour-of-day, for the Prescriptive tab's
+        // per-plaza booth plan. hourDow above is corridor-wide; a plaza's own
+        // peak hour and peak share differ from the corridor's, and staffing
+        // is decided per plaza.
+        wet === null
+          ? db.query(
+              `WITH hourly AS (
+                 SELECT t.date, t.toll_plaza AS plaza, u.hr - 1 AS hour, SUM(u.v) AS v
+                 FROM nlex_traffic_volume t,
+                      LATERAL unnest(${HOUR_ARRAY}) WITH ORDINALITY AS u(v, hr)
+                 WHERE ${volumeWhere}
+                 GROUP BY 1, 2, 3
+               )
+               SELECT plaza, hour::int, ROUND(AVG(v))::int AS v
+               FROM hourly GROUP BY 1, 2 ORDER BY 1, 2`,
+              params
+            )
+          : db.query(
+              `WITH ${TWX_CTE}, ${HV_CTE},
+               hourly AS (SELECT date, toll_plaza AS plaza, hour, SUM(v) AS v FROM hvw GROUP BY 1, 2, 3)
+               SELECT plaza, hour::int, ROUND(AVG(v))::int AS v
+               FROM hourly GROUP BY 1, 2 ORDER BY 1, 2`,
+              wparams
+            ),
       ]);
 
     const data = {
@@ -439,6 +463,7 @@ export async function getTrafficAnalyticsFromDb(filters: AnalyticsFilters) {
         : null,
       byPlaza: byPlaza.rows.map((r) => ({ plaza: r.plaza, v: Number(r.v) })),
       hourDow: hourDow.rows,
+      plazaHourProfile: plazaHour.rows.map((r) => ({ plaza: r.plaza, hour: Number(r.hour), v: Number(r.v) })),
       speedByHour: speedByHour.rows,
       eventImpact: eventImpact.rows.map((r) => ({
         label: r.label,

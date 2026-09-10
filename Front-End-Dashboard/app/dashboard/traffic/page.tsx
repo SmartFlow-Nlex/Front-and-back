@@ -6,8 +6,7 @@ import { useChartTheme, applyChartTheme, seriesRamp, seriesPair } from "../../..
 import ReactECharts from "echarts-for-react";
 import type { EChartsOption } from "echarts";
 import { Activity, ArrowDownWideNarrow, ArrowUpNarrowWide, Building2, CalendarClock, Clock, Gauge, TrendingUp } from "lucide-react";
-import { VolumeStaffingPanel, CongestionResponsePanel, EventInterventionPanel } from "../../../components/dashboard/PrescriptiveTrafficPanels";
-import ForecastGlance from "../../../components/dashboard/ForecastGlance";
+import { BoothStaffingPanel, CongestionResponsePanel, EventInterventionPanel } from "../../../components/dashboard/PrescriptiveTrafficPanels";
 import ChartSkeleton, { KpiSkeleton } from "../../../components/dashboard/ChartSkeleton";
 import CustomSelect from "../../../components/dashboard/CustomSelect";
 import RampKey from "../../../components/dashboard/RampKey";
@@ -41,6 +40,7 @@ type Analytics = {
   hourlyTrend: { d: string; hour: number; nb: number; sb: number }[] | null;
   byPlaza: { plaza: string; v: number }[];
   hourDow: { dow: number; hour: number; v: number }[];
+  plazaHourProfile?: { plaza: string; hour: number; v: number }[];
   speedByHour: { hour: number; speed: number; jam_level: number }[];
   eventImpact: {
     label: string; date: string; dayVolume: number; baseline: number; deviationPct: number | null;
@@ -766,15 +766,6 @@ export default function TrafficPage() {
   const kpiValue = (v: string | null) =>
     loading && !data ? <KpiSkeleton /> : (v ?? "—");
 
-  /* What fraction of a day's traffic lands in its busiest hour. Measured, not
-     assumed: both terms come from the descriptive aggregate the KPI row
-     already shows. The staffing LP turns a daily volume forecast into a
-     peak-hour demand with it. */
-  const peakShare =
-    derived && derived.curAdt > 0 && derived.peakHourVolume > 0
-      ? derived.peakHourVolume / derived.curAdt
-      : null;
-
   // ---------- Predictive / Prescriptive share the same shell ----------
   if (activeTab !== "Descriptive") {
     return (
@@ -841,13 +832,6 @@ export default function TrafficPage() {
         </div>
         {activeTab === "Predictive" ? (
           <>
-            {/* The diagram's System Output boxes, stated first: next-day
-                volume, seasonal peak, congestion state, event surge. The three
-                cards beneath are the Models, KPI and Visualization boxes that
-                back them up. */}
-            <div className={styles.spanFull}>
-              <ForecastGlance />
-            </div>
             <div className={styles.spanFull}>
               <PredictiveVolumeChart
                 months={rangeMode === "custom" ? "all" : rangeMode}
@@ -862,12 +846,17 @@ export default function TrafficPage() {
         ) : (
           /* Three panels, one per row of the analytics diagram, each acting on
              the Predictive tab's own forecast rather than a separate model.
-             The peak-hour share comes from the descriptive hour-by-weekday
-             profile already computed for the KPI row, so the staffing panel
-             and the "Peak Hour" tile cannot disagree about when the peak is. */
+             The booth plan takes the descriptive plaza shares and per-plaza
+             hourly profiles from the same analytics payload the Descriptive
+             tab charts, so it cannot disagree with the "Volume by Plaza" and
+             hour-of-day views about where and when the peak is. */
           <>
             <div className={styles.spanFull}>
-              <VolumeStaffingPanel peakShare={peakShare} />
+              <BoothStaffingPanel
+                byPlaza={data?.byPlaza ?? []}
+                plazaHour={data?.plazaHourProfile ?? []}
+                typicalDaily={derived && derived.curAdt > 0 ? derived.curAdt : null}
+              />
             </div>
             <div className={styles.spanFull}>
               <CongestionResponsePanel />

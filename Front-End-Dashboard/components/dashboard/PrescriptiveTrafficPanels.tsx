@@ -11,12 +11,14 @@
 import { useEffect, useMemo, useState } from "react";
 import InfoTooltip from "./InfoTooltip";
 import {
-  loadForecast, championValue, allocateStaff, fuzzyUrgency, topsisRank, manilaDate,
+  loadForecast, championValue, fuzzyUrgency, topsisRank, manilaDate,
   type ForecastPayload,
 } from "./prescriptiveTraffic.shared";
 
 const fmtInt = (n: number) => Math.round(n).toLocaleString("en-US");
-const fmtPct = (n: number) => `${n >= 0 ? "" : "−"}${Math.abs(n).toFixed(1)}%`;
+const fmtHour = (h: number) => (h === 0 ? "12 AM" : h < 12 ? `${h} AM` : h === 12 ? "12 PM" : `${h - 12} PM`);
+const shortDay = (iso: string) =>
+  new Date(`${iso}T00:00:00`).toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" });
 
 function useForecast() {
   const [data, setData] = useState<ForecastPayload | null>(null);
@@ -53,27 +55,17 @@ function Shell({ title, hint, children, right }: {
   );
 }
 
-const Banner = ({ children }: { children: React.ReactNode }) => (
-  <div style={{
-    background: "color-mix(in srgb, var(--brand-primary) 8%, transparent)",
-    border: "1px solid color-mix(in srgb, var(--brand-primary) 22%, transparent)",
-    borderRadius: 10, padding: "12px 14px", fontSize: "0.82rem", lineHeight: 1.5,
-    color: "var(--text-primary)",
-  }}>{children}</div>
-);
-
-const Slider = ({ label, value, min, max, step = 1, unit, onChange }: {
-  label: string; value: number; min: number; max: number; step?: number; unit: string;
-  onChange: (v: number) => void;
-}) => (
-  <label style={{ display: "grid", gap: 4, minWidth: 150, flex: "1 1 150px" }}>
-    <span style={{ display: "flex", justifyContent: "space-between", fontSize: "0.72rem", color: "var(--text-secondary)" }}>
-      <span>{label}</span><b style={{ color: "var(--text-primary)" }}>{value.toLocaleString("en-US")} {unit}</b>
-    </span>
-    <input type="range" min={min} max={max} step={step} value={value}
-      onChange={(e) => onChange(Number(e.target.value))} style={{ accentColor: "var(--brand-primary)" }} />
-  </label>
-);
+const Banner = ({ tone = "info", children }: { tone?: "info" | "alert"; children: React.ReactNode }) => {
+  const c = tone === "alert" ? "var(--color-danger)" : "var(--brand-primary)";
+  return (
+    <div style={{
+      background: `color-mix(in srgb, ${c} 8%, transparent)`,
+      border: `1px solid color-mix(in srgb, ${c} 22%, transparent)`,
+      borderRadius: 10, padding: "12px 14px", fontSize: "0.82rem", lineHeight: 1.5,
+      color: "var(--text-primary)",
+    }}>{children}</div>
+  );
+};
 
 const Empty = ({ msg }: { msg: string }) => (
   <article className="chart-card wide" style={{ ...CARD, minHeight: 160, justifyContent: "center", alignItems: "center", color: "var(--text-muted)", fontSize: "0.85rem" }}>
@@ -81,122 +73,169 @@ const Empty = ({ msg }: { msg: string }) => (
   </article>
 );
 
-/* ==================================================================== 1 ====
- * Volume surge advisory and booth staffing.
- */
-export function VolumeStaffingPanel({ peakShare }: { peakShare: number | null }) {
-  const { data, error } = useForecast();
-  /* Corridor-wide defaults, sized off the data rather than picked: ~350k
-     vehicles a day with ~6.7% in the peak hour is ~23k veh/hr across roughly
-     twenty plazas, so ~60 lanes at 400 veh/hr is the regime where the fleet
-     is neither trivially sufficient nor hopelessly short. Opening at 12 lanes
-     made every day short by ~18k vehicles and the whole allocation pointless. */
-  const [baseLanes, setBaseLanes] = useState(58);
-  const [rate, setRate] = useState(400);
-  const [pool, setPool] = useState(20);
-  const [horizon, setHorizon] = useState(14);
+const Foot = ({ children }: { children: React.ReactNode }) => (
+  <p style={{ margin: 0, fontSize: "0.72rem", color: "var(--text-muted)", lineHeight: 1.45 }}>{children}</p>
+);
 
-  const future = useMemo(() => {
+/* ==================================================================== 1 ====
+ * Booth staffing plan, per plaza.
+ *
+ * The first version of this panel allocated "extra lanes" across a
+ * corridor-wide count -- 58 lanes open at once -- which is not a quantity
+ * anyone manages. Staffing is decided one plaza at a time: how many booths to
+ * open for the peak. So the corridor forecast is apportioned to each plaza by
+ * its observed share of volume, then to the plaza's own busiest hour by its
+ * observed hourly profile, and divided by what one booth can serve. The single
+ * assumption left is booth throughput, which the warehouse does not hold and
+ * the operator does.
+ */
+export type PlazaShare = { plaza: string; v: number };
+export type PlazaHour = { plaza: string; hour: number; v: number };
+
+export function BoothStaffingPanel({ byPlaza, plazaHour, typicalDaily }: {
+  byPlaza: PlazaShare[];
+  plazaHour: PlazaHour[];
+  typicalDaily: number | null;
+}) {
+  const { data, error } = useForecast();
+  const [rate, setRate] = useState(350);
+  const [showAll, setShowAll] = useState(false);
+
+  const days = useMemo(() => {
     if (!data) return [];
     return data.volumes
       .filter((v) => v.is_future)
       .map((v) => ({ date: manilaDate(v.date), forecast: championValue(v, data.championModel) ?? 0 }))
       .filter((d) => d.forecast > 0)
-      .slice(0, horizon);
-  }, [data, horizon]);
-
-  /* The surge threshold is the 90th percentile of days the model was actually
-     scored on, so "surge" means busy relative to observed history rather than
-     relative to a number chosen here. */
-  const p90 = useMemo(() => {
-    if (!data) return null;
-    const actuals = data.volumes.map((v) => v.actual_volume).filter((n): n is number => typeof n === "number" && n > 0).sort((a, b) => a - b);
-    return actuals.length ? actuals[Math.floor(actuals.length * 0.9)] : null;
+      .sort((a, b) => (a.date < b.date ? -1 : 1))
+      .slice(0, 7);
   }, [data]);
+
+  /* Per plaza: share of corridor volume, and the share of its own day that
+     falls in its busiest hour. Both measured over the selected range. */
+  const plazas = useMemo(() => {
+    const total = byPlaza.reduce((s, p) => s + p.v, 0);
+    if (total <= 0) return [];
+    const byName = new Map<string, { sum: number; peak: number; peakHour: number }>();
+    for (const r of plazaHour) {
+      const cur = byName.get(r.plaza) ?? { sum: 0, peak: 0, peakHour: 0 };
+      cur.sum += r.v;
+      if (r.v > cur.peak) { cur.peak = r.v; cur.peakHour = r.hour; }
+      byName.set(r.plaza, cur);
+    }
+    return byPlaza
+      .filter((p) => p.v > 0)
+      .map((p) => {
+        const h = byName.get(p.plaza);
+        const peakShare = h && h.sum > 0 ? h.peak / h.sum : null;
+        return { plaza: p.plaza, share: p.v / total, peakShare, peakHour: h?.peakHour ?? null };
+      })
+      .filter((p) => p.peakShare != null) as { plaza: string; share: number; peakShare: number; peakHour: number }[];
+  }, [byPlaza, plazaHour]);
 
   if (error) return <Empty msg={`Forecast unavailable: ${error}`} />;
   if (!data) return <Empty msg="Loading forecast…" />;
-  if (peakShare == null) return <Empty msg="Waiting for the descriptive peak-hour profile." />;
-  if (future.length === 0) return <Empty msg="No future days in the forecast." />;
+  if (days.length === 0) return <Empty msg="No future days in the forecast." />;
+  if (plazas.length === 0 || typicalDaily == null) return <Empty msg="Waiting for the descriptive plaza and hourly profiles." />;
 
-  const lp = allocateStaff(future, { peakShare, baseLanes, rate, pool, maxExtra: 8 });
-  const surgeDays = p90 != null ? future.filter((d) => d.forecast > p90) : [];
-  const worked = lp.schedule.filter((r) => r.lanes > 0).sort((a, b) => b.lanes - a.lanes);
+  const booths = (dailyCorridor: number, p: { share: number; peakShare: number }) =>
+    Math.max(1, Math.ceil((dailyCorridor * p.share * p.peakShare) / rate));
 
-  /* Queue delay under a deterministic server: vehicles that cannot be served in
-     the peak hour wait for the hour(s) behind it. Reduction is the change in
-     total queued vehicle-hours, which is what an extra lane actually buys. */
-  const waitCut = lp.unmetBefore > 0 ? ((lp.unmetBefore - lp.unmetAfter) / lp.unmetBefore) * 100 : 0;
-  const peakHours = lp.schedule.filter((r) => r.unmetAfter > 0).length;
+  const rows = plazas.map((p) => {
+    const typical = booths(typicalDaily, p);
+    const need = days.map((d) => booths(d.forecast, p));
+    return { ...p, typical, need };
+  });
+
+  const visible = showAll ? rows : rows.slice(0, 8);
+  const first = days[0];
+  const corridorTomorrow = rows.reduce((s, r) => s + r.need[0], 0);
+  const corridorTypical = rows.reduce((s, r) => s + r.typical, 0);
+  const biggest = [...rows].sort((a, b) => (b.need[0] - b.typical) - (a.need[0] - a.typical))[0];
+  const daysUp = days.filter((_, i) => rows.some((r) => r.need[i] > r.typical)).length;
 
   return (
     <Shell
-      title="Volume Surge Advisory & Booth Staffing"
-      hint="Allocates a fixed pool of extra staffed lanes across the forecast days to minimise unmet peak-hour demand. The allocation is the exact optimum of the stated linear program; lane count and throughput are yours to set because the warehouse holds no plaza capacity."
+      title="Booth Staffing Plan"
+      hint="Booths to open at each plaza's busiest hour for the next seven forecast days. Corridor forecast × the plaza's observed share of volume × the share of its day that falls in its peak hour, divided by what one booth serves. Throughput is the one assumption; everything else is measured."
       right={
-        <div style={{ display: "flex", gap: 6 }}>
-          {[7, 14, 30].map((n) => (
-            <button key={n} onClick={() => setHorizon(n)} style={{
-              padding: "4px 10px", borderRadius: 999, fontSize: "0.72rem", fontWeight: 700, cursor: "pointer",
-              border: `1px solid ${horizon === n ? "var(--brand-primary)" : "var(--border-strong)"}`,
-              background: horizon === n ? "var(--brand-primary)" : "var(--bg-surface)",
-              color: horizon === n ? "#fff" : "var(--text-secondary)",
-            }}>{n}d</button>
-          ))}
-        </div>
+        <label style={{ display: "grid", gap: 4, minWidth: 220 }}>
+          <span style={{ display: "flex", justifyContent: "space-between", fontSize: "0.72rem", color: "var(--text-secondary)" }}>
+            <span>One booth serves</span><b style={{ color: "var(--text-primary)" }}>{rate} veh/hr</b>
+          </span>
+          <input type="range" min={150} max={800} step={25} value={rate}
+            onChange={(e) => setRate(Number(e.target.value))} style={{ accentColor: "var(--brand-primary)" }} />
+        </label>
       }
     >
-      <div style={{ display: "flex", flexWrap: "wrap", gap: 16 }}>
-        <Slider label="Lanes open (baseline)" value={baseLanes} min={20} max={140} unit="lanes" onChange={setBaseLanes} />
-        <Slider label="Throughput per lane" value={rate} min={150} max={800} step={25} unit="veh/hr" onChange={setRate} />
-        <Slider label="Extra lane-shifts available" value={pool} min={0} max={80} unit="shifts" onChange={setPool} />
-      </div>
-
       <Banner>
-        <b>{worked.length} of the next {future.length} days need reinforcement.</b>{" "}
-        Assigning {pool} extra lane-shifts by the linear program cuts unmet peak demand from{" "}
-        <b>{fmtInt(lp.unmetBefore)}</b> to <b>{fmtInt(lp.unmetAfter)}</b> vehicles — a{" "}
-        <b>{fmtPct(waitCut)}</b> reduction in queued vehicles.{" "}
-        {peakHours > 0
-          ? <>Even so, <b>{peakHours}</b> day{peakHours === 1 ? "" : "s"} still exceed capacity at peak; that residual is the honest limit of this fleet.</>
-          : <>No day exceeds capacity after allocation.</>}
-        {surgeDays.length > 0 && p90 != null && (
-          <> <b>{surgeDays.length}</b> day{surgeDays.length === 1 ? " sits" : "s sit"} above the {fmtInt(p90)}-vehicle surge threshold (90th percentile of scored history).</>
-        )}
+        <b>{shortDay(first.date)}: open {corridorTomorrow} booths across the corridor at the peak</b>
+        {corridorTomorrow !== corridorTypical && (
+          <> — {corridorTomorrow > corridorTypical ? "+" : "−"}{Math.abs(corridorTomorrow - corridorTypical)} versus a typical day</>
+        )}.{" "}
+        {biggest && biggest.need[0] !== biggest.typical ? (
+          <>The largest change is at <b>{biggest.plaza}</b> ({biggest.typical} → {biggest.need[0]}, peak {fmtHour(biggest.peakHour)}).{" "}</>
+        ) : null}
+        {daysUp > 0
+          ? <>{daysUp} of the next {days.length} days need more than typical staffing somewhere on the corridor.</>
+          : <>No day in the next {days.length} exceeds typical staffing anywhere.</>}
       </Banner>
 
       <div style={{ overflowX: "auto" }}>
         <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "0.78rem" }}>
           <thead>
             <tr style={{ textAlign: "left", color: "var(--text-muted)", borderBottom: "1px solid var(--border-default)" }}>
-              <th style={{ padding: "6px 8px", fontWeight: 700 }}>Date</th>
-              <th style={{ padding: "6px 8px", fontWeight: 700, textAlign: "right" }}>Forecast volume</th>
-              <th style={{ padding: "6px 8px", fontWeight: 700, textAlign: "right" }}>Peak-hour demand</th>
-              <th style={{ padding: "6px 8px", fontWeight: 700, textAlign: "right" }}>Extra lanes</th>
-              <th style={{ padding: "6px 8px", fontWeight: 700, textAlign: "right" }}>Unmet after</th>
+              <th style={{ padding: "6px 8px", fontWeight: 700 }}>Plaza</th>
+              <th style={{ padding: "6px 8px", fontWeight: 700 }}>Peak hour</th>
+              <th style={{ padding: "6px 8px", fontWeight: 700, textAlign: "right" }}>Typical</th>
+              {days.map((d) => (
+                <th key={d.date} style={{ padding: "6px 8px", fontWeight: 700, textAlign: "right", whiteSpace: "nowrap" }}>
+                  {new Date(`${d.date}T00:00:00`).toLocaleDateString("en-US", { weekday: "short" })}
+                  <span style={{ display: "block", fontWeight: 500, fontSize: "0.68rem" }}>
+                    {new Date(`${d.date}T00:00:00`).toLocaleDateString("en-US", { month: "short", day: "numeric" })}
+                  </span>
+                </th>
+              ))}
             </tr>
           </thead>
           <tbody>
-            {(worked.length ? worked : lp.schedule.slice(0, 6)).slice(0, 10).map((r) => (
-              <tr key={r.date} style={{ borderBottom: "1px solid var(--border-default)" }}>
-                <td style={{ padding: "6px 8px", fontWeight: 600 }}>{r.date}</td>
-                <td style={{ padding: "6px 8px", textAlign: "right", fontVariantNumeric: "tabular-nums" }}>{fmtInt(r.forecast)}</td>
-                <td style={{ padding: "6px 8px", textAlign: "right", fontVariantNumeric: "tabular-nums" }}>{fmtInt(r.peakDemand)}</td>
-                <td style={{ padding: "6px 8px", textAlign: "right", fontWeight: 800, color: "var(--brand-primary)" }}>{r.lanes || "—"}</td>
-                <td style={{ padding: "6px 8px", textAlign: "right", fontVariantNumeric: "tabular-nums", color: r.unmetAfter > 0 ? "var(--color-danger)" : "var(--text-muted)" }}>
-                  {r.unmetAfter > 0 ? fmtInt(r.unmetAfter) : "0"}
-                </td>
+            {visible.map((r) => (
+              <tr key={r.plaza} style={{ borderBottom: "1px solid var(--border-default)" }}>
+                <td style={{ padding: "6px 8px", fontWeight: 600, whiteSpace: "nowrap" }}>{r.plaza}</td>
+                <td style={{ padding: "6px 8px", color: "var(--text-secondary)" }}>{fmtHour(r.peakHour)}</td>
+                <td style={{ padding: "6px 8px", textAlign: "right", fontVariantNumeric: "tabular-nums", color: "var(--text-secondary)" }}>{r.typical}</td>
+                {r.need.map((n, i) => {
+                  const delta = n - r.typical;
+                  return (
+                    <td key={days[i].date} style={{
+                      padding: "6px 8px", textAlign: "right", fontVariantNumeric: "tabular-nums", fontWeight: delta !== 0 ? 800 : 500,
+                      color: delta > 0 ? "var(--color-danger)" : delta < 0 ? "var(--color-success)" : "var(--text-primary)",
+                      background: delta > 0 ? "color-mix(in srgb, var(--color-danger) 7%, transparent)" : undefined,
+                    }}>
+                      {n}{delta !== 0 && <span style={{ fontSize: "0.66rem", marginLeft: 3 }}>{delta > 0 ? `+${delta}` : delta}</span>}
+                    </td>
+                  );
+                })}
               </tr>
             ))}
           </tbody>
         </table>
       </div>
 
-      <p style={{ margin: 0, fontSize: "0.72rem", color: "var(--text-muted)", lineHeight: 1.45 }}>
-        Peak-hour share {(peakShare * 100).toFixed(1)}% is measured from the descriptive hour×weekday profile, and the
-        volume is the {data.championModel ?? "champion"} forecast. Lanes and throughput are operator inputs: the warehouse
-        holds no plaza capacity, so those two numbers are assumptions you set, not measurements.
-      </p>
+      {rows.length > 8 && (
+        <button onClick={() => setShowAll((v) => !v)} style={{
+          alignSelf: "flex-start", border: "1px solid var(--border-strong)", background: "var(--bg-surface)", color: "var(--text-secondary)",
+          borderRadius: 999, padding: "4px 12px", fontSize: "0.72rem", fontWeight: 700, cursor: "pointer",
+        }}>
+          {showAll ? "Show the 8 busiest" : `Show all ${rows.length} plazas`}
+        </button>
+      )}
+
+      <Foot>
+        Volume is the {data.championModel ?? "champion"} forecast. Each plaza&apos;s share of the corridor and its peak-hour share are
+        measured over the selected Range; &ldquo;typical&rdquo; is the same calculation on the range&apos;s average day. Booth
+        throughput is the only assumption — the warehouse holds no plaza capacity, so it is yours to set.
+      </Foot>
     </Shell>
   );
 }
@@ -206,22 +245,24 @@ export function VolumeStaffingPanel({ peakShare }: { peakShare: number | null })
  */
 export function CongestionResponsePanel() {
   const { data, error } = useForecast();
+  const [showRest, setShowRest] = useState(false);
 
   const rows = useMemo(() => {
     if (!data) return [];
-    const bySeg = new Map<string, { segment: string; km: number; first: number | null; peak: number; peakHour: number; urgency: number; label: string }>();
+    type Row = { segment: string; km: number; first: number | null; peak: number; peakHour: number; urgency: number; label: "Monitor" | "Prepare" | "Act" };
+    const bySeg = new Map<string, Row>();
     for (const c of data.congestion) {
       const p = Number(c.probability);
       if (!Number.isFinite(p)) continue;
       const high = String(c.state).toLowerCase() === "high";
       const u = fuzzyUrgency(high ? p : 1 - p, c.hours);
-      const cur = bySeg.get(c.segment) ?? { segment: c.segment, km: c.km, first: null, peak: 0, peakHour: 0, urgency: 0, label: "Monitor" };
+      const cur: Row = bySeg.get(c.segment) ?? { segment: c.segment, km: c.km, first: null, peak: 0, peakHour: 0, urgency: 0, label: "Monitor" };
       if (high && cur.first == null) cur.first = c.hours;
       if (high && p > cur.peak) { cur.peak = p; cur.peakHour = c.hours; }
       if (u.score > cur.urgency) { cur.urgency = u.score; cur.label = u.label; }
       bySeg.set(c.segment, cur);
     }
-    return [...bySeg.values()].sort((a, b) => b.urgency - a.urgency);
+    return [...bySeg.values()].sort((a, b) => b.urgency - a.urgency || (a.first ?? 99) - (b.first ?? 99));
   }, [data]);
 
   if (error) return <Empty msg={`Forecast unavailable: ${error}`} />;
@@ -230,68 +271,74 @@ export function CongestionResponsePanel() {
 
   const act = rows.filter((r) => r.label === "Act");
   const prepare = rows.filter((r) => r.label === "Prepare");
-  const lead = act.length ? Math.min(...act.map((r) => r.first ?? 99)) : null;
+  const top = act.slice(0, 3);
+  const rest = rows.filter((r) => !top.includes(r) && r.label !== "Monitor");
+  const lead = top.length ? Math.min(...top.map((r) => r.first ?? 99)) : null;
+
+  const ACTION: Record<string, string> = {
+    Act: "Deploy counter-flow and post VMS advisories before the first High hour.",
+    Prepare: "Stage units nearby; hold the advisory until probability firms up.",
+    Monitor: "No action; re-check next cycle.",
+  };
   const tone = (l: string) => (l === "Act" ? "var(--color-danger)" : l === "Prepare" ? "var(--color-warning)" : "var(--text-muted)");
 
   return (
     <Shell
       title="Congestion Response Advisory"
-      hint="A Mamdani fuzzy controller over predicted congestion likelihood and how soon it arrives. Overlapping memberships mean a segment near a threshold reads as near a threshold, instead of flipping an alert on and off between two probabilities that describe the same road."
+      hint="Ranks segments by how likely High congestion is and how soon, through a fuzzy controller so a segment near a threshold reads as near a threshold rather than flipping an alert on and off. Counter-flow is disruptive and scarce, so the advisory goes to the three most urgent; the rest are listed, not alerted."
     >
-      <Banner>
-        {act.length > 0 ? (
+      <Banner tone={act.length ? "alert" : "info"}>
+        {top.length > 0 ? (
           <>
-            <b style={{ color: "var(--color-danger)" }}>Operator alert:</b>{" "}
-            severe congestion predicted on <b>{act.slice(0, 3).map((r) => r.segment).join(", ")}</b>
-            {act.length > 3 && <> and <b>{act.length - 3}</b> other segment{act.length - 3 === 1 ? "" : "s"}</>}
-            {lead != null && lead < 99 && <> in <b>{lead}h</b></>}.{" "}
-            {/* Counter-flow is a scarce, disruptive intervention: naming twelve
-                segments at once is the same as naming none, so the advisory
-                goes to the three highest-urgency and the rest are reported as
-                a count. */}
-            Counter-flow advisory recommended for the {Math.min(3, act.length)} highest-urgency
-            segment{Math.min(3, act.length) === 1 ? "" : "s"}; {prepare.length} more
-            {prepare.length === 1 ? " is" : " are"} at Prepare.
+            <b style={{ color: "var(--color-danger)" }}>Operator alert:</b> severe congestion predicted
+            {lead != null && lead < 99 && <> within <b>{lead}h</b></>} — counter-flow advisory for{" "}
+            <b>{top.map((r) => r.segment).join(", ")}</b>.
+            {rest.length > 0 && <> {rest.length} more segment{rest.length === 1 ? "" : "s"} elevated but not advised.</>}
           </>
         ) : prepare.length > 0 ? (
-          <><b>No segment reaches Act.</b> {prepare.length} at Prepare — worth staging, not worth intervening.</>
+          <><b>No segment reaches Act.</b> {prepare.length} at Prepare — stage, don&apos;t intervene.</>
         ) : (
           <><b>Corridor clear.</b> No segment crosses Prepare inside the 12-hour horizon.</>
         )}
       </Banner>
 
-      <div style={{ overflowX: "auto" }}>
-        <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "0.78rem" }}>
-          <thead>
-            <tr style={{ textAlign: "left", color: "var(--text-muted)", borderBottom: "1px solid var(--border-default)" }}>
-              <th style={{ padding: "6px 8px", fontWeight: 700 }}>Segment</th>
-              <th style={{ padding: "6px 8px", fontWeight: 700, textAlign: "right" }}>First High</th>
-              <th style={{ padding: "6px 8px", fontWeight: 700, textAlign: "right" }}>Peak probability</th>
-              <th style={{ padding: "6px 8px", fontWeight: 700, textAlign: "right" }}>Urgency</th>
-              <th style={{ padding: "6px 8px", fontWeight: 700 }}>Advisory</th>
-            </tr>
-          </thead>
-          <tbody>
-            {rows.slice(0, 10).map((r) => (
-              <tr key={r.segment} style={{ borderBottom: "1px solid var(--border-default)" }}>
-                <td style={{ padding: "6px 8px", fontWeight: 600 }}>{r.segment}</td>
-                <td style={{ padding: "6px 8px", textAlign: "right" }}>{r.first != null ? `+${r.first}h` : "—"}</td>
-                <td style={{ padding: "6px 8px", textAlign: "right", fontVariantNumeric: "tabular-nums" }}>
-                  {r.peak > 0 ? `${(r.peak * 100).toFixed(0)}%` : "—"}
-                </td>
-                <td style={{ padding: "6px 8px", textAlign: "right", fontVariantNumeric: "tabular-nums" }}>{r.urgency.toFixed(2)}</td>
-                <td style={{ padding: "6px 8px", fontWeight: 700, color: tone(r.label) }}>{r.label}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))", gap: 12 }}>
+        {(top.length ? top : rows.slice(0, 3)).map((r, i) => (
+          <div key={r.segment} style={{ border: "1px solid var(--border-default)", borderLeft: `4px solid ${tone(r.label)}`, borderRadius: 10, padding: "12px 14px", display: "grid", gap: 6 }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 8 }}>
+              <span style={{ fontWeight: 800, fontSize: "0.9rem" }}>{i + 1}. {r.segment}</span>
+              <span style={{ fontSize: "0.7rem", fontWeight: 800, color: tone(r.label), textTransform: "uppercase", letterSpacing: "0.06em" }}>{r.label}</span>
+            </div>
+            <div style={{ display: "flex", gap: 14, fontSize: "0.76rem", color: "var(--text-secondary)" }}>
+              <span>First High <b style={{ color: "var(--text-primary)" }}>{r.first != null ? `+${r.first}h` : "—"}</b></span>
+              <span>Peak <b style={{ color: "var(--text-primary)" }}>{r.peak > 0 ? `${Math.round(r.peak * 100)}%` : "—"}</b>{r.peak > 0 && <> at +{r.peakHour}h</>}</span>
+            </div>
+            <div style={{ fontSize: "0.76rem", lineHeight: 1.4 }}>{ACTION[r.label]}</div>
+          </div>
+        ))}
       </div>
 
-      <p style={{ margin: 0, fontSize: "0.72rem", color: "var(--text-muted)", lineHeight: 1.45 }}>
-        Urgency is the defuzzified score, not a probability. The diagram&apos;s peak V/C ratio target is not shown: a
-        volume-to-capacity ratio needs lane capacity, and no capacity or lane-count column exists anywhere in the
-        warehouse — the predicted congestion state is what the data can actually support.
-      </p>
+      {rest.length > 0 && (
+        <div style={{ fontSize: "0.76rem", color: "var(--text-secondary)" }}>
+          <button onClick={() => setShowRest((v) => !v)} style={{ border: 0, background: "none", color: "var(--brand-primary)", fontWeight: 700, cursor: "pointer", padding: 0, fontSize: "0.76rem" }}>
+            {showRest ? "Hide" : "Show"} the {rest.length} elevated segment{rest.length === 1 ? "" : "s"} not advised
+          </button>
+          {showRest && (
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: 8 }}>
+              {rest.map((r) => (
+                <span key={r.segment} style={{ border: "1px solid var(--border-default)", borderRadius: 999, padding: "3px 10px", background: "var(--bg-surface)" }}>
+                  <b style={{ color: tone(r.label) }}>{r.label}</b> · {r.segment}{r.first != null && <> · +{r.first}h</>}
+                </span>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      <Foot>
+        A volume-to-capacity ratio is not shown: it needs lane capacity, and no capacity or lane-count column exists anywhere in
+        the warehouse. The predicted congestion state is what the data supports.
+      </Foot>
     </Shell>
   );
 }
@@ -310,11 +357,12 @@ export function EventInterventionPanel() {
   const top = ranked.slice(0, 3);
   const totalExtra = top.reduce((s, r) => s + r.extraVehicles, 0);
   const anchor = data.events.find((e) => e.material)?.anchorExit ?? null;
+  const confidence = (w: number) => (w < 0.05 ? "firm" : w < 0.12 ? "fair" : "loose");
 
   return (
     <Shell
-      title="Event Intervention Ranking (TOPSIS)"
-      hint="Ranks exits for event-day intervention by closeness to an ideal option across four criteria: vehicles moved, uplift over baseline, how many events the estimate rests on, and the width of its confidence interval as a penalty."
+      title="Event Intervention Ranking"
+      hint="Ranks exits for event-day intervention by closeness to an ideal option across four criteria: vehicles moved, uplift over baseline, how many events the estimate rests on, and the width of its confidence interval as a penalty (TOPSIS)."
     >
       <Banner>
         <b>Event traffic management plan: {top.map((r) => r.exit).join(", ")}.</b>{" "}
@@ -331,8 +379,8 @@ export function EventInterventionPanel() {
               <th style={{ padding: "6px 8px", fontWeight: 700, textAlign: "right" }}>Extra vehicles</th>
               <th style={{ padding: "6px 8px", fontWeight: 700, textAlign: "right" }}>Uplift</th>
               <th style={{ padding: "6px 8px", fontWeight: 700, textAlign: "right" }}>Events seen</th>
-              <th style={{ padding: "6px 8px", fontWeight: 700, textAlign: "right" }}>CI width</th>
-              <th style={{ padding: "6px 8px", fontWeight: 700, textAlign: "right" }}>Closeness</th>
+              <th style={{ padding: "6px 8px", fontWeight: 700 }}>Estimate</th>
+              <th style={{ padding: "6px 8px", fontWeight: 700, textAlign: "right" }}>Score</th>
             </tr>
           </thead>
           <tbody>
@@ -343,19 +391,19 @@ export function EventInterventionPanel() {
                 <td style={{ padding: "6px 8px", textAlign: "right", fontVariantNumeric: "tabular-nums" }}>{fmtInt(r.extraVehicles)}</td>
                 <td style={{ padding: "6px 8px", textAlign: "right", fontVariantNumeric: "tabular-nums" }}>{r.uplift.toFixed(2)}×</td>
                 <td style={{ padding: "6px 8px", textAlign: "right", fontVariantNumeric: "tabular-nums" }}>{r.evidence}</td>
-                <td style={{ padding: "6px 8px", textAlign: "right", fontVariantNumeric: "tabular-nums" }}>±{(r.uncertainty / 2).toFixed(3)}</td>
-                <td style={{ padding: "6px 8px", textAlign: "right", fontWeight: 800, fontVariantNumeric: "tabular-nums" }}>{r.closeness.toFixed(3)}</td>
+                <td style={{ padding: "6px 8px", color: "var(--text-secondary)" }}>{confidence(r.uncertainty)} <span style={{ fontSize: "0.68rem" }}>(±{(r.uncertainty / 2).toFixed(2)})</span></td>
+                <td style={{ padding: "6px 8px", textAlign: "right", fontWeight: 800, fontVariantNumeric: "tabular-nums" }}>{r.closeness.toFixed(2)}</td>
               </tr>
             ))}
           </tbody>
         </table>
       </div>
 
-      <p style={{ margin: 0, fontSize: "0.72rem", color: "var(--text-muted)", lineHeight: 1.45 }}>
-        Criteria are weighted 0.40 vehicles / 0.25 uplift / 0.20 evidence / 0.15 interval width. Alert lead time is not
-        shown: it needs a schedule of upcoming events, and this forecast carries only the historical window the uplift
-        was measured over ({data.events[0]?.event ?? "event"} days).
-      </p>
+      <Foot>
+        Criteria weighted 0.40 vehicles / 0.25 uplift / 0.20 evidence / 0.15 interval width. &ldquo;Estimate&rdquo; reads the
+        uplift interval: firm under ±0.025, fair under ±0.06. Alert lead time is not shown — it needs a schedule of upcoming
+        events, and this forecast carries only the historical window the uplift was measured over.
+      </Foot>
     </Shell>
   );
 }

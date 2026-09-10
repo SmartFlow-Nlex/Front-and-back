@@ -52,6 +52,7 @@ export type UpcomingEventExit = {
 };
 export type UpcomingEvent = {
   date: string; title: string; isDerived: boolean; capacity: number | null;
+  venue: string | null;
   exits: UpcomingEventExit[];
 };
 

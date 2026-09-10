@@ -893,20 +893,55 @@ export type UpcomingEventExit = {
 };
 export type UpcomingEvent = {
   date: string; title: string; isDerived: boolean; capacity: number | null;
+  // Where it is. Three BTS nights are at the Philippine Sports Stadium --
+  // same complex, same exit, a third of the Arena's capacity -- and the
+  // uplift was measured on Arena days, so the card must be able to say so.
+  venue: string | null;
   exits: UpcomingEventExit[];
 };
 
-export async function getUpcomingEventSurge(limit = 6): Promise<UpcomingEvent[] | null> {
+// Every scheduled day, not the next six. An audit found 13 distinct upcoming
+// days with the cap at 6, which silently dropped everything from March 2027.
+// A dropdown holds thirteen entries comfortably; the cap only guards runaway.
+export async function getUpcomingEventSurge(limit = 60): Promise<UpcomingEvent[] | null> {
   if (!db) return null;
   try {
     const { rows } = await db.query(
-      `WITH up AS (
+      `WITH today AS (
+         -- Event days are Manila days; the server clock is UTC and is a day
+         -- behind for eight hours of every night.
+         SELECT (now() AT TIME ZONE 'Asia/Manila')::date AS d
+       ),
+       src AS (
+         SELECT e.start_date, e.title, e.is_derived, e.capacity, e.venue, e.date_raw
+         FROM philippine_arena_events e, today
+         WHERE e.start_date >= today.d
+       ),
+       -- Multi-day runs come from the source as a range row ("May 15–16, 2027")
+       -- and, sometimes, one row per day. LANY's range was split into days;
+       -- Bruno Mars' was not, so its second night was missing from the
+       -- schedule. Same-month ranges are expanded here to the days the range
+       -- names; days that already have their own row are left alone by the
+       -- GROUP BY below.
+       expanded AS (
+         SELECT start_date, title, is_derived, capacity, venue FROM src
+         UNION ALL
+         SELECT (start_date + g)::date, title, is_derived, capacity, venue
+         FROM (
+           SELECT *,
+                  (regexp_match(date_raw, '^[A-Za-z]+\\s+(\\d{1,2})\\s*[–-]\\s*(\\d{1,2}),?\\s*(\\d{4})$'))[2]::int AS end_day
+           FROM src
+         ) r,
+         LATERAL generate_series(1, GREATEST(0, r.end_day - EXTRACT(DAY FROM r.start_date)::int)) AS g
+         WHERE r.end_day IS NOT NULL
+       ),
+       up AS (
          SELECT start_date AS d,
                 (array_agg(title ORDER BY length(title), title))[1] AS title,
                 bool_and(is_derived) AS is_derived,
-                MAX(NULLIF(replace((regexp_match(capacity, '[0-9][0-9,]*'))[1], ',', ''), '')::int) AS capacity
-         FROM philippine_arena_events
-         WHERE start_date >= CURRENT_DATE
+                MAX(NULLIF(replace((regexp_match(capacity, '[0-9][0-9,]*'))[1], ',', ''), '')::int) AS capacity,
+                (array_agg(venue ORDER BY venue NULLS LAST))[1] AS venue
+         FROM expanded
          GROUP BY start_date
          ORDER BY start_date
          LIMIT $1
@@ -922,7 +957,7 @@ export async function getUpcomingEventSurge(limit = 6): Promise<UpcomingEvent[] 
                      AND EXTRACT(MONTH FROM t.date) = EXTRACT(MONTH FROM u.d)
          GROUP BY 1, 2
        )
-       SELECT u.d::text AS date, u.title, u.is_derived AS "isDerived", u.capacity,
+       SELECT u.d::text AS date, u.title, u.is_derived AS "isDerived", u.capacity, u.venue,
               n.plaza AS exit, n.baseline,
               ROUND(n.baseline * f.uplift)::int    AS surge,
               ROUND(n.baseline * f.uplift_lo)::int AS "surgeLo",
@@ -939,7 +974,7 @@ export async function getUpcomingEventSurge(limit = 6): Promise<UpcomingEvent[] 
     for (const r of rows) {
       const ev: UpcomingEvent = byDate.get(r.date) ?? {
         date: r.date, title: r.title, isDerived: !!r.isDerived,
-        capacity: r.capacity == null ? null : Number(r.capacity), exits: [],
+        capacity: r.capacity == null ? null : Number(r.capacity), venue: r.venue ?? null, exits: [],
       };
       ev.exits.push({
         exit: r.exit, baseline: Number(r.baseline), surge: Number(r.surge),

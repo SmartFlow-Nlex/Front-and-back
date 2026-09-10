@@ -93,7 +93,7 @@ export const getForecast = async (req: Request, res: Response) => {
     getEventSurgeMetrics(),
     // The next Arena event days with a dated per-exit surge forecast each,
     // so the Prescriptive tab can plan for a real date rather than "an event".
-    getUpcomingEventSurge(6)
+    getUpcomingEventSurge()
   ]);
 
   if (!volumes && !congestion && !events) {

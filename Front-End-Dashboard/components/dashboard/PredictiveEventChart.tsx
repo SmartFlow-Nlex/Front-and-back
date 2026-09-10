@@ -35,7 +35,12 @@ type Row = {
 // measured uplift -- the same construction the observed rows use, applied to a
 // real date.
 type UpcomingExit = { exit: string; baseline: number; surge: number; surgeLo: number; surgeHi: number; uplift: number; nEvents: number };
-type UpcomingEvent = { date: string; title: string; isDerived: boolean; capacity: number | null; exits: UpcomingExit[] };
+type UpcomingEvent = { date: string; title: string; isDerived: boolean; capacity: number | null; venue: string | null; exits: UpcomingExit[] };
+
+// The uplift was measured on Philippine Arena days. Events elsewhere in the
+// same complex reach the same exit but not at the same scale, so the card
+// names the venue whenever it is not the Arena.
+const isArena = (venue: string | null) => !venue || /arena/i.test(venue);
 
 const SURGE_COLOR = "#e11d48";
 
@@ -304,12 +309,17 @@ export default function PredictiveEventChart() {
           >
             <option value="">Past events — what {eventName === "the upcoming event" ? "event" : eventName} days did</option>
             {upcoming.map((u, i) => {
-              const nth = upcoming.slice(0, i + 1).filter((x) => x.title === u.title).length;
-              const multi = upcoming.filter((x) => x.title === u.title).length > 1;
+              // Group nights by the act, not the full title: the source spells
+              // BTS's three nights two different ways ("BTS - Arirang World
+              // Tour", "BTS - BTS WORLD TOUR 'ARIRANG'"), which by full title
+              // read as one lone night plus a two-night run.
+              const act = shortTitle(u.title);
+              const nth = upcoming.slice(0, i + 1).filter((x) => shortTitle(x.title) === act).length;
+              const multi = upcoming.filter((x) => shortTitle(x.title) === act).length > 1;
               const d = new Date(`${u.date}T00:00:00`);
               return (
                 <option key={u.date} value={String(i)}>
-                  {d.toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric", year: "numeric" })} — {shortTitle(u.title)}{multi ? ` (day ${nth})` : ""}
+                  {d.toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric", year: "numeric" })} — {shortTitle(u.title)}{multi ? ` (day ${nth})` : ""}{isArena(u.venue) ? "" : ` · ${u.venue}`}
                 </option>
               );
             })}
@@ -331,6 +341,9 @@ export default function PredictiveEventChart() {
           <>
             During <b>{shortTitle(chosen.title)}</b>
             {chosen.isDerived && <span title="A recurring event the ETL inferred from prior years, not an announced date." style={{ opacity: 0.8 }}> (inferred)</span>}
+            {!isArena(chosen.venue) && (
+              <span style={{ opacity: 0.85 }}> at {chosen.venue}{chosen.capacity ? ` (${fmtVeh(chosen.capacity)} capacity)` : ""}</span>
+            )}
             {" "}on <b>{chosenDateLong}</b>
             {chosenLead != null && chosenLead >= 0 && <> · in {chosenLead} day{chosenLead === 1 ? "" : "s"}</>}: expect{" "}
             <b>+{fmtVeh(totalAdded)}</b> extra vehicles. <b>{top.exit}</b> takes {top.shareOfSurge.toFixed(0)}% of it,{" "}
@@ -404,7 +417,8 @@ export default function PredictiveEventChart() {
               <p style={{ margin: "6px 0 0", lineHeight: 1.5, color: "#94a3b8" }}>
                 Fitted on earlier events, scored on later ones it never saw{champ.diagnosis ? ` (${champ.diagnosis})` : ""}.{" "}
                 {chosen
-                  ? <>The day shown applies each exit&apos;s uplift to its normal same-weekday, same-month volume; the uplift does not yet vary with the act or its capacity.</>
+                  ? <>The day shown applies each exit&apos;s uplift to its normal same-weekday, same-month volume; the uplift does not yet vary with the act or its capacity.
+                      {!isArena(chosen.venue) && <> It was measured on Philippine Arena days; this event is at the {chosen.venue}, a smaller venue in the same complex, so treat the figures as an upper bound.</>}</>
                   : <>Choose an upcoming date above to see the forecast for it.</>}
               </p>
             </div>

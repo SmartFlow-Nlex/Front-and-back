@@ -6,7 +6,7 @@ import { useChartTheme, applyChartTheme, seriesRamp, seriesPair } from "../../..
 import ReactECharts from "echarts-for-react";
 import type { EChartsOption } from "echarts";
 import { Activity, ArrowDownWideNarrow, ArrowUpNarrowWide, Building2, CalendarClock, Clock, Gauge, TrendingUp } from "lucide-react";
-import DashboardChart from "../../../components/dashboard/DashboardChart";
+import { VolumeStaffingPanel, CongestionResponsePanel, EventInterventionPanel } from "../../../components/dashboard/PrescriptiveTrafficPanels";
 import ChartSkeleton, { KpiSkeleton } from "../../../components/dashboard/ChartSkeleton";
 import CustomSelect from "../../../components/dashboard/CustomSelect";
 import RampKey from "../../../components/dashboard/RampKey";
@@ -112,15 +112,6 @@ function buildTrend(data: Analytics, grain: Granularity): TrendRow[] {
 }
 
 const ROLLING_WINDOW: Record<Granularity, number> = { hourly: 24, daily: 7, weekly: 0, monthly: 0 };
-
-// ---------- Prescriptive mock (unchanged tab) ----------
-const prescriptiveImpactOption: EChartsOption = {
-  grid: { left: 46, right: 20, top: 20, bottom: 36 },
-  xAxis: { type: "category", data: ["Strategy A", "Strategy B", "Strategy C"] },
-  yAxis: { type: "value" },
-  tooltip: { trigger: "axis" },
-  series: [{ type: "bar", data: [15, 25, 40], itemStyle: { color: "#29b471", borderRadius: [8, 8, 0, 0] } }],
-};
 
 export default function TrafficPage() {
   // Chart furniture follows the active theme; series hues stay fixed.
@@ -774,6 +765,15 @@ export default function TrafficPage() {
   const kpiValue = (v: string | null) =>
     loading && !data ? <KpiSkeleton /> : (v ?? "—");
 
+  /* What fraction of a day's traffic lands in its busiest hour. Measured, not
+     assumed: both terms come from the descriptive aggregate the KPI row
+     already shows. The staffing LP turns a daily volume forecast into a
+     peak-hour demand with it. */
+  const peakShare =
+    derived && derived.curAdt > 0 && derived.peakHourVolume > 0
+      ? derived.peakHourVolume / derived.curAdt
+      : null;
+
   // ---------- Predictive / Prescriptive share the same shell ----------
   if (activeTab !== "Descriptive") {
     return (
@@ -822,7 +822,12 @@ export default function TrafficPage() {
               </div>
             </>
           )}
-          {activeTab === "Prescriptive" && <span className={styles.filterLabel}>Projected impact of traffic strategies</span>}
+          {activeTab === "Prescriptive" && (
+            <span className={styles.filterNote}>
+              Staffing, congestion response and event ranking, computed from the Predictive tab&apos;s own forecast —
+              Range does not apply.
+            </span>
+          )}
           <span className={styles.spacer} />
           <div className={styles.modeTabs}>
             {(["Descriptive", "Predictive", "Prescriptive"] as const).map((t) => (
@@ -847,16 +852,22 @@ export default function TrafficPage() {
             <div className={styles.spanHalf}><PredictiveEventChart /></div>
           </>
         ) : (
-          <article className={`${styles.chartCard} ${styles.chart1}`}>
-            <div className={styles.chartHead}>
-              <div className={styles.headText}>
-                <h3>Projected Impact of Strategies (Throughput Gain)</h3>
-              </div>
+          /* Three panels, one per row of the analytics diagram, each acting on
+             the Predictive tab's own forecast rather than a separate model.
+             The peak-hour share comes from the descriptive hour-by-weekday
+             profile already computed for the KPI row, so the staffing panel
+             and the "Peak Hour" tile cannot disagree about when the peak is. */
+          <>
+            <div className={styles.spanFull}>
+              <VolumeStaffingPanel peakShare={peakShare} />
             </div>
-            <div className={styles.chartBody}>
-              <DashboardChart option={prescriptiveImpactOption} height={280} />
+            <div className={styles.spanFull}>
+              <CongestionResponsePanel />
             </div>
-          </article>
+            <div className={styles.spanFull}>
+              <EventInterventionPanel />
+            </div>
+          </>
         )}
       </section>
     );

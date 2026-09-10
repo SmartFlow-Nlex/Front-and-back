@@ -140,15 +140,21 @@ export default function ForecastGlance() {
     return { exits, at1, peakHour, peakCount };
   }, [data]);
 
-  /* Event surge per exit: where the extra vehicles land. */
+  /* Event surge per exit: where the extra vehicles land.
+     Same arithmetic as the Event Surge card below, on purpose: keep exits whose
+     `material` flag is not false, take surge minus baseline without clamping,
+     and total over every kept row. A first draft clamped at zero and dropped
+     non-positive rows, which put this tile at 27% against the card's 28% for
+     the same exit. */
   const surge = useMemo(() => {
     if (!data || data.events.length === 0) return null;
     const rows = data.events
-      .map((e) => ({ exit: e.exit, extra: Math.max(0, (e.surge ?? 0) - (e.baseline ?? 0)), n: e.nEvents, event: e.event }))
-      .filter((r) => r.extra > 0)
+      .filter((e) => e.surge != null && e.material !== false)
+      .map((e) => ({ exit: e.exit, extra: Number(e.surge) - Number(e.baseline), n: e.nEvents, event: e.event }))
       .sort((a, b) => b.extra - a.extra);
     if (rows.length === 0) return null;
     const total = rows.reduce((s, r) => s + r.extra, 0);
+    if (total <= 0 || rows[0].extra <= 0) return null;
     return { top: rows[0], share: rows[0].extra / total, total, exits: rows.length };
   }, [data]);
 

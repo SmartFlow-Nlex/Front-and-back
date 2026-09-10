@@ -414,18 +414,60 @@ export function EventInterventionPanel() {
           given a date. */}
       {upcoming.length > 0 && ev && (
         <div style={{ display: "grid", gap: 10, paddingTop: 6, borderTop: "1px solid var(--border-default)" }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-            <span style={{ fontSize: "0.72rem", fontWeight: 700, letterSpacing: "0.06em", textTransform: "uppercase", color: "var(--text-muted)" }}>Upcoming at the Arena</span>
-            {upcoming.map((u, i) => (
-              <button key={u.date} onClick={() => setSel(i)} title={u.title} style={{
-                padding: "4px 10px", borderRadius: 999, fontSize: "0.72rem", fontWeight: 700, cursor: "pointer", whiteSpace: "nowrap",
-                border: `1px solid ${i === sel ? "var(--brand-primary)" : "var(--border-strong)"}`,
-                background: i === sel ? "var(--brand-primary)" : "var(--bg-surface)",
-                color: i === sel ? "#fff" : "var(--text-secondary)",
-              }}>
-                {new Date(`${u.date}T00:00:00`).toLocaleDateString("en-US", { month: "short", day: "numeric" })}
-              </button>
-            ))}
+          <span style={{ fontSize: "0.72rem", fontWeight: 700, letterSpacing: "0.06em", textTransform: "uppercase", color: "var(--text-muted)" }}>
+            Upcoming at the Arena — what to be ready for
+          </span>
+
+          {/* The whole horizon at once: an operator planning a roster needs to
+              see every date and what is on, not one at a time behind a pill.
+              Clicking a row opens its per-exit detail below. */}
+          <div style={{ overflowX: "auto" }}>
+            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "0.78rem" }}>
+              <thead>
+                <tr style={{ textAlign: "left", color: "var(--text-muted)", borderBottom: "1px solid var(--border-default)" }}>
+                  <th style={{ padding: "6px 8px", fontWeight: 700 }}>Date</th>
+                  <th style={{ padding: "6px 8px", fontWeight: 700 }}>Event</th>
+                  <th style={{ padding: "6px 8px", fontWeight: 700, textAlign: "right" }}>In</th>
+                  <th style={{ padding: "6px 8px", fontWeight: 700, textAlign: "right" }}>Capacity</th>
+                  <th style={{ padding: "6px 8px", fontWeight: 700, textAlign: "right" }}>Expected extra</th>
+                  <th style={{ padding: "6px 8px", fontWeight: 700 }}>Most affected</th>
+                </tr>
+              </thead>
+              <tbody>
+                {upcoming.map((u, i) => {
+                  const d = new Date(`${u.date}T00:00:00`);
+                  const days = Math.round((d.getTime() - Date.now()) / 86400000);
+                  const extra = u.exits.reduce((s, x) => s + (x.surge - x.baseline), 0);
+                  const active = i === sel;
+                  return (
+                    <tr key={u.date} onClick={() => setSel(i)} style={{
+                      cursor: "pointer", borderBottom: "1px solid var(--border-default)",
+                      background: active ? "color-mix(in srgb, var(--brand-primary) 7%, transparent)" : undefined,
+                    }}>
+                      <td style={{ padding: "6px 8px", fontWeight: 700, whiteSpace: "nowrap" }}>
+                        {d.toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric", year: "numeric" })}
+                      </td>
+                      <td style={{ padding: "6px 8px" }}>
+                        {u.title}
+                        {u.isDerived && <span style={{ fontSize: "0.68rem", color: "var(--text-muted)" }}> · recurring, inferred</span>}
+                      </td>
+                      <td style={{ padding: "6px 8px", textAlign: "right", fontVariantNumeric: "tabular-nums", whiteSpace: "nowrap" }}>
+                        {days >= 0 ? `${days} day${days === 1 ? "" : "s"}` : "today"}
+                      </td>
+                      <td style={{ padding: "6px 8px", textAlign: "right", fontVariantNumeric: "tabular-nums", color: "var(--text-secondary)" }}>
+                        {u.capacity != null ? fmtInt(u.capacity) : "—"}
+                      </td>
+                      <td style={{ padding: "6px 8px", textAlign: "right", fontVariantNumeric: "tabular-nums", fontWeight: 800, color: "var(--color-danger)" }}>
+                        +{fmtInt(extra)}
+                      </td>
+                      <td style={{ padding: "6px 8px", color: "var(--text-secondary)", whiteSpace: "nowrap" }}>
+                        {u.exits[0] ? <>{u.exits[0].exit} <span style={{ fontSize: "0.68rem" }}>+{fmtInt(u.exits[0].surge - u.exits[0].baseline)}</span></> : "—"}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
           </div>
 
           <Banner>

@@ -11,7 +11,7 @@
 import { useEffect, useMemo, useState } from "react";
 import InfoTooltip from "./InfoTooltip";
 import {
-  loadForecast, championValue, allocateStaff, fuzzyUrgency, topsisRank,
+  loadForecast, championValue, allocateStaff, fuzzyUrgency, topsisRank, manilaDate,
   type ForecastPayload,
 } from "./prescriptiveTraffic.shared";
 
@@ -100,7 +100,7 @@ export function VolumeStaffingPanel({ peakShare }: { peakShare: number | null })
     if (!data) return [];
     return data.volumes
       .filter((v) => v.is_future)
-      .map((v) => ({ date: String(v.date).slice(0, 10), forecast: championValue(v, data.championModel) ?? 0 }))
+      .map((v) => ({ date: manilaDate(v.date), forecast: championValue(v, data.championModel) ?? 0 }))
       .filter((d) => d.forecast > 0)
       .slice(0, horizon);
   }, [data, horizon]);

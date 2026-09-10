@@ -54,6 +54,19 @@ export type ForecastPayload = {
   events: EventRow[];
 };
 
+/* The calendar day a forecast row is FOR.
+   Rows arrive as ISO instants: a Manila midnight serialises as 16:00Z the
+   evening before, so slicing the string to ten characters names the wrong
+   day for every row. The corridor's days are Manila days, so the conversion is
+   pinned to that zone rather than the browser's, and gives the same answer on
+   any machine. */
+export function manilaDate(value: string): string {
+  const d = new Date(value);
+  return Number.isNaN(d.getTime())
+    ? String(value).slice(0, 10)
+    : d.toLocaleDateString("en-CA", { timeZone: "Asia/Manila" });
+}
+
 const num = (v: unknown): number | null => {
   if (v === null || v === undefined || v === "") return null;
   const n = Number(v);

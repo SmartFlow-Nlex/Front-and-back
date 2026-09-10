@@ -7,6 +7,7 @@ import ReactECharts from "echarts-for-react";
 import type { EChartsOption } from "echarts";
 import { Activity, ArrowDownWideNarrow, ArrowUpNarrowWide, Building2, CalendarClock, Clock, Gauge, TrendingUp } from "lucide-react";
 import { VolumeStaffingPanel, CongestionResponsePanel, EventInterventionPanel } from "../../../components/dashboard/PrescriptiveTrafficPanels";
+import ForecastGlance from "../../../components/dashboard/ForecastGlance";
 import ChartSkeleton, { KpiSkeleton } from "../../../components/dashboard/ChartSkeleton";
 import CustomSelect from "../../../components/dashboard/CustomSelect";
 import RampKey from "../../../components/dashboard/RampKey";
@@ -840,6 +841,13 @@ export default function TrafficPage() {
         </div>
         {activeTab === "Predictive" ? (
           <>
+            {/* The diagram's System Output boxes, stated first: next-day
+                volume, seasonal peak, congestion state, event surge. The three
+                cards beneath are the Models, KPI and Visualization boxes that
+                back them up. */}
+            <div className={styles.spanFull}>
+              <ForecastGlance />
+            </div>
             <div className={styles.spanFull}>
               <PredictiveVolumeChart
                 months={rangeMode === "custom" ? "all" : rangeMode}

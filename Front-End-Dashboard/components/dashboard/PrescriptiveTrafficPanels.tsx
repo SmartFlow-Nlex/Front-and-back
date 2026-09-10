@@ -412,6 +412,18 @@ export function EventInterventionPanel() {
           specific date -- the measured uplift applied to that weekday-in-that-
           month's baseline, the same construction the Predictive tab uses when
           given a date. */}
+      {/* Never vanish silently. If the schedule is empty or the field is missing
+          from the payload -- an older backend, a failed query -- say so, so an
+          empty section reads as "nothing scheduled" and not as "feature gone". */}
+      {(upcoming.length === 0 || !ev) && (
+        <div style={{ paddingTop: 6, borderTop: "1px solid var(--border-default)", fontSize: "0.78rem", color: "var(--text-muted)" }}>
+          <span style={{ fontSize: "0.72rem", fontWeight: 700, letterSpacing: "0.06em", textTransform: "uppercase" }}>Upcoming at the Arena</span>
+          <div style={{ marginTop: 4 }}>
+            No upcoming Arena events were returned. Either none are scheduled in <code>philippine_arena_events</code> from today
+            onward, or the backend serving this page predates the <code>upcomingEvents</code> field.
+          </div>
+        </div>
+      )}
       {upcoming.length > 0 && ev && (
         <div style={{ display: "grid", gap: 10, paddingTop: 6, borderTop: "1px solid var(--border-default)" }}>
           <span style={{ fontSize: "0.72rem", fontWeight: 700, letterSpacing: "0.06em", textTransform: "uppercase", color: "var(--text-muted)" }}>

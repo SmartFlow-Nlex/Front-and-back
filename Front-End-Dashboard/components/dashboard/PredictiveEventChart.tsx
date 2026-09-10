@@ -359,67 +359,86 @@ export default function PredictiveEventChart() {
         <DashboardChart option={impactOption} height={impactHeight} />
       </div>
 
-      {/* Row 6: everything a reader may want and nobody needs first. */}
+      {/* Row 6: what a reviewer needs and an operator does not need first.
+          Validation as a table, matching how the volume card above shows its
+          models; the long tail and unchanged exits as one chip row, there so
+          "13 of 19" can be checked, not to be read. */}
       <details style={{ fontSize: "0.76rem", color: "#64748b", borderTop: "1px solid #eef2f7", paddingTop: 10 }}>
         <summary style={{ cursor: "pointer", color: "#475569", fontWeight: 600, listStyle: "none", display: "flex", gap: 14, flexWrap: "wrap" }}>
           <span>Details</span>
-          {minorAffected.length > 0 && <span style={{ color: "#94a3b8" }}>{minorAffected.length} smaller rises not charted</span>}
-          {otherExits.length > 0 && <span style={{ color: "#94a3b8" }}>{otherExits.length} exits unchanged</span>}
-          {champ?.wmape != null && <span style={{ color: "#94a3b8" }}>how this was validated</span>}
+          {champ?.wmape != null && <span style={{ color: "#94a3b8" }}>model comparison</span>}
+          {(minorAffected.length > 0 || otherExits.length > 0) && (
+            <span style={{ color: "#94a3b8" }}>the other {minorAffected.length + otherExits.length} exits</span>
+          )}
         </summary>
 
-        <div style={{ display: "grid", gap: 12, marginTop: 10 }}>
-          {minorAffected.length > 0 && (
-            <p style={{ margin: 0, lineHeight: 1.55 }}>
-              <b style={{ color: "#334155" }}>Smaller rises</b> (each under 4% of the surge, {minorAffected.reduce((a, r) => a + r.shareOfSurge, 0).toFixed(0)}% combined):{" "}
-              {minorAffected.map((r) => `${r.exit} +${fmtVeh(r.added)}`).join(" · ")}
-            </p>
-          )}
-
-          {otherExits.length > 0 && (
+        <div style={{ display: "grid", gap: 14, marginTop: 10 }}>
+          {champ?.wmape != null && (
             <div>
-              <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 12, marginBottom: 6 }}>
-                <b style={{ color: "#334155" }}>Exits with no forecast change</b>
-                {otherExits.length > VISIBLE_OTHERS && (
-                  <button
-                    onClick={() => setShowAllOthers((v) => !v)}
-                    style={{ border: "1px solid #dce2ef", background: "#fff", borderRadius: "999px", padding: "2px 10px", fontSize: "0.7rem", fontWeight: 600, color: "#475569", cursor: "pointer" }}
-                  >
-                    {showAllOthers ? "Show fewer" : `Show all ${otherExits.length}`}
-                  </button>
-                )}
-              </div>
-              <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
-                {shownOthers.map((o) => (
-                  <span key={o.exit} title={`${o.exit} — ${fmtVeh(o.baseline)} vehicles/day, no event surge forecast`} style={{
-                    display: "inline-flex", alignItems: "center", gap: 6, padding: "3px 9px", borderRadius: "999px",
-                    background: "#fff", border: "1px solid #e2e8f0", fontSize: "0.72rem", color: "#64748b", whiteSpace: "nowrap",
-                  }}>
-                    {o.exit}<span style={{ color: "#cbd5e1" }}>{fmtVeh(o.baseline)}</span>
-                  </span>
-                ))}
-              </div>
-              {otherPoints.length > 0 && (
-                <p style={{ fontSize: "0.72rem", color: "#94a3b8", margin: "8px 0 0", lineHeight: 1.5 }}>
-                  Excludes {otherPoints.length} mainline barriers, ramps and spur roads ({otherPoints.slice(0, 3).map((x) => x.exit).join(", ")}
-                  {otherPoints.length > 3 ? "…" : ""}), which are toll points rather than exits. <b>Bocaue Barrier</b> is a
-                  mainline barrier, separate from the <b>Bocaue Interchange</b> exit.
-                </p>
-              )}
+              <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "0.74rem" }}>
+                <thead>
+                  <tr style={{ textAlign: "left", color: "#94a3b8", borderBottom: "1px solid #eef2f7" }}>
+                    <th style={{ padding: "4px 6px", fontWeight: 600 }}>Model</th>
+                    <th style={{ padding: "4px 6px", fontWeight: 600, textAlign: "right" }}>Error on held-out events</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {[champ, ...others].map((m, i) => (
+                    <tr key={m.model} style={{ borderBottom: "1px solid #f1f5f9", color: i === 0 ? "#0f172a" : "#475569" }}>
+                      <td style={{ padding: "4px 6px", fontWeight: i === 0 ? 700 : 500 }}>
+                        {m.model}{i === 0 && <span style={{ marginLeft: 6, fontSize: "0.66rem", color: "#1d4ed8", fontWeight: 700 }}>used</span>}
+                      </td>
+                      <td style={{ padding: "4px 6px", textAlign: "right", fontVariantNumeric: "tabular-nums", fontWeight: i === 0 ? 700 : 500 }}>
+                        {m.wmape != null ? `${m.wmape.toFixed(2)}%` : "—"}
+                      </td>
+                    </tr>
+                  ))}
+                  {noAdj?.wmape != null && (
+                    <tr style={{ color: "#94a3b8" }}>
+                      <td style={{ padding: "4px 6px", fontStyle: "italic" }}>Ignoring the event</td>
+                      <td style={{ padding: "4px 6px", textAlign: "right", fontVariantNumeric: "tabular-nums" }}>{noAdj.wmape.toFixed(2)}%</td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+              <p style={{ margin: "6px 0 0", lineHeight: 1.5, color: "#94a3b8" }}>
+                Fitted on earlier events, scored on later ones it never saw{champ.diagnosis ? ` (${champ.diagnosis})` : ""}.{" "}
+                {chosen
+                  ? <>The day shown applies each exit&apos;s uplift to its normal same-weekday, same-month volume; the uplift does not yet vary with the act or its capacity.</>
+                  : <>Choose an upcoming date above to see the forecast for it.</>}
+              </p>
             </div>
           )}
 
-          {champ?.wmape != null && (
-            <p style={{ margin: 0, lineHeight: 1.55 }}>
-              <b style={{ color: "#334155" }}>Validation.</b> Per-exit uplift is fitted on earlier events and scored on later ones it never saw
-              ({champ.diagnosis}), reaching <b style={{ color: "#334155" }}>{champ.wmape.toFixed(2)}% WMAPE</b>
-              {noAdj?.wmape != null && <> against <b style={{ color: "#334155" }}>{noAdj.wmape.toFixed(2)}%</b> for ignoring the event</>}.
-              {others.length > 0 && <> Ranked against {others.map((o) => `${o.model} ${o.wmape?.toFixed(2)}%`).join(", ")}.</>}{" "}
-              The uplift was fitted on event days inferred from the arena exit&apos;s own spikes.{" "}
-              {chosen
-                ? <>The day shown applies that uplift to the exit&apos;s normal volume for the same weekday and month; the uplift is one figure per exit and does not yet vary with the act or its announced capacity.</>
-                : <>&ldquo;Past events&rdquo; describes what those days did; choose an upcoming date above to see the forecast for it.</>}
-            </p>
+          {(minorAffected.length > 0 || otherExits.length > 0) && (
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+              {minorAffected.map((r) => (
+                <span key={r.exit} title={`${r.exit}: +${fmtVeh(r.added)} vehicles, ${r.shareOfSurge.toFixed(1)}% of the surge — too small to chart`} style={{
+                  display: "inline-flex", alignItems: "center", gap: 6, padding: "3px 9px", borderRadius: "999px",
+                  background: "#fff1f2", border: "1px solid #fecdd3", fontSize: "0.72rem", color: "#9f1239", whiteSpace: "nowrap",
+                }}>
+                  {r.exit}<b>+{fmtVeh(r.added)}</b>
+                </span>
+              ))}
+              {shownOthers.map((o) => (
+                <span key={o.exit} title={`${o.exit}: ${fmtVeh(o.baseline)} vehicles/day, no material event effect`} style={{
+                  display: "inline-flex", alignItems: "center", gap: 6, padding: "3px 9px", borderRadius: "999px",
+                  background: "#fff", border: "1px solid #e2e8f0", fontSize: "0.72rem", color: "#94a3b8", whiteSpace: "nowrap",
+                }}>
+                  {o.exit}<span>no change</span>
+                </span>
+              ))}
+              {otherExits.length > VISIBLE_OTHERS && (
+                <button onClick={() => setShowAllOthers((v) => !v)} style={{ border: "1px solid #dce2ef", background: "#fff", borderRadius: "999px", padding: "3px 10px", fontSize: "0.7rem", fontWeight: 600, color: "#475569", cursor: "pointer" }}>
+                  {showAllOthers ? "fewer" : `+${otherExits.length - VISIBLE_OTHERS} more`}
+                </button>
+              )}
+              {otherPoints.length > 0 && (
+                <span style={{ alignSelf: "center", fontSize: "0.7rem", color: "#94a3b8" }} title={otherPoints.map((x) => x.exit).join(", ")}>
+                  · {otherPoints.length} barriers/ramps excluded
+                </span>
+              )}
+            </div>
           )}
         </div>
       </details>

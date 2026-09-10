@@ -46,12 +46,22 @@ export type EventRow = {
   anchorExit: string;
 };
 
+export type UpcomingEventExit = {
+  exit: string; baseline: number; surge: number; surgeLo: number; surgeHi: number;
+  uplift: number; nEvents: number;
+};
+export type UpcomingEvent = {
+  date: string; title: string; isDerived: boolean; capacity: number | null;
+  exits: UpcomingEventExit[];
+};
+
 export type ForecastPayload = {
   championModel: string | null;
   mlConfidence: number | null;
   volumes: VolumeRow[];
   congestion: CongestionRow[];
   events: EventRow[];
+  upcomingEvents: UpcomingEvent[];
 };
 
 /* The calendar day a forecast row is FOR.
@@ -106,6 +116,7 @@ export function loadForecast(): Promise<ForecastPayload> {
           volumes: Array.isArray(d.volumes) ? d.volumes : [],
           congestion: Array.isArray(d.congestion) ? d.congestion : [],
           events: Array.isArray(d.events) ? d.events : [],
+          upcomingEvents: Array.isArray(d.upcomingEvents) ? d.upcomingEvents : [],
         } as ForecastPayload;
       })
       .catch((e) => {

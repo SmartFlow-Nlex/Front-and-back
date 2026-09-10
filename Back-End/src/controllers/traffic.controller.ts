@@ -1,6 +1,6 @@
 import type { Request, Response } from "express";
 import { TrafficQuerySchema, IncidentQuerySchema, ForecastQuerySchema, HourlyForecastQuerySchema, AnalyticsQuerySchema } from "../validators/traffic.validator.js";
-import { getTrafficVolumesFromDb, getDirectionalFlowFromDb, getVehicleClassDistributionFromDb, getTrafficAnalyticsFromDb, getMLPredictiveVolume, getMLPredictiveVolumeHourly, getMLPredictiveCongestion, getMLEventSurge, getMLModelMetrics, getWeatherEvidenceFromDb, getSplitSummary, getCongestionModel,
+import { getTrafficVolumesFromDb, getDirectionalFlowFromDb, getVehicleClassDistributionFromDb, getTrafficAnalyticsFromDb, getMLPredictiveVolume, getMLPredictiveVolumeHourly, getMLPredictiveCongestion, getMLEventSurge, getUpcomingEventSurge, getMLModelMetrics, getWeatherEvidenceFromDb, getSplitSummary, getCongestionModel,
   getHorizonAccuracy,
   getCongestionHorizonAccuracy,
   getEventSurgeMetrics
@@ -77,7 +77,7 @@ export const getForecast = async (req: Request, res: Response) => {
   const query = ForecastQuerySchema.parse(req.query);
   
   // Fetch real ML predictions from AWS PostgreSQL DB
-  const [volumes, congestion, events, modelMetrics, congestionModel, split, horizonAccuracy, congestionHorizon, eventMetrics] = await Promise.all([
+  const [volumes, congestion, events, modelMetrics, congestionModel, split, horizonAccuracy, congestionHorizon, eventMetrics, upcomingEvents] = await Promise.all([
     getMLPredictiveVolume({ months: query.months, from: query.from, to: query.to, split: query.split }),
     getMLPredictiveCongestion(),
     getMLEventSurge(query.eventDate),
@@ -90,7 +90,10 @@ export const getForecast = async (req: Request, res: Response) => {
     // metrics are h=14; the chart now draws up to 90 days.
     getHorizonAccuracy("Total Traffic"),
     getCongestionHorizonAccuracy(),
-    getEventSurgeMetrics()
+    getEventSurgeMetrics(),
+    // The next Arena event days with a dated per-exit surge forecast each,
+    // so the Prescriptive tab can plan for a real date rather than "an event".
+    getUpcomingEventSurge(6)
   ]);
 
   if (!volumes && !congestion && !events) {
@@ -121,7 +124,8 @@ export const getForecast = async (req: Request, res: Response) => {
       modelMetrics: modelMetrics ?? [],
       volumes: volumes || [],
       congestion: congestion || [],
-      events: events || []
+      events: events || [],
+      upcomingEvents: upcomingEvents || []
     }
   });
 };

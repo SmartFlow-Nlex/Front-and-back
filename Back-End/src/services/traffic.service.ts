@@ -869,6 +869,92 @@ export async function getMLEventSurge(eventDate?: string) {
   }
 }
 
+// [ML-03b] Dated surge forecast for the NEXT Arena events.
+//
+// getMLEventSurge(eventDate) above already turns the measured uplift into a
+// forecast for one named date. Its comment says nothing in the warehouse knows
+// when the next event is; public.philippine_arena_events now does -- the
+// schedule runs into 2027 -- so this enumerates the upcoming event days and
+// runs that same construction for each in one query.
+//
+// Baseline is built exactly as the single-date path builds it: the median of
+// each exit's daily total on the same weekday in the same month, so a Saturday
+// concert in November is measured against November Saturdays. The two paths
+// must agree or the Prescriptive tab would forecast a different surge from the
+// Predictive tab for the same date.
+//
+// One row per event DAY. The source repeats multi-day runs as both a range row
+// ("November 7–8, 2026") and single-day rows, so days are collapsed on
+// start_date; the shortest title is kept. is_derived marks recurring events the
+// ETL inferred (New Year Countdown) rather than announced dates.
+export type UpcomingEventExit = {
+  exit: string; baseline: number; surge: number; surgeLo: number; surgeHi: number;
+  uplift: number; nEvents: number;
+};
+export type UpcomingEvent = {
+  date: string; title: string; isDerived: boolean; capacity: number | null;
+  exits: UpcomingEventExit[];
+};
+
+export async function getUpcomingEventSurge(limit = 6): Promise<UpcomingEvent[] | null> {
+  if (!db) return null;
+  try {
+    const { rows } = await db.query(
+      `WITH up AS (
+         SELECT start_date AS d,
+                (array_agg(title ORDER BY length(title), title))[1] AS title,
+                bool_and(is_derived) AS is_derived,
+                MAX(NULLIF(replace((regexp_match(capacity, '[0-9][0-9,]*'))[1], ',', ''), '')::int) AS capacity
+         FROM philippine_arena_events
+         WHERE start_date >= CURRENT_DATE
+         GROUP BY start_date
+         ORDER BY start_date
+         LIMIT $1
+       ),
+       daily AS (
+         SELECT date, exit_canonical AS plaza, SUM(total) AS v
+         FROM gold.fact_traffic_hourly GROUP BY 1, 2
+       ),
+       norm AS (
+         SELECT u.d, t.plaza, PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY t.v)::int AS baseline
+         FROM up u
+         JOIN daily t ON EXTRACT(DOW FROM t.date) = EXTRACT(DOW FROM u.d)
+                     AND EXTRACT(MONTH FROM t.date) = EXTRACT(MONTH FROM u.d)
+         GROUP BY 1, 2
+       )
+       SELECT u.d::text AS date, u.title, u.is_derived AS "isDerived", u.capacity,
+              n.plaza AS exit, n.baseline,
+              ROUND(n.baseline * f.uplift)::int    AS surge,
+              ROUND(n.baseline * f.uplift_lo)::int AS "surgeLo",
+              ROUND(n.baseline * f.uplift_hi)::int AS "surgeHi",
+              ROUND(f.uplift, 4)::float AS uplift, f.n_events AS "nEvents"
+       FROM up u
+       JOIN norm n ON n.d = u.d
+       JOIN gold.ml_event_surge_forecast f ON f.exit_name = n.plaza AND f.material
+       ORDER BY u.d, (n.baseline * (f.uplift - 1)) DESC`,
+      [limit],
+    );
+
+    const byDate = new Map<string, UpcomingEvent>();
+    for (const r of rows) {
+      const ev: UpcomingEvent = byDate.get(r.date) ?? {
+        date: r.date, title: r.title, isDerived: !!r.isDerived,
+        capacity: r.capacity == null ? null : Number(r.capacity), exits: [],
+      };
+      ev.exits.push({
+        exit: r.exit, baseline: Number(r.baseline), surge: Number(r.surge),
+        surgeLo: Number(r.surgeLo), surgeHi: Number(r.surgeHi),
+        uplift: Number(r.uplift), nEvents: Number(r.nEvents),
+      });
+      byDate.set(r.date, ev);
+    }
+    return [...byDate.values()];
+  } catch (error) {
+    console.error("Failed to fetch upcoming event surge:", error);
+    return null;
+  }
+}
+
 // [ML-04] Hourly breakdown for one forecast day — powers the click-to-drill-down
 // on the predictive volume chart.
 //

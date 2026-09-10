@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { EChartsOption } from "echarts";
 import DashboardChart from "./DashboardChart";
 import ModelNarrative, { type MetricRow } from "./ModelNarrative";
@@ -180,9 +180,22 @@ type Props = {
 };
 
 export default function PredictiveVolumeChart({ months = "all", from, to, weather = "all" }: Props) {
-  // Several models can be on screen at once; the list never empties so the
-  // chart always has something to compare the ground truth against.
+  /* Several models can be on screen at once; the list never empties so the
+     chart always has something to compare the ground truth against.
+
+     Which one it OPENS on is decided once the forecast arrives, below. It was
+     hardcoded to LSTM -- the model the pipeline rejects. On the current
+     retrain LSTM is rank 7 of 8 at MASE 1.653, meaning its forecast is worse
+     than repeating last week's values, while Prophet is the only accepted
+     model at MASE 0.969. Opening on LSTM put the weakest candidate in front of
+     every reader who never touched the buttons, and disagreed with the
+     Prescriptive tab, which plans against the accepted champion. LSTM stays
+     selectable: being outperformed is a finding worth showing. */
   const [selected, setSelected] = useState<ModelType[]>(["LSTM"]);
+  const [apiChampion, setApiChampion] = useState<string | null>(null);
+  // Set once the reader picks a model, so a late fetch cannot override a
+  // deliberate choice.
+  const modelChosenByUser = useRef(false);
   const [chartData, setChartData] = useState<ChartData | null>(null);
   // Raw metric rows, kept unmodified so the narrative can read fields the
   // metrics TABLE does not display (rejected_reason, aic/bic, the _nw twins).
@@ -256,7 +269,22 @@ export default function PredictiveVolumeChart({ months = "all", from, to, weathe
     return next;
   }, [rawMetrics, showWeather]);
 
+  /* Open on whatever the API calls champion, mapped back to this chart's key.
+     If the name does not map -- an unknown model, or no accepted model in the
+     run -- the existing selection stands rather than guessing. */
+  useEffect(() => {
+    if (modelChosenByUser.current || !apiChampion) return;
+    const key = apiChampion.toLowerCase().replace(/[^a-z]/g, "");
+    const BY_DB: Record<string, ModelType> = {
+      prophet: "Prophet", holtwinters: "HoltWinters", sarimax: "SARIMAX",
+      lstm: "LSTM", holtslinear: "HoltsLinear",
+    };
+    const match = BY_DB[key];
+    if (match) setSelected([match]);
+  }, [apiChampion]);
+
   const toggleModel = useCallback((key: ModelType) => {
+    modelChosenByUser.current = true;
     setSelected((prev) => {
       if (!prev.includes(key)) return MODELS.filter((m) => m.key === key || prev.includes(m.key)).map((m) => m.key);
       if (prev.length === 1) return prev; // keep at least one line on the chart
@@ -287,6 +315,13 @@ export default function PredictiveVolumeChart({ months = "all", from, to, weathe
         const res = await fetch(`${BACKEND}/api/traffic/forecast?${qs}`);
         const json = await res.json();
         if (cancelled || !json.success || !json.data?.volumes) return;
+
+        /* The API names the champion from the same metrics table this chart
+           renders. Capturing it here means the chart opens on the model the
+           Prescriptive panels plan against -- they read championModel off this
+           very payload -- instead of the two sides picking independently and
+           drifting apart after a retrain. */
+        setApiChampion(typeof json.data.championModel === "string" ? json.data.championModel : null);
 
         const rows = json.data.volumes as ForecastRow[];
 

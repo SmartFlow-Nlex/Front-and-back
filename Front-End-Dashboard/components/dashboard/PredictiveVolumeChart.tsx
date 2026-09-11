@@ -854,6 +854,15 @@ export default function PredictiveVolumeChart({ months = "all", from, to, weathe
         }</span>`;
       },
     },
+    graphic: isAggregated
+      ? [{
+          type: "text", right: 18, top: 8, silent: true,
+          style: {
+            text: `every point = ${meanLabel}`,
+            fontSize: 11, fontWeight: 600, fill: T.textMuted,
+          },
+        }]
+      : [],
     legend: {
       data: [
         "Actual Volume",
@@ -868,6 +877,7 @@ export default function PredictiveVolumeChart({ months = "all", from, to, weathe
       // Formatter is display-only: the underlying seriesName values still drive
       // tooltip matching and the click-to-drill handler, so renaming them here
       // cannot break either.
+      formatter: (name: string) => (isAggregated ? `${name}  · ${meanLabel}` : name),
     },
     dataZoom: [
       { type: "slider", start: 0, end: 100, height: 18, bottom: 44,
@@ -974,11 +984,9 @@ export default function PredictiveVolumeChart({ months = "all", from, to, weathe
             // than as month boundaries. Any divider that survives the thinning is
             // labelled, so a line on the chart always says what it marks.
             ...(() => {
-              // Period dividers are off: the W1/W3/… tags and their dashed
-              // lines read as noise over the data, and the x-axis dates already
-              // give the reader the calendar. Kept behind a constant so they can
-              // be turned back on for debugging the bucketing.
-              const SHOW_PERIOD_DIVIDERS = false;
+              // Period dividers (W1/W3/… or M1/M3/…) are on by request; flip
+              // the constant to hide them.
+              const SHOW_PERIOD_DIVIDERS = true;
               const periods = !SHOW_PERIOD_DIVIDERS ? []
                 : granularity === "Weekly" ? weeklyPeriods.map((w) => ({ at: w.start, tag: `W${w.weekNum}` }))
                 : granularity === "Monthly" ? monthlyPeriods.map((m) => ({ at: m.start, tag: `M${m.monthNum}` }))
@@ -1320,6 +1328,11 @@ export default function PredictiveVolumeChart({ months = "all", from, to, weathe
           Traffic Volume Walk-Forward Forecast
           <InfoTooltip text="Daily corridor volume: the model's past fit, its held-out test period against real counts, and the forecast ahead. Pick a model above; the champion is preselected." />
         </h3>
+        <p style={{ color: "var(--text-secondary)", fontSize: "0.82rem", margin: "4px 0 0 0" }}>
+          {isAggregated
+            ? <>Every point is a <b>{meanLabel}</b> — the average of that {bucketNoun}&apos;s days, not a total.</>
+            : <>One point per day. Click any point for that day&apos;s hourly breakdown.</>}
+        </p>
       </div>
 
       {/* Row 2: the finding. */}

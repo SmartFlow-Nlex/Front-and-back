@@ -22,11 +22,21 @@
   margin-top: 0;
 }
 
-/* Filters stay in reach while scrolling (pinned below the 64px sticky topbar) */
+/* Filters stay in reach while scrolling, pinned directly under the topbar.
+
+   The offset is the topbar's MEASURED height (set on .ds-main by the layout),
+   not a hard-coded 64px: below 640px the topbar wraps and grows, and a fixed
+   number left the row sitting on top of the clock.
+
+   z-index sits BELOW the topbar's 20 on purpose. This row is a grid item, and a
+   grid item's z-index applies even when it is position:static -- so the old 30
+   meant that wherever the row was static (narrow widths) it scrolled under
+   the topbar and painted OVER it, tabs on top of the clock. The topbar must
+   always win; the row only needs to beat the cards that scroll beneath it. */
 .filterRow {
   position: sticky;
-  top: 64px;
-  z-index: 30;
+  top: var(--ds-topbar-h, 64px);
+  z-index: 10;
   background: var(--bg-body, #f3f5f9);
   margin: -20px -28px 0;
   padding: 12px 28px;
@@ -36,9 +46,28 @@
 .filterRow {
   grid-column: 1 / -1;
   display: flex;
+  /* Wrap at every width: between 980 and ~1200px the row is too wide for the
+     content column but the old wrap only kicked in below 980, so the mode
+     tabs were clipped off the right edge. */
+  flex-wrap: wrap;
+  row-gap: 8px;
   align-items: center;
   gap: 10px;
   min-width: 0;
+}
+
+/* A hairline under the pinned row so it reads as a shelf once cards scroll
+   beneath it, and stays invisible while the row is still in flow. */
+.filterRow::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 1px;
+  background: var(--border-default);
+  opacity: 0.6;
+  pointer-events: none;
 }
 
 .filterGroup {
@@ -971,7 +1000,11 @@
 
 /* Mobile: stack everything */
 @media (max-width: 980px) {
-  .filterRow { flex-wrap: wrap; position: static; margin: 0; padding: 0; }
+  /* Still pinned on tablets and phones -- the mode tabs are how you leave the
+     view -- but with tighter padding so two wrapped lines cost less height.
+     (.page keeps its 20px/28px padding at every width, so the negative
+     margins above still line up.) */
+  .filterRow { padding: 8px 28px 10px; }
   .kpiRow { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   /* Five tiles in two columns leave the last one alone; give it the row. */
   .kpiRow > .kpiTile:nth-child(5):last-child { grid-column: 1 / -1; }

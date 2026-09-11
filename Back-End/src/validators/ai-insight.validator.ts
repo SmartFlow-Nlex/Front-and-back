@@ -35,6 +35,55 @@ export const ModelNarrativeSchema = z.object({
 });
 
 /**
+ * POST /api/ai-insight/congestion-narrative
+ *
+ * The congestion model is a CLASSIFIER, not a forecaster of a quantity: it
+ * labels each exit-hour Clear / Heavy / Severe and is scored by accuracy
+ * against a "nothing changes" benchmark, per hour ahead. None of the error
+ * measures the model-narrative endpoint reasons about (WMAPE, MASE, R2) apply,
+ * so it gets its own schema and its own prompt rather than having accuracy
+ * squeezed into a field that means something else.
+ */
+export const CongestionNarrativeSchema = z.object({
+  models: z
+    .array(
+      z.object({
+        model: z.string().min(1).max(80),
+        accuracy: z.number().min(0).max(1).nullable().optional(),
+        accepted: z.boolean().nullable().optional(),
+        rejectedReason: z.string().max(400).nullable().optional(),
+      }),
+    )
+    .min(1)
+    .max(8),
+  baseline: z
+    .object({ model: z.string().min(1).max(80), accuracy: z.number().min(0).max(1).nullable() })
+    .nullable()
+    .optional(),
+  // One row per hour ahead. Capped at 24: the served map covers 12.
+  horizons: z
+    .array(
+      z.object({
+        horizon: z.number().int().min(1).max(24),
+        accuracy: z.number().min(0).max(1).nullable(),
+        persistence: z.number().min(0).max(1).nullable(),
+        n: z.number().int().nonnegative().nullable().optional(),
+      }),
+    )
+    .max(24)
+    .optional(),
+  /** What the map currently shows, so the read-out can speak to it. */
+  situation: z
+    .object({
+      exitsTotal: z.number().int().min(0).max(200),
+      exitsSevere: z.number().int().min(0).max(200),
+      hoursCovered: z.number().int().min(1).max(24),
+      neverPredictsHeavy: z.boolean().optional(),
+    })
+    .optional(),
+});
+
+/**
  * POST /api/ai-insight/explain
  *
  * Unlike the narrative endpoint, no data is accepted from the client — only the

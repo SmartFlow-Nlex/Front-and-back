@@ -55,6 +55,15 @@ type Props = {
   windowEnd?: string | null;
   weatherMode?: "with" | "without" | null;
   labelFor?: (modelName: string) => string;
+  /** Override the endpoint and payload, for a module whose metrics are not
+      errors — the congestion classifier is scored by accuracy against a
+      "nothing changes" benchmark, so it has its own route and prompt. The
+      request/busy/timeout/retry behaviour is identical, which is the whole
+      reason to share this component rather than copy it. */
+  endpoint?: string;
+  buildBody?: () => unknown;
+  /** What counts as a change of subject, when it is not the model roster. */
+  subjectKey?: string;
 };
 
 export default function AiModelInsight(props: Props) {
@@ -69,7 +78,7 @@ export default function AiModelInsight(props: Props) {
   const latest = useRef(props);
   latest.current = props;
 
-  const key = JSON.stringify([quantity, weatherMode, metrics.map((m) => m.model)]);
+  const key = props.subjectKey ?? JSON.stringify([quantity, weatherMode, metrics.map((m) => m.model)]);
   const attempt = useRef(0);
 
   const run = useCallback(() => {
@@ -84,19 +93,23 @@ export default function AiModelInsight(props: Props) {
     const ctrl = new AbortController();
     const timer = setTimeout(() => ctrl.abort(), TIMEOUT_MS);
 
-    fetch(`${BACKEND}/api/ai-insight/model-narrative`, {
+    fetch(`${BACKEND}${p.endpoint ?? "/api/ai-insight/model-narrative"}`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       signal: ctrl.signal,
-      body: JSON.stringify({
-        quantity: p.quantity,
-        metrics: p.metrics,
-        horizonDays: p.horizonDays,
-        scoredDays: p.scoredDays ?? null,
-        windowStart: p.windowStart ?? null,
-        windowEnd: p.windowEnd ?? null,
-        weatherMode: p.weatherMode ?? null,
-      }),
+      body: JSON.stringify(
+        p.buildBody
+          ? p.buildBody()
+          : {
+              quantity: p.quantity,
+              metrics: p.metrics,
+              horizonDays: p.horizonDays,
+              scoredDays: p.scoredDays ?? null,
+              windowStart: p.windowStart ?? null,
+              windowEnd: p.windowEnd ?? null,
+              weatherMode: p.weatherMode ?? null,
+            },
+      ),
     })
       .then(async (r) => {
         const j = await r.json().catch(() => null);
@@ -176,7 +189,7 @@ export default function AiModelInsight(props: Props) {
       )}
 
       <p style={{ margin: 0, fontSize: "0.72rem", color: "var(--text-muted)" }}>
-        Written by the language model from the validation metrics shown on this card. Check any figure against the table before acting on it.
+        Written by the language model from the validation metrics shown on this card. Check any figure against the numbers above before acting on it.
       </p>
     </div>
   );

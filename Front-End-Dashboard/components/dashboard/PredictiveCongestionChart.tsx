@@ -4,6 +4,8 @@ import { useEffect, useMemo, useState } from "react";
 import type { EChartsOption } from "echarts";
 import DashboardChart from "./DashboardChart";
 import InfoTooltip from "./InfoTooltip";
+import CongestionNarrative from "./CongestionNarrative";
+import { ShieldCheck, ChevronRight } from "lucide-react";
 import { loadForecast } from "./prescriptiveTraffic.shared";
 
 type State = "Low" | "Med" | "High";
@@ -857,18 +859,64 @@ export default function PredictiveCongestionChart() {
         </div>
       </div>
 
-      {/* Row 6: model evidence, behind one disclosure. */}
+      {/* Row 6: the model's own read-out, in the open. The control that asks
+          for it has to be visible, and the panel is the same one the forecast
+          cards carry so the tab reads as one system. */}
+      <CongestionNarrative
+        modelInfo={
+          modelInfo
+            ? {
+                model: modelInfo.model,
+                accuracy: modelInfo.accuracy ?? null,
+                accepted: Boolean(modelInfo.accepted),
+                rejectedReason: modelInfo.rejectedReason ?? null,
+                baseline: modelInfo.baseline ?? null,
+              }
+            : null
+        }
+        horizons={hzAcc.map((a) => ({
+          horizon: a.horizon,
+          accuracy: a.accuracy,
+          persistenceAccuracy: a.persistenceAccuracy,
+        }))}
+        exitsTotal={segments.length}
+        exitsSevere={nSevere}
+        hoursCovered={hourLabels.length}
+        neverPredictsHeavy={!model.everHeavy}
+      />
+
+      {/* Row 7: model evidence, behind one disclosure. */}
       {hzAcc.length > 1 && hzFirst && hzLast && (
         <details style={{ fontSize: "0.76rem", color: "#64748b", borderTop: "1px solid #eef2f7", paddingTop: 10 }}>
-          <summary style={{ cursor: "pointer", color: "#475569", fontWeight: 600, listStyle: "none", display: "flex", gap: 14, flexWrap: "wrap" }}>
-            <span>Details</span>
-            <span style={{ color: "#94a3b8" }}>
+          <summary
+            className="evidence-summary"
+            style={{ cursor: "pointer", listStyle: "none", display: "flex", gap: 12, flexWrap: "wrap", alignItems: "center" }}
+          >
+            <span style={{
+              display: "grid", placeItems: "center", width: 28, height: 28, borderRadius: 8,
+              background: "color-mix(in srgb, var(--color-success) 14%, transparent)", color: "var(--color-success)", flex: "none",
+            }}>
+              <ShieldCheck size={16} strokeWidth={2.4} />
+            </span>
+            <span style={{ fontSize: "0.98rem", fontWeight: 800, letterSpacing: "-0.01em", color: "var(--text-primary)" }}>
+              Validation evidence
+            </span>
+            <span style={{
+              display: "inline-flex", alignItems: "center", gap: 6, padding: "3px 10px", borderRadius: 999,
+              background: "var(--bg-surface-hover)", border: "1px solid var(--border-default)",
+              fontSize: "0.74rem", fontWeight: 600, color: "var(--text-secondary)", fontVariantNumeric: "tabular-nums",
+            }}>
               {(() => {
                 const a0 = hzFirst.accuracy ?? 0; const a1 = hzLast.accuracy ?? 0;
                 return a1 < a0 - 0.03 ? "accuracy fades with distance" : a1 > a0 + 0.03 ? "accuracy improves with distance" : "accuracy holds across the horizon";
               })()} · {pct(hzFirst.accuracy)} at +1h → {pct(hzLast.accuracy)} at +{hzLast.horizon}h
+              {" · "}{beatsFrom ? "beats no-change" : "no better than no-change"}
             </span>
-            <span style={{ color: "#94a3b8" }}>{beatsFrom ? "beats no-change" : "no better than no-change"}</span>
+            <span className="evidence-chevron" style={{ marginLeft: "auto", display: "inline-flex", alignItems: "center", gap: 4, fontSize: "0.74rem", fontWeight: 600, color: "var(--text-secondary)" }}>
+              <span className="evidence-open-label">Show</span>
+              <span className="evidence-close-label">Hide</span>
+              <ChevronRight size={15} strokeWidth={2.4} />
+            </span>
           </summary>
 
           <div style={{ display: "grid", gap: 10, marginTop: 10 }}>

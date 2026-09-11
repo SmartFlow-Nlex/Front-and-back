@@ -196,6 +196,121 @@ function validate(raw: unknown, req: InsightRequest): Insight {
   return { summary, perModel, caveat };
 }
 
+/* ── Congestion: a classifier, scored per hour ahead ──────────────────────── */
+
+export type CongestionModelInput = {
+  model: string;
+  accuracy?: number | null;
+  accepted?: boolean | null;
+  rejectedReason?: string | null;
+};
+
+export type CongestionInsightRequest = {
+  models: CongestionModelInput[];
+  baseline?: { model: string; accuracy: number | null } | null;
+  horizons?: { horizon: number; accuracy: number | null; persistence: number | null; n?: number | null }[];
+  situation?: {
+    exitsTotal: number;
+    exitsSevere: number;
+    hoursCovered: number;
+    neverPredictsHeavy?: boolean;
+  };
+};
+
+const CONGESTION_SYSTEM = `You explain a traffic congestion CLASSIFIER to traffic operations staff who are not statisticians. Reply with JSON only.
+
+OUTPUT SHAPE
+{
+  "summary": "2-4 sentences: how far ahead this map can be trusted and what that means for acting on it",
+  "perModel": [{"model": "<exact name as given>", "verdict": "one sentence"}],
+  "caveat": "the single most important limitation, or null"
+}
+
+WHAT THE MODEL DOES
+It labels every exit-hour on the corridor as Clear, Heavy or Severe from Waze jam reports: Severe means jams running under 30 km/h, Heavy means 30-60 km/h, Clear means no jam was reported. It is scored on held-out hours by ACCURACY: the share of exit-hours whose label it got right.
+
+HOW TO READ THE NUMBERS
+- Accuracy is a percentage of exit-hours classified correctly. It is NOT an error and NOT a probability of congestion.
+- The benchmark is "nothing changes": assume each exit stays in the state it is in now. A forecaster that cannot beat that benchmark adds nothing, however high its raw accuracy looks.
+- Accuracy is given PER HOUR AHEAD. Whether it holds up or decays across the horizon is the single most useful thing for a reader deciding how far ahead to plan.
+- The benchmark itself decays with distance. A model whose accuracy holds flat while the benchmark falls is becoming MORE valuable further out, not less.
+
+RULES
+- Never state a number that was not given to you. Never estimate one.
+- Every claim must be traceable to a number above. You know NOTHING about how the model was built, what data it saw, or how it will behave in future. Do not speculate.
+- If a model is marked rejected, say so and give the stated reason.
+- Translate into consequences a control room can act on: how far ahead the map is worth trusting, and what a wrong label would cost.
+- Do not recommend retraining, more data, or model changes. The reader operates this system, they do not build it.
+- Plain English. No jargon that is not defined in the sentence that uses it.
+
+THE CAVEAT FIELD
+Use it ONLY for a limitation the supplied numbers demonstrate — accuracy that decays sharply with distance, a model that barely clears the benchmark, a class the model never predicts. If the numbers show no such problem, return null. Never invent a limitation you were not told about.`;
+
+function buildCongestionMessage(req: CongestionInsightRequest): string {
+  const pct = (v: number | null | undefined) =>
+    v == null || !Number.isFinite(v) ? null : `${(v * 100).toFixed(1)}%`;
+  const lines: string[] = [];
+
+  lines.push(
+    "TASK: classify each exit-hour on the NLEX corridor as Clear, Heavy or Severe.",
+    "READER: a traffic control centre deciding how far ahead to act on the congestion map.",
+  );
+
+  if (req.situation) {
+    const s = req.situation;
+    lines.push(
+      `CURRENTLY SHOWN: the next ${s.hoursCovered} hours, ${s.exitsSevere} of ${s.exitsTotal} exits expected to be severe at some point.`,
+    );
+    if (s.neverPredictsHeavy) {
+      lines.push(
+        "NOTE: the model never outputs the Heavy class on this corridor — reported jams almost always run under 30 km/h, so in practice it decides between Clear and Severe.",
+      );
+    }
+  }
+
+  lines.push("", "MODEL ACCURACY (share of held-out exit-hours labelled correctly)");
+  for (const m of req.models) {
+    const parts = [pct(m.accuracy) ? `accuracy ${pct(m.accuracy)}` : null].filter(Boolean);
+    if (m.accepted === true) parts.push("ACCEPTED");
+    if (m.accepted === false) parts.push(`REJECTED${m.rejectedReason ? ` (${m.rejectedReason})` : ""}`);
+    lines.push(`- ${m.model}: ${parts.length ? parts.join(", ") : "no metrics supplied"}`);
+  }
+
+  if (req.baseline && pct(req.baseline.accuracy)) {
+    lines.push(
+      "",
+      `BENCHMARK TO BEAT: ${req.baseline.model} at ${pct(req.baseline.accuracy)}. A model at or below this adds nothing.`,
+    );
+  }
+
+  if (req.horizons?.length) {
+    lines.push("", "ACCURACY BY HOUR AHEAD (model vs the \"nothing changes\" benchmark)");
+    for (const h of req.horizons) {
+      const a = pct(h.accuracy) ?? "n/a";
+      const p = pct(h.persistence) ?? "n/a";
+      lines.push(`- +${h.horizon}h: model ${a}, nothing-changes ${p}${h.n ? `, scored on ${h.n.toLocaleString()} exit-hours` : ""}`);
+    }
+  }
+
+  return lines.join("\n");
+}
+
+export async function generateCongestionInsight(req: CongestionInsightRequest): Promise<Insight> {
+  if (req.models.length === 0) {
+    throw new GlmError("No model metrics were supplied.", "bad_model_output");
+  }
+  const content = await chat({
+    system: CONGESTION_SYSTEM,
+    user: buildCongestionMessage(req),
+    json: true,
+    maxTokens: 1400,
+    temperature: 0.3,
+  });
+  const raw = extractJson(content);
+  // Same shaping as the forecast path, with this endpoint's own roster.
+  return validate(raw, { quantity: "volume", metrics: req.models.map((m) => ({ model: m.model })), horizonDays: 1 });
+}
+
 export async function generateInsight(req: InsightRequest): Promise<Insight> {
   if (req.metrics.length === 0) {
     throw new GlmError("No model metrics were supplied.", "bad_model_output");

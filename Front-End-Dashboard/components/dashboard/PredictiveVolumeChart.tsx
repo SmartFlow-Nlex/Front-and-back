@@ -452,17 +452,22 @@ export default function PredictiveVolumeChart({ months = "all", from, to, weathe
           const m = metricsMeta[baseM.key];
           const on = selected.includes(m.key);
           const locked = on && selected.length === 1;
+          // Holt-Winters and Holts Linear take no weather inputs, so with
+          // Weather on there is nothing weather-driven to draw for them.
+          const weatherLocked = showWeather && (m.key === "HoltWinters" || m.key === "HoltsLinear");
           return (
             <button
               key={m.key}
               onClick={() => toggleModel(m.key)}
               aria-pressed={on}
-              title={locked ? "At least one model must stay selected" : `${on ? "Hide" : "Show"} ${m.label}`}
+              disabled={weatherLocked}
+              title={weatherLocked ? `${m.label} uses no weather inputs — turn Weather off to show it` : locked ? "At least one model must stay selected" : `${on ? "Hide" : "Show"} ${m.label}`}
               style={{
                 display: "inline-flex", alignItems: "center", border: 0,
                 padding: "5px 12px", borderRadius: "999px",
                 fontSize: "0.76rem", fontWeight: 600, whiteSpace: "nowrap",
-                cursor: locked ? "default" : "pointer", transition: "all 0.15s",
+                cursor: weatherLocked ? "not-allowed" : locked ? "default" : "pointer", transition: "all 0.15s",
+                opacity: weatherLocked ? 0.4 : 1,
                 background: on ? m.color : "transparent",
                 color: on ? "var(--bg-surface)" : "var(--text-secondary, #4b5e7d)",
                 boxShadow: on ? `0 1px 4px ${m.color}40` : "none",
@@ -1363,7 +1368,13 @@ export default function PredictiveVolumeChart({ months = "all", from, to, weathe
             <span style={{ display: "inline-flex", padding: 2, borderRadius: 999, background: "var(--bg-surface)", border: "1px solid #dce2ef" }}>
               {(["Daily", "Weekly", "Monthly"] as const).map((g) => (
                 <button key={g}
-                  onClick={() => { setGranularity(g); setPastDays(g === "Daily" ? 90 : ALL_PAST); }}
+                  onClick={() => {
+                    setGranularity(g);
+                    setPastDays(g === "Daily" ? 90 : ALL_PAST);
+                    // A monthly point averages a whole month; a 14-day horizon
+                    // would be half of one, so Monthly starts at one month ahead.
+                    if (g === "Monthly" && futureDays < 28) setFutureDays(28);
+                  }}
                   title={g === "Daily" ? "One point per day — the resolution the models actually forecast" : `Averaged per ${g.replace("ly", "").toLowerCase()} — a viewing aid, not a separate forecast`}
                   style={{ padding: "3px 10px", borderRadius: 999, border: "none", background: granularity === g ? "#3876f5" : "transparent", color: granularity === g ? "#fff" : "var(--text-secondary)", fontWeight: 600, fontSize: "0.72rem", cursor: "pointer" }}>
                   {g}
@@ -1374,9 +1385,11 @@ export default function PredictiveVolumeChart({ months = "all", from, to, weathe
           <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
             <span style={groupLabel}>Ahead</span>
             {[{ label: "2 wk", d: 14 }, { label: "1 mo", d: 28 }, { label: "2 mo", d: 60 }, { label: "3 mo", d: 90 }].map((item) => {
-              const off = item.d > futureAvailable;
+              const tooShort = granularity === "Monthly" && item.d < 28;
+              const off = item.d > futureAvailable || tooShort;
               return (
                 <button key={item.label} onClick={() => setFutureDays(item.d)} disabled={off}
+                  title={tooShort ? "Monthly view needs at least one month ahead" : off ? "Beyond the stored forecast" : undefined}
                   style={{ ...pill(futureDays === item.d, "#16a34a"), cursor: off ? "not-allowed" : "pointer", opacity: off ? 0.4 : 1 }}>
                   {item.label}
                 </button>
@@ -1404,32 +1417,6 @@ export default function PredictiveVolumeChart({ months = "all", from, to, weathe
           forecast · {Math.min(futureDays, futureAvailable)}d
         </span>
       </div>
-
-      {futureDays > VALIDATED_HORIZON && (
-        <div style={{
-          display: "flex", alignItems: "flex-start", gap: 10, padding: "9px 14px", borderRadius: 10,
-          background: "rgba(249,115,22,0.08)", border: "1px solid rgba(249,115,22,0.28)",
-          fontSize: "0.75rem", color: "var(--text-secondary)", lineHeight: 1.5,
-        }}>
-          <span style={{ fontSize: "0.9rem", lineHeight: 1 }}>⚠</span>
-          <span>
-            Beyond {VALIDATED_HORIZON} days only <b style={{ color: "var(--text-primary)" }}>{horizonAcc[0]?.model ?? "the accepted model"}</b> was
-            measured, by a separate rolling-origin run at h={horizonAcc[horizonAcc.length - 1]?.hHi ?? 90}.
-            {horizonAcc.length > 1 && (
-              <> Error rises then flattens (d{horizonAcc[0].hLo}-{horizonAcc[0].hHi} {horizonAcc[0].wmape?.toFixed(2)}% → d{horizonAcc[horizonAcc.length - 1].hLo}-{horizonAcc[horizonAcc.length - 1].hHi} {horizonAcc[horizonAcc.length - 1].wmape?.toFixed(2)}% WMAPE)</>
-            )}{" "}
-            because it is structural — trend plus weekly and yearly seasonality — so it does not compound its own errors.{" "}
-            {(() => {
-              const b = horizonBucketFor(futureDays);
-              return b?.mase != null && b.mase > 0.95 ? (
-                <>At the {b.hLo}-{b.hHi} day range it clears the seasonal-naive benchmark by only <b style={{ color: "var(--color-warning)" }}>{(1 - b.mase).toFixed(3)} MASE</b>, so treat that stretch as indicative rather than reliable. </>
-              ) : null;
-            })()}
-            The rejected models are still drawn if you toggle them, but nothing validates them at this range and{" "}
-            <b style={{ color: "var(--text-primary)" }}>SARIMAX collapses to implausible values</b> past a few weeks. Weather across the projection is day-of-year climatology, not a forecast.
-          </span>
-        </div>
-      )}
 
       {/* Row 5: the chart. */}
       <div style={{ height: "450px", width: "100%", cursor: isAggregated ? "default" : "pointer" }}>

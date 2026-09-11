@@ -495,7 +495,7 @@ export default function PredictiveVolumeChart({ months = "all", from, to, weathe
         </button>
       </div>
       <div style={{ overflowX: "auto" }}>
-        <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "0.82rem", minWidth: showAllMetrics ? 820 : 520 }}>
+        <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "0.82rem", minWidth: showAllMetrics ? 820 : 0 }}>
           <thead>
             <tr style={{ textAlign: "left", color: "var(--text-muted)", fontSize: "0.68rem", textTransform: "uppercase", letterSpacing: "0.05em" }}>
               <th style={{ padding: "6px 8px", fontWeight: 700 }}>Model</th>
@@ -1500,11 +1500,13 @@ export default function PredictiveVolumeChart({ months = "all", from, to, weathe
             <ChevronRight size={15} strokeWidth={2.4} />
           </span>
         </summary>
-        <div style={{ display: "grid", gap: 16, marginTop: 12 }}>
-          {metricsTable}
+        <div style={{ display: "grid", gap: 12, marginTop: 12, gridTemplateColumns: "repeat(auto-fit, minmax(460px, 1fr))", alignItems: "start" }}>
+          <div style={{ background: "var(--bg-surface-hover)", borderRadius: 12, padding: "14px 16px", minWidth: 0 }}>
+            {metricsTable}
+          </div>
           {showWeather && (
-            <div style={{ borderTop: "1px solid var(--border-default)", paddingTop: 14 }}>
-              <WeatherEvidencePanel plotted="total_rain" />
+            <div style={{ background: "var(--bg-surface-hover)", borderRadius: 12, padding: "14px 16px", minWidth: 0 }}>
+              <WeatherEvidencePanel plotted="total_rain" selectedModels={visibleModels.map((k) => metricsMeta[k].label)} />
             </div>
           )}
         </div>

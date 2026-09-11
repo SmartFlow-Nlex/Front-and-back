@@ -116,6 +116,7 @@ export default function WeatherEvidencePanel({ plotted = "total_rain", selectedM
         {verdict}
       </p>
 
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(340px, 1fr))", gap: "12px 32px", alignItems: "start" }}>
       {shown.length > 0 && (
         <div style={{ display: "grid", gap: 10 }}>
           {shown.map((m) => {
@@ -152,8 +153,9 @@ export default function WeatherEvidencePanel({ plotted = "total_rain", selectedM
       )}
 
       {/* The four weather signals, graded in words. */}
-      <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", fontSize: "0.76rem" }}>
-        <span style={{ color: "var(--text-secondary)" }}>How much each signal moves with traffic:</span>
+      <div style={{ display: "grid", gap: 8, fontSize: "0.76rem", alignContent: "start" }}>
+        <span style={{ color: "var(--text-secondary)", fontWeight: 700 }}>How much each weather signal moves with traffic</span>
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
         {corr.map((c) => (
           <span
             key={c.variable}
@@ -168,6 +170,8 @@ export default function WeatherEvidencePanel({ plotted = "total_rain", selectedM
             {c.variable === plotted && <span style={{ fontSize: "0.62rem", color: "var(--text-muted)" }}>on chart</span>}
           </span>
         ))}
+        </div>
+      </div>
       </div>
     </section>
   );

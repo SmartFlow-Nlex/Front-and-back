@@ -491,14 +491,14 @@ export default function PredictiveVolumeChart({ months = "all", from, to, weathe
           onClick={() => setShowAllMetrics(!showAllMetrics)}
           style={{ padding: 0, border: 0, background: "transparent", cursor: "pointer", fontSize: "0.74rem", fontWeight: 600, color: "var(--text-secondary)" }}
         >
-          {showAllMetrics ? "Fewer columns" : "More columns"}
+          {showAllMetrics ? "Hide secondary metrics" : "Show secondary metrics"}
         </button>
       </div>
       <div style={{ overflowX: "auto" }}>
         <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "0.82rem", minWidth: showAllMetrics ? 820 : 0 }}>
           <thead>
             <tr style={{ textAlign: "left", color: "var(--text-muted)", fontSize: "0.68rem", textTransform: "uppercase", letterSpacing: "0.05em" }}>
-              <th style={{ padding: "6px 8px", fontWeight: 700 }}>Model</th>
+              <th style={{ padding: "6px 8px", fontWeight: 700, position: "sticky", left: 0, background: "var(--bg-surface-hover)", zIndex: 1 }}>Model</th>
               <th style={{ padding: "6px 8px", fontWeight: 700, textAlign: "right" }}>WMAPE</th>
               <th style={{ padding: "6px 8px", fontWeight: 700, textAlign: "right" }} title="Error relative to repeating last week. Below 1.0 beats it.">MASE</th>
               <th style={{ padding: "6px 8px", fontWeight: 700, textAlign: "right" }}>MAE (veh)</th>
@@ -517,7 +517,7 @@ export default function PredictiveVolumeChart({ months = "all", from, to, weathe
           <tbody>
             {MODELS.map(baseM => metricsMeta[baseM.key]).filter((m) => selected.includes(m.key)).map((m) => (
               <tr key={m.key} style={{ borderTop: "1px solid var(--border-default)" }}>
-                <td style={{ padding: "8px", fontWeight: 700, color: "var(--text-primary)" }}>
+                <td style={{ padding: "8px", fontWeight: 700, color: "var(--text-primary)", position: "sticky", left: 0, background: "var(--bg-surface-hover)", zIndex: 1, whiteSpace: "nowrap" }}>
                   <span style={{ display: "inline-flex", alignItems: "center", gap: 8 }}>
                     <span style={{ width: 9, height: 9, borderRadius: "50%", background: m.color }} />
                     {m.label}
@@ -1500,7 +1500,7 @@ export default function PredictiveVolumeChart({ months = "all", from, to, weathe
             <ChevronRight size={15} strokeWidth={2.4} />
           </span>
         </summary>
-        <div style={{ display: "grid", gap: 12, marginTop: 12, gridTemplateColumns: "repeat(auto-fit, minmax(460px, 1fr))", alignItems: "start" }}>
+        <div style={{ display: "grid", gap: 12, marginTop: 12 }}>
           <div style={{ background: "var(--bg-surface-hover)", borderRadius: 12, padding: "14px 16px", minWidth: 0 }}>
             {metricsTable}
           </div>

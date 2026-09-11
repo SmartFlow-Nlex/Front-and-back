@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import InfoTooltip from "./InfoTooltip";
+import { CloudRain } from "lucide-react";
 
 /**
  * Weather as a predictor, as one flat block inside the Validation evidence
@@ -32,10 +33,28 @@ function strengthOf(r: number | null): { label: string; tone: string } {
   return { label: "strong", tone: "var(--color-success)" };
 }
 
-const LABEL: React.CSSProperties = {
-  fontSize: "0.68rem", fontWeight: 700, letterSpacing: "0.06em", textTransform: "uppercase",
-  color: "var(--text-muted)", display: "inline-flex", alignItems: "center",
-};
+
+/** Section heading inside the evidence area: a tinted icon tile and a bold
+    title, so each block is identifiable at a glance rather than a line of
+    small caps that reads as a footnote. */
+export function EvidenceHeading({ icon, tint, title, children }: {
+  icon: React.ReactNode; tint: string; title: string; children?: React.ReactNode;
+}) {
+  return (
+    <span style={{ display: "inline-flex", alignItems: "center", gap: 9 }}>
+      <span style={{
+        display: "grid", placeItems: "center", width: 24, height: 24, borderRadius: 7,
+        background: `color-mix(in srgb, ${tint} 14%, transparent)`, color: tint, flex: "none",
+      }}>
+        {icon}
+      </span>
+      <span style={{ fontSize: "0.9rem", fontWeight: 800, letterSpacing: "-0.01em", color: "var(--text-primary)", display: "inline-flex", alignItems: "center" }}>
+        {title}
+        {children}
+      </span>
+    </span>
+  );
+}
 
 export default function WeatherEvidencePanel({ plotted = "total_rain" }: { plotted?: string }) {
   const [corr, setCorr] = useState<Correlation[]>([]);
@@ -66,11 +85,10 @@ export default function WeatherEvidencePanel({ plotted = "total_rain" }: { plott
 
   return (
     <section style={{ display: "grid", gap: 10 }}>
-      <div style={{ display: "flex", alignItems: "baseline", gap: 12, flexWrap: "wrap" }}>
-        <span style={LABEL}>
-          Weather as a predictor
+      <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+        <EvidenceHeading icon={<CloudRain size={14} strokeWidth={2.4} />} tint="#0284c7" title="Weather as a predictor">
           <InfoTooltip text={`Pearson correlation of each daily weather variable with daily corridor volume${days ? ` over ${days.toLocaleString()} days` : ""}. Rainfall is the one drawn on the chart because it is easiest to read, not because it predicts best. The per-model line is the same model trained with and without weather inputs; lower WMAPE is better. Holt-Winters and Holts Linear take no external inputs, so they have no pair.`} />
-        </span>
+        </EvidenceHeading>
         <span style={{ fontSize: "0.78rem", color: "var(--text-secondary)" }}>
           {strongest && (
             <>Strongest: <b style={{ color: "var(--text-primary)" }}>{strongest.label}</b> r = {strongest.pearson?.toFixed(3)}{" "}

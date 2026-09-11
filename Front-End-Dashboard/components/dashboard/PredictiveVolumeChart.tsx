@@ -7,7 +7,8 @@ import InfoTooltip from "./InfoTooltip";
 import ModelNarrative, { type MetricRow } from "./ModelNarrative";
 import { aggregateSeries } from "./aggregateSeries";
 import { useThemeTokens, zoneTints } from "./useThemeTokens";
-import WeatherEvidencePanel from "./WeatherEvidencePanel";
+import WeatherEvidencePanel, { EvidenceHeading } from "./WeatherEvidencePanel";
+import { BarChart3, ShieldCheck, ChevronRight } from "lucide-react";
 
 type ModelType = "LSTM" | "Prophet" | "HoltWinters" | "SARIMAX" | "HoltsLinear";
 
@@ -482,11 +483,10 @@ export default function PredictiveVolumeChart({ months = "all", from, to, weathe
 
   const metricsTable = (
     <div style={{ display: "grid", gap: 8 }}>
-      <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
-        <span style={{ fontSize: "0.68rem", fontWeight: 700, letterSpacing: "0.06em", textTransform: "uppercase", color: "var(--text-muted)", display: "inline-flex", alignItems: "center" }}>
-          Held-out accuracy
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
+        <EvidenceHeading icon={<BarChart3 size={14} strokeWidth={2.4} />} tint="#2563eb" title="Held-out accuracy">
           <InfoTooltip text="Scored on the Present zone: real daily counts the model never trained on. WMAPE is the headline error; MASE below 1 beats repeating last week's pattern. Show more adds the secondary error measures." />
-        </span>
+        </EvidenceHeading>
         <button
           onClick={() => setShowAllMetrics(!showAllMetrics)}
           style={{ padding: 0, border: 0, background: "transparent", cursor: "pointer", fontSize: "0.74rem", fontWeight: 600, color: "var(--text-secondary)" }}
@@ -1474,10 +1474,30 @@ export default function PredictiveVolumeChart({ months = "all", from, to, weathe
       {/* Row 7: the evidence, behind one disclosure. The summary states the
           validation figures so they stay visible without opening it. */}
       <details style={{ fontSize: "0.78rem", color: "var(--text-secondary)", borderTop: "1px solid var(--border-default)", paddingTop: 10 }}>
-        <summary style={{ cursor: "pointer", color: "var(--text-primary)", fontWeight: 600, listStyle: "none", display: "flex", gap: 14, flexWrap: "wrap", alignItems: "baseline" }}>
-          <span>Validation evidence</span>
-          <span style={{ color: "var(--text-muted)", fontWeight: 500 }}>
+        <summary
+          className="evidence-summary"
+          style={{ cursor: "pointer", listStyle: "none", display: "flex", gap: 12, flexWrap: "wrap", alignItems: "center" }}
+        >
+          <span style={{
+            display: "grid", placeItems: "center", width: 28, height: 28, borderRadius: 8,
+            background: "color-mix(in srgb, var(--color-success) 14%, transparent)", color: "var(--color-success)", flex: "none",
+          }}>
+            <ShieldCheck size={16} strokeWidth={2.4} />
+          </span>
+          <span style={{ fontSize: "0.98rem", fontWeight: 800, letterSpacing: "-0.01em", color: "var(--text-primary)" }}>
+            Validation evidence
+          </span>
+          <span style={{
+            display: "inline-flex", alignItems: "center", gap: 6, padding: "3px 10px", borderRadius: 999,
+            background: "var(--bg-surface-hover)", border: "1px solid var(--border-default)",
+            fontSize: "0.74rem", fontWeight: 600, color: "var(--text-secondary)", fontVariantNumeric: "tabular-nums",
+          }}>
             {primaryMeta.label} · WMAPE {primaryMeta.wmape} · MASE {primaryMeta.mase ?? "—"}
+          </span>
+          <span className="evidence-chevron" style={{ marginLeft: "auto", display: "inline-flex", alignItems: "center", gap: 4, fontSize: "0.74rem", fontWeight: 600, color: "var(--text-secondary)" }}>
+            <span className="evidence-open-label">Show</span>
+            <span className="evidence-close-label">Hide</span>
+            <ChevronRight size={15} strokeWidth={2.4} />
           </span>
         </summary>
         <div style={{ display: "grid", gap: 16, marginTop: 12 }}>

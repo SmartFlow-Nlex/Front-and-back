@@ -6195,3 +6195,13 @@ body {
   background: transparent;
 }
 .ai-plan-discard:hover { background: var(--bg-subtle, #f5f5f7); }
+
+/* Evidence disclosure on the forecast cards: the chevron turns and the label
+   flips between Show and Hide with the native open state, so the summary
+   reads as a control and not as a line of text. */
+.evidence-summary::-webkit-details-marker { display: none; }
+.evidence-summary .evidence-chevron svg { transition: transform 160ms ease; }
+details[open] > .evidence-summary .evidence-chevron svg { transform: rotate(90deg); }
+.evidence-summary .evidence-close-label { display: none; }
+details[open] > .evidence-summary .evidence-open-label { display: none; }
+details[open] > .evidence-summary .evidence-close-label { display: inline; }

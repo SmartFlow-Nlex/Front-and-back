@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { cachedJson } from "../../../lib/cached-json";
 import { displayExitName, useNlexExits } from "../../../lib/nlex-exits";
 import { Car } from "lucide-react";
 import PageHeader from "../../../components/dashboard/PageHeader";
@@ -53,8 +54,7 @@ export default function AiSandboxPage() {
 
   // Anchor the inflow default to observed NLEX volume (falls back gracefully).
   useEffect(() => {
-    fetch(`${BACKEND}/api/traffic/analytics?months=12`, { cache: "no-store" })
-      .then((r) => r.json())
+    cachedJson<{ success: boolean; data: { kpis: { totalVolume: number; days: number } } }>(`${BACKEND}/api/traffic/analytics?months=12`)
       .then((j) => {
         if (!j.success) return;
         const daily = j.data.kpis.totalVolume / Math.max(1, j.data.kpis.days);

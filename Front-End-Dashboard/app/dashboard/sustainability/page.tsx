@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import { cachedJson } from "../../../lib/cached-json";
 import { attachCategoryClick } from "../../../lib/chart-click";
 import { useChartTheme, applyChartTheme, seriesRamp, seriesPair } from "../../../lib/chart-theme";
 import ReactECharts from "echarts-for-react";
@@ -121,8 +122,10 @@ export default function SustainabilityPage() {
       qs.set("months", rangeMode);
     }
     if (classFilter !== "All") qs.set("vehicleClass", classFilter);
-    fetch(`${BACKEND}/api/emissions/analytics?${qs}`, { cache: "no-store" })
-      .then((r) => r.json())
+    // Memoised per query string: switching tabs or returning to this page
+    // renders from memory instead of refetching. Five minutes, refreshed
+    // quietly in the background once stale. See lib/cached-json.
+    cachedJson<{ success: boolean; message?: string; data: Analytics }>(`${BACKEND}/api/emissions/analytics?${qs}`)
       .then((json) => {
         if (cancelled) return;
         if (!json.success) throw new Error(json.message ?? "Request failed");

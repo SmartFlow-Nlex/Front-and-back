@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
+import { cachedJson } from "../../../lib/cached-json";
 import { ChevronDown, Clock, Map, Maximize2, Milestone, Navigation, Search, ZoomIn, ZoomOut } from "lucide-react";
 import type { Feature } from "geojson";
 import TrafficMapPanel from "../../../components/maps/TrafficMapPanel";
@@ -87,9 +88,8 @@ export default function MapComparisonPage() {
 
   useEffect(() => {
     let cancelled = false;
-    fetch(`${BACKEND}/api/map-comparison/forecast?hours=1`, { cache: "no-store" })
-      .then((r) => r.json())
-      .then((j) => { if (!cancelled && j?.model) setForecastModel(j.model); })
+    cachedJson<{ model?: unknown }>(`${BACKEND}/api/map-comparison/forecast?hours=1`, 10 * 60_000)
+      .then((j) => { if (!cancelled && j?.model) setForecastModel(j.model as never); })
       .catch(() => {/* the panel simply says nothing about the model */});
     return () => { cancelled = true; };
   }, []);
@@ -98,8 +98,8 @@ export default function MapComparisonPage() {
   useEffect(() => {
     async function fetchStats() {
       try {
-        const response = await fetch(`${process.env.NEXT_PUBLIC_BACKEND_URL ?? "http://localhost:4000"}/api/map-comparison/real-time`, { cache: "no-store" });
-        const geojson = await response.json();
+        // Shared with the Home corridor panel through the same memo.
+        const geojson = await cachedJson<{ features?: Feature[] }>(`${process.env.NEXT_PUBLIC_BACKEND_URL ?? "http://localhost:4000"}/api/map-comparison/real-time`, 25_000);
         if (geojson && geojson.features) {
           const features = geojson.features as Feature[];
 

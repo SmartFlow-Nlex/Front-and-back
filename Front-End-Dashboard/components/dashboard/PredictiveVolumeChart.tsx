@@ -1050,18 +1050,19 @@ export default function PredictiveVolumeChart({ months = "all", from, to, weathe
   const hourlyWeatherSeries: Record<string, unknown>[] = (drawWeather && anyHourly) ? [
     {
       name: "Rainfall (mm)",
-      type: "line",
+      type: "bar",
       yAxisIndex: 1,
       data: anyHourly.hours.map((h) => h.rainfall != null ? h.rainfall : null),
-      smooth: true,
-      connectNulls: true,
-      symbol: "none",
-      // Behind the volume bars, as a wash rather than a second bar series:
-      // the volume bars are already blue, so rainfall bars read as a second
-      // volume series rather than as weather.
-      z: 0,
-      lineStyle: { width: 1.5, color: "#0284c7" },
-      areaStyle: { color: "rgba(2, 132, 199, 0.16)" },
+      barMaxWidth: 18,
+      // Bars for rain, lines for traffic — the same division the daily chart
+      // uses, so the two quantities never read as the same kind of thing.
+      z: 1,
+      itemStyle: {
+        color: "rgba(56, 189, 248, 0.45)",
+        borderColor: "#0284c7",
+        borderWidth: 1,
+        borderRadius: [3, 3, 0, 0],
+      },
     },
   ] : [];
 
@@ -1152,12 +1153,17 @@ export default function PredictiveVolumeChart({ months = "all", from, to, weathe
             ? [
                 {
                   name: "Actual Volume",
-                  type: "bar" as const,
+                  type: "line" as const,
                   yAxisIndex: 0,
                   data: anyHourly.hours.map((h) => h.actual),
-                  itemStyle: { color: ACTUAL_COLOR, borderRadius: [4, 4, 0, 0] as [number, number, number, number] },
-                  barMaxWidth: 26,
-                  z: 1,
+                  smooth: true,
+                  connectNulls: true,
+                  symbol: "circle" as const,
+                  symbolSize: 5,
+                  lineStyle: { width: 2.6, color: ACTUAL_COLOR },
+                  itemStyle: { color: ACTUAL_COLOR },
+                  areaStyle: { color: "rgba(37, 99, 235, 0.10)" },
+                  z: 3,
                 },
               ]
             : []),

@@ -1325,11 +1325,6 @@ export default function PredictiveVolumeChart({ months = "all", from, to, weathe
           Traffic Volume Walk-Forward Forecast
           <InfoTooltip text="Daily corridor volume: the model's past fit, its held-out test period against real counts, and the forecast ahead. Pick a model above; the champion is preselected." />
         </h3>
-        <p style={{ color: "var(--text-secondary)", fontSize: "0.82rem", margin: "4px 0 0 0" }}>
-          {isAggregated
-            ? <>Every point is a <b>{meanLabel}</b> — the average of that {bucketNoun}&apos;s days, not a total.</>
-            : <>One point per day. Click any point for that day&apos;s hourly breakdown.</>}
-        </p>
       </div>
 
       {/* Row 2: the finding. */}

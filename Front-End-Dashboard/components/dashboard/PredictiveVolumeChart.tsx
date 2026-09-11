@@ -854,15 +854,6 @@ export default function PredictiveVolumeChart({ months = "all", from, to, weathe
         }</span>`;
       },
     },
-    graphic: isAggregated
-      ? [{
-          type: "text", right: 18, top: 8, silent: true,
-          style: {
-            text: `every point = ${meanLabel}`,
-            fontSize: 11, fontWeight: 600, fill: T.textMuted,
-          },
-        }]
-      : [],
     legend: {
       data: [
         "Actual Volume",
@@ -877,7 +868,6 @@ export default function PredictiveVolumeChart({ months = "all", from, to, weathe
       // Formatter is display-only: the underlying seriesName values still drive
       // tooltip matching and the click-to-drill handler, so renaming them here
       // cannot break either.
-      formatter: (name: string) => (isAggregated ? `${name}  · ${meanLabel}` : name),
     },
     dataZoom: [
       { type: "slider", start: 0, end: 100, height: 18, bottom: 44,
@@ -984,8 +974,13 @@ export default function PredictiveVolumeChart({ months = "all", from, to, weathe
             // than as month boundaries. Any divider that survives the thinning is
             // labelled, so a line on the chart always says what it marks.
             ...(() => {
-              const periods =
-                granularity === "Weekly" ? weeklyPeriods.map((w) => ({ at: w.start, tag: `W${w.weekNum}` }))
+              // Period dividers are off: the W1/W3/… tags and their dashed
+              // lines read as noise over the data, and the x-axis dates already
+              // give the reader the calendar. Kept behind a constant so they can
+              // be turned back on for debugging the bucketing.
+              const SHOW_PERIOD_DIVIDERS = false;
+              const periods = !SHOW_PERIOD_DIVIDERS ? []
+                : granularity === "Weekly" ? weeklyPeriods.map((w) => ({ at: w.start, tag: `W${w.weekNum}` }))
                 : granularity === "Monthly" ? monthlyPeriods.map((m) => ({ at: m.start, tag: `M${m.monthNum}` }))
                 : [];
               if (periods.length === 0) return [];
@@ -1325,11 +1320,6 @@ export default function PredictiveVolumeChart({ months = "all", from, to, weathe
           Traffic Volume Walk-Forward Forecast
           <InfoTooltip text="Daily corridor volume: the model's past fit, its held-out test period against real counts, and the forecast ahead. Pick a model above; the champion is preselected." />
         </h3>
-        <p style={{ color: "var(--text-secondary)", fontSize: "0.82rem", margin: "4px 0 0 0" }}>
-          {isAggregated
-            ? <>Every point is a <b>{meanLabel}</b> — the average of that {bucketNoun}&apos;s days, not a total.</>
-            : <>One point per day. Click any point for that day&apos;s hourly breakdown.</>}
-        </p>
       </div>
 
       {/* Row 2: the finding. */}
@@ -1338,11 +1328,10 @@ export default function PredictiveVolumeChart({ months = "all", from, to, weathe
           padding: "12px 14px", borderRadius: "10px", fontSize: "0.88rem", lineHeight: 1.5,
           background: "rgba(22,163,74,0.07)", border: "1px solid rgba(22,163,74,0.25)", color: "var(--text-primary)",
         }}>
-          Next <b>{futureDays} days</b>: <b>{primaryMeta.label}</b> forecasts an average of{" "}
-          <b>{fmtVeh(futAvg)}</b> vehicles a day
-          {futPeak && <>, busiest {isAggregated ? `${bucketNoun} of` : "on"} <b>{dates[futPeak.idx]}</b> at {fmtVeh(futPeak.v)}</>}.
-          {" "}Typical error at this range <b>{rangeErr}</b>
-          {primaryMeta.accepted ? "" : <span style={{ color: "var(--color-danger)" }}> — this model failed the acceptance test; shown for comparison</span>}.
+          <b>Next {futureDays} days</b> · <b>{fmtVeh(futAvg)}</b> vehicles/day on average
+          {futPeak && <> · peak {isAggregated ? bucketNoun : "day"} <b>{dates[futPeak.idx]}</b> ({fmtVeh(futPeak.v)})</>}
+          {" "}· typical error <b>{rangeErr}</b>
+          {primaryMeta.accepted ? "" : <span style={{ color: "var(--color-danger)" }}> · failed acceptance, shown for comparison</span>}
         </div>
       )}
 
@@ -1397,22 +1386,17 @@ export default function PredictiveVolumeChart({ months = "all", from, to, weathe
         <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
           <span style={{ width: 10, height: 10, borderRadius: 2, background: "rgba(37,99,235,0.25)" }} />
           <b style={{ color: "var(--text-primary)" }}>Past</b>
-          {chartData.split
-            ? <>{chartData.split.trainDays.toLocaleString()}d trained{chartData.split.trainPct != null && ` · ${chartData.split.trainPct}%`}</>
-            : <>{chartData.holdoutStart}d shown</>}
-          {chartData.split && chartData.holdoutStart < chartData.split.trainDays && (
-            <span style={{ color: "var(--color-warning)" }}>· showing last {chartData.holdoutStart.toLocaleString()}d</span>
-          )}
+          trained · {chartData.holdoutStart.toLocaleString()}d shown
         </span>
         <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
           <span style={{ width: 10, height: 10, borderRadius: 2, background: "rgba(249,115,22,0.35)" }} />
           <b style={{ color: "var(--text-primary)" }}>Present</b>
-          {chartData.futureStart - chartData.holdoutStart}d scored{chartData.split?.holdoutPct != null && ` · ${chartData.split.holdoutPct}%`} · fixed by evaluation
+          tested on real counts · {(chartData.futureStart - chartData.holdoutStart).toLocaleString()}d
         </span>
         <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
           <span style={{ width: 10, height: 10, borderRadius: 2, background: "rgba(22,163,74,0.3)" }} />
           <b style={{ color: "var(--text-primary)" }}>Future</b>
-          {Math.min(futureDays, futureAvailable)}d · validated at {VALIDATED_HORIZON}d
+          forecast · {Math.min(futureDays, futureAvailable)}d
         </span>
       </div>
 
@@ -1450,16 +1434,13 @@ export default function PredictiveVolumeChart({ months = "all", from, to, weathe
       {/* Rainfall key, one muted line under the bars it explains. */}
       {showWeather && (
         <div style={{ display: "flex", alignItems: "center", gap: "14px", flexWrap: "wrap", fontSize: "0.72rem", color: "var(--text-secondary)" }}>
-          <span style={{ fontWeight: 700, color: "var(--text-primary)" }}>{isAggregated ? `Rainfall — ${meanLabel}` : "Daily rainfall"}</span>
+          <span style={{ fontWeight: 700, color: "var(--text-primary)" }} title={isAggregated ? `Bar height is the ${bucketNoun}'s mean rainfall; bar colour is its wettest single day.` : "Taller bar = wetter day."}>Rainfall</span>
           {RAIN_BANDS.map((b, i) => (
             <span key={b.label} style={{ display: "inline-flex", alignItems: "center", gap: 5 }}>
               <span style={{ width: 12, height: 9, borderRadius: 2, background: b.color, border: "1px solid rgba(2,132,199,0.5)", display: "inline-block" }} />
               {b.label} <span style={{ color: "var(--text-muted)" }}>{i === 0 ? `< ${b.max} mm` : b.max === Infinity ? `≥ ${RAIN_BANDS[i - 1].max} mm` : `${RAIN_BANDS[i - 1].max}–${b.max} mm`}</span>
             </span>
           ))}
-          <span style={{ color: "var(--text-muted)" }} title={isAggregated ? `Bar height is the ${bucketNoun}'s mean; bar colour is its wettest single day, because the bands are daily rain advisories.` : "Taller bar = wetter day."}>
-            {isAggregated ? "height = mean, colour = wettest day ⓘ" : "taller = wetter"}
-          </span>
         </div>
       )}
 
@@ -1486,8 +1467,7 @@ export default function PredictiveVolumeChart({ months = "all", from, to, weathe
         <summary style={{ cursor: "pointer", color: "var(--text-primary)", fontWeight: 600, listStyle: "none", display: "flex", gap: 14, flexWrap: "wrap", alignItems: "baseline" }}>
           <span>Validation evidence</span>
           <span style={{ color: "var(--text-muted)", fontWeight: 500 }}>
-            {primaryMeta.label} · {primaryMeta.note} · WMAPE {primaryMeta.wmape} · MASE {primaryMeta.mase ?? "—"}
-            {showWeather && " · weather evidence"}
+            {primaryMeta.label} · WMAPE {primaryMeta.wmape} · MASE {primaryMeta.mase ?? "—"}
           </span>
         </summary>
         <div style={{ display: "grid", gap: 14, marginTop: 12 }}>

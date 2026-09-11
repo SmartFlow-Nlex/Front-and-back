@@ -692,7 +692,7 @@ export default function PredictiveCongestionChart() {
     ? `No severe congestion forecast in the next ${hourLabels.length} hours.`
     : firstCount < peakCount
     ? `Congestion builds: ${firstCount} of ${segments.length} exit${firstCount === 1 ? "" : "s"} severe at +1h, rising to ${peakCount} by +${peakAt}h. By the peak it is ${whoText}.`
-    : `${whoText} — forecast severe from +1h${model.allHours ? ` and holding for the whole ${model.maxHour}-hour window` : ""}.`;
+    : `${whoText.charAt(0).toUpperCase()}${whoText.slice(1)} — forecast severe from +1h${model.allHours ? ` and holding for the whole ${model.maxHour}-hour window` : ""}.`;
 
   const stat = (value: string, label: string, tone?: string) => (
     <div style={{ display: "flex", flexDirection: "column", gap: 1, minWidth: 0 }}>
@@ -837,7 +837,7 @@ export default function PredictiveCongestionChart() {
       <div>
         <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 12, marginBottom: 8 }}>
           <h4 style={{ margin: 0, fontSize: "0.88rem", color: "#0f172a", fontWeight: 700 }}>
-            What to act on <span style={{ color: "#94a3b8", fontWeight: 500 }}>· {model.severeCount} severe, {alerts.length - model.severeCount} heavy</span>
+            What to act on <span style={{ color: "#94a3b8", fontWeight: 500 }}>· {model.severeCount} severe episode{model.severeCount === 1 ? "" : "s"} across {nSevere} of {segments.length} exits</span>
           </h4>
           {alerts.length > VISIBLE_ALERTS && (
             <button onClick={() => setAlertsOpen(true)} style={{ display: "inline-flex", alignItems: "center", gap: 6, border: "1px solid #dce2ef", background: "#fff", borderRadius: 999, padding: "4px 12px", fontSize: "0.74rem", fontWeight: 600, color: "#475569", cursor: "pointer" }}>

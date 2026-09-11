@@ -997,7 +997,14 @@ export async function getUpcomingEventSurge(limit = 60): Promise<UpcomingEvent[]
 // observed. Future days have no hourly ground truth and the models only predict
 // a daily total, so the predicted curve is that total redistributed over the
 // station's typical shape for the same weekday (last 90 days of history).
-export type HourlyForecastPoint = { hour: number; actual: number | null; predicted: number | null };
+export type HourlyForecastPoint = {
+  hour: number;
+  actual: number | null;
+  predicted: number | null;
+  /** Mean across the corridor's weather stations for that Manila hour. */
+  rainfall: number | null;
+  temperature: number | null;
+};
 export type HourlyForecastResult = {
   date: string;
   weekday: string;
@@ -1041,7 +1048,7 @@ export async function getMLPredictiveVolumeHourly(
   )`;
 
   try {
-    const [dayRes, actualRes, profileRes] = await Promise.all([
+    const [dayRes, actualRes, profileRes, weatherRes] = await Promise.all([
       // The day's totals as the models see them
       db.query(
         `SELECT forecast_date::text AS date, actual_volume, ${column} AS predicted, is_future
@@ -1090,6 +1097,19 @@ export async function getMLPredictiveVolumeHourly(
          SELECT hour, AVG(v)::float AS v FROM hv GROUP BY 1 ORDER BY 1`,
         [date]
       ),
+      // Per-hour weather for this day. AVERAGED across the 21 stations, never
+      // summed: summing is the bug that inflated corridor rainfall ~20x
+      // elsewhere in this file. Hours the stations did not report stay null so
+      // the chart can leave a gap rather than draw a dry hour.
+      db.query(
+        `SELECT EXTRACT(hour FROM timestamp_utc + interval '8 hours')::int AS hour,
+                AVG(rainfall)::float AS rainfall,
+                AVG(temperature)::float AS temperature
+         FROM public.hourly_weather
+         WHERE (timestamp_utc + interval '8 hours')::date = $1::date
+         GROUP BY 1 ORDER BY 1`,
+        [date]
+      ),
     ]);
 
     const day = dayRes.rows[0] as
@@ -1099,6 +1119,12 @@ export async function getMLPredictiveVolumeHourly(
 
     const actualByHour = new Map<number, number>(
       actualRes.rows.map((r: { hour: number; v: string }) => [Number(r.hour), Number(r.v)])
+    );
+    const weatherByHour = new Map<number, { rainfall: number | null; temperature: number | null }>(
+      weatherRes.rows.map((r: { hour: number; rainfall: number | null; temperature: number | null }) => [
+        Number(r.hour),
+        { rainfall: r.rainfall == null ? null : Number(r.rainfall), temperature: r.temperature == null ? null : Number(r.temperature) },
+      ])
     );
     const profile = profileRes.rows.map((r: { hour: number; v: number }) => Number(r.v));
     const profileTotal = profile.reduce((s, v) => s + v, 0);
@@ -1113,6 +1139,8 @@ export async function getMLPredictiveVolumeHourly(
       // than zero — a zero bar would read as "no traffic".
       actual: !hasActualHours ? null : wetFilter === null ? actualByHour.get(h) ?? 0 : actualByHour.get(h) ?? null,
       predicted: canShapePrediction ? Math.round((profile[h] / profileTotal) * dayPredicted) : null,
+      rainfall: weatherByHour.get(h)?.rainfall ?? null,
+      temperature: weatherByHour.get(h)?.temperature ?? null,
     }));
 
     return {

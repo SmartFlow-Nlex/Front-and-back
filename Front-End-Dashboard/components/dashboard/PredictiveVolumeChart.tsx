@@ -1050,32 +1050,39 @@ export default function PredictiveVolumeChart({ months = "all", from, to, weathe
   const hourlyWeatherSeries: Record<string, unknown>[] = (drawWeather && anyHourly) ? [
     {
       name: "Rainfall (mm)",
-      type: "bar",
+      type: "line",
       yAxisIndex: 1,
       data: anyHourly.hours.map((h) => h.rainfall != null ? h.rainfall : null),
-      barMaxWidth: 16,
-      z: 2,
-      itemStyle: {
-        color: "rgba(56, 189, 248, 0.35)",
-        borderColor: "#0284c7",
-        borderWidth: 1,
-        borderRadius: [3, 3, 0, 0],
-      },
-    },
-    {
-      name: "Temperature (\u00B0C)",
-      type: "line",
-      yAxisIndex: 2,
-      data: anyHourly.hours.map((h) => h.temperature != null ? h.temperature : null),
       smooth: true,
       connectNulls: true,
-      symbol: "circle",
-      symbolSize: 4,
-      lineStyle: { width: 2, color: "#f97316", type: "dashed" as const },
-      itemStyle: { color: "#f97316" },
-      z: 2,
+      symbol: "none",
+      // Behind the volume bars, as a wash rather than a second bar series:
+      // the volume bars are already blue, so rainfall bars read as a second
+      // volume series rather than as weather.
+      z: 0,
+      lineStyle: { width: 1.5, color: "#0284c7" },
+      areaStyle: { color: "rgba(2, 132, 199, 0.16)" },
     },
   ] : [];
+
+  // Temperature is not drawn: it needs a third axis, and on a hidden one a
+  // reader cannot tell 25 from 40. It rides in the tooltip and the day summary.
+  const hourTemps = anyHourly?.hours.map((h) => h.temperature) ?? [];
+  const weatherSummary = (() => {
+    if (!anyHourly) return null;
+    const rain = anyHourly.hours.map((h) => h.rainfall).filter((v): v is number => v != null);
+    const temps = hourTemps.filter((v): v is number => v != null);
+    if (rain.length === 0 && temps.length === 0) return null;
+    const totalRain = rain.reduce((a, b) => a + b, 0);
+    const wettest = rain.length ? anyHourly.hours.reduce((best, h) => (h.rainfall ?? -1) > (best.rainfall ?? -1) ? h : best) : null;
+    return {
+      totalRain,
+      wettestLabel: wettest && (wettest.rainfall ?? 0) > 0.05 ? fmtHour(wettest.hour) : null,
+      wettestValue: wettest?.rainfall ?? null,
+      tMin: temps.length ? Math.min(...temps) : null,
+      tMax: temps.length ? Math.max(...temps) : null,
+    };
+  })();
 
   const hourlyOption: EChartsOption | null = anyHourly
     ? {
@@ -1083,8 +1090,9 @@ export default function PredictiveVolumeChart({ months = "all", from, to, weathe
         tooltip: {
           trigger: "axis",
           formatter: (params: unknown) => {
-            const items = params as { name: string; marker: string; seriesName: string; value: number | null }[];
-            let tip = `<b>${items[0].name}</b><br/>`;
+            const items = params as { name: string; marker: string; seriesName: string; value: number | null; dataIndex: number }[];
+            const t = hourTemps[items[0]?.dataIndex ?? -1];
+            let tip = `<b>${items[0].name}</b>${t != null ? ` · ${t.toFixed(1)}\u00B0C` : ""}<br/>`;
             items.forEach((p) => {
               if (p.value != null) {
                 if (p.seriesName === "Rainfall (mm)") {
@@ -1103,7 +1111,7 @@ export default function PredictiveVolumeChart({ months = "all", from, to, weathe
           data: [
             ...(hasActualHours ? ["Actual Volume"] : []),
             ...visibleModels.filter((k) => hourlyByModel[k]?.hours.some((h) => h.predicted != null)).map((k) => `${metricsMeta[k].label} Prediction`),
-            ...(drawWeather ? ["Rainfall (mm)", "Temperature (\u00B0C)"] : []),
+            ...(drawWeather ? ["Rainfall (mm)"] : []),
           ],
           bottom: 0,
           icon: "circle",
@@ -1137,12 +1145,6 @@ export default function PredictiveVolumeChart({ months = "all", from, to, weathe
             splitLine: { show: false },
             min: 0,
             max: (value: { max: number }) => Math.max(Math.ceil(value.max * 2.5), 10),
-          },
-          {
-            type: "value",
-            show: false,
-            min: 15,
-            max: 45,
           },
         ],
         series: [
@@ -1211,6 +1213,17 @@ export default function PredictiveVolumeChart({ months = "all", from, to, weathe
                           <> · {metricsMeta[k].label} was <b style={{ color: Math.abs(pct) <= 5 ? "var(--color-success)" : "var(--color-warning)" }}>{Math.abs(pct).toFixed(1)}% {pct < 0 ? "under" : "over"}</b> the day&apos;s actual</>
                         )}
                       </>}
+                  {weatherSummary && (
+                    <>
+                      {" · "}
+                      {weatherSummary.totalRain > 0.05
+                        ? <>rain <b style={{ color: "#0284c7" }}>{weatherSummary.totalRain.toFixed(1)} mm</b>{weatherSummary.wettestLabel && <> (heaviest {weatherSummary.wettestLabel})</>}</>
+                        : <>no rain recorded</>}
+                      {weatherSummary.tMin != null && weatherSummary.tMax != null && (
+                        <> · {weatherSummary.tMin.toFixed(0)}&ndash;{weatherSummary.tMax.toFixed(0)}&deg;C</>
+                      )}
+                    </>
+                  )}
                 </p>
               );
             })()}

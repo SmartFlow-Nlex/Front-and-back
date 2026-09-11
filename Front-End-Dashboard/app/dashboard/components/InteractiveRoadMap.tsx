@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import { cachedJson } from "../../../lib/cached-json";
 
 /* ══════════════════════════════════════════════════════════════════════════════
    OFFICIAL NLEX STATION DEFINITIONS
@@ -155,8 +156,10 @@ function useCorridorStatus() {
            geometric corridor test and took direction from bearing alone — so
            this panel and the map disagreed about which stretches were busy.
            Both now derive from one payload through one function. */
-        const r = await fetch(`${BACKEND}/api/map-comparison/real-time`, { cache: "no-store" });
-        const fc = await r.json();
+        // 25 s memo: the panel polls anyway, and the Live Map reads the same
+        // URL, so the two share one response instead of two round trips.
+        const fc = await cachedJson<Parameters<typeof corridorStatusFromFeed>[0] & { feed?: { windowMinutes?: number; newestAt?: string | null; ageMinutes?: number | null; stale?: boolean } }>(
+          `${BACKEND}/api/map-comparison/real-time`, 25_000);
         if (cancelled) return;
         if (!fc?.features) throw new Error("Feed unavailable");
         setData({

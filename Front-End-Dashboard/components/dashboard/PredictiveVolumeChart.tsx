@@ -833,7 +833,7 @@ export default function PredictiveVolumeChart({ months = "all", from, to, weathe
       formatter: (params: unknown) => {
         const items = params as { name: string; marker: string; seriesName: string; value: number | null }[];
         if (!items || items.length === 0) return "";
-        let tip = `<b>${items[0].name}</b>${isAggregated ? ` · ${meanLabel} (average of the ${bucketNoun}'s days)` : ""}<br/>`;
+        let tip = `<b>${items[0].name}</b><br/>`;
         items.forEach((p) => {
           if (p.value != null) {
             if (p.seriesName === "Rainfall (mm)") {
@@ -879,7 +879,6 @@ export default function PredictiveVolumeChart({ months = "all", from, to, weathe
       // Formatter is display-only: the underlying seriesName values still drive
       // tooltip matching and the click-to-drill handler, so renaming them here
       // cannot break either.
-      formatter: (name: string) => (isAggregated ? `${name}  · ${meanLabel}` : name),
     },
     dataZoom: [
       { type: "slider", start: 0, end: 100, height: 18, bottom: 44,
@@ -916,7 +915,7 @@ export default function PredictiveVolumeChart({ months = "all", from, to, weathe
     yAxis: [
       {
         type: "value",
-        name: isAggregated ? `Avg daily volume — ${meanLabel}` : "Total Vehicle Volume",
+        name: isAggregated ? "Avg daily volume" : "Total Vehicle Volume",
         nameLocation: "middle",
         nameGap: 60,
         axisLabel: { color: T.chartText, formatter: (val: number) => `${(val / 1000).toFixed(0)}k` },
@@ -925,7 +924,7 @@ export default function PredictiveVolumeChart({ months = "all", from, to, weathe
       },
       {
         type: "value",
-        name: showWeather ? (isAggregated ? `Avg daily rainfall, mm — ${meanLabel}` : "Daily rainfall (mm)") : "",
+        name: showWeather ? (isAggregated ? "Avg daily rainfall, mm" : "Daily rainfall (mm)") : "",
         nameLocation: "middle",
         nameGap: 50,
         nameTextStyle: { color: T.isDark ? "#38bdf8" : "#0284c7", fontSize: 11, fontWeight: "bold" },

@@ -889,7 +889,10 @@ export default function PredictiveVolumeChart({ months = "all", from, to, weathe
     ],
     xAxis: {
       type: "category",
-      data: dates,
+      // Weekly/Monthly append one empty category: with a one-month horizon the
+      // Future zone is a single point, and a band from that point to itself has
+      // no width, so the green never showed. The empty slot gives it a band.
+      data: isAggregated ? [...dates, ""] : dates,
       triggerEvent: true,
       axisLine: { lineStyle: { color: T.chartAxis } },
       axisLabel: {
@@ -963,12 +966,12 @@ export default function PredictiveVolumeChart({ months = "all", from, to, weathe
           data: [
             { name: "Past", from: 0, to: holdoutStart - 1, color: ZONE.past },
             { name: "Present", from: holdoutStart, to: futureStart - 1, color: ZONE.present },
-            { name: "Future", from: futureStart, to: dates.length - 1, color: ZONE.future },
+            { name: "Future", from: futureStart, to: isAggregated ? dates.length : dates.length - 1, color: ZONE.future },
           ]
-            .filter((z) => z.from <= z.to && dates[z.from] != null && dates[z.to] != null)
+            .filter((z) => z.from <= z.to && dates[z.from] != null && (z.to === dates.length || dates[z.to] != null))
             .map((z) => [
               { xAxis: dates[z.from], itemStyle: { color: z.color }, label: zoneLabel(z.name) },
-              { xAxis: dates[z.to] },
+              { xAxis: z.to === dates.length ? "" : dates[z.to] },
             ]),
         },
         markLine: {
@@ -1015,16 +1018,6 @@ export default function PredictiveVolumeChart({ months = "all", from, to, weathe
                   },
                 }));
             })(),
-            ...(dates[futureStart + VALIDATED_HORIZON] != null
-              ? [{
-                  xAxis: dates[futureStart + VALIDATED_HORIZON],
-                  lineStyle: { type: "dotted" as const, color: "#f59e0b", width: 2 },
-                  label: {
-                    show: true, position: "end" as const, formatter: "beyond validated 14d",
-                    color: "var(--color-warning)", fontSize: 10, fontWeight: 600 as const,
-                  },
-                }]
-              : []),
           ],
         },
       },

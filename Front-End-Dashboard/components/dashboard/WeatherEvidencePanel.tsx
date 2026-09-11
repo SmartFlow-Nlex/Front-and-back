@@ -24,15 +24,6 @@ const BACKEND = process.env.NEXT_PUBLIC_BACKEND_URL ?? "http://localhost:4000";
 type Correlation = { variable: string; label: string; pearson: number | null; spearman: number | null; days: number };
 type ModelComparison = { model: string; withWeather: number | null; withoutWeather: number | null; deltaPts: number | null };
 
-function strengthOf(r: number | null): { label: string; tone: string } {
-  const a = Math.abs(r ?? 0);
-  if (r == null) return { label: "—", tone: "var(--text-muted)" };
-  if (a < 0.1) return { label: "negligible", tone: "var(--text-muted)" };
-  if (a < 0.3) return { label: "weak", tone: "var(--color-warning)" };
-  if (a < 0.5) return { label: "moderate", tone: "var(--color-warning)" };
-  return { label: "strong", tone: "var(--color-success)" };
-}
-
 
 /** Section heading inside the evidence area: a tinted icon tile and a bold
     title, so each block is identifiable at a glance rather than a line of
@@ -81,66 +72,104 @@ export default function WeatherEvidencePanel({ plotted = "total_rain" }: { plott
   const days = corr[0]?.days ?? null;
   const strongest = corr[0];
   const maxAbs = Math.max(...corr.map((c) => Math.abs(c.pearson ?? 0)), 0.001);
+
+  // Plain words for a correlation, the way a stakeholder would say it.
+  const linkWord = (r: number | null) => {
+    const a = Math.abs(r ?? 0);
+    if (r == null) return "no data";
+    if (a < 0.1) return "almost none";
+    if (a < 0.3) return "weak";
+    if (a < 0.5) return "moderate";
+    return "strong";
+  };
+  const linkTone = (r: number | null) => {
+    const a = Math.abs(r ?? 0);
+    return a < 0.1 ? "var(--text-muted)" : a < 0.5 ? "var(--color-warning)" : "var(--color-success)";
+  };
+
+  // The headline: how much does adding weather change the forecast error?
   const helped = models.filter((m) => (m.deltaPts ?? 0) > 0.05).length;
+  const best = models.reduce<ModelComparison | null>((acc, m) => (m.deltaPts != null && (acc == null || m.deltaPts > (acc.deltaPts ?? 0)) ? m : acc), null);
+  const verdict =
+    models.length === 0 ? "Weather inputs were not tested for these models."
+    : helped === 0 ? "No. Adding weather data does not make the forecast more accurate."
+    : helped === models.length ? `A little. Weather makes every tested model slightly more accurate — ${best!.model} gains the most, ${best!.deltaPts!.toFixed(2)} points of error.`
+    : `Only for some. Weather helps ${helped} of ${models.length} models; ${best!.model} gains the most at ${best!.deltaPts!.toFixed(2)} points of error.`;
+  const strongestLine = strongest
+    ? `${strongest.label} is the weather signal most tied to daily traffic, and even that link is ${linkWord(strongest.pearson)}.`
+    : "";
+
+  const maxErr = Math.max(...models.flatMap((m) => [m.withWeather ?? 0, m.withoutWeather ?? 0]), 0.001);
 
   return (
-    <section style={{ display: "grid", gap: 10 }}>
+    <section style={{ display: "grid", gap: 12 }}>
       <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
-        <EvidenceHeading icon={<CloudRain size={14} strokeWidth={2.4} />} tint="#0284c7" title="Weather as a predictor">
-          <InfoTooltip text={`Pearson correlation of each daily weather variable with daily corridor volume${days ? ` over ${days.toLocaleString()} days` : ""}. Rainfall is the one drawn on the chart because it is easiest to read, not because it predicts best. The per-model line is the same model trained with and without weather inputs; lower WMAPE is better. Holt-Winters and Holts Linear take no external inputs, so they have no pair.`} />
+        <EvidenceHeading icon={<CloudRain size={14} strokeWidth={2.4} />} tint="#0284c7" title="Does weather change the forecast?">
+          <InfoTooltip text={`Two checks. Left: how closely each daily weather variable moves with daily corridor volume${days ? ` over ${days.toLocaleString()} days` : ""} (Pearson correlation, shown in words). Right: the same model trained with and without weather inputs, compared on held-out error; lower is better. Holt-Winters and Holts Linear take no external inputs, so they are not tested. Rainfall is the variable drawn on the chart because it is the easiest to read.`} />
         </EvidenceHeading>
-        <span style={{ fontSize: "0.78rem", color: "var(--text-secondary)" }}>
-          {strongest && (
-            <>Strongest: <b style={{ color: "var(--text-primary)" }}>{strongest.label}</b> r = {strongest.pearson?.toFixed(3)}{" "}
-            <span style={{ color: strengthOf(strongest.pearson).tone, fontWeight: 600 }}>{strengthOf(strongest.pearson).label}</span></>
-          )}
-          {models.length > 0 && (
-            <> · weather inputs help <b style={{ color: helped === 0 ? "var(--text-secondary)" : "var(--color-success)" }}>{helped} of {models.length}</b> models</>
-          )}
-        </span>
       </div>
 
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))", gap: "8px 28px" }}>
-        {/* Four variables, strongest first. */}
-        <div style={{ display: "grid", gap: 6 }}>
+      {/* The answer, in one or two sentences. */}
+      <p style={{ margin: 0, fontSize: "0.86rem", lineHeight: 1.55, color: "var(--text-primary)" }}>
+        <b>{verdict}</b>{strongestLine ? <> {strongestLine}</> : null}
+      </p>
+
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(300px, 1fr))", gap: "10px 32px" }}>
+        {/* Left: how closely each weather variable tracks traffic. */}
+        <div style={{ display: "grid", gap: 7, alignContent: "start" }}>
+          <div style={{ fontSize: "0.74rem", fontWeight: 700, color: "var(--text-secondary)" }}>
+            How closely each weather variable tracks daily traffic
+          </div>
           {corr.map((c) => {
-            const s = strengthOf(c.pearson);
             const pct = (Math.abs(c.pearson ?? 0) / maxAbs) * 100;
             const isPlotted = c.variable === plotted;
             return (
-              <div key={c.variable} style={{ display: "grid", gridTemplateColumns: "92px 1fr 54px 70px", alignItems: "center", gap: 8, fontSize: "0.78rem" }}>
+              <div key={c.variable} style={{ display: "grid", gridTemplateColumns: "104px 1fr 88px", alignItems: "center", gap: 8, fontSize: "0.78rem" }}>
                 <span style={{ color: "var(--text-primary)", fontWeight: isPlotted ? 700 : 500, whiteSpace: "nowrap" }}>
                   {c.label}{isPlotted && <span style={{ marginLeft: 5, fontSize: "0.62rem", color: "var(--text-muted)", fontWeight: 500 }}>on chart</span>}
                 </span>
-                <span style={{ height: 5, background: "var(--bg-surface-hover)", borderRadius: 3, overflow: "hidden" }}>
-                  <span style={{ display: "block", height: "100%", width: `${pct}%`, background: (c.pearson ?? 0) < 0 ? "#0ea5e9" : "#f59e0b", borderRadius: 3 }} />
+                <span style={{ height: 7, background: "var(--bg-surface-hover)", borderRadius: 4, overflow: "hidden" }}>
+                  <span style={{ display: "block", height: "100%", width: `${pct}%`, background: "#0284c7", borderRadius: 4, opacity: 0.85 }} />
                 </span>
-                <span style={{ textAlign: "right", color: "var(--text-primary)", fontVariantNumeric: "tabular-nums" }}>
-                  {c.pearson == null ? "—" : c.pearson.toFixed(3)}
+                <span style={{ fontSize: "0.74rem", fontWeight: 700, color: linkTone(c.pearson), whiteSpace: "nowrap" }} title={`r = ${c.pearson == null ? "—" : c.pearson.toFixed(3)}`}>
+                  {linkWord(c.pearson)}
                 </span>
-                <span style={{ fontSize: "0.7rem", color: s.tone }}>{s.label}</span>
               </div>
             );
           })}
+          <div style={{ fontSize: "0.7rem", color: "var(--text-muted)" }}>Longer bar = moves more closely with traffic. Hover a word for the exact figure.</div>
         </div>
 
-        {/* With vs without weather, one line per model. */}
+        {/* Right: forecast error with vs without weather, as paired bars. */}
         {models.length > 0 && (
-          <div style={{ display: "grid", gap: 6, alignContent: "start" }}>
+          <div style={{ display: "grid", gap: 7, alignContent: "start" }}>
+            <div style={{ fontSize: "0.74rem", fontWeight: 700, color: "var(--text-secondary)" }}>
+              Forecast error with weather vs without <span style={{ fontWeight: 500, color: "var(--text-muted)" }}>· lower is better</span>
+            </div>
             {models.map((m) => {
               const d = m.deltaPts;
               const helps = d != null && d > 0.05;
               const hurts = d != null && d < -0.05;
               const tone = helps ? "var(--color-success)" : hurts ? "var(--color-danger)" : "var(--text-muted)";
-              return (
-                <div key={m.model} style={{ display: "grid", gridTemplateColumns: "92px 1fr auto", alignItems: "baseline", gap: 8, fontSize: "0.78rem" }}>
-                  <b style={{ color: "var(--text-primary)" }}>{m.model}</b>
-                  <span style={{ color: "var(--text-secondary)", fontVariantNumeric: "tabular-nums" }}>
-                    {m.withWeather?.toFixed(2)}% with · {m.withoutWeather?.toFixed(2)}% without
+              const bar = (v: number | null, color: string, label: string) => (
+                <div style={{ display: "grid", gridTemplateColumns: "52px 1fr 48px", alignItems: "center", gap: 6, fontSize: "0.72rem" }}>
+                  <span style={{ color: "var(--text-muted)" }}>{label}</span>
+                  <span style={{ height: 6, background: "var(--bg-surface-hover)", borderRadius: 3, overflow: "hidden" }}>
+                    <span style={{ display: "block", height: "100%", width: `${((v ?? 0) / maxErr) * 100}%`, background: color, borderRadius: 3 }} />
                   </span>
-                  <b style={{ color: tone, fontVariantNumeric: "tabular-nums" }}>
-                    {d == null ? "—" : helps ? `−${d.toFixed(2)} pts` : hurts ? `+${Math.abs(d).toFixed(2)} pts` : "no change"}
-                  </b>
+                  <span style={{ textAlign: "right", color: "var(--text-primary)", fontVariantNumeric: "tabular-nums" }}>{v == null ? "—" : `${v.toFixed(2)}%`}</span>
+                </div>
+              );
+              return (
+                <div key={m.model} style={{ display: "grid", gap: 3 }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", fontSize: "0.78rem" }}>
+                    <b style={{ color: "var(--text-primary)" }}>{m.model}</b>
+                    <b style={{ color: tone, fontSize: "0.74rem" }}>
+                      {d == null ? "—" : helps ? `${d.toFixed(2)} pts better with weather` : hurts ? `${Math.abs(d).toFixed(2)} pts worse with weather` : "no difference"}
+                    </b>
+                  </div>
+                  {bar(m.withWeather, "#0284c7", "with")}
+                  {bar(m.withoutWeather, "#94a3b8", "without")}
                 </div>
               );
             })}

@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import AiModelInsight, { type InsightMetric } from "./AiModelInsight";
+import { Sparkles } from "lucide-react";
 
 /**
  * Generative narrative for the forecast chart.
@@ -174,9 +175,10 @@ export default function ModelNarrative({
   return (
     <section
       style={{
-        border: "1px solid #e8edf5",
+        border: "1px solid color-mix(in srgb, #4f46e5 28%, transparent)",
         borderRadius: 12,
-        background: "var(--bg-surface)",
+        background: "linear-gradient(135deg, color-mix(in srgb, #6366f1 11%, var(--bg-surface)), color-mix(in srgb, #4f46e5 4%, var(--bg-surface)))",
+        boxShadow: "inset 0 1px 0 rgba(255,255,255,0.5)",
         padding: open ? "18px 20px" : "12px 18px",
         display: "flex",
         flexDirection: "column",
@@ -184,8 +186,13 @@ export default function ModelNarrative({
       }}
     >
       <div style={{ display: "flex", alignItems: "center", gap: 16, flexWrap: "wrap" }}>
-        <div style={{ minWidth: 190 }}>
-          <h4 style={{ margin: 0, fontSize: "0.98rem", fontWeight: 700, color: "var(--text-primary)" }}>
+        <div style={{ minWidth: 190, display: "flex", alignItems: "center", gap: 10 }}>
+          <span style={{ display: "grid", placeItems: "center", width: 30, height: 30, borderRadius: 9, flex: "none",
+            background: "linear-gradient(135deg, #6366f1, #4f46e5)", color: "#fff", boxShadow: "0 1px 6px rgba(79,70,229,0.35)" }}>
+            <Sparkles size={15} strokeWidth={2.4} />
+          </span>
+          <div>
+          <h4 style={{ margin: 0, fontSize: "0.98rem", fontWeight: 800, letterSpacing: "-0.01em", color: "var(--text-primary)" }}>
             Narrative Explanation
           </h4>
           {!open && (
@@ -193,6 +200,7 @@ export default function ModelNarrative({
               Plain-language read-out of how {selected.length === 1 ? "the selected model" : `the ${selected.length} selected models`} performed
             </p>
           )}
+          </div>
         </div>
 
         {/* Collapsed, the row was mostly dead space. These chips put the headline

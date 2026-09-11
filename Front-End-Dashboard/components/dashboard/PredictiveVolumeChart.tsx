@@ -481,67 +481,64 @@ export default function PredictiveVolumeChart({ months = "all", from, to, weathe
   );
 
   const metricsTable = (
-    <div style={{ background: "var(--bg-surface-hover)", borderRadius: "8px", padding: "16px", border: "1px solid var(--border-default)" }}>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "12px" }}>
-        <h4 style={{ margin: "0", fontSize: "0.95rem", color: "var(--text-primary)", fontWeight: 600 }}>
-          Real-World ML Validation Metrics
-        </h4>
+    <div style={{ display: "grid", gap: 8 }}>
+      <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
+        <span style={{ fontSize: "0.68rem", fontWeight: 700, letterSpacing: "0.06em", textTransform: "uppercase", color: "var(--text-muted)", display: "inline-flex", alignItems: "center" }}>
+          Held-out accuracy
+          <InfoTooltip text="Scored on the Present zone: real daily counts the model never trained on. WMAPE is the headline error; MASE below 1 beats repeating last week's pattern. Show more adds the secondary error measures." />
+        </span>
         <button
           onClick={() => setShowAllMetrics(!showAllMetrics)}
-          style={{
-            display: "inline-flex", alignItems: "center", gap: "6px", padding: "4px 10px", borderRadius: "6px",
-            background: showAllMetrics ? "var(--bg-surface-hover)" : "var(--bg-surface)", border: "1px solid var(--border-strong)",
-            color: "var(--text-secondary)", fontSize: "0.75rem", fontWeight: 600, cursor: "pointer", transition: "all 0.15s"
-          }}
+          style={{ padding: 0, border: 0, background: "transparent", cursor: "pointer", fontSize: "0.74rem", fontWeight: 600, color: "var(--text-secondary)" }}
         >
-          {showAllMetrics ? "Show Less" : "Show All Metrics"}
+          {showAllMetrics ? "Fewer columns" : "More columns"}
         </button>
       </div>
       <div style={{ overflowX: "auto" }}>
-        <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "0.85rem", minWidth: showAllMetrics ? "1000px" : "600px" }}>
+        <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "0.82rem", minWidth: showAllMetrics ? 820 : 520 }}>
           <thead>
-            <tr style={{ textAlign: "left", color: "var(--text-muted)", fontSize: "0.72rem", textTransform: "uppercase", letterSpacing: "0.05em" }}>
-              <th style={{ padding: "6px 10px", fontWeight: 600 }}>Model</th>
-              <th style={{ padding: "6px 10px", fontWeight: 600, textAlign: "right" }}>RMSE (veh)</th>
-              <th style={{ padding: "6px 10px", fontWeight: 600, textAlign: "right" }}>MAE (veh)</th>
-              <th style={{ padding: "6px 10px", fontWeight: 600, textAlign: "right" }}>WMAPE</th>
-              <th style={{ padding: "6px 10px", fontWeight: 600, textAlign: "right" }}>R² Score</th>
-              <th style={{ padding: "6px 10px", fontWeight: 600, textAlign: "right" }} title="Error relative to a seasonal-naive forecast. Below 1.0 beats it; above 1.0 does not.">MASE</th>
+            <tr style={{ textAlign: "left", color: "var(--text-muted)", fontSize: "0.68rem", textTransform: "uppercase", letterSpacing: "0.05em" }}>
+              <th style={{ padding: "6px 8px", fontWeight: 700 }}>Model</th>
+              <th style={{ padding: "6px 8px", fontWeight: 700, textAlign: "right" }}>WMAPE</th>
+              <th style={{ padding: "6px 8px", fontWeight: 700, textAlign: "right" }} title="Error relative to repeating last week. Below 1.0 beats it.">MASE</th>
+              <th style={{ padding: "6px 8px", fontWeight: 700, textAlign: "right" }}>MAE (veh)</th>
+              <th style={{ padding: "6px 8px", fontWeight: 700, textAlign: "right" }}>RMSE (veh)</th>
+              <th style={{ padding: "6px 8px", fontWeight: 700, textAlign: "right" }}>R²</th>
               {showAllMetrics && (
                 <>
-                  <th style={{ padding: "6px 10px", fontWeight: 600, textAlign: "right" }}>MAPE</th>
-                  <th style={{ padding: "6px 10px", fontWeight: 600, textAlign: "right" }}>sMAPE</th>
-                  <th style={{ padding: "6px 10px", fontWeight: 600, textAlign: "right" }}>RMSSE</th>
-                                    <th style={{ padding: "6px 10px", fontWeight: 600, textAlign: "right" }}>Adj R²</th>
-                                  </>
+                  <th style={{ padding: "6px 8px", fontWeight: 700, textAlign: "right" }}>MAPE</th>
+                  <th style={{ padding: "6px 8px", fontWeight: 700, textAlign: "right" }}>sMAPE</th>
+                  <th style={{ padding: "6px 8px", fontWeight: 700, textAlign: "right" }}>RMSSE</th>
+                  <th style={{ padding: "6px 8px", fontWeight: 700, textAlign: "right" }}>Adj R²</th>
+                </>
               )}
             </tr>
           </thead>
           <tbody>
             {MODELS.map(baseM => metricsMeta[baseM.key]).filter((m) => selected.includes(m.key)).map((m) => (
-              <tr key={m.key} style={{ background: "var(--bg-surface)", borderTop: "1px solid var(--border-default)" }}>
-                <td style={{ padding: "10px", fontWeight: 700, color: "var(--text-primary)" }}>
-                  <span style={{ display: "inline-flex", alignItems: "center", gap: "8px" }}>
-                    <span style={{ width: 10, height: 10, borderRadius: "50%", background: m.color }} />
+              <tr key={m.key} style={{ borderTop: "1px solid var(--border-default)" }}>
+                <td style={{ padding: "8px", fontWeight: 700, color: "var(--text-primary)" }}>
+                  <span style={{ display: "inline-flex", alignItems: "center", gap: 8 }}>
+                    <span style={{ width: 9, height: 9, borderRadius: "50%", background: m.color }} />
                     {m.label}
-                    <span style={{ fontSize: "0.72rem", fontWeight: 500, color: m.accepted ? "var(--color-success)" : "var(--color-danger)" }}>{m.note}</span>
+                    <span style={{ fontSize: "0.7rem", fontWeight: 600, color: m.accepted ? "var(--color-success)" : "var(--color-danger)" }}>{m.note}</span>
                   </span>
                 </td>
-                <td style={{ padding: "10px", textAlign: "right", color: "var(--text-primary)" }}>{m.rmse}</td>
-                <td style={{ padding: "10px", textAlign: "right", color: "var(--text-primary)" }}>{m.mae}</td>
-                <td style={{ padding: "10px", textAlign: "right", fontWeight: 700, color: m.color }}>{m.wmape}</td>
-                <td style={{ padding: "10px", textAlign: "right", fontWeight: 700, color: m.color }}>{m.r2}</td>
-                <td style={{ padding: "10px", textAlign: "right", fontWeight: 700,
+                <td style={{ padding: "8px", textAlign: "right", fontWeight: 700, color: m.color, fontVariantNumeric: "tabular-nums" }}>{m.wmape}</td>
+                <td style={{ padding: "8px", textAlign: "right", fontWeight: 700, fontVariantNumeric: "tabular-nums",
                   color: m.mase && m.mase !== "—" ? (parseFloat(m.mase) < 1 ? "var(--color-success)" : "var(--color-danger)") : "var(--text-secondary)" }}>
                   {m.mase ?? "—"}
                 </td>
+                <td style={{ padding: "8px", textAlign: "right", color: "var(--text-primary)", fontVariantNumeric: "tabular-nums" }}>{m.mae}</td>
+                <td style={{ padding: "8px", textAlign: "right", color: "var(--text-primary)", fontVariantNumeric: "tabular-nums" }}>{m.rmse}</td>
+                <td style={{ padding: "8px", textAlign: "right", color: "var(--text-primary)", fontVariantNumeric: "tabular-nums" }}>{m.r2}</td>
                 {showAllMetrics && (
                   <>
-                    <td style={{ padding: "10px", textAlign: "right", color: "var(--text-secondary)" }}>{m.mape ?? "—"}</td>
-                    <td style={{ padding: "10px", textAlign: "right", color: "var(--text-secondary)" }}>{m.smape ?? "—"}</td>
-                    <td style={{ padding: "10px", textAlign: "right", color: "var(--text-secondary)" }}>{m.rmsse ?? "—"}</td>
-                                        <td style={{ padding: "10px", textAlign: "right", color: "var(--text-secondary)" }}>{m.adjusted_r2 ?? "—"}</td>
-                                      </>
+                    <td style={{ padding: "8px", textAlign: "right", color: "var(--text-secondary)", fontVariantNumeric: "tabular-nums" }}>{m.mape ?? "—"}</td>
+                    <td style={{ padding: "8px", textAlign: "right", color: "var(--text-secondary)", fontVariantNumeric: "tabular-nums" }}>{m.smape ?? "—"}</td>
+                    <td style={{ padding: "8px", textAlign: "right", color: "var(--text-secondary)", fontVariantNumeric: "tabular-nums" }}>{m.rmsse ?? "—"}</td>
+                    <td style={{ padding: "8px", textAlign: "right", color: "var(--text-secondary)", fontVariantNumeric: "tabular-nums" }}>{m.adjusted_r2 ?? "—"}</td>
+                  </>
                 )}
               </tr>
             ))}
@@ -1483,9 +1480,13 @@ export default function PredictiveVolumeChart({ months = "all", from, to, weathe
             {primaryMeta.label} · WMAPE {primaryMeta.wmape} · MASE {primaryMeta.mase ?? "—"}
           </span>
         </summary>
-        <div style={{ display: "grid", gap: 14, marginTop: 12 }}>
-          {showWeather && <WeatherEvidencePanel plotted="total_rain" />}
+        <div style={{ display: "grid", gap: 16, marginTop: 12 }}>
           {metricsTable}
+          {showWeather && (
+            <div style={{ borderTop: "1px solid var(--border-default)", paddingTop: 14 }}>
+              <WeatherEvidencePanel plotted="total_rain" />
+            </div>
+          )}
         </div>
       </details>
     </article>

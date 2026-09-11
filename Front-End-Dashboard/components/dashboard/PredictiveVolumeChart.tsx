@@ -791,10 +791,19 @@ export default function PredictiveVolumeChart({ months = "all", from, to, weathe
       }
     }
 
-    // Thin to ~12 ticks: monthly, else quarterly, half-yearly and so on.
+    // Thin to ~18 ticks: monthly, else quarterly, half-yearly and so on.
+    //
+    // The threshold was 12, which at a 12-month range plus a 3-month horizon
+    // (16 month starts) labelled every OTHER month. A reader looking at the
+    // Monthly view then saw "Jan 2026 ... Mar 2026" with February unlabelled
+    // and asked why a three-month horizon showed two months. Eighteen still
+    // fits: these labels are ~55px and the plot is ~1,300px wide.
     if (monthStarts.length > 0) {
-      const step = monthStarts.length <= 12 ? 1 : Math.ceil(monthStarts.length / 12);
+      const step = monthStarts.length <= 18 ? 1 : Math.ceil(monthStarts.length / 18);
       for (let i = 0; i < monthStarts.length; i += step) keep.add(monthStarts[i]);
+      // The end of the horizon is the one tick a forecast reader is looking
+      // for, and the stride above lands on it only by luck.
+      keep.add(n - 1);
     } else {
       // A window too short to contain a month boundary would otherwise render a
       // bare axis, so fall back to the old index stride.
@@ -1450,6 +1459,12 @@ export default function PredictiveVolumeChart({ months = "all", from, to, weathe
           <span style={{ width: 10, height: 10, borderRadius: 2, background: "rgba(22,163,74,0.3)" }} />
           <b style={{ color: "var(--text-primary)" }}>Future</b>
           forecast · {Math.min(futureDays, futureAvailable)}d
+          {(() => {
+            const last = chartData.isoDates[chartData.futureStart + Math.min(futureDays, futureAvailable) - 1];
+            if (!last) return null;
+            const d = new Date(`${last}T00:00:00`);
+            return <> · to {d.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}</>;
+          })()}
         </span>
       </div>
 

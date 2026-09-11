@@ -1,4 +1,5 @@
 import type { Request, Response, NextFunction } from "express";
+import { bypassScope } from "../utils/ttl-cache.js";
 
 /* Route-level cache for GET JSON responses.
  *
@@ -109,5 +110,8 @@ export function routeCache(req: Request, res: Response, next: NextFunction): voi
   }) as typeof res.json;
   res.on("finish", () => { inflight.delete(url); settle(); });
   res.on("close", () => { inflight.delete(url); settle(); });
-  next();
+  // A bypass reaches past this layer to the controllers' own TTL cache; see
+  // bypassScope in utils/ttl-cache.
+  if (bypass) bypassScope.run({ bypass: true }, () => next());
+  else next();
 }

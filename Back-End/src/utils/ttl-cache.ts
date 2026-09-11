@@ -14,7 +14,17 @@
  * Failures are never cached: a rejected promise is dropped so the next caller
  * retries rather than replaying an error for the whole TTL.
  */
+import { AsyncLocalStorage } from "node:async_hooks";
+
 type Entry<T> = { at: number; value: T };
+
+/* Request-scoped bypass. The route cache honours x-cache-bypass, but the
+ * controllers behind it keep their own entries here, so a refresh request
+ * was refilling the route layer with a value THIS layer still held from
+ * before a retrain -- the congestion map stayed five days stale through a
+ * "refresh". When the middleware runs the request inside bypassScope, every
+ * cached() call on that request treats its entry as absent and reproduces it. */
+export const bypassScope = new AsyncLocalStorage<{ bypass: boolean }>();
 
 const store = new Map<string, Entry<unknown>>();
 const inflight = new Map<string, Promise<unknown>>();
@@ -30,7 +40,8 @@ const inflight = new Map<string, Promise<unknown>>();
  * database again; they get the last answer, at most one TTL old, and the
  * next caller gets the refreshed one. */
 export async function cached<T>(key: string, ttlMs: number, produce: () => Promise<T>): Promise<T> {
-  const hit = store.get(key) as Entry<T> | undefined;
+  const bypass = bypassScope.getStore()?.bypass === true;
+  const hit = bypass ? undefined : (store.get(key) as Entry<T> | undefined);
   const fresh = hit != null && Date.now() - hit.at < ttlMs;
   if (fresh) return hit!.value;
 

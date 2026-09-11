@@ -334,8 +334,8 @@ export default function IncidentNarrative({
           {weather !== "all" ? ` · scored on ${weather} days only` : null}
         </p>
 
-      {/* Same rows the prose above was composed from, so the two cannot
-          describe different models. */}
+      {/* The read-out is the language model's alone. The metrics it was given
+          are the ones on the card above, so the two cannot disagree. */}
       <AiModelInsight
         quantity="incidents"
         horizonDays={horizonDays}
@@ -359,130 +359,6 @@ export default function IncidentNarrative({
             diagnosis: r.Diagnosis,
           }))}
       />
-
-        {selected.map((k) => {
-        const r = byModel.get(k);
-        if (!r) {
-          return (
-            <article key={k} style={{ fontSize: "0.85rem", color: "#64748b" }}>
-              <b style={{ color: "#0f172a" }}>{META[k]?.label ?? k}</b> — no stored metrics for this model yet.
-            </article>
-          );
-        }
-
-        const wmape = fmt2(r.WMAPE);
-        const mae = fmt3(r.MAE);
-        const rmse = fmt3(r.RMSE);
-        const mase = r.MASE != null && isFinite(r.MASE) ? r.MASE : null;
-
-        // Champion selection rule (train_incident_models.py select_champion):
-        // eligible = MASE <= 1.0, champion = best of the eligible by R2 or MAE.
-        // Which of those two the pipeline actually used isn't on the API
-        // response, so the wording stays generic rather than picking one.
-        let verdictLine: string;
-        if (r.isChampion) {
-          verdictLine = "Champion — selected among the models that beat the naive weekly baseline.";
-        } else if (mase != null) {
-          verdictLine = mase <= 1.0
-            ? "Beats the naive weekly baseline, but was not the pipeline's pick."
-            : `Does not beat the naive weekly baseline — MASE ${mase.toFixed(3)} is at or above 1.0.`;
-        } else {
-          verdictLine = "No MASE recorded for this model in the current window.";
-        }
-
-        // Only present on the "holdout" fallback rows (buildIncidentPredictiveResponse
-        // leaves these null on live "window" rows — see the doc comment there).
-        const hasDiagnosis = r.Diagnosis != null && r.Train_R2 != null && r.Gap != null;
-        const diagnosisLine = hasDiagnosis
-          ? `${r.Diagnosis}: train R² ${fmt3(r.Train_R2)} vs validation R² ${fmt3(r.R2)} (gap ${fmt3(r.Gap)}).`
-          : null;
-
-        // Compact stat strip — scannable, and keeps the prose down to verdicts.
-        const stats: { label: string; value: string; tone?: string }[] = [];
-        if (wmape) stats.push({ label: "WMAPE", value: `${wmape}%`, tone: META[k]?.color });
-        if (mae) stats.push({ label: "MAE", value: `${mae} incidents` });
-        if (rmse) stats.push({ label: "RMSE", value: rmse });
-        if (r.R2 != null && isFinite(r.R2)) stats.push({ label: "R²", value: r.R2.toFixed(3) });
-        if (mase != null) stats.push({ label: "MASE", value: mase.toFixed(3), tone: mase < 1 ? "#15803d" : "#b91c1c" });
-
-        return (
-          <article
-            key={k}
-            style={{
-              borderLeft: `3px solid ${r.isChampion ? "#16a34a" : "#cbd5e1"}`,
-              paddingLeft: 14,
-              display: "flex",
-              flexDirection: "column",
-              gap: 7,
-            }}
-          >
-            <div style={{ display: "flex", alignItems: "center", gap: 9, flexWrap: "wrap" }}>
-              <b style={{ fontSize: "0.9rem", color: "#0f172a" }}>{META[k]?.label ?? k}</b>
-              <span
-                style={{
-                  fontSize: "0.64rem", fontWeight: 700, padding: "2px 7px", borderRadius: 999,
-                  background: r.isChampion ? "#dcfce7" : "#f1f5f9",
-                  color: r.isChampion ? "#15803d" : "#64748b",
-                }}
-              >
-                {r.isChampion ? "CHAMPION" : "CANDIDATE"}
-              </span>
-              {r.source === "holdout" && (
-                <span style={{ fontSize: "0.66rem", color: "#94a3b8" }} title="No scored days in the current Range/Weather view — these are the pipeline's full-holdout numbers">
-                  full holdout
-                </span>
-              )}
-              <span style={{ fontSize: "0.78rem", color: "#64748b" }}>{HOW_IT_WORKS[k]}</span>
-            </div>
-
-            {/* Numbers as a strip rather than buried in a sentence. The hover-formula
-                popup lives only on the Real-World ML Validation Metrics table below
-                (see PredictiveIncidentChart's metricsTable) — these labels are plain. */}
-            <div style={{ display: "flex", gap: 14, flexWrap: "wrap" }}>
-              {stats.map((st) => (
-                <span key={st.label} style={{ display: "inline-flex", alignItems: "baseline", gap: 5 }}>
-                  <span style={{ fontSize: "0.64rem", color: "#94a3b8", textTransform: "uppercase", letterSpacing: "0.04em" }}>
-                    {st.label}
-                  </span>
-                  <b style={{ fontSize: "0.84rem", color: st.tone ?? "#0f172a" }}>{st.value}</b>
-                </span>
-              ))}
-              <span style={{ display: "inline-flex", alignItems: "baseline", gap: 5 }}>
-                <span style={{ fontSize: "0.64rem", color: "#94a3b8", textTransform: "uppercase", letterSpacing: "0.04em" }}>N</span>
-                <b style={{ fontSize: "0.84rem", color: "#0f172a" }}>{r.n}</b>
-              </span>
-            </div>
-
-            <div style={{ fontSize: "0.8rem", color: "#4b5e7d", lineHeight: 1.5 }}>
-              {maseSentence(r.MASE)}
-            </div>
-
-            {diagnosisLine && (
-              <div style={{ fontSize: "0.74rem", color: "#94a3b8" }}>{diagnosisLine}</div>
-            )}
-
-            <div style={{ fontSize: "0.8rem", fontWeight: 600, color: r.isChampion ? "#15803d" : "#b45309" }}>
-              {verdictLine}
-            </div>
-          </article>
-        );
-      })}
-
-      <p
-        style={{
-          margin: 0,
-          fontSize: "0.74rem",
-          color: "#94a3b8",
-          lineHeight: 1.5,
-          borderTop: "1px solid #eef2f7",
-          paddingTop: 10,
-        }}
-      >
-        All figures are out-of-sample: each model was scored on days it never trained on. Accuracy beyond
-        {" "}{horizonDays} day{horizonDays === 1 ? "" : "s"} ahead is not covered by these numbers, and the Future band is a
-        projection rather than a validated forecast. Rows marked &quot;full holdout&quot; reflect the pipeline&apos;s
-        last training run rather than the days currently on screen.
-      </p>
 
       </div>
       )}

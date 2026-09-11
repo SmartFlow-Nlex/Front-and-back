@@ -68,7 +68,6 @@ export default function FeatureBriefing({
     };
   }, [load]);
 
-  if (failed && !data) return null;
 
   return (
     <article
@@ -115,7 +114,14 @@ export default function FeatureBriefing({
 
       {busy && !data ? (
         <p style={{ margin: 0, fontSize: "0.82rem", color: "var(--text-muted)", fontStyle: "italic" }}>
-          Preparing the read-out…
+          Asking the model to read the current figures… this can take up to a minute on the free tier.
+        </p>
+      ) : failed && !data ? (
+        <p style={{ margin: 0, fontSize: "0.82rem", lineHeight: 1.55, color: "#b54708", background: "#fffaeb", borderLeft: "3px solid #f79009", borderRadius: 8, padding: "9px 11px", display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap" }}>
+          <span style={{ flex: "1 1 240px" }}>The explanation could not be generated.</span>
+          <button onClick={load} style={{ padding: "5px 13px", borderRadius: 999, cursor: "pointer", fontSize: "0.74rem", fontWeight: 600, border: "1px solid #f79009", background: "transparent", color: "#b54708" }}>
+            Try again
+          </button>
         </p>
       ) : data ? (
         <>

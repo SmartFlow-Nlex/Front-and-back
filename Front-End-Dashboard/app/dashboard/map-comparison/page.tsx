@@ -7,7 +7,6 @@ import TrafficMapPanel from "../../../components/maps/TrafficMapPanel";
 import WazeLiveModal from "../../../components/maps/WazeLiveModal";
 import MapLegend from "../../../components/maps/MapLegend";
 import PageHeader from "../../../components/dashboard/PageHeader";
-import FeatureBriefing from "../../../components/dashboard/FeatureBriefing";
 import { cachedJson } from "../../../lib/cached-json";
 
 const BACKEND = process.env.NEXT_PUBLIC_BACKEND_URL ?? "http://localhost:4000";
@@ -385,14 +384,6 @@ export default function MapComparisonPage() {
         </div>
 
       </div>
-
-      {/* Reads the same corridor-status rows the map draws from, resolved
-          server-side, so the two cannot disagree about which exits are shut. */}
-      <FeatureBriefing
-        feature="corridor_status"
-        title="Corridor Conditions"
-        refreshable
-      />
 
       <WazeLiveModal open={wazeMax} onClose={() => setWazeMax(false)} />
     </section>

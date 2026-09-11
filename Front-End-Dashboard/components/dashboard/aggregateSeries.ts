@@ -89,7 +89,24 @@ export type AggOutput<K extends string> = {
   holdoutStart: number;
   futureStart: number;
   bucketDays: number[];
+  /** Partial buckets dropped from each end; see the trimming note below. */
+  trimmedHead: number;
+  trimmedTail: number;
 };
+
+/** Days a complete bucket of this granularity covers, for the month it starts in. */
+function bucketLength(key: string, g: Granularity): number {
+  if (g === "Weekly") return 7;
+  if (g === "Monthly") {
+    const [y, m] = key.slice(1).split("-").map(Number);
+    return new Date(y, m, 0).getDate();
+  }
+  if (g === "Yearly") {
+    const y = Number(key.slice(1));
+    return (y % 4 === 0 && y % 100 !== 0) || y % 400 === 0 ? 366 : 365;
+  }
+  return 1;
+}
 
 /** Returns null when no aggregation applies, so callers keep the daily arrays. */
 export function aggregateSeries<K extends string>(input: AggInput<K>): AggOutput<K> | null {
@@ -147,21 +164,47 @@ export function aggregateSeries<K extends string>(input: AggInput<K>): AggOutput
     zones.push(future >= present && future >= past ? 2 : present >= past ? 1 : 0);
   });
 
-  const firstOf = (z: number) => {
-    const i = zones.indexOf(z);
-    return i === -1 ? dates.length : i;
+  /* Drop a PARTIAL bucket at either edge.
+   *
+   * The window is cut in days, so its ends rarely land on a period boundary.
+   * At a 60-day horizon the last monthly bucket held a single day — 1 March —
+   * and that one day's forecast was plotted beside months averaged over 28 to
+   * 31 days. It read as the forecast collapsing on the final point; it was
+   * only a mean of one. A bucket covering less than half its period is not
+   * comparable with its neighbours, so it is not drawn.
+   *
+   * Only the edges can be partial: every interior bucket is complete by
+   * construction. */
+  let from = 0;
+  let to = order.length;
+  const partial = (i: number) => bucketDays[i] < bucketLength(order[i], granularity) / 2;
+  while (from < to && partial(from)) from++;
+  while (to > from + 1 && partial(to - 1)) to--;
+  // Never trim everything away: a window shorter than one period still has to
+  // draw something, and a single partial bucket is better than a blank chart.
+  if (to <= from) { from = 0; to = order.length; }
+
+  const trimmedHead = from;
+  const trimmedTail = order.length - to;
+  const slice = <T,>(a: T[]) => a.slice(from, to);
+  const zonesT = zones.slice(from, to);
+  const firstOfT = (z: number) => {
+    const i = zonesT.indexOf(z);
+    return i === -1 ? zonesT.length : i;
   };
 
   return {
-    dates,
-    isoDates: outIso,
-    baseActual: outActual,
-    models: outModels,
-    rainfall: outRain,
+    dates: slice(dates),
+    isoDates: slice(outIso),
+    baseActual: slice(outActual),
+    models: Object.fromEntries(keys.map((k) => [k, slice(outModels[k])])) as Record<K, (number | null)[]>,
+    rainfall: slice(outRain),
     /** Wettest day per bucket — drives the band colour, never the bar height. */
-    rainfallPeak: outRainPeak,
-    holdoutStart: firstOf(1),
-    futureStart: firstOf(2),
-    bucketDays,
+    rainfallPeak: slice(outRainPeak),
+    holdoutStart: firstOfT(1),
+    futureStart: firstOfT(2),
+    bucketDays: slice(bucketDays),
+    trimmedHead,
+    trimmedTail,
   };
 }

@@ -1463,7 +1463,16 @@ export default function PredictiveVolumeChart({ months = "all", from, to, weathe
             const last = chartData.isoDates[chartData.futureStart + Math.min(futureDays, futureAvailable) - 1];
             if (!last) return null;
             const d = new Date(`${last}T00:00:00`);
-            return <> · to {d.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}</>;
+            const period = granularity === "Monthly" ? "months" : "weeks";
+            return (
+              <>
+                {" "}· to {d.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}
+                {/* The chart drops a final part-period rather than plotting a
+                    two-day "month" beside 31-day ones, so the horizon can end
+                    after the last point drawn. */}
+                {agg && agg.trimmedTail > 0 && <> · whole {period} shown</>}
+              </>
+            );
           })()}
         </span>
       </div>

@@ -776,9 +776,23 @@ export default function TrafficPage() {
       <section className={`${styles.page} viz-traffic`}>
         <PageHeader icon={TrendingUp} title="Traffic Overview" subtitle="Volume, congestion, and speed patterns across NLEX" />
         <div className={styles.filterRow} style={{ flexWrap: "wrap", rowGap: 8 }}>
-          {/* The Predictive tab has no page-level filters: the forecast card
-              carries its own model, view, horizon and weather controls, and the
-              stored forecast is not a function of the Descriptive Range. */}
+          {/* Predictive keeps the Range presets (they set how much history the
+              forecast card shows) but not Custom, and not the Weather filter:
+              the forecast card carries its own weather toggle. */}
+          {activeTab === "Predictive" && (
+            <div className={styles.filterGroup}>
+              <svg width="15" height="15" viewBox="0 0 16 16" fill="none" style={{ color: "var(--text-muted)" }}><rect x="2" y="2" width="12" height="12" rx="3" stroke="currentColor" strokeWidth="1.4" /><path d="M2 6h12" stroke="currentColor" strokeWidth="1.4" /><path d="M5.5 2V4M10.5 2V4" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" /></svg>
+              <span className={styles.filterLabel}>Range</span>
+              <div className={styles.segmented}>
+                {(["3", "12", "all"] as const).map((m) => (
+                  <button key={m} className={rangeMode === m ? "active" : ""} onClick={() => setRangeMode(m)}>
+                    {rangeMode === m && <svg width="12" height="12" viewBox="0 0 16 16" fill="none" style={{ marginRight: 4, marginBottom: -1 }}><path d="M3.5 8.5l3 3 6-7" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" /></svg>}
+                    {m === "3" ? "3 mo" : m === "12" ? "12 mo" : "All"}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
           {activeTab === "Prescriptive" && (
             <span className={styles.filterNote}>
               Staffing, congestion response and event ranking, computed from the Predictive tab&apos;s own forecast —

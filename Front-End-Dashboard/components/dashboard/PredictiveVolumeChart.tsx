@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { EChartsOption } from "echarts";
 import DashboardChart from "./DashboardChart";
+import InfoTooltip from "./InfoTooltip";
 import ModelNarrative, { type MetricRow } from "./ModelNarrative";
 import { aggregateSeries } from "./aggregateSeries";
 import { useThemeTokens, zoneTints } from "./useThemeTokens";
@@ -1322,6 +1323,7 @@ export default function PredictiveVolumeChart({ months = "all", from, to, weathe
       <div>
         <h3 style={{ fontSize: "1.05rem", color: "var(--text-primary)", fontWeight: 700, margin: 0, letterSpacing: "-0.01em" }}>
           Traffic Volume Walk-Forward Forecast
+          <InfoTooltip text="Daily corridor volume: the model's past fit, its held-out test period against real counts, and the forecast ahead. Pick a model above; the champion is preselected." />
         </h3>
         <p style={{ color: "var(--text-secondary)", fontSize: "0.82rem", margin: "4px 0 0 0" }}>
           {isAggregated

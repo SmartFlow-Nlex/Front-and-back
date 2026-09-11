@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import type { EChartsOption } from "echarts";
 import DashboardChart from "./DashboardChart";
+import InfoTooltip from "./InfoTooltip";
 import { loadForecast } from "./prescriptiveTraffic.shared";
 
 type State = "Low" | "Med" | "High";
@@ -343,6 +344,7 @@ export default function PredictiveCongestionChart() {
           <>
             <h3 style={{ margin: 0, fontSize: "1.05rem", fontWeight: 700, color: "#0f172a" }}>
               Predictive Congestion State Map
+              <InfoTooltip text="Predicted jam state at each exit for the next 12 hours, from Waze jam reports. Red = jams under 30 km/h expected; blue = no jam reported." />
             </h3>
             <div style={{ color: "var(--color-danger, #ef4444)", fontSize: "0.88rem" }}>{loadError}</div>
             <div>
@@ -719,6 +721,7 @@ export default function PredictiveCongestionChart() {
         <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
           <h3 style={{ fontSize: "1.05rem", color: "#0f172a", fontWeight: 700, margin: 0, letterSpacing: "-0.01em" }}>
             Predictive Congestion State Map
+            <InfoTooltip text="Predicted jam state at each exit for the next 12 hours, from Waze jam reports. Red = jams under 30 km/h expected; blue = no jam reported." />
           </h3>
           <div style={{ display: "flex", gap: 6, flexWrap: "wrap", justifyContent: "flex-end" }}>
             <span

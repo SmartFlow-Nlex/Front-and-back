@@ -11,6 +11,7 @@ import DashboardChart from "../../../components/dashboard/DashboardChart";
 import ChartSkeleton, { KpiSkeleton } from "../../../components/dashboard/ChartSkeleton";
 import CustomSelect from "../../../components/dashboard/CustomSelect";
 import PageHeader from "../../../components/dashboard/PageHeader";
+import InfoTooltip from "../../../components/dashboard/InfoTooltip";
 import PredictiveEmissionChart from "../../../components/dashboard/PredictiveEmissionChart";
 import DateRangePicker from "../traffic/components/DateRangePicker";
 import { rangeDays, grainBlockedReason, bestGrainFor, axisLabelFor, bucketLabelFor } from "../../../lib/granularity";
@@ -704,7 +705,7 @@ export default function SustainabilityPage() {
           <article className={`${styles.chartCard} ${styles.chart1}`}>
             <div className={styles.chartHead}>
               <div className={styles.headText}>
-                <h3>Projected % Emission Reduction by Strategy</h3>
+                <h3>Projected % Emission Reduction by Strategy<InfoTooltip text="Estimated CO₂ reduction each intervention would deliver, derived from the fleet mix and volume in the Range." /></h3>
               </div>
             </div>
             <div className={styles.chartBody}>
@@ -785,7 +786,7 @@ export default function SustainabilityPage() {
       <div className={styles.kpiRow}>
         <article className={styles.kpiTile}>
           <span className={styles.kpiIcon} aria-hidden="true"><Leaf size={15} /></span>
-          <h3>Total CO₂ (Modeled)</h3>
+          <h3>Total CO₂ (Modeled)<InfoTooltip text="Tonnes of CO₂ modeled from vehicle volume and class mix over the Range using per-class emission factors — not a sensor reading." /></h3>
           <div className={styles.kpiValue} title={data ? `${fmtInt(data.kpis.totalCo2T)} tonnes` : undefined}>
             {kpiValue(data ? `${fmtCompact(data.kpis.totalCo2T)} t` : null)}
           </div>
@@ -798,7 +799,7 @@ export default function SustainabilityPage() {
         </article>
         <article className={styles.kpiTile}>
           <span className={styles.kpiIcon} aria-hidden="true"><CalendarClock size={15} /></span>
-          <h3>Avg Daily CO₂</h3>
+          <h3>Avg Daily CO₂<InfoTooltip text="Modeled CO₂ divided by the number of days in the Range." /></h3>
           <div className={styles.kpiValue}>{kpiValue(derived ? `${fmtInt(derived.avgDailyT)} t` : null)}</div>
           <div className={styles.sparkBox}>
             {sparkOption && <ReactECharts option={sparkOption} style={{ width: "100%", height: "100%" }} opts={{ renderer: "canvas" }} />}
@@ -806,7 +807,7 @@ export default function SustainabilityPage() {
         </article>
         <article className={styles.kpiTile}>
           <span className={styles.kpiIcon} aria-hidden="true"><Truck size={15} /></span>
-          <h3>Heavy-Vehicle Impact</h3>
+          <h3>Heavy-Vehicle Impact<InfoTooltip text="How much of the modeled CO₂ comes from trucks and buses versus their share of traffic — heavy classes emit far more per vehicle." /></h3>
           <div className={styles.kpiValue}>{kpiValue(derived ? `${derived.heavyCo2Pct.toFixed(1)}%` : null)}</div>
           <p className={styles.kpiHint}>
             {derived ? `of CO₂ from just ${derived.heavyVolPct.toFixed(1)}% of traffic` : "—"}
@@ -814,7 +815,7 @@ export default function SustainabilityPage() {
         </article>
         <article className={styles.kpiTile}>
           <span className={styles.kpiIcon} aria-hidden="true"><Clock size={15} /></span>
-          <h3>Peak Emission Hour</h3>
+          <h3>Peak Emission Hour<InfoTooltip text="The hour of the day with the highest modeled CO₂, which follows the volume peak weighted by fleet mix." /></h3>
           <div className={styles.kpiValue}>{kpiValue(timeProfile ? fmtHour(timeProfile.peakHour) : null)}</div>
           <p className={styles.kpiHint}>
             {timeProfile ? `${fmt1(timeProfile.allHour[timeProfile.peakHour])} t/day in that hour` : "—"}
@@ -822,7 +823,7 @@ export default function SustainabilityPage() {
         </article>
         <article className={styles.kpiTile}>
           <span className={styles.kpiIcon} aria-hidden="true"><Wind size={15} /></span>
-          <h3>Measured Air Quality</h3>
+          <h3>Measured Air Quality<InfoTooltip text="Latest measured pollutant readings near the corridor, shown alongside the modeled CO₂ for context." /></h3>
           <div className={styles.kpiValue}>
             {kpiValue(data?.kpis.avgAqi != null ? `${data.kpis.avgAqi.toFixed(1)} / 5` : null)}
           </div>
@@ -838,7 +839,7 @@ export default function SustainabilityPage() {
       <article className={`${styles.chartCard} ${styles.chart1} ${styles.hero}`}>
         <div className={styles.chartHead}>
           <div className={styles.headText}>
-            <h3>CO₂ Emissions Trend by Vehicle Class</h3>
+            <h3>CO₂ Emissions Trend by Vehicle Class<InfoTooltip text="Modeled CO₂ per day, week or month, split by vehicle class so you can see which classes drive the total." /></h3>
           </div>
         </div>
         <div className={styles.heroFilters}>
@@ -894,7 +895,7 @@ export default function SustainabilityPage() {
       <article className={`${styles.chartCard} ${styles.chart2}`}>
         <div className={styles.chartHead}>
           <div className={styles.headText}>
-            <h3>When Emissions Happen</h3>
+            <h3>When Emissions Happen<InfoTooltip text="Modeled CO₂ by hour of day and day of week — when the corridor's emissions concentrate." /></h3>
             {timeTakeaway && <p className={styles.subtitle}>{timeTakeaway}</p>}
           </div>
           <div className={styles.segmentedSmall}>
@@ -912,7 +913,7 @@ export default function SustainabilityPage() {
       <article className={`${styles.chartCard} ${styles.chart3}`}>
         <div className={styles.chartHead}>
           <div className={styles.headText}>
-            <h3>Fleet Mix vs Pollution Load</h3>
+            <h3>Fleet Mix vs Pollution Load<InfoTooltip text="Each vehicle class's share of traffic next to its share of CO₂ — the gap shows which classes pollute out of proportion to their numbers." /></h3>
             {fleetTakeaway && <p className={styles.subtitle}>{fleetTakeaway}</p>}
           </div>
         </div>
@@ -923,7 +924,7 @@ export default function SustainabilityPage() {
       <article className={`${styles.chartCard} ${styles.chart4}`}>
         <div className={styles.chartHead}>
           <div className={styles.headText}>
-            <h3>Heavy-Vehicle Share of CO₂</h3>
+            <h3>Heavy-Vehicle Share of CO₂<InfoTooltip text="The fraction of modeled CO₂ attributable to heavy vehicles over the Range." /></h3>
             {heavyShareTakeaway && <p className={styles.subtitle}>{heavyShareTakeaway}</p>}
           </div>
         </div>
@@ -933,7 +934,7 @@ export default function SustainabilityPage() {
       <article className={`${styles.chartCard} ${styles.chart5}`}>
         <div className={styles.chartHead}>
           <div className={styles.headText}>
-            <h3>Measured Air Quality by Month</h3>
+            <h3>Measured Air Quality by Month<InfoTooltip text="Monthly measured pollutant levels near the corridor, for comparison against the modeled emissions." /></h3>
           </div>
         </div>
         <div className={styles.chartBody}>{chartFrame(aqiOption, "No station readings in the selected range", onAqiClick)}</div>

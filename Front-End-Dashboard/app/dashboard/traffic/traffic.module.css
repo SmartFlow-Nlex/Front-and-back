@@ -509,9 +509,12 @@
   text-transform: uppercase;
   letter-spacing: 0.08em;
   color: var(--text-muted);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  /* Wraps rather than truncates. With the info icon beside it, "AVG DAILY
+     VOLUME" and "TOTAL CO2 (MODELED)" were being cut to an ellipsis at
+     ordinary widths -- a label that hides its own last word is worse than one
+     that takes two lines. */
+  line-height: 1.3;
+  overflow-wrap: anywhere;
 }
 
 /* Tinted square holding the tile's icon, top right. */

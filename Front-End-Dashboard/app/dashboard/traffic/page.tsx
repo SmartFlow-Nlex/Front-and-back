@@ -12,6 +12,7 @@ import ChartSkeleton, { KpiSkeleton } from "../../../components/dashboard/ChartS
 import CustomSelect from "../../../components/dashboard/CustomSelect";
 import RampKey from "../../../components/dashboard/RampKey";
 import PageHeader from "../../../components/dashboard/PageHeader";
+import InfoTooltip from "../../../components/dashboard/InfoTooltip";
 import PredictiveVolumeChart from "../../../components/dashboard/PredictiveVolumeChart";
 import PredictiveCongestionChart from "../../../components/dashboard/PredictiveCongestionChart";
 import PredictiveEventChart from "../../../components/dashboard/PredictiveEventChart";
@@ -934,7 +935,7 @@ export default function TrafficPage() {
       <div className={styles.kpiRow}>
         <article className={styles.kpiTile}>
           <span className={styles.kpiIcon} aria-hidden="true"><Activity size={15} /></span>
-          <h3>Total Volume</h3>
+          <h3>Total Volume<InfoTooltip text="All vehicles counted at NLEX toll plazas over the selected Range, compared with the equivalent prior period." /></h3>
           <div className={styles.kpiValue} title={data ? `${fmtInt(data.kpis.totalVolume)} vehicles` : undefined}>
             {kpiValue(data ? fmtCompact(data.kpis.totalVolume) : null)}
           </div>
@@ -947,7 +948,7 @@ export default function TrafficPage() {
         </article>
         <article className={styles.kpiTile}>
           <span className={styles.kpiIcon} aria-hidden="true"><CalendarClock size={15} /></span>
-          <h3>Avg Daily Volume</h3>
+          <h3>Avg Daily Volume<InfoTooltip text="Total volume divided by the number of days in the Range — the corridor's typical day." /></h3>
           <div className={styles.kpiValue}>{kpiValue(derived ? fmtInt(derived.curAdt) : null)}</div>
           <div className={styles.sparkBox}>
             {sparkOption && <ReactECharts option={sparkOption} style={{ width: "100%", height: "100%" }} opts={{ renderer: "canvas" }} />}
@@ -955,13 +956,13 @@ export default function TrafficPage() {
         </article>
         <article className={styles.kpiTile}>
           <span className={styles.kpiIcon} aria-hidden="true"><Clock size={15} /></span>
-          <h3>Peak Hour (Weekdays)</h3>
+          <h3>Peak Hour (Weekdays)<InfoTooltip text="The hour of a weekday that carries the most vehicles on average across the Range." /></h3>
           <div className={styles.kpiValue}>{kpiValue(derived ? fmtHour(derived.peakHour) : null)}</div>
           <p className={styles.kpiHint}>{derived ? `${fmtInt(derived.peakHourVolume)} vehicles/hr avg` : "—"}</p>
         </article>
         <article className={styles.kpiTile}>
           <span className={styles.kpiIcon} aria-hidden="true"><Building2 size={15} /></span>
-          <h3>Busiest Plaza</h3>
+          <h3>Busiest Plaza<InfoTooltip text="The toll plaza with the largest share of the Range's volume." /></h3>
           <div className={styles.kpiValue}>{kpiValue(derived?.busiest ? derived.busiest.plaza : null)}</div>
           <p className={styles.kpiHint}>
             {derived?.busiest && derived.plazaTotal > 0 ? `${((derived.busiest.v / derived.plazaTotal) * 100).toFixed(1)}% of selected volume` : "—"}
@@ -969,7 +970,7 @@ export default function TrafficPage() {
         </article>
         <article className={styles.kpiTile}>
           <span className={styles.kpiIcon} aria-hidden="true"><Gauge size={15} /></span>
-          <h3>Congestion Index</h3>
+          <h3>Congestion Index<InfoTooltip text="Average Waze jam severity on the corridor, 0 (free flow) to 5 (standstill), over the Range." /></h3>
           <div className={styles.kpiValue}>{kpiValue(data?.kpis.congestionIndex != null ? `${data.kpis.congestionIndex.toFixed(2)} / 5` : null)}</div>
           <p className={styles.kpiHint}>
             {derived?.congestionDelta != null ? (
@@ -988,7 +989,7 @@ export default function TrafficPage() {
       <article className={`${styles.chartCard} ${styles.chart1} ${styles.hero}`}>
         <div className={styles.chartHead}>
           <div className={styles.headText}>
-            <h3>Volume Trend</h3>
+            <h3>Volume Trend<InfoTooltip text="Vehicles per day, week or month over the Range, with the 7-day average smoothing out weekday swings. Click a point to see that period's hourly breakdown." /></h3>
           </div>
         </div>
         <div className={styles.heroFilters}>
@@ -1074,7 +1075,7 @@ export default function TrafficPage() {
       <article className={`${styles.chartCard} ${styles.chart2}`}>
         <div className={styles.chartHead}>
           <div className={styles.headText}>
-            <h3>Average Volume by Hour × Day of Week</h3>
+            <h3>Average Volume by Hour × Day of Week<InfoTooltip text="Typical vehicles per hour for each day of the week — darker cells are busier. Shows when the corridor peaks." /></h3>
           </div>
         </div>
         <div className={styles.chartBody}>{chartFrame(heatmapOption, "No data for the selected filters", onHeatmapClick, false, (c) => { heatChart.current = c; })}</div>
@@ -1092,7 +1093,7 @@ export default function TrafficPage() {
       <article className={`${styles.chartCard} ${styles.chart3}`}>
         <div className={styles.chartHead}>
           <div className={styles.headText}>
-            <h3>Volume by Plaza</h3>
+            <h3>Volume by Plaza<InfoTooltip text="Share of the Range's volume handled by each toll plaza. Click a bar for its hourly profile." /></h3>
           </div>
           <button
             type="button"
@@ -1115,7 +1116,7 @@ export default function TrafficPage() {
       <article className={`${styles.chartCard} ${styles.chart4}`}>
         <div className={styles.chartHead}>
           <div className={styles.headText}>
-            <h3>Average Speed in Jams by Hour</h3>
+            <h3>Average Speed in Jams by Hour<InfoTooltip text="Mean speed reported inside Waze jams for each hour of the day — lower means slower-moving jams at that hour." /></h3>
           </div>
         </div>
         <div className={styles.chartBody}>{chartFrame(speedOption, "No congestion data in the selected range", onSpeedClick, true, (c) => { speedChart.current = c; })}</div>
@@ -1133,7 +1134,7 @@ export default function TrafficPage() {
       <article className={`${styles.chartCard} ${styles.chart5}`}>
         <div className={styles.chartHead}>
           <div className={styles.headText}>
-            <h3>{impactMode === "Events" ? "Arena Event Impact (venue exit entries)" : "Holiday Impact vs Normal Days"}</h3>
+            <h3>{impactMode === "Events" ? "Arena Event Impact (venue exit entries)" : "Holiday Impact vs Normal Days"}<InfoTooltip text="How volume on Philippine Arena event days or public holidays compares with the normal days around them (±45-day local baseline). Toggle Events / Holidays above." /></h3>
           </div>
           <button
             type="button"

@@ -1,0 +1,143 @@
+================================================================================
+  INCIDENT FORECASTING CANDIDATES 
+  (target: incident_count)
+================================================================================
+
+  Source        : nlex_road_crashes + nlex_motorcycle_crashes + nlex_stalled_vehicles
+  Protocol      : holdout (90-day window)
+  Holdout window: 2025-10-03 .. 2025-12-31
+  Train rows    : 1005
+  Selected by   : r2
+
+  [SELECTED] Random Forest
+  ------------------------------------------------------------
+    MAE              =       5.2360
+    MSE              =      45.9704
+    RMSE             =       6.7801
+    MAPE             =      17.4279 %
+    sMAPE            =      16.5370 %
+    WMAPE            =      16.2049 %
+    Poisson_Deviance =       1.4045
+    MASE             =       0.6820
+    RMSSE            =       0.6362
+    R2               =       0.4443
+    Adjusted_R2      =       0.3131
+    --- Split R2 (Adviser Diagnostic) ---
+    Train R2         =       0.6392
+    Val R2           =       0.4443
+    Gap              =       0.1949
+    DIAGNOSIS        = OVERFITTING
+
+  [RANK #2] XGBoost
+  ------------------------------------------------------------
+    MAE              =       5.3846
+    MSE              =      47.0516
+    RMSE             =       6.8594
+    MAPE             =      17.7657 %
+    sMAPE            =      16.9648 %
+    WMAPE            =      16.6647 %
+    Poisson_Deviance =       1.4340
+    MASE             =       0.7013
+    RMSSE            =       0.6436
+    R2               =       0.4312
+    Adjusted_R2      =       0.2969
+    --- Split R2 (Adviser Diagnostic) ---
+    Train R2         =       0.7362
+    Val R2           =       0.4312
+    Gap              =       0.3050
+    DIAGNOSIS        = OVERFITTING
+
+  [RANK #3] Poisson GLM
+  ------------------------------------------------------------
+    MAE              =       5.4283
+    MSE              =      50.5844
+    RMSE             =       7.1123
+    MAPE             =      18.0588 %
+    sMAPE            =      17.0856 %
+    WMAPE            =      16.8002 %
+    Poisson_Deviance =       1.5360
+    MASE             =       0.7070
+    RMSSE            =       0.6673
+    R2               =       0.3885
+    Adjusted_R2      =       0.2442
+    --- Split R2 (Adviser Diagnostic) ---
+    Train R2         =       0.2573
+    Val R2           =       0.3885
+    Gap              =      -0.1312
+    DIAGNOSIS        = JUST RIGHT
+
+  [RANK #4] Negative Binomial GLM
+  ------------------------------------------------------------
+    MAE              =       5.4230
+    MSE              =      50.6125
+    RMSE             =       7.1142
+    MAPE             =      18.0149 %
+    sMAPE            =      17.0678 %
+    WMAPE            =      16.7838 %
+    Poisson_Deviance =       1.5364
+    MASE             =       0.7063
+    RMSSE            =       0.6675
+    R2               =       0.3882
+    Adjusted_R2      =       0.2437
+    --- Split R2 (Adviser Diagnostic) ---
+    Train R2         =       0.2569
+    Val R2           =       0.3882
+    Gap              =      -0.1313
+    DIAGNOSIS        = JUST RIGHT
+
+  [RANK #5] SARIMAX
+  ------------------------------------------------------------
+    MAE              =       6.1636
+    MSE              =      63.6553
+    RMSE             =       7.9784
+    MAPE             =      20.1274 %
+    sMAPE            =      19.4116 %
+    WMAPE            =      19.0759 %
+    Poisson_Deviance =       1.9425
+    MASE             =       0.8028
+    RMSSE            =       0.7486
+    R2               =       0.2305
+    Adjusted_R2      =       0.0488
+    --- Split R2 (Adviser Diagnostic) ---
+    Train R2         =       0.1855
+    Val R2           =       0.2305
+    Gap              =      -0.0450
+    DIAGNOSIS        = JUST RIGHT
+
+  [RANK #6] GRU
+  ------------------------------------------------------------
+    MAE              =       6.6285
+    MSE              =      74.7479
+    RMSE             =       8.6457
+    MAPE             =      21.4965 %
+    sMAPE            =      20.9131 %
+    WMAPE            =      20.5145 %
+    Poisson_Deviance =       2.3014
+    MASE             =       0.8633
+    RMSSE            =       0.8112
+    R2               =       0.0964
+    Adjusted_R2      =      -0.0722
+    --- Split R2 (Adviser Diagnostic) ---
+    Train R2         =       0.0488
+    Val R2           =       0.0964
+    Gap              =      -0.0477
+    DIAGNOSIS        = UNDERFITTING
+
+  [RANK #7] LSTM
+  ------------------------------------------------------------
+    MAE              =       6.6669
+    MSE              =      77.1693
+    RMSE             =       8.7846
+    MAPE             =      21.3268 %
+    sMAPE            =      20.9949 %
+    WMAPE            =      20.6334 %
+    Poisson_Deviance =       2.3782
+    MASE             =       0.8683
+    RMSSE            =       0.8242
+    R2               =       0.0672
+    Adjusted_R2      =      -0.1070
+    --- Split R2 (Adviser Diagnostic) ---
+    Train R2         =       0.0501
+    Val R2           =       0.0672
+    Gap              =      -0.0171
+    DIAGNOSIS        = JUST RIGHT

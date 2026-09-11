@@ -1,0 +1,235 @@
+.pickerContainer {
+  position: relative;
+  display: inline-block;
+  font-family: var(--font-inter, sans-serif);
+}
+
+.triggerBtn {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  background: #ffffff;
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  padding: 6px 12px;
+  font-size: 0.8rem;
+  font-weight: 500;
+  color: #3b465b;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  box-shadow: 0 1px 2px rgba(0,0,0,0.04);
+}
+
+.triggerBtn:hover {
+  border-color: #c4ccdf;
+  background: #f8fafc;
+}
+
+.triggerBtn.active {
+  border-color: #3b82f6;
+  box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.15);
+}
+
+.dateBlock {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.dash {
+  color: #94a3b8;
+}
+
+.popover {
+  position: absolute;
+  top: calc(100% + 8px);
+  left: 0;
+  background: #ffffff;
+  border: 1px solid #e2e8f0;
+  border-radius: 12px;
+  box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.1), 0 8px 10px -6px rgba(0, 0, 0, 0.05);
+  padding: 16px;
+  z-index: 100;
+  width: 320px;
+  animation: slideDown 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+@keyframes slideDown {
+  from { opacity: 0; transform: translateY(-8px) scale(0.98); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+.header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 16px;
+}
+
+.headerMiddle {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.monthYearBtn {
+  background: transparent;
+  border: none;
+  font-size: 0.95rem;
+  font-weight: 600;
+  color: #1e293b;
+  cursor: pointer;
+  padding: 4px 8px;
+  border-radius: 6px;
+  outline: none;
+  transition: background 0.2s;
+  font-family: inherit;
+}
+
+.monthYearBtn:hover {
+  background: var(--bg-surface-hover);
+}
+
+.monthsGrid, .yearsGrid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
+  margin-bottom: 8px;
+  min-height: 190px;
+}
+
+.gridItemBtn {
+  background: transparent;
+  border: none;
+  font-size: 0.9rem;
+  font-weight: 500;
+  color: #334155;
+  cursor: pointer;
+  border-radius: 6px;
+  transition: all 0.15s ease;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.gridItemBtn:hover {
+  background: var(--bg-surface-hover);
+}
+
+.gridItemBtn.selected {
+  background: #3b82f6;
+  color: #ffffff;
+}
+
+.navBtn {
+  background: transparent;
+  border: 1px solid #e2e8f0;
+  border-radius: 6px;
+  width: 28px;
+  height: 28px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  color: #64748b;
+  transition: all 0.2s ease;
+}
+
+.navBtn:hover {
+  background: var(--bg-surface-hover);
+  color: #0f172a;
+}
+
+.daysGrid {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  gap: 2px;
+  margin-bottom: 8px;
+}
+
+.weekday {
+  text-align: center;
+  font-size: 0.7rem;
+  font-weight: 600;
+  color: #64748b;
+  text-transform: uppercase;
+  padding: 4px 0;
+}
+
+.dayBtn {
+  aspect-ratio: 1;
+  background: transparent;
+  border: none;
+  font-size: 0.85rem;
+  color: #334155;
+  cursor: pointer;
+  border-radius: 6px;
+  transition: all 0.15s ease;
+  position: relative;
+  z-index: 2;
+}
+
+.dayBtn:hover:not(.disabled) {
+  background: var(--bg-surface-hover);
+}
+
+.dayBtn.disabled {
+  color: #cbd5e1;
+  cursor: not-allowed;
+}
+
+.dayBtn.selected {
+  background: #3b82f6;
+  color: #ffffff;
+  font-weight: 600;
+}
+
+.dayBtn.inRange {
+  background: #eff6ff;
+  border-radius: 0;
+}
+
+.dayBtn.rangeStart {
+  background: #3b82f6;
+  color: white;
+  border-top-right-radius: 0;
+  border-bottom-right-radius: 0;
+}
+
+.dayBtn.rangeEnd {
+  background: #3b82f6;
+  color: white;
+  border-top-left-radius: 0;
+  border-bottom-left-radius: 0;
+}
+
+.dayBtn.rangeStart.rangeEnd {
+  border-radius: 6px;
+}
+
+.presets {
+  margin-top: 16px;
+  padding-top: 12px;
+  border-top: 1px solid var(--bg-surface-hover);
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.presetBtn {
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  border-radius: 16px;
+  padding: 4px 10px;
+  font-size: 0.7rem;
+  font-weight: 500;
+  color: #475569;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.presetBtn:hover {
+  background: #eff6ff;
+  border-color: #bfdbfe;
+  color: #1d4ed8;
+}

@@ -1,136 +1,46 @@
 "use client";
 
 import { ChangeEvent, useState } from "react";
+import { Brain } from "lucide-react";
+import PageHeader from "../../../components/dashboard/PageHeader";
 
-type BatchRow = {
-  time_reported: string;
-  time_cleared: string;
-  daily_volume: number;
+type PipelineGateLog = {
+  gate: string;
+  passed: boolean;
+  details: string;
 };
 
-type BatchResult = BatchRow & {
-  row_index: number;
-  delay_minutes: number;
-  trapped_vehicles: number;
-  idling_penalty_co2_kg: number;
-};
-
-type DatasetClassification = {
-  kind: "emissions-compatible" | "unsupported";
-  message: string;
-  missingFields: string[];
-};
-
-function parseCsv(text: string) {
-  const lines = text.trim().split(/\r?\n/).filter(Boolean);
-  if (lines.length < 2) {
-    throw new Error("CSV file must include a header row and at least one data row");
-  }
-
-  const headers = lines[0].split(",").map((value) => value.trim());
-  const expectedHeaders = ["time_reported", "time_cleared", "daily_volume"];
-
-  for (const header of expectedHeaders) {
-    if (!headers.includes(header)) {
-      throw new Error(`Missing required CSV column: ${header}`);
-    }
-  }
-
-  return lines.slice(1).map((line) => {
-    const values = line.split(",").map((value) => value.trim().replace(/^"|"$/g, ""));
-    const row: Record<string, string> = {};
-
-    headers.forEach((header, index) => {
-      row[header] = values[index] ?? "";
-    });
-
-    return {
-      time_reported: row.time_reported,
-      time_cleared: row.time_cleared,
-      daily_volume: Number(row.daily_volume),
-    } satisfies BatchRow;
-  });
-}
-
-function classifyBatchRows(rows: BatchRow[]): DatasetClassification {
-  const missingFields: string[] = [];
-
-  if (!rows.length) {
-    return {
-      kind: "unsupported",
-      message: "No usable data was found in the file.",
-      missingFields: ["time_reported", "time_cleared", "daily_volume"],
-    };
-  }
-
-  for (const field of ["time_reported", "time_cleared", "daily_volume"] as const) {
-    const invalidRow = rows.find((row) => {
-      if (field === "daily_volume") {
-        return Number.isNaN(row.daily_volume);
-      }
-
-      return typeof row[field] !== "string" || row[field].trim().length === 0;
-    });
-
-    if (invalidRow) {
-      missingFields.push(field);
-    }
-  }
-
-  if (missingFields.length > 0) {
-    return {
-      kind: "unsupported",
-      message: "This file does not look ready for processing yet.",
-      missingFields,
-    };
-  }
-
-  return {
-    kind: "emissions-compatible",
-    message: "This file is ready and will be processed automatically.",
-    missingFields: [],
+type EtlResult = {
+  upload_id: string | null;
+  filename: string;
+  file_format: string;
+  source_type: string;
+  dataset_type: string;
+  classification: {
+    type: string;
+    confidence: number;
+    reason: string;
   };
-}
+  stats: {
+    total_rows_parsed: number;
+    rows_accepted: number;
+    rows_rejected: number;
+    rows_inserted: number;
+    rows_skipped_transform: number;
+  };
+  pipeline_gates: PipelineGateLog[];
+  rejected_sample: unknown[];
+  errors: string[];
+  warnings: string[];
+  duration_ms: number;
+};
 
 export default function DataManagementPage() {
   const [fileName, setFileName] = useState("");
-  const [rows, setRows] = useState<BatchRow[]>([]);
-  const [results, setResults] = useState<BatchResult[]>([]);
-  const [classification, setClassification] = useState<DatasetClassification | null>(null);
-  const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
-
-  async function runBatchCalculation(targetRows: BatchRow[]) {
-    setLoading(true);
-    setError("");
-
-    try {
-      const response = await fetch(`${process.env.NEXT_PUBLIC_BACKEND_URL ?? "http://localhost:4000"}/api/emissions/calculate/batch`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({ rows: targetRows }),
-      });
-
-      const payload = (await response.json()) as {
-        success: boolean;
-        data?: BatchResult[];
-        message?: string;
-      };
-
-      if (!response.ok || !payload.success || !payload.data) {
-        throw new Error(payload.message ?? "Unable to calculate batch emissions");
-      }
-
-      setResults(payload.data);
-    } catch (error) {
-      setResults([]);
-      setError(error instanceof Error ? error.message : "Unable to calculate batch emissions");
-    } finally {
-      setLoading(false);
-    }
-  }
+  const [error, setError] = useState("");
+  const [result, setResult] = useState<EtlResult | null>(null);
+  const [success, setSuccess] = useState<boolean | null>(null);
 
   async function handleFileChange(event: ChangeEvent<HTMLInputElement>) {
     const file = event.target.files?.[0];
@@ -140,138 +50,157 @@ export default function DataManagementPage() {
 
     setFileName(file.name);
     setError("");
+    setResult(null);
+    setSuccess(null);
+    setLoading(true);
 
     try {
-      const text = await file.text();
-      let parsedRows: BatchRow[] = [];
+      const formData = new FormData();
+      formData.append("file", file);
 
-      if (file.name.toLowerCase().endsWith(".json")) {
-        const parsed = JSON.parse(text) as BatchRow[];
-        parsedRows = parsed.map((row) => ({
-          time_reported: row.time_reported,
-          time_cleared: row.time_cleared,
-          daily_volume: Number(row.daily_volume),
-        }));
+      const response = await fetch(`${process.env.NEXT_PUBLIC_BACKEND_URL ?? "http://localhost:4000"}/api/upload/file`, {
+        method: "POST",
+        body: formData, // fetch will automatically set the correct multipart boundary headers
+      });
+
+      const payload = await response.json();
+
+      if (!response.ok && !payload.data) {
+        throw new Error(payload.error || "An error occurred during upload.");
+      }
+
+      setSuccess(payload.success);
+      if (payload.data) {
+        setResult(payload.data as EtlResult);
       } else {
-        parsedRows = parseCsv(text);
+        setError(payload.error || "Upload failed without additional details.");
       }
-
-      if (!parsedRows.length) {
-        throw new Error("No rows found in file");
-      }
-
-      setRows(parsedRows);
-
-      const nextClassification = classifyBatchRows(parsedRows);
-      setClassification(nextClassification);
-
-      if (nextClassification.kind === "emissions-compatible") {
-        await runBatchCalculation(parsedRows);
-      } else {
-        setResults([]);
-      }
-    } catch (error) {
-      setRows([]);
-      setResults([]);
-      setClassification(null);
-      setError(error instanceof Error ? error.message : "Unable to read the uploaded file");
+    } catch (err) {
+      setSuccess(false);
+      setError(err instanceof Error ? err.message : "Unable to process the uploaded file.");
+    } finally {
+      setLoading(false);
+      // Reset input so the same file can be uploaded again if needed
+      event.target.value = "";
     }
-  }
-
-  async function handleCalculate() {
-    await runBatchCalculation(rows);
   }
 
   return (
     <section className="ds-content ds-long">
-      <div className="dm-head">
-        <div>
-          <h1 className="tab-title">Data Management</h1>
-          <p>Upload your data here and the system will check it before processing.</p>
-        </div>
-        <span className="pill blue">Batch Processing Ready</span>
-      </div>
+      <PageHeader
+        icon={Brain}
+        title="Data Management"
+        subtitle="Upload datasets — the ETL pipeline classifies, validates, and loads them into the AWS database"
+        actions={<span className="pill blue">ETL Pipeline Ready</span>}
+      />
 
       <article className="upload-zone">
         <div className="upload-icon">?</div>
         <h2>Upload Batch Dataset</h2>
-        <p>Choose a file and the system will review it, then process it if it matches the current workflow.</p>
-        <label className="btn-primary" style={{ display: "inline-block", cursor: "pointer" }}>
-          Select File
+        <p>Choose a CSV or JSON file. The system will automatically classify and process it if it matches the current workflow.</p>
+        <label className="btn-primary" style={{ display: "inline-block", cursor: "pointer", opacity: loading ? 0.7 : 1 }}>
+          {loading ? "Processing..." : "Select File"}
           <input
             type="file"
-            accept=".csv,.json"
+            accept=".csv,.json,.xlsx"
             onChange={handleFileChange}
             style={{ display: "none" }}
+            disabled={loading}
           />
         </label>
         <small>{fileName || "No file selected yet"}</small>
-        {loading && <small>Processing...</small>}
+        {loading && <small style={{ color: "#3b82f6", display: "block", marginTop: "10px" }}>Running ETL Pipeline... this may take a moment for large files.</small>}
       </article>
 
-      {classification && (
-        <section className="panel">
-          <h2>Dataset Classification</h2>
-          <p className={classification.kind === "emissions-compatible" ? "ok" : "bad"}>{classification.message}</p>
-          {classification.missingFields.length > 0 && <p className="muted">Please check the file and try again.</p>}
+      {error && (
+        <section className="panel" style={{ marginTop: 16 }}>
+          <h2>Pipeline Error</h2>
+          <p className="bad">{error}</p>
         </section>
       )}
 
-      {error && <p className="bad" style={{ marginTop: 12 }}>{error}</p>}
+      {result && (
+        <>
+          <section className="panel" style={{ marginTop: 16 }}>
+            <h2>Dataset Classification</h2>
+            <p className={success ? "ok" : "bad"}>{result.classification.reason}</p>
+            {result.dataset_type === "unknown" && (
+              <p className="muted">This file is not a supported traffic volume or incident dataset and was rejected by the pipeline.</p>
+            )}
+            {result.dataset_type !== "unknown" && (
+              <p className="muted">Detected Type: <strong>{result.dataset_type}</strong> (Confidence: {result.classification.confidence}%)</p>
+            )}
+          </section>
 
-      {rows.length > 0 && (
-        <div className="table-card">
-          <table>
-            <thead>
-              <tr>
-                <th>FIELD 1</th>
-                <th>FIELD 2</th>
-                <th>FIELD 3</th>
-              </tr>
-            </thead>
-            <tbody>
-              {rows.map((row, index) => (
-                <tr key={`${row.time_reported}-${row.time_cleared}-${index}`}>
-                  <td>{row.time_reported}</td>
-                  <td>{row.time_cleared}</td>
-                  <td>{row.daily_volume}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+          <div className="mini-stats-grid three" style={{ marginTop: 16 }}>
+            <article className="mini-stat">
+              <h3>Rows Parsed</h3>
+              <p style={{ fontSize: '2em', fontWeight: 'bold' }}>{result.stats.total_rows_parsed}</p>
+            </article>
+            <article className="mini-stat">
+              <h3>Rows Inserted (AWS)</h3>
+              <p style={{ fontSize: '2em', fontWeight: 'bold', color: '#10b981' }}>{result.stats.rows_inserted}</p>
+            </article>
+            <article className="mini-stat">
+              <h3>Rows Rejected</h3>
+              <p style={{ fontSize: '2em', fontWeight: 'bold', color: result.stats.rows_rejected > 0 ? '#ef4444' : 'inherit' }}>{result.stats.rows_rejected}</p>
+            </article>
+          </div>
+
+          <div className="table-card" style={{ marginTop: 16 }}>
+            <h3 style={{ padding: '16px 20px', margin: 0, borderBottom: '1px solid #eee' }}>ETL Validation Gates</h3>
+            <div className="table-scroll">
+              <table>
+                <thead>
+                  <tr>
+                    <th>GATE</th>
+                    <th>STATUS</th>
+                    <th>DETAILS</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {result.pipeline_gates.map((gate, index) => (
+                    <tr key={index}>
+                      <td style={{ fontWeight: 500 }}>{gate.gate}</td>
+                      <td>
+                        {gate.passed ? (
+                          <span className="pill" style={{ backgroundColor: '#10b981', color: 'white' }}>PASSED</span>
+                        ) : (
+                          <span className="pill" style={{ backgroundColor: '#ef4444', color: 'white' }}>FAILED</span>
+                        )}
+                      </td>
+                      <td>{gate.details}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          {(result.errors.length > 0 || result.warnings.length > 0) && (
+            <section className="panel" style={{ marginTop: 16 }}>
+              {result.errors.length > 0 && (
+                <>
+                  <h3 style={{ color: '#ef4444' }}>Pipeline Errors</h3>
+                  <ul style={{ color: '#ef4444', paddingLeft: 20 }}>
+                    {result.errors.slice(0, 10).map((err, i) => <li key={i}>{err}</li>)}
+                    {result.errors.length > 10 && <li>...and {result.errors.length - 10} more errors</li>}
+                  </ul>
+                </>
+              )}
+              {result.warnings.length > 0 && (
+                <>
+                  <h3 style={{ color: '#f59e0b', marginTop: result.errors.length > 0 ? 16 : 0 }}>Warnings</h3>
+                  <ul style={{ color: '#f59e0b', paddingLeft: 20 }}>
+                    {result.warnings.slice(0, 10).map((warn, i) => <li key={i}>{warn}</li>)}
+                    {result.warnings.length > 10 && <li>...and {result.warnings.length - 10} more warnings</li>}
+                  </ul>
+                </>
+              )}
+            </section>
+          )}
+        </>
       )}
-
-      {results.length > 0 && (
-        <div className="table-card" style={{ marginTop: 16 }}>
-          <table>
-            <thead>
-              <tr>
-                <th>ROW</th>
-                <th>RESULT 1</th>
-                <th>RESULT 2</th>
-                <th>RESULT 3</th>
-              </tr>
-            </thead>
-            <tbody>
-              {results.map((row) => (
-                <tr key={row.row_index}>
-                  <td>{row.row_index}</td>
-                  <td>{row.delay_minutes}</td>
-                  <td>{row.trapped_vehicles}</td>
-                  <td>{row.idling_penalty_co2_kg}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      )}
-
-      <div className="mini-stats-grid three">
-        <article className="mini-stat"><h3>Batch Validation</h3><p>The uploaded file is checked for the required carbon calculation columns before submission.</p></article>
-        <article className="mini-stat"><h3>Backend Processing</h3><p>Rows are sent to the Express emissions endpoint in one batch request.</p></article>
-        <article className="mini-stat"><h3>Result Output</h3><p>The returned table shows delay, trapped vehicles, and CO2 penalty per uploaded row.</p></article>
-      </div>
     </section>
   );
 }

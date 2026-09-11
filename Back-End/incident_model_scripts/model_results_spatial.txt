@@ -1,0 +1,26 @@
+================================================================================
+  INCIDENT SPATIAL MODELS (per-exit)
+================================================================================
+
+  GWR — cross-section over 20 exits, IN-SAMPLE fit (see fit_gwr docstring)
+    bandwidth (fixed, degrees) = 0.6800
+    MAE              = 0.786
+    Poisson_Deviance = 0.920
+    n                = 20
+    Leave-one-exit-out MAE = 2.024  (n=20 folds) — the honest generalization estimate; compare against the in-sample MAE above
+
+    9 of 60 non-intercept (exit, variable) coefficients are locally significant (|t| > 1.96)
+
+  Spatial LSTM — pooled across exits, genuine temporal holdout
+    MAE              = 1.201
+    Poisson_Deviance = 1.896
+    holdout n        = 1220
+    epochs trained   = 60
+
+  Next-24h high-risk segments (top 5):
+    #1  exit_id=12  predicted=1.760  last_observed=8
+    #2  exit_id=11  predicted=1.636  last_observed=1
+    #3  exit_id=4   predicted=1.552  last_observed=5
+    #4  exit_id=10  predicted=1.551  last_observed=3
+    #5  exit_id=13  predicted=1.338  last_observed=1
+================================================================================

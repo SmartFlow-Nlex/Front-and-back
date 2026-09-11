@@ -35,10 +35,20 @@ type RawRow = { segment: string; hours: number; state: State; probability: numbe
 //    with green (point 1) and printing "SEVERE" on every cell so the exceptions
 //    had nothing to stand out against — both fixed elsewhere, without needing
 //    to weaken the colour that carries the warning.
+//
+// WHAT THE STATES MEAN. train_congestion_horizon.py labels each exit-hour from
+// the length-weighted average speed of the Waze jams reported there: under 30
+// km/h is High, 30-60 is Med, and an hour with NO jam report at all is Low.
+// Jams are slow by definition -- the training table averages 7.6 km/h and
+// never exceeds 56 -- so Med is all but impossible and any hour that has a
+// report is High. The map is therefore "will Waze carry a jam report at this
+// exit this hour", not a corridor speed. The legend used to promise "Free flow
+// > 60 km/h", a speed the data cannot contain; the blue cell means the model
+// expects no report, which is what it says now.
 const STATE_META: Record<State, { rank: number; color: string; text: string; label: string; short: string; speed: string }> = {
-  Low: { rank: 0, color: "#cfe4f7", text: "#12507e", label: "Free flow", short: "FREE", speed: "> 60 km/h" },
-  Med: { rank: 1, color: "#f0a63a", text: "#5c3208", label: "Heavy", short: "HEAVY", speed: "30–60 km/h" },
-  High: { rank: 2, color: "#dc2626", text: "#ffffff", label: "Severe", short: "SEVERE", speed: "< 30 km/h" },
+  Low: { rank: 0, color: "#cfe4f7", text: "#12507e", label: "Clear", short: "CLEAR", speed: "no jam reported" },
+  Med: { rank: 1, color: "#f0a63a", text: "#5c3208", label: "Heavy", short: "HEAVY", speed: "jams at 30–60 km/h" },
+  High: { rank: 2, color: "#dc2626", text: "#ffffff", label: "Severe", short: "SEVERE", speed: "jams under 30 km/h" },
 };
 
 const LOW_CONF = 0.8;
@@ -460,7 +470,7 @@ export default function PredictiveCongestionChart() {
             <div style="margin-top:8px; display:grid; grid-template-columns:112px 1fr; gap:5px 8px; font-size:0.9em;">
               <span style="color:#64748b;">Horizon</span><span style="font-weight:600;">${hourLabels[x]}</span>
               <span style="color:#64748b;">Predicted state</span><span style="color:${d.state === "Low" ? STATE_META.Low.text : d.state === "Med" ? STATE_META.Med.text : STATE_META.High.color}; font-weight:700;">${meta.label}</span>
-              <span style="color:#64748b;">Speed band</span><span style="font-weight:500;">${meta.speed}</span>
+              <span style="color:#64748b;">Meaning</span><span style="font-weight:500;">${meta.speed}</span>
               <span style="color:#64748b;">Model confidence</span><span style="font-weight:600; color:${low ? "#b45309" : "#334155"};">${(d.conf * 100).toFixed(1)}%${low ? " · lower" : ""}</span>
             </div>
           </div>`;
@@ -754,7 +764,7 @@ export default function PredictiveCongestionChart() {
 
       {/* Row 3: how many, where, how long, how sure — once each, one line. */}
       <div style={{ display: "grid", gridTemplateColumns: "repeat(4, minmax(0, 1fr))", gap: "10px 16px", padding: "10px 14px", background: "#f8fafc", border: "1px solid #e2e8f0", borderRadius: 10 }}>
-        {stat(`${nSevere} of ${segments.length}`, nSevere > 0 ? "exits below 30 km/h" : "exits affected · clear", nSevere > 0 ? "#b91c1c" : "#15803d")}
+        {stat(`${nSevere} of ${segments.length}`, nSevere > 0 ? "exits with a jam expected" : "exits affected · clear", nSevere > 0 ? "#b91c1c" : "#15803d")}
         {stat(kmSpan != null ? `km ${model.kmFrom}–${model.kmTo}` : "—", kmSpan != null ? `${kmSpan} km${model.contiguous ? ", one stretch" : ", not contiguous"}` : "no congestion predicted")}
         {stat(model.allHours ? `all ${model.maxHour}h` : model.worstSegment ? `${model.worstSegmentCount} of ${hourLabels.length}h` : "—", model.flatHours ? "same every hour" : "at the worst exit")}
         {stat(model.confLo != null && model.confHi != null ? `${Math.round(model.confLo * 100)}–${Math.round(model.confHi * 100)}%` : "—",
@@ -769,7 +779,7 @@ export default function PredictiveCongestionChart() {
             {(["Low", "Med", "High"] as State[]).map((st) => {
               const absent = st === "Med" && !model.everHeavy;
               return (
-                <span key={st} title={absent ? "This model never predicts Heavy — it was trained on jam-only data and cannot separate the middle state" : undefined}
+                <span key={st} title={absent ? "Heavy would need jams averaging 30–60 km/h; reported jams almost never run that fast, so the model has nothing to learn it from" : undefined}
                       style={{ display: "inline-flex", alignItems: "center", gap: 5, whiteSpace: "nowrap", opacity: absent ? 0.45 : 1 }}>
                   <span style={{ width: 11, height: 11, background: STATE_META[st].color, borderRadius: 3 }} />
                   {STATE_META[st].label} <span style={{ color: "#94a3b8" }}>{STATE_META[st].speed}</span>
@@ -778,6 +788,9 @@ export default function PredictiveCongestionChart() {
               );
             })}
             {model.lowConfCount > 0 && <span style={{ color: "#94a3b8", whiteSpace: "nowrap" }}><b>*</b> confidence under 80%</span>}
+            <span style={{ color: "#94a3b8" }} title="States come from Waze jam reports at each exit, hour by hour. Severe means jams were reported and averaged under 30 km/h; Clear means the model expects no report.">
+              · from Waze jam reports ⓘ
+            </span>
           </div>
 
           {/* Which exits are drawn. A select instead of fifteen chips: the
@@ -870,9 +883,10 @@ export default function PredictiveCongestionChart() {
               </span>
             </div>
             <p style={{ margin: 0, lineHeight: 1.55, color: "#94a3b8" }}>
-              {modelInfo?.model ?? "The model"} classifies each exit-hour as free flow or severe
+              {modelInfo?.model ?? "The model"} classifies each exit-hour as clear or severe from whether Waze jams were reported there and how slow they ran
               {modelInfo?.baseline?.accuracy != null && <>, at {(modelInfo.accuracy! * 100).toFixed(1)}% against {(modelInfo.baseline.accuracy * 100).toFixed(1)}% for the {modelInfo.baseline.model.toLowerCase()} baseline</>}.
-              {!model.everHeavy && <> It never predicts Heavy: it was trained on jam-only data and cannot separate the middle state.</>}
+              {!model.everHeavy && <> It never predicts Heavy: that would need jams averaging 30–60 km/h, and reported jams almost never do.</>}
+              {" "}Because most daytime hours on the corridor carry at least one jam report, the grid runs mostly red; the informative cells are the clear ones and the hour a run begins.
               {" "}Confidence is the model&apos;s certainty in its classification, not the probability of congestion.
             </p>
           </div>

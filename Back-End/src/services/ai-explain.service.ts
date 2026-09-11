@@ -257,21 +257,31 @@ async function buildCorridor(): Promise<Built | null> {
       ? "The feed is STALE — older than 30 minutes, so this picture may not reflect the road now."
       : "The feed is current.",
     `Of ${total} exit/direction pairs with a ramp: ${c.congested} congested, ${c.slow} slow, ${c.clear} clear.`,
+    // Without this the model read the pair count as a sample and warned the
+    // reader that coverage might be partial. It is the whole corridor.
+    `Those ${total} pairs are the entire corridor, not a sample of it — every exit in both directions, excluding directions with no ramp.`,
     `That puts ${(((c.congested ?? 0) / Math.max(1, total)) * 100).toFixed(0)}% of the corridor in a congested state.`,
   ];
 
   // Name the worst locations rather than making the model scan the array.
+  // Per-direction state is nested under `directions`, not spread onto the exit
+  // row. Reading it off the row returned undefined for every exit, so this
+  // produced "no pair is congested" while counts.congested said ten — and the
+  // model, given both, wrote a headline that contradicted its own bullets.
   const bad: { name: string; dir: string; speed: number | null; level: number | null }[] = [];
   for (const x of d.exits ?? []) {
     for (const dir of ["NB", "SB"] as const) {
-      const s = x[dir === "NB" ? "nb" : "sb"];
+      const s = x.directions?.[dir];
       if (!s || !s.hasRamp) continue;
       if (s.status === "congested") {
         bad.push({ name: x.display_name ?? x.exit_name, dir, speed: s.speedKmh, level: s.level });
       }
     }
   }
-  bad.sort((a, b) => (a.speed ?? 999) - (b.speed ?? 999));
+  // Sorted by speed, with unknown speeds last rather than first — a null is an
+  // absent reading, not a stationary one.
+  bad.sort((a, b) => (a.speed ?? Number.POSITIVE_INFINITY) - (b.speed ?? Number.POSITIVE_INFINITY));
+
   if (bad.length) {
     facts.push(
       `Congested locations, slowest first: ${bad
@@ -279,8 +289,14 @@ async function buildCorridor(): Promise<Built | null> {
         .map((b) => `${b.name} ${b.dir}${b.speed != null ? ` (${b.speed} km/h)` : ""}`)
         .join(", ")}.`,
     );
-  } else {
+  } else if ((c.congested ?? 0) === 0) {
     facts.push("No exit/direction pair is currently congested.");
+  } else {
+    // The count and the scan disagree. Say so plainly rather than emitting a
+    // statement that contradicts the tally three lines above it.
+    facts.push(
+      `The tally reports ${c.congested} congested pairs but none could be named — treat the per-exit detail as unavailable for this snapshot.`,
+    );
   }
 
   return {

@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Calendar, ChevronDown, MapPin, Plus, Search, Wrench, X } from "lucide-react";
 import PageHeader from "../../../components/dashboard/PageHeader";
+import FeatureBriefing from "../../../components/dashboard/FeatureBriefing";
 import styles from "../traffic/traffic.module.css";
 import { supabase } from "../../../lib/supabase";
 
@@ -510,6 +511,10 @@ export default function MaintenancePage() {
           <p className={styles.kpiHint}>all time</p>
         </article>
       </div>
+
+      {/* Sits between the tiles and the list: the tiles give the counts, this
+          says what the plan as a whole looks like. */}
+      <FeatureBriefing feature="maintenance" title="Schedule Read-out" />
 
       {/* Row C — schedule list */}
       <article className={`${styles.chartCard} ${styles.chart1}`}>

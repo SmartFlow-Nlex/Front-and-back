@@ -136,7 +136,7 @@ export default function VmsAdvisoryPanel({ months = "12", from, to }: Props) {
             <div
               key={x.exitId}
               style={{
-                display: "grid", gridTemplateColumns: "180px 1fr", gap: "16px",
+                display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: "16px",
                 padding: "12px 14px", borderRadius: "10px", background: "#f8fafc", border: "1px solid #e2e8f0",
               }}
             >

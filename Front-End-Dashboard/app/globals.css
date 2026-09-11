@@ -3199,9 +3199,12 @@ body {
     font-size: 1.05rem;
   }
 
+  /* Was 100x100 -- two and a half times the desktop mark, taller than the
+     64px bar it sits in, and it pushed the wordmark and clock off the edge on
+     every page below this width. */
   .ds-top-brand img {
-    width: 100px;
-    height: 100px;
+    width: 32px;
+    height: 32px;
   }
 }
 
@@ -6119,3 +6122,9 @@ body {
 .ds-rd-scale-chip.lv-3,
 .ds-rd-scale-chip.lv-4,
 .ds-rd-scale-chip.lv-5 { background: #e04434; }
+
+/* Live Map: two full maps side by side need ~1000px to breathe; below that the
+   forecast-model card lands on the other map's controls. Stack them. */
+@media (max-width: 1100px) {
+  .mc-map-grid { grid-template-columns: minmax(0, 1fr) !important; }
+}

@@ -202,7 +202,7 @@ export function BoothStaffingPanel({ byPlaza, plazaHour, typicalDaily }: {
             {visible.map((r) => (
               <tr key={r.plaza} style={{ borderBottom: "1px solid var(--border-default)" }}>
                 <td style={{ padding: "6px 8px", fontWeight: 600, whiteSpace: "nowrap" }}>{r.plaza}</td>
-                <td style={{ padding: "6px 8px", color: "var(--text-secondary)" }}>{fmtHour(r.peakHour)}</td>
+                <td style={{ padding: "6px 8px", color: "var(--text-secondary)", whiteSpace: "nowrap" }}>{fmtHour(r.peakHour)}</td>
                 <td style={{ padding: "6px 8px", textAlign: "right", fontVariantNumeric: "tabular-nums", color: "var(--text-secondary)" }}>{r.typical}</td>
                 {r.need.map((n, i) => {
                   const delta = n - r.typical;

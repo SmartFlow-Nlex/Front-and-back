@@ -219,8 +219,10 @@ export default function PrescriptiveDeploymentPanel({ months = "12", from, to }:
 
   return (
     <article className="chart-card wide" style={{ padding: "24px", display: "flex", flexDirection: "column", gap: "16px" }}>
-      <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: "16px" }}>
-        <div style={{ flex: 1, minWidth: 0 }}>
+      <div style={{ display: "flex", flexWrap: "wrap", alignItems: "flex-start", justifyContent: "space-between", gap: "16px" }}>
+        {/* A basis, so the title wraps under the controls on a narrow card
+            instead of shrinking into a 110px column beside them. */}
+        <div style={{ flex: "1 1 280px", minWidth: 0 }}>
           <h3 style={{ fontSize: "1.05rem", color: "#0f172a", fontWeight: 700, margin: 0, letterSpacing: "-0.01em" }}>
             Resource Staging &amp; Patrol Repositioning
             <InfoTooltip text="A solution for the Predictive tab's own Predicted Incidents Ranking: an exact linear program (Maximal Covering Location solve) that recommends exactly where to pre-position patrol and tow-truck units — which exits or km segments to station them at — to cover as much predicted incident risk as possible, cutting response time during high-risk windows. Fleet size and coverage radius are yours to set — nothing in the warehouse records NLEX's actual patrol fleet." />
@@ -267,7 +269,7 @@ export default function PrescriptiveDeploymentPanel({ months = "12", from, to }:
         </p>
       </div>
 
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "24px", alignItems: "start" }}>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(300px, 1fr))", gap: "24px", alignItems: "start" }}>
         {/* Left: the LP deployment map itself. */}
         <div>
           <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: "10px", flexWrap: "wrap", marginBottom: "6px" }}>

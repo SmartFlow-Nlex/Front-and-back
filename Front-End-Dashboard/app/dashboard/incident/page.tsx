@@ -694,7 +694,11 @@ export default function IncidentPage() {
           {activeTab === "Prescriptive" && (
             <>
               {rangeFilter}
-              <span className={styles.filterLabel} style={{ color: "var(--text-muted)", fontWeight: 400 }}>
+              {/* .filterNote, not .filterLabel: the label class carries
+                  white-space:nowrap for one-word controls, and on this
+                  sentence it ran the text off the screen. A merge had put
+                  the label class back once already. */}
+              <span className={styles.filterNote}>
                 Applies to Resource Staging and VMS Advisory Routing — clearance-time recommendations come from a
                 trained model and don&apos;t change per Range.
               </span>

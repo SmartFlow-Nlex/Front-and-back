@@ -973,6 +973,13 @@
 @media (max-width: 980px) {
   .filterRow { flex-wrap: wrap; position: static; margin: 0; padding: 0; }
   .kpiRow { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  /* Five tiles in two columns leave the last one alone; give it the row. */
+  .kpiRow > .kpiTile:nth-child(5):last-child { grid-column: 1 / -1; }
+  /* Nothing in the filter row may refuse to shrink, and the Prescriptive
+     note takes a full row of its own -- as a flex item beside the pills it
+     was being laid out at its unwrapped width and ran off the screen. */
+  .filterRow > * { min-width: 0; }
+  .filterNote { flex: 1 1 100%; overflow-wrap: anywhere; }
 
   .chart1, .chart2, .chart3, .chart4, .chart5 {
     grid-column: 1 / -1;

@@ -1,13 +1,12 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { cachedJson } from "../../../lib/cached-json";
 import { attachCategoryClick } from "../../../lib/chart-click";
 import { useChartTheme, applyChartTheme, seriesRamp, seriesPair } from "../../../lib/chart-theme";
 import ReactECharts from "echarts-for-react";
 import type { EChartsOption } from "echarts";
 import { Activity, ArrowDownWideNarrow, ArrowUpNarrowWide, Building2, CalendarClock, Clock, Gauge, TrendingUp } from "lucide-react";
-import { BoothStaffingPanel, CongestionResponsePanel, EventInterventionPanel } from "../../../components/dashboard/PrescriptiveTrafficPanels";
+import DashboardChart from "../../../components/dashboard/DashboardChart";
 import ChartSkeleton, { KpiSkeleton } from "../../../components/dashboard/ChartSkeleton";
 import CustomSelect from "../../../components/dashboard/CustomSelect";
 import RampKey from "../../../components/dashboard/RampKey";
@@ -41,7 +40,7 @@ type Analytics = {
   hourlyTrend: { d: string; hour: number; nb: number; sb: number }[] | null;
   byPlaza: { plaza: string; v: number }[];
   hourDow: { dow: number; hour: number; v: number }[];
-  plazaHourProfile?: { plaza: string; hour: number; v: number }[];
+
   speedByHour: { hour: number; speed: number; jam_level: number }[];
   eventImpact: {
     label: string; date: string; dayVolume: number; baseline: number; deviationPct: number | null;
@@ -170,10 +169,8 @@ export default function TrafficPage() {
     if (plazaSel.length > 0) qs.set("plazas", plazaSel.join(","));
     if (vClass !== "All") qs.set("vehicleClass", vClass);
     if (weather !== "all") qs.set("weather", weather);
-    // Memoised per query string: switching tabs or returning to this page
-    // renders from memory instead of refetching. Five minutes, refreshed
-    // quietly in the background once stale. See lib/cached-json.
-    cachedJson<{ success: boolean; message?: string; data: Analytics }>(`${BACKEND}/api/traffic/analytics?${qs}`)
+    fetch(`${BACKEND}/api/traffic/analytics?${qs}`, { cache: "no-store" })
+      .then((r) => r.json())
       .then((json) => {
         if (cancelled) return;
         if (!json.success) throw new Error(json.message ?? "Request failed");
@@ -847,27 +844,22 @@ export default function TrafficPage() {
             <div className={styles.spanHalf}><PredictiveEventChart /></div>
           </>
         ) : (
-          /* Three panels, one per row of the analytics diagram, each acting on
-             the Predictive tab's own forecast rather than a separate model.
-             The booth plan takes the descriptive plaza shares and per-plaza
-             hourly profiles from the same analytics payload the Descriptive
-             tab charts, so it cannot disagree with the "Volume by Plaza" and
-             hour-of-day views about where and when the peak is. */
-          <>
-            <div className={styles.spanFull}>
-              <BoothStaffingPanel
-                byPlaza={data?.byPlaza ?? []}
-                plazaHour={data?.plazaHourProfile ?? []}
-                typicalDaily={derived && derived.curAdt > 0 ? derived.curAdt : null}
-              />
+          <article className={`${styles.chartCard} ${styles.chart1}`}>
+            <div className={styles.chartHead}>
+              <div className={styles.headText}>
+                <h3>Projected Impact of Strategies (Throughput Gain)</h3>
+              </div>
             </div>
-            <div className={styles.spanFull}>
-              <CongestionResponsePanel />
+            <div className={styles.chartBody}>
+              <DashboardChart option={{
+                grid: { left: 46, right: 20, top: 20, bottom: 36 },
+                xAxis: { type: "category", data: ["Strategy A", "Strategy B", "Strategy C"] },
+                yAxis: { type: "value" },
+                tooltip: { trigger: "axis" },
+                series: [{ type: "bar", data: [15, 25, 40], itemStyle: { color: "#29b471", borderRadius: [8, 8, 0, 0] } }],
+              }} height={280} />
             </div>
-            <div className={styles.spanFull}>
-              <EventInterventionPanel />
-            </div>
-          </>
+          </article>
         )}
       </section>
     );

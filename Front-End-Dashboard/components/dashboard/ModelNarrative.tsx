@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import AiModelInsight, { type InsightMetric } from "./AiModelInsight";
 
 /**
  * Generative narrative for the forecast chart.
@@ -126,6 +127,7 @@ export default function ModelNarrative({
   horizonDays,
   vocab = VOLUME_VOCAB,
   quantityNote,
+  quantity = "volume",
 }: {
   selected: NarrativeModelKey[];
   metrics: MetricRow[];
@@ -134,6 +136,8 @@ export default function ModelNarrative({
   vocab?: NarrativeVocab;
   /** Appended to the closing caveat, for module-specific limitations. */
   quantityNote?: string;
+  /** Which quantity is being forecast — steers the AI summary's framing. */
+  quantity?: "volume" | "incidents" | "emissions";
   scoredDays: number | null;
   windowStart: string | null;
   windowEnd: string | null;
@@ -258,6 +262,36 @@ export default function ModelNarrative({
           ) : null}
           {showWeather === undefined ? null : showWeather ? " · weather-driven variants" : " · weather-free variants"}
         </p>
+
+      {/* Same rows the prose above was composed from, so the two cannot
+          describe different models. */}
+      <AiModelInsight
+        quantity={quantity}
+        horizonDays={horizonDays}
+        scoredDays={scoredDays}
+        windowStart={windowStart}
+        windowEnd={windowEnd}
+        weatherMode={showWeather === undefined ? null : showWeather ? "with" : "without"}
+        labelFor={(name) => {
+          const key = Object.keys(DBN).find((k) => DBN[k] === name);
+          return key ? LBL[key] ?? name : name;
+        }}
+        metrics={selected
+          .map((k) => rowFor(k))
+          .filter((r): r is MetricRow => !!r)
+          .map<InsightMetric>((r) => ({
+            model: r.model_name,
+            wmape: r.wmape,
+            mae: r.mae,
+            rmse: r.rmse,
+            r2: r.r2,
+            mase: r.mase,
+            rank: r.rank,
+            accepted: r.accepted,
+            rejectedReason: r.rejected_reason,
+            diagnosis: r.diagnosis ?? null,
+          }))}
+      />
 
         {selected.map((k) => {
         const r = rowFor(k);
@@ -386,6 +420,7 @@ export default function ModelNarrative({
         and the Future band is a projection rather than a validated forecast.
         {quantityNote ? <> {quantityNote}</> : null}
       </p>
+
       </div>
       )}
     </section>

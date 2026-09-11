@@ -1065,6 +1065,7 @@ export default function PredictiveEmissionChart() {
         windowEnd={data.split.holdoutEnd}
         horizonDays={data.horizonDays}
         vocab={NARRATIVE_VOCAB}
+        quantity="emissions"
         quantityNote={
           "CO₂ is not measured: it is derived from the same traffic series the volume forecast uses, times the per-class " +
           "DENR/DOTC emission factors and each exit's corridor segment, so the two panels reconcile by construction. The " +

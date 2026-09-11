@@ -1,7 +1,6 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { cachedJson } from "../../../lib/cached-json";
 import { displayExitName, useNlexExits } from "../../../lib/nlex-exits";
 import { Car } from "lucide-react";
 import PageHeader from "../../../components/dashboard/PageHeader";
@@ -16,6 +15,55 @@ const SIM_DT = 0.2; // fixed physics timestep (s)
 const SPEED_STEPS = [0.5, 1, 2, 4] as const;
 
 type Baseline = { avgSpeedKmh: number; throughputPerMin: number; longestQueueM: number; co2RatePerMin: number; avgTravelTimeS: number };
+
+/**
+ * A proposed set of simulation changes from the command parser. Mirrors the
+ * response of POST /api/ai-sandbox/command — keep in step with
+ * Back-End/src/services/sandbox-command.service.ts.
+ */
+type CommandAction =
+  | { type: "close_lane"; lanes: number[] }
+  | { type: "open_lane"; lanes: number[] }
+  | { type: "set_speed_limit"; kmh: number | null }
+  | { type: "add_incident"; lane: number; positionPct: number }
+  | { type: "clear_incidents" }
+  | { type: "set_inflow"; vehPerHour: number }
+  | { type: "set_lane_count"; lanes: number }
+  | { type: "set_route"; originExitId: number; destinationExitId: number };
+
+type CommandPlan = {
+  actions: CommandAction[];
+  reply: string;
+  unsupported: string | null;
+  warnings: string[];
+};
+
+/** One proposed action as a line an operator can check before applying. */
+function describeAction(a: CommandAction, exits: { exit_id: number; exit_name: string }[]): string {
+  switch (a.type) {
+    case "close_lane":
+      return `Close lane ${a.lanes.join(", ")}`;
+    case "open_lane":
+      return `Reopen lane ${a.lanes.join(", ")}`;
+    case "set_speed_limit":
+      return a.kmh == null ? "Remove the speed limit" : `Set a ${a.kmh} km/h speed limit`;
+    case "add_incident":
+      return `Place an incident in lane ${a.lane}, ${Math.round(a.positionPct)}% along the segment`;
+    case "clear_incidents":
+      return "Clear all incidents";
+    case "set_inflow":
+      return `Set inflow to ${fmt(a.vehPerHour)} veh/h`;
+    case "set_lane_count":
+      return `Rebuild the road with ${a.lanes} lanes`;
+    case "set_route": {
+      const name = (id: number) => {
+        const hit = exits.find((x) => x.exit_id === id);
+        return hit ? displayExitName(hit.exit_name) : `exit ${id}`;
+      };
+      return `Set the route ${name(a.originExitId)} → ${name(a.destinationExitId)}`;
+    }
+  }
+}
 
 const fmt = (n: number, d = 0) => n.toLocaleString("en-US", { minimumFractionDigits: d, maximumFractionDigits: d });
 
@@ -43,18 +91,25 @@ export default function AiSandboxPage() {
   const [incidentCount, setIncidentCount] = useState(0);
   const [placingIncident, setPlacingIncident] = useState(false);
 
-  // Simulation Controls card can flip between the manual controls and an
-  // (in-training) natural-language command prompt for the NLEX corridor.
+  // Simulation Controls card can flip between the manual controls and a
+  // natural-language command prompt for the NLEX corridor. The prompt is parsed
+  // by GLM server-side (see Back-End/src/services/sandbox-command.service.ts);
+  // the model proposes actions and the operator confirms before anything is
+  // applied to the running simulation.
   const [sideMode, setSideMode] = useState<"controls" | "command">("controls");
   const [command, setCommand] = useState("");
   const [commandNote, setCommandNote] = useState<string | null>(null);
+  const [commandBusy, setCommandBusy] = useState(false);
+  const [commandError, setCommandError] = useState<string | null>(null);
+  const [plan, setPlan] = useState<CommandPlan | null>(null);
 
   const [metrics, setMetrics] = useState<Metrics | null>(null);
   const [baseline, setBaseline] = useState<Baseline | null>(null);
 
   // Anchor the inflow default to observed NLEX volume (falls back gracefully).
   useEffect(() => {
-    cachedJson<{ success: boolean; data: { kpis: { totalVolume: number; days: number } } }>(`${BACKEND}/api/traffic/analytics?months=12`)
+    fetch(`${BACKEND}/api/traffic/analytics?months=12`, { cache: "no-store" })
+      .then((r) => r.json())
       .then((j) => {
         if (!j.success) return;
         const daily = j.data.kpis.totalVolume / Math.max(1, j.data.kpis.days);
@@ -186,14 +241,128 @@ export default function AiSandboxPage() {
     return () => window.removeEventListener("keydown", onKey);
   }, [placingIncident]);
 
-  // The natural-language command AI isn't wired up yet (still being trained),
-  // so for now the prompt just acknowledges the input as a preview.
-  const runCommand = () => {
+  // Ask the backend to turn the sentence into simulation actions. This only
+  // ever produces a PROPOSAL — applyPlan() below is what actually touches the
+  // simulation, and it runs when the operator presses Apply.
+  const runCommand = async () => {
     const text = command.trim();
-    if (!text) return;
-    setCommandNote(
-      `🤖 Command received: "${text}". The AI that turns this into traffic actions is still being trained, so nothing was applied yet — natural-language control is coming soon.`
-    );
+    if (!text || commandBusy) return;
+
+    setCommandBusy(true);
+    setCommandError(null);
+    setCommandNote(null);
+    setPlan(null);
+
+    try {
+      const res = await fetch(`${BACKEND}/api/ai-sandbox/command`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          command: text,
+          context: {
+            laneCount,
+            segmentLengthM: SEG_LENGTH,
+            // The model reasons in 1-indexed lane numbers, the sim in 0-indexed
+            // array positions. Convert on the way out and back again in
+            // applyPlan() so the two never mix.
+            closedLanes: closedLanes.map((c, i) => (c ? i + 1 : 0)).filter(Boolean),
+            speedLimitKmh: speedLimit,
+            incidentCount,
+            exits: EXITS.map((x) => ({ exit_id: x.exit_id, exit_name: displayExitName(x.exit_name) })),
+          },
+        }),
+      });
+      const json = await res.json();
+
+      if (!res.ok || !json.success) {
+        setCommandError(json?.message ?? `Request failed (${res.status}).`);
+        return;
+      }
+      setPlan(json.data as CommandPlan);
+    } catch {
+      setCommandError("Could not reach the backend. Is it running on port 4000?");
+    } finally {
+      setCommandBusy(false);
+    }
+  };
+
+  // Apply a confirmed plan to the simulation. Every action was already range-
+  // checked server-side; the bounds are re-asserted here because this function
+  // is the last thing between model output and sim state.
+  const applyPlan = () => {
+    const sim = simRef.current;
+    if (!plan || !sim) return;
+    const applied: string[] = [];
+
+    // Changing the lane count rebuilds the simulation, and rebuild() resets
+    // closures, the speed limit and incidents. Applying a closure in the same
+    // batch would therefore be silently undone a tick later, so a plan that
+    // resizes the road applies only that and says the rest was dropped.
+    const resize = plan.actions.find((a) => a.type === "set_lane_count");
+    if (resize && resize.type === "set_lane_count") {
+      setLaneCount(resize.lanes);
+      const dropped = plan.actions.length - 1;
+      setCommandNote(
+        `Applied: ${resize.lanes} lanes.` +
+          (dropped > 0
+            ? ` Rebuilding the road clears existing interventions, so ${dropped} other action${dropped > 1 ? "s were" : " was"} not applied — re-issue them now.`
+            : ""),
+      );
+      setPlan(null);
+      setCommand("");
+      return;
+    }
+
+    for (const a of plan.actions) {
+      switch (a.type) {
+        case "close_lane":
+        case "open_lane": {
+          const shut = a.type === "close_lane";
+          const idx = a.lanes.map((n) => n - 1).filter((i) => i >= 0 && i < laneCount);
+          if (idx.length === 0) break;
+          setClosedLanes((prev) => prev.map((c, i) => (idx.includes(i) ? shut : c)));
+          applied.push(`${shut ? "Closed" : "Opened"} lane ${a.lanes.join(", ")}`);
+          break;
+        }
+        case "set_speed_limit":
+          setSpeedLimit(a.kmh);
+          applied.push(a.kmh == null ? "Removed the speed limit" : `Speed limit ${a.kmh} km/h`);
+          break;
+        case "add_incident": {
+          const x = (a.positionPct / 100) * SEG_LENGTH;
+          sim.addIncident(a.lane - 1, x);
+          setIncidentCount(sim.interventions.incidents.length);
+          applied.push(`Incident in lane ${a.lane}`);
+          break;
+        }
+        case "clear_incidents":
+          sim.interventions.incidents = [];
+          setIncidentCount(0);
+          applied.push("Cleared incidents");
+          break;
+        case "set_inflow":
+          setInflow(a.vehPerHour);
+          applied.push(`Inflow ${fmt(a.vehPerHour)} veh/h`);
+          break;
+        case "set_lane_count":
+          setLaneCount(a.lanes);
+          applied.push(`${a.lanes} lanes`);
+          break;
+        case "set_route": {
+          const o = EXITS.findIndex((x) => x.exit_id === a.originExitId);
+          const d = EXITS.findIndex((x) => x.exit_id === a.destinationExitId);
+          if (o < 0 || d < 0) break;
+          setOrigin(o);
+          setDestination(d);
+          applied.push(`Route ${displayExitName(EXITS[o].exit_name)} → ${displayExitName(EXITS[d].exit_name)}`);
+          break;
+        }
+      }
+    }
+
+    setCommandNote(applied.length ? `Applied: ${applied.join(" · ")}.` : "Nothing to apply.");
+    setPlan(null);
+    setCommand("");
   };
   const clearIncidents = () => {
     const sim = simRef.current;
@@ -468,10 +637,51 @@ export default function AiSandboxPage() {
               <button
                 className="ai-command-btn"
                 onClick={runCommand}
-                disabled={!command.trim()}
+                disabled={!command.trim() || commandBusy}
               >
-                Execute Command
+                {commandBusy ? "Interpreting…" : "Execute Command"}
               </button>
+
+              {commandError && <p className="ai-command-error">{commandError}</p>}
+
+              {/* A proposal, not a change. Nothing reaches the simulation until
+                  the operator presses Apply. */}
+              {plan && (
+                <div className="ai-plan">
+                  <p className="ai-plan-reply">{plan.reply}</p>
+
+                  {plan.actions.length > 0 ? (
+                    <ul className="ai-plan-actions">
+                      {plan.actions.map((a, i) => (
+                        <li key={i}>{describeAction(a, EXITS)}</li>
+                      ))}
+                    </ul>
+                  ) : (
+                    <p className="ai-plan-empty">No actions to apply.</p>
+                  )}
+
+                  {plan.unsupported && (
+                    <p className="ai-plan-warn">Not applied: {plan.unsupported}</p>
+                  )}
+                  {plan.warnings.map((w, i) => (
+                    <p className="ai-plan-warn" key={i}>{w}</p>
+                  ))}
+
+                  <div className="ai-plan-buttons">
+                    <button
+                      className="ai-plan-apply"
+                      onClick={applyPlan}
+                      disabled={plan.actions.length === 0}
+                    >
+                      Apply
+                    </button>
+                    <button className="ai-plan-discard" onClick={() => setPlan(null)}>
+                      Discard
+                    </button>
+                  </div>
+                </div>
+              )}
+
               {commandNote && <p className="ai-command-note">{commandNote}</p>}
             </div>
           </div>

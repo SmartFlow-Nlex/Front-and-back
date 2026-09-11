@@ -1,7 +1,6 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { cachedJson } from "../../../lib/cached-json";
 import { Activity, Shield, AlertCircle, ClipboardList, Filter } from "lucide-react";
 import PageHeader from "../../../components/dashboard/PageHeader";
 import { SortableTh, useTableSort } from "../../../lib/table-sort";
@@ -62,7 +61,8 @@ export default function AuditLogPage() {
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    cachedJson<{ success: boolean; message?: string; data: Parameters<typeof mapLog>[0][] }>(`${BACKEND}/api/audit-log/list`, 15_000)
+    fetch(`${BACKEND}/api/audit-log/list`, { cache: "no-store" })
+      .then((r) => r.json())
       .then((json) => {
         if (!json.success) throw new Error(json.message ?? "Request failed");
         setAuditLogs(json.data.map(mapLog));

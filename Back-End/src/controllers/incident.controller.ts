@@ -1,5 +1,4 @@
 import type { Request, Response } from "express";
-import { cached } from "../utils/ttl-cache.js";
 import { z } from "zod";
 import {
   IncidentQuerySchema,
@@ -60,8 +59,7 @@ export const getIncidentAnalytics = async (req: Request, res: Response) => {
 // picker never would — and again as the resolved-window input the service
 // needs. One query, two consumers, instead of fetching them twice.
 export const getIncidentPredictive = async (req: Request, res: Response) => {
-  // Anchors are three cheap reads that every call repeated; ten minutes.
-  const anchors = await cached("incident:anchors", 10 * 60_000, getIncidentPredictiveAnchors);
+  const anchors = await getIncidentPredictiveAnchors();
   if (!anchors) {
     return res.status(503).json({ success: false, message: "Predictive analytics unavailable: database not reachable" });
   }
@@ -71,11 +69,7 @@ export const getIncidentPredictive = async (req: Request, res: Response) => {
     maxDate: anchors.maxForecastDate,
   }).parse(req.query);
 
-  /* Eight parallel queries and a large response assembly, measured at
-     1.8-4.1 s, over tables that change only on retrain. Keyed by the parsed
-     query so each Range/Weather combination caches separately. */
-  const data = await cached(`incident:predictive:${JSON.stringify(query)}`, 10 * 60_000, () =>
-    getIncidentPredictiveFromDb(query, anchors));
+  const data = await getIncidentPredictiveFromDb(query, anchors);
   if (!data) {
     return res.status(503).json({ success: false, message: "Predictive analytics unavailable: database not reachable" });
   }

@@ -1,6 +1,5 @@
 import type { Request, Response } from "express";
 import { getLiveCorridorOverview, getLiveMapGeoJson, getFeedFreshness } from "../services/map-live.service.js";
-import { cached } from "../utils/ttl-cache.js";
 import { z } from "zod";
 import { searchExitsInDb, getForecastCongestionFromDb, getForecastModelInfo } from "../services/map-comparison.service.js";
 import { ExitSearchSchema } from "../validators/map-comparison.validator.js";
@@ -104,30 +103,17 @@ function isNlexCorridor(street: string): boolean {
 }
 
 // [DEV-01, DEV-03] GET /api/v1/map-comparison/real-time
-/* The warehouse answer, cached for 30 seconds and shared between concurrent
-   callers. The Live Map and the Home corridor panel both read this endpoint,
-   the feed is a 60-minute window, and the queries behind it measured 13 ms
-   and 73 ms in the planner -- the 7 seconds every call was paying went to two
-   Upstash round-trips for keys that hold nothing (see below). Thirty seconds
-   of staleness on a one-hour window is invisible; the feed's own ageMinutes
-   is at most 30 s behind the truth. */
-const warehouseRealtime = () =>
-  cached("map:realtime", 30_000, async () => {
-    const [fc, feed] = await Promise.all([getLiveMapGeoJson(), getFeedFreshness()]);
-    return { ...fc, feed };
-  });
-
 export const getMapRealtime = async (_req: Request, res: Response) => {
-  /* Redis is opt-in now. The keys authenticate but hold zero records, so
-     every request fetched them, parsed nothing, then fell through to the
-     warehouse anyway -- ~7 s of pure waiting per map load, measured. Set
-     MAP_USE_REDIS=true to try the keys first; the code path is intact. */
-  const redis = process.env.MAP_USE_REDIS === "true" ? redisConfig() : null;
+  // The warehouse is the reliable source: the Redis keys authenticate but hold
+  // zero records, so anything served from them draws an empty corridor. Redis is
+  // still tried first in case the ingester starts filling it again.
+  const redis = redisConfig();
   if (!redis) {
     /* The feed's own freshness travels with it. The Home tab needs it to
        say how old the newest report is, and that was the only reason it
        had to read a different endpoint with a different pipeline. */
-    return res.json(await warehouseRealtime());
+    const [fc, feed] = await Promise.all([getLiveMapGeoJson(), getFeedFreshness()]);
+    return res.json({ ...fc, feed });
   }
 
   try {
@@ -221,7 +207,11 @@ export const getMapRealtime = async (_req: Request, res: Response) => {
     // corridor that actually has fifty jams on it.
     const redisJams = features.filter((f) => f?.properties?.feature_type === "jam").length;
     if (redisJams === 0) {
-      return res.json(await warehouseRealtime());
+      /* The feed's own freshness travels with it. The Home tab needs it to
+         say how old the newest report is, and that was the only reason it
+         had to read a different endpoint with a different pipeline. */
+      const [fc, feed] = await Promise.all([getLiveMapGeoJson(), getFeedFreshness()]);
+      return res.json({ ...fc, feed });
     }
 
     res.json({

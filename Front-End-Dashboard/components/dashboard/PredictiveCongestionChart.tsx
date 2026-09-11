@@ -3,7 +3,6 @@
 import { useEffect, useMemo, useState } from "react";
 import type { EChartsOption } from "echarts";
 import DashboardChart from "./DashboardChart";
-import { loadForecast } from "./prescriptiveTraffic.shared";
 
 type State = "Low" | "Med" | "High";
 
@@ -36,20 +35,10 @@ type RawRow = { segment: string; hours: number; state: State; probability: numbe
 //    with green (point 1) and printing "SEVERE" on every cell so the exceptions
 //    had nothing to stand out against — both fixed elsewhere, without needing
 //    to weaken the colour that carries the warning.
-//
-// WHAT THE STATES MEAN. train_congestion_horizon.py labels each exit-hour from
-// the length-weighted average speed of the Waze jams reported there: under 30
-// km/h is High, 30-60 is Med, and an hour with NO jam report at all is Low.
-// Jams are slow by definition -- the training table averages 7.6 km/h and
-// never exceeds 56 -- so Med is all but impossible and any hour that has a
-// report is High. The map is therefore "will Waze carry a jam report at this
-// exit this hour", not a corridor speed. The legend used to promise "Free flow
-// > 60 km/h", a speed the data cannot contain; the blue cell means the model
-// expects no report, which is what it says now.
 const STATE_META: Record<State, { rank: number; color: string; text: string; label: string; short: string; speed: string }> = {
-  Low: { rank: 0, color: "#cfe4f7", text: "#12507e", label: "Clear", short: "CLEAR", speed: "no jam reported" },
-  Med: { rank: 1, color: "#f0a63a", text: "#5c3208", label: "Heavy", short: "HEAVY", speed: "jams at 30–60 km/h" },
-  High: { rank: 2, color: "#dc2626", text: "#ffffff", label: "Severe", short: "SEVERE", speed: "jams under 30 km/h" },
+  Low: { rank: 0, color: "#cfe4f7", text: "#12507e", label: "Free flow", short: "FREE", speed: "> 60 km/h" },
+  Med: { rank: 1, color: "#f0a63a", text: "#5c3208", label: "Heavy", short: "HEAVY", speed: "30–60 km/h" },
+  High: { rank: 2, color: "#dc2626", text: "#ffffff", label: "Severe", short: "SEVERE", speed: "< 30 km/h" },
 };
 
 const LOW_CONF = 0.8;
@@ -101,6 +90,7 @@ type CellItem = {
   runStart?: boolean;
   label: { color: string };
 };
+const BACKEND = process.env.NEXT_PUBLIC_BACKEND_URL ?? "http://localhost:4000";
 
 type Alert = { segment: string; state: State; from: number; to: number; conf: number };
 
@@ -130,28 +120,27 @@ export default function PredictiveCongestionChart() {
   useEffect(() => {
     let cancelled = false;
     const timers: ReturnType<typeof setTimeout>[] = [];
-    // Reads the shared, cached forecast rather than fetching the ~600 KB
-    // payload again: the volume and event cards on this tab want the same
-    // response in the same second. A failure is not cached by the loader, so
-    // each retry here is a real retry. Previously a failure left the card
-    // stuck on "Loading…" with no way to recover.
+    // Previously this logged to the console and returned, which left `raw` null
+    // and the card stuck on "Loading ML congestion forecast from AWS..." with no
+    // error and no way to recover — a failure looked identical to a slow load.
     (async () => {
       const MAX_TRIES = 3;
       for (let tryNo = 1; tryNo <= MAX_TRIES; tryNo++) {
         try {
-          const fc = await loadForecast();
+          const res = await fetch(`${BACKEND}/api/traffic/forecast`);
+          const json = await res.json().catch(() => ({}));
           if (cancelled) return;
-          if (fc.congestion.length > 0) {
-            setRaw(fc.congestion as unknown as RawRow[]);
-            setModelInfo((fc.extras.congestionModel as ModelInfo | undefined) ?? null);
-            if (Array.isArray(fc.extras.congestionHorizonAccuracy)) {
-              setHzAcc(fc.extras.congestionHorizonAccuracy as HzAcc[]);
+          if (res.ok && json.success && json.data?.congestion) {
+            setRaw(json.data.congestion as RawRow[]);
+            setModelInfo(json.data.congestionModel ?? null);
+            if (Array.isArray(json.data.congestionHorizonAccuracy)) {
+              setHzAcc(json.data.congestionHorizonAccuracy as HzAcc[]);
             }
             setLoadError(null);
             return;
           }
           if (tryNo === MAX_TRIES) {
-            setLoadError("No congestion forecast in the payload");
+            setLoadError(json.message ?? `HTTP ${res.status}`);
             return;
           }
         } catch (e) {
@@ -430,9 +419,9 @@ export default function PredictiveCongestionChart() {
   // The strip needs its own axis and hour labels, so it gets real height. It
   // was 34px of unlabelled bars floating under the grid, which is why it read
   // as a mystery total rather than a count per hour.
-  const stripTop = heatTop + heatHeight + 34;
-  const stripHeight = 52;
-  const chartHeight = stripTop + stripHeight + 50;
+  const stripTop = heatTop + heatHeight + 66;
+  const stripHeight = 60;
+  const chartHeight = stripTop + stripHeight + 68;
 
   const option: EChartsOption = {
     // A cartesian heatmap throws "Heatmap must use with visualMap" without
@@ -448,6 +437,18 @@ export default function PredictiveCongestionChart() {
         { value: 2, color: STATE_META.High.color },
       ],
     },
+    title: [
+      {
+        // "SEGMENTS CONGESTED PER HOUR" in grey caps, detached at the far left,
+        // read as a label for nothing in particular — a reader could not tell
+        // whether the bars were a count, a total or a percentage.
+        text: `How many of the ${segments.length} exits are congested, hour by hour`,
+        left: 150,
+        top: stripTop - 60,
+        textStyle: { fontSize: 12, fontWeight: 700, color: "#334155" },
+        subtextStyle: { fontSize: 10.5, color: "#94a3b8" },
+      },
+    ],
     tooltip: {
       backgroundColor: "rgba(255,255,255,0.97)",
       borderColor: "#e2e8f0",
@@ -471,7 +472,7 @@ export default function PredictiveCongestionChart() {
             <div style="margin-top:8px; display:grid; grid-template-columns:112px 1fr; gap:5px 8px; font-size:0.9em;">
               <span style="color:#64748b;">Horizon</span><span style="font-weight:600;">${hourLabels[x]}</span>
               <span style="color:#64748b;">Predicted state</span><span style="color:${d.state === "Low" ? STATE_META.Low.text : d.state === "Med" ? STATE_META.Med.text : STATE_META.High.color}; font-weight:700;">${meta.label}</span>
-              <span style="color:#64748b;">Meaning</span><span style="font-weight:500;">${meta.speed}</span>
+              <span style="color:#64748b;">Speed band</span><span style="font-weight:500;">${meta.speed}</span>
               <span style="color:#64748b;">Model confidence</span><span style="font-weight:600; color:${low ? "#b45309" : "#334155"};">${(d.conf * 100).toFixed(1)}%${low ? " · lower" : ""}</span>
             </div>
           </div>`;
@@ -518,9 +519,9 @@ export default function PredictiveCongestionChart() {
         // The reader read these bars as a running total. It is a total
         // ACROSS EXITS at one hour, never a total across the 12 hours -
         // so the title says "at each hour ahead" rather than just "total".
-        name: `Exits congested at each hour ahead, of ${segments.length}`,
+        name: "Total exits affected at each hour ahead",
         nameLocation: "middle",
-        nameGap: 38,
+        nameGap: 42,
         nameTextStyle: { color: "#64748b", fontSize: 11, fontWeight: 700 },
         // Was dropping the clock line to save height, which left the bars
         // labelled only by horizon while the grid above showed the hour.
@@ -550,6 +551,10 @@ export default function PredictiveCongestionChart() {
         gridIndex: 0,
         type: "category",
         data: shownSegments.map((s) => `${s}  ·  km ${kmLabel(KMI.get(s))}`),
+        name: "Exit  ·  km-post          Hours ahead  ·  clock time",
+        nameLocation: "end",
+        nameGap: 22,
+        nameTextStyle: { color: "#94a3b8", fontSize: 10, fontWeight: 600, align: "right" },
         axisTick: { show: false },
         axisLine: { show: false },
         axisLabel: { color: "#334155", fontWeight: 600, fontSize: 11 },
@@ -633,6 +638,14 @@ export default function PredictiveCongestionChart() {
     ],
   };
 
+  const kpi = (label: string, value: string, sub: string, tone?: string) => (
+    <div style={{ background: "#f8fafc", border: "1px solid #e2e8f0", borderRadius: "8px", padding: "8px 11px" }}>
+      <div style={{ fontSize: "0.68rem", color: "#64748b", textTransform: "uppercase", letterSpacing: "0.05em", fontWeight: 600 }}>{label}</div>
+      <div style={{ fontSize: "1rem", fontWeight: 700, color: tone ?? "#0f172a", margin: "1px 0" }}>{value}</div>
+      <div style={{ fontSize: "0.72rem", color: "#94a3b8" }}>{sub}</div>
+    </div>
+  );
+
   const VISIBLE_ALERTS = 4;
   const shown = alerts.slice(0, VISIBLE_ALERTS);
 
@@ -643,33 +656,52 @@ export default function PredictiveCongestionChart() {
     .filter((g) => g.runs.length > 0)
     .sort((a, b) => (KMI.get(a.seg)?.km ?? 9999) - (KMI.get(b.seg)?.km ?? 9999));
 
-  /* One row per episode. The cards each restated a heatmap row in three
-     lines; a row does it in one and four of them fit where two cards did. */
-  const alertRow = (a: Alert, key: string) => {
+  const alertCard = (a: Alert, key: string) => {
     const severe = a.state === "High";
     const span = a.to - a.from + 1;
     return (
-      <div key={key} style={{ display: "grid", gridTemplateColumns: "64px 1fr auto auto", alignItems: "center", gap: 10, padding: "7px 10px", borderRadius: 8, background: severe ? "#fef2f2" : "#fffbeb", border: `1px solid ${severe ? "#fecaca" : "#fde68a"}`, fontSize: "0.8rem" }}>
-        <span style={{ padding: "2px 7px", borderRadius: 999, textAlign: "center", background: severe ? STATE_META.High.color : STATE_META.Med.color, color: severe ? "#fff" : STATE_META.Med.text, fontSize: "0.62rem", fontWeight: 800, letterSpacing: "0.04em" }}>
+      <div
+        key={key}
+        style={{
+          display: "flex", alignItems: "center", gap: "12px",
+          padding: "10px 12px", borderRadius: "8px",
+          background: severe ? "#fef2f2" : "#fffbeb",
+          border: `1px solid ${severe ? "#fecaca" : "#fde68a"}`,
+        }}
+      >
+        <span
+          style={{
+            flex: "none", padding: "3px 8px", borderRadius: "999px",
+            background: severe ? STATE_META.High.color : STATE_META.Med.color,
+            color: severe ? "#fff" : STATE_META.Med.text,
+            fontSize: "0.64rem", fontWeight: 800, letterSpacing: "0.04em",
+          }}
+        >
           {severe ? "SEVERE" : "HEAVY"}
         </span>
-        <span style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-          <b style={{ color: "#0f172a" }}>{a.segment}</b> <span style={{ color: "#94a3b8" }}>km {kmLabel(KMI.get(a.segment))}</span>
-        </span>
-        <span style={{ color: "#475569", fontVariantNumeric: "tabular-nums", whiteSpace: "nowrap" }}>
-          {a.from === a.to ? `+${a.from}h` : `+${a.from}h → +${a.to}h`} <span style={{ color: "#94a3b8" }}>· {span}h</span>
-        </span>
-        <span style={{ color: a.conf < LOW_CONF ? "#b45309" : "#94a3b8", fontVariantNumeric: "tabular-nums", whiteSpace: "nowrap" }}>{(a.conf * 100).toFixed(0)}%</span>
+        <div style={{ minWidth: 0, fontSize: "0.82rem", lineHeight: 1.4 }}>
+          <div style={{ fontWeight: 700, color: "#0f172a" }}>
+            {a.segment} <span style={{ fontWeight: 500, color: "#94a3b8" }}>km {kmLabel(KMI.get(a.segment))}</span>
+          </div>
+          <div style={{ color: "#64748b" }}>
+            {a.from === a.to ? `+${a.from}h` : `+${a.from}h → +${a.to}h`} · {span}h · {(a.conf * 100).toFixed(0)}% confidence
+          </div>
+        </div>
       </div>
     );
   };
 
   // A one-sentence read of the whole card, for stakeholders who will not
-  // decode a 108-cell grid. The shape of the problem - one unbroken stretch of
-  // road, bad for the whole window - is the thing to say.
+  // decode a 108-cell grid.
+  // "A and B and C and D and E are forecast to hit severe congestion" made the
+  // reader assemble the picture from a list. The shape of the problem - one
+  // unbroken stretch of road, bad for the whole window - is the thing to say.
   const nSevere = model.severeSegments.length;
   const kmSpan =
     model.kmFrom != null && model.kmTo != null ? Math.round(model.kmTo - model.kmFrom) : null;
+  const whenText = model.allHours
+    ? `for the whole ${model.maxHour}-hour window`
+    : `starting +${model.firstSevere?.from}h`;
 
   const spH = model.severePerHour as number[];
   const firstCount = spH[0] ?? 0;
@@ -677,6 +709,9 @@ export default function PredictiveCongestionChart() {
   const peakAt = spH.indexOf(peakCount) + 1;
   const clear = segments.filter((sg) => !model.severeSegments.includes(sg));
 
+  // Naming nineteen exits made the reader parse a list; naming the one that
+  // stays clear says the same thing in a glance. And a single "starting +1h"
+  // was wrong once the forecast became real - congestion BUILDS, so say so.
   const whoText =
     nSevere === segments.length
       ? `every exit on the corridor`
@@ -692,242 +727,355 @@ export default function PredictiveCongestionChart() {
     ? `Congestion builds: ${firstCount} of ${segments.length} exit${firstCount === 1 ? "" : "s"} severe at +1h, rising to ${peakCount} by +${peakAt}h. By the peak it is ${whoText}.`
     : `${whoText} — forecast severe from +1h${model.allHours ? ` and holding for the whole ${model.maxHour}-hour window` : ""}.`;
 
-  const stat = (value: string, label: string, tone?: string) => (
-    <div style={{ display: "flex", flexDirection: "column", gap: 1, minWidth: 0 }}>
-      <span style={{ fontSize: "1.02rem", fontWeight: 800, color: tone ?? "#0f172a", letterSpacing: "-0.01em", fontVariantNumeric: "tabular-nums", lineHeight: 1.1, whiteSpace: "nowrap" }}>{value}</span>
-      <span style={{ fontSize: "0.68rem", color: "#64748b" }}>{label}</span>
-    </div>
-  );
-
-  const pct = (v: number | null) => (v == null ? "—" : `${(v * 100).toFixed(0)}%`);
-  const hzFirst = hzAcc[0];
-  const hzLast = hzAcc[hzAcc.length - 1];
-  const beatsFrom = hzAcc.find(
-    (a) => a.accuracy != null && a.persistenceAccuracy != null && a.accuracy > a.persistenceAccuracy);
-  const hiddenSorted = [...hiddenSegments].sort((a, b) => (firstSevere(a) ?? 99) - (firstSevere(b) ?? 99));
-
-  /* Layout, top to bottom: what am I looking at -> the finding -> four numbers
-     -> the grid, with its own legend directly above it -> what to act on ->
-     everything a reviewer wants behind one disclosure. The previous card put
-     the accuracy strip between the title and the finding, the legend in the
-     header far from the grid it explains, fifteen chips of exit names, and
-     four three-line cards that each restated a heatmap row. */
   return (
-    <article className="chart-card wide" style={{ padding: "22px 24px", display: "flex", flexDirection: "column", gap: "14px", marginTop: "24px" }}>
-      {/* Row 1: title left, provenance right, anchor time beneath. */}
-      <div>
-        <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
-          <h3 style={{ fontSize: "1.05rem", color: "#0f172a", fontWeight: 700, margin: 0, letterSpacing: "-0.01em" }}>
+    <article className="chart-card wide" style={{ padding: "18px 20px", display: "flex", flexDirection: "column", gap: "12px", marginTop: "24px" }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: "16px", flexWrap: "wrap" }}>
+        <div>
+          <h3 style={{ fontSize: "1.05rem", color: "#0f172a", fontWeight: 700, margin: 0, letterSpacing: "-0.01em", display: "flex", alignItems: "center", gap: "8px" }}>
             Predictive Congestion State Map
-          </h3>
-          <div style={{ display: "flex", gap: 6, flexWrap: "wrap", justifyContent: "flex-end" }}>
+            {/* Read from gold.ml_model_metrics, never hardcoded. The caption said
+                XGBoost while the accepted model was GRU, so the label and the data
+                described different models. Accuracy sits beside it so the panel
+                states how well it actually does. */}
             <span
               title={modelInfo && !modelInfo.accepted && modelInfo.rejectedReason ? modelInfo.rejectedReason : undefined}
               style={{
-                fontSize: "0.7rem", padding: "2px 8px", borderRadius: "999px", fontWeight: 600, whiteSpace: "nowrap",
+                fontSize: "0.72rem", padding: "2px 8px", borderRadius: "999px", fontWeight: 600,
                 background: modelInfo?.accepted ? "#ecfdf5" : "#f1f5f9",
                 border: `1px solid ${modelInfo?.accepted ? "#a7f3d0" : "#dce2ef"}`,
                 color: modelInfo?.accepted ? "#047857" : "#475569",
               }}
             >
-              {modelInfo?.model ?? "—"}{modelInfo?.accuracy != null && ` · ${(modelInfo.accuracy * 100).toFixed(1)}%`}{modelInfo && !modelInfo.accepted && " · not accepted"}
+              {modelInfo?.model ?? "—"}
+              {modelInfo?.accuracy != null && ` · ${(modelInfo.accuracy * 100).toFixed(1)}%`}
+              {modelInfo && !modelInfo.accepted && " · not accepted"}
             </span>
-            {stale && (
+          {stale && (
+            <span
+              title={`This forecast was generated from data ending ${model.baseTs}. ${elapsedHours} of ${hourLabels.length} forecast hours have already passed. Re-run train_congestion_horizon.py to refresh it.`}
+              style={{
+                fontSize: "0.72rem", padding: "2px 8px", borderRadius: 999, fontWeight: 700,
+                background: elapsedHours === hourLabels.length ? "#fef2f2" : "#fffbeb",
+                border: `1px solid ${elapsedHours === hourLabels.length ? "#fecaca" : "#fde68a"}`,
+                color: elapsedHours === hourLabels.length ? "#b91c1c" : "#92400e",
+                cursor: "help",
+              }}
+            >
+              {elapsedHours === hourLabels.length
+                ? `⚠ expired · ${Math.round(ageHours!)}h old`
+                : `⚠ ${elapsedHours} of ${hourLabels.length} hours elapsed`}
+            </span>
+          )}
+        </h3>
+        <p style={{ color: "#64748b", fontSize: "0.82rem", margin: "4px 0 0 0" }}>
+            {/* "one row per exit, ordered north-bound, hover for confidence" all
+                described what the grid already shows. Only the anchor time is
+                genuinely unguessable, so that is what survives. */}
+            {stale ? "Covered" : "Next"} {hourLabels.length} hours from{" "}
+            <b style={{ color: "#334155" }}>{baseLabel(model.baseTs) ?? "the last reading"}</b>
+            <span
+              style={{ cursor: "help" }}
+              title="Rows are exits ordered north-bound by km-post. Hover any cell for the model's confidence. The base time is the last complete hour of Waze ingestion."
+            >
+              {" "}· hover for detail
+            </span>
+          </p>
+        </div>
+        <div style={{ display: "flex", gap: "14px", alignItems: "center", fontSize: "0.76rem", color: "#64748b", fontWeight: 500, flexWrap: "wrap" }}>
+          {(["Low", "Med", "High"] as State[]).map((s) => {
+            // Heavy is in the legend but this model never predicts it, so an
+            // unexplained swatch reads as missing data rather than as a known
+            // limitation. Say so instead of letting the reader wonder.
+            const absent = s === "Med" && !model.everHeavy;
+            return (
               <span
-                title={`This forecast was generated from data ending ${model.baseTs}. ${elapsedHours} of ${hourLabels.length} forecast hours have already passed. Re-run train_congestion_horizon.py to refresh it.`}
+                key={s}
+                title={absent ? "This model never predicts Heavy — it was trained on jam-only data and cannot separate the middle state" : undefined}
                 style={{
-                  fontSize: "0.7rem", padding: "2px 8px", borderRadius: 999, fontWeight: 700, cursor: "help", whiteSpace: "nowrap",
-                  background: elapsedHours === hourLabels.length ? "#fef2f2" : "#fffbeb",
-                  border: `1px solid ${elapsedHours === hourLabels.length ? "#fecaca" : "#fde68a"}`,
-                  color: elapsedHours === hourLabels.length ? "#b91c1c" : "#92400e",
+                  display: "inline-flex", alignItems: "center", gap: "6px",
+                  whiteSpace: "nowrap", opacity: absent ? 0.45 : 1,
                 }}
               >
-                {elapsedHours === hourLabels.length ? `⚠ expired · ${Math.round(ageHours!)}h old` : `⚠ ${elapsedHours} of ${hourLabels.length} hours elapsed`}
+                <span style={{ width: 13, height: 13, background: STATE_META[s].color, borderRadius: "3px" }} />
+                {STATE_META[s].label} <span style={{ color: "#94a3b8" }}>({STATE_META[s].speed})</span>
+                {absent && <span style={{ color: "#94a3b8", fontStyle: "italic" }}>· never predicted</span>}
               </span>
-            )}
-          </div>
+            );
+          })}
+          {model.lowConfCount > 0 && (
+            <span style={{ color: "#94a3b8", whiteSpace: "nowrap" }}>
+              <b style={{ color: "#64748b" }}>*</b> lower confidence (&lt;80%)
+            </span>
+          )}
         </div>
-        <p style={{ color: "#64748b", fontSize: "0.82rem", margin: "4px 0 0 0" }}>
-          {stale ? "Covered" : "Next"} {hourLabels.length} hours from <b style={{ color: "#334155" }}>{baseLabel(model.baseTs) ?? "the last reading"}</b>
-          <span style={{ cursor: "help" }} title="Rows are exits ordered north-bound by km-post. Hover any cell for the model's confidence. The base time is the last complete hour of Waze ingestion."> · hover for detail</span>
-        </p>
       </div>
 
-      {/* Row 2: the finding. */}
-      <div style={{
-        padding: "12px 14px", borderRadius: "10px", fontSize: "0.88rem", lineHeight: 1.5,
-        background: model.firstSevere ? "#fef2f2" : "#f0fdf4",
-        border: `1px solid ${model.firstSevere ? "#fecaca" : "#bbf7d0"}`,
-        color: model.firstSevere ? "#991b1b" : "#166534",
-      }}>
+      {/* One averaged accuracy hides the decay across the horizon, and the
+          "nothing changes" benchmark is what the model actually has to beat.
+          Both come from gold.ml_congestion_horizon_accuracy. */}
+      {hzAcc.length > 1 && (() => {
+        const first = hzAcc[0];
+        const last = hzAcc[hzAcc.length - 1];
+        const pct = (v: number | null) => (v == null ? "—" : `${(v * 100).toFixed(0)}%`);
+        const beatsFrom = hzAcc.find(
+          (a) => a.accuracy != null && a.persistenceAccuracy != null && a.accuracy > a.persistenceAccuracy);
+        return (
+          <div style={{
+            display: "flex", alignItems: "center", gap: 14, flexWrap: "wrap",
+            padding: "8px 12px", borderRadius: 8, background: "#f8fafc",
+            border: "1px solid #e2e8f0", fontSize: "0.75rem", color: "#64748b",
+          }}>
+            <span style={{ fontWeight: 700, color: "#334155", whiteSpace: "nowrap" }}>
+              {(() => {
+                const a0 = first.accuracy ?? 0;
+                const a1 = last.accuracy ?? 0;
+                if (a1 < a0 - 0.03) return "Accuracy fades with distance";
+                if (a1 > a0 + 0.03) return "Accuracy improves with distance";
+                return "Accuracy holds across the horizon";
+              })()}
+            </span>
+            <span style={{ display: "inline-flex", gap: 4, alignItems: "flex-end", height: 26 }}>
+              {hzAcc.map((a) => {
+                const beats = a.accuracy != null && a.persistenceAccuracy != null
+                  && a.accuracy > a.persistenceAccuracy;
+                return (
+                  <span
+                    key={a.horizon}
+                    title={`+${a.horizon}h — model ${pct(a.accuracy)}, "nothing changes" ${pct(a.persistenceAccuracy)}`}
+                    style={{
+                      width: 9, borderRadius: 2, background: beats ? "#16a34a" : "#cbd5e1",
+                      height: `${Math.max(4, ((a.accuracy ?? 0) - 0.5) * 90)}px`,
+                    }}
+                  />
+                );
+              })}
+            </span>
+            <span style={{ whiteSpace: "nowrap" }}>
+              <b style={{ color: "#334155" }}>{pct(first.accuracy)}</b> at +1h →{" "}
+              <b style={{ color: "#334155" }}>{pct(last.accuracy)}</b> at +{last.horizon}h
+            </span>
+            {/* The full benchmark sentence lived here and doubled the height of
+                the strip. It is one hover away instead. */}
+            <span
+              style={{ color: "#94a3b8", cursor: "help" }}
+              title={
+                !beatsFrom
+                  ? "Never beats simply assuming nothing changes — the map adds no value over the current state."
+                  : beatsFrom.horizon === 1
+                  ? `Beats "assume nothing changes" at every horizon; that benchmark falls to ${pct(last.persistenceAccuracy)} by +${last.horizon}h.`
+                  : `Beats "assume nothing changes" from +${beatsFrom.horizon}h onward; below that they are level.`
+              }
+            >
+              {beatsFrom ? "beats no-change ⓘ" : "no better than no-change ⓘ"}
+            </span>
+          </div>
+        );
+      })()}
+
+      {/* Plain-language read of the grid */}
+      <div
+        style={{
+          padding: "9px 12px",
+          borderRadius: "8px",
+          background: model.firstSevere ? "#fef2f2" : "#f0fdf4",
+          border: `1px solid ${model.firstSevere ? "#fecaca" : "#bbf7d0"}`,
+          color: model.firstSevere ? "#991b1b" : "#166534",
+          fontSize: "0.86rem",
+          lineHeight: 1.5,
+        }}
+      >
         {headline}
       </div>
 
-      {/* Row 3: how many, where, how long, how sure — once each, one line. */}
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(4, minmax(0, 1fr))", gap: "10px 16px", padding: "10px 14px", background: "#f8fafc", border: "1px solid #e2e8f0", borderRadius: 10 }}>
-        {stat(`${nSevere} of ${segments.length}`, nSevere > 0 ? "exits with a jam expected" : "exits affected · clear", nSevere > 0 ? "#b91c1c" : "#15803d")}
-        {stat(kmSpan != null ? `km ${model.kmFrom}–${model.kmTo}` : "—", kmSpan != null ? `${kmSpan} km${model.contiguous ? ", one stretch" : ", not contiguous"}` : "no congestion predicted")}
-        {stat(model.allHours ? `all ${model.maxHour}h` : model.worstSegment ? `${model.worstSegmentCount} of ${hourLabels.length}h` : "—", model.flatHours ? "same every hour" : "at the worst exit")}
-        {stat(model.confLo != null && model.confHi != null ? `${Math.round(model.confLo * 100)}–${Math.round(model.confHi * 100)}%` : "—",
-              model.confLo != null && model.confLo < LOW_CONF ? "confidence · below 80%, indicative" : "confidence on severe cells",
-              model.confLo != null && model.confLo < LOW_CONF ? "#b45309" : undefined)}
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(165px, 1fr))", gap: "8px" }}>
+        {/* Previously four cards, three of which restated the sentence above and
+            two of which showed the SAME number ("Severe risk 5 of 20" and "Heavy
+            or worse 5 of 20") because the model never predicts Heavy. These
+            answer different questions: how many, where, how long, how sure. */}
+        {kpi("Exits affected", `${model.severeSegments.length} of ${segments.length}`,
+             model.severeSegments.length > 0 ? "forecast below 30 km/h" : "corridor is clear",
+             model.severeSegments.length > 0 ? "#b91c1c" : "#15803d")}
+        {kpi("Where", kmSpan != null ? `km ${model.kmFrom}–${model.kmTo}` : "—",
+             kmSpan != null
+               ? `${kmSpan} km${model.contiguous ? " · one unbroken stretch" : " · not contiguous"}`
+               : "no congestion predicted")}
+        {kpi("How long", model.allHours ? `all ${model.maxHour}h` : model.worstSegment ? `${model.worstSegmentCount} of ${hourLabels.length}h` : "—",
+             model.flatHours ? "same every hour — no peak window" : "varies by hour")}
+        {kpi("Model confidence",
+             model.confLo != null && model.confHi != null
+               ? `${Math.round(model.confLo * 100)}–${Math.round(model.confHi * 100)}%`
+               : "—",
+             model.confLo != null && model.confLo < LOW_CONF ? "below the 80% mark — treat as indicative" : "on the severe predictions",
+             model.confLo != null && model.confLo < LOW_CONF ? "#b45309" : undefined)}
       </div>
 
-      {/* Row 4: the grid, with its legend and its exit picker attached to it. */}
-      <div>
-        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, flexWrap: "wrap", marginBottom: 2 }}>
-          <div style={{ display: "flex", gap: 12, alignItems: "center", fontSize: "0.74rem", color: "#64748b", flexWrap: "wrap" }}>
-            {(["Low", "Med", "High"] as State[]).map((st) => {
-              const absent = st === "Med" && !model.everHeavy;
+      <div style={{ width: "100%", height: `${chartHeight}px` }}>
+        <DashboardChart option={option} height={chartHeight} />
+      </div>
+
+      {/* Per-exit chips. "Show all 20" was all-or-nothing; usually a reader
+          wants the default five plus the two or three exits they are
+          responsible for. Ordered by how soon each turns severe, so the ones
+          worth adding surface first. */}
+      {(hiddenCount > 0 || extraExits.length > 0) && (
+        <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
+          <span style={{ fontSize: "0.72rem", color: "#94a3b8", fontWeight: 600, marginRight: 2 }}>
+            Add exit
+            {urgentHidden && (
+              <span style={{ color: "#b45309" }}> · some hidden turn severe sooner</span>
+            )}
+          </span>
+
+          {[...hiddenSegments]
+            .sort((a, b) => (firstSevere(a) ?? 99) - (firstSevere(b) ?? 99))
+            .map((sg) => {
+              const f = firstSevere(sg);
+              const early = f != null && f < earliestShown;
               return (
-                <span key={st} title={absent ? "Heavy would need jams averaging 30–60 km/h; reported jams almost never run that fast, so the model has nothing to learn it from" : undefined}
-                      style={{ display: "inline-flex", alignItems: "center", gap: 5, whiteSpace: "nowrap", opacity: absent ? 0.45 : 1 }}>
-                  <span style={{ width: 11, height: 11, background: STATE_META[st].color, borderRadius: 3 }} />
-                  {STATE_META[st].label} <span style={{ color: "#94a3b8" }}>{STATE_META[st].speed}</span>
-                  {absent && <span style={{ color: "#94a3b8", fontStyle: "italic" }}>· never predicted</span>}
-                </span>
+                <button
+                  key={sg}
+                  onClick={() => setExtraExits((cur) => [...cur, sg])}
+                  title={f ? `Turns severe at +${f}h` : "Stays clear across the window"}
+                  style={{
+                    padding: "3px 9px", borderRadius: 999, cursor: "pointer", fontSize: "0.71rem",
+                    fontWeight: 600, background: "var(--bg-surface, #fff)",
+                    border: `1px solid ${early ? "#fcd9a4" : "var(--border-default, #dce2ef)"}`,
+                    color: early ? "#b45309" : "#64748b",
+                  }}
+                >
+                  + {sg}
+                  {f != null && <span style={{ opacity: 0.7 }}> · +{f}h</span>}
+                </button>
               );
             })}
-            {model.lowConfCount > 0 && <span style={{ color: "#94a3b8", whiteSpace: "nowrap" }}><b>*</b> confidence under 80%</span>}
-            <span style={{ color: "#94a3b8" }} title="States come from Waze jam reports at each exit, hour by hour. Severe means jams were reported and averaged under 30 km/h; Clear means the model expects no report.">
-              · from Waze jam reports ⓘ
-            </span>
-          </div>
 
-          {/* Which exits are drawn. A select instead of fifteen chips: the
-              reader pulls in the two or three they are responsible for. */}
-          <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: "0.72rem", color: "#64748b", flexWrap: "wrap" }}>
-            <span>{shownSegments.length} of {segments.length} exits</span>
-            {hiddenCount > 0 && (
-              <select
-                value=""
-                onChange={(e) => { if (e.target.value) setExtraExits((cur) => [...cur, e.target.value]); }}
-                title={urgentHidden ? "Some hidden exits turn severe sooner than any shown" : undefined}
-                style={{ font: "inherit", fontWeight: 600, color: urgentHidden ? "#b45309" : "#475569", background: "#fff", border: `1px solid ${urgentHidden ? "#fcd9a4" : "#dce2ef"}`, borderRadius: 8, padding: "3px 8px", cursor: "pointer" }}
-              >
-                <option value="">{urgentHidden ? "Add exit… (some hidden turn severe sooner)" : "Add exit…"}</option>
-                {hiddenSorted.map((sg) => {
-                  const f = firstSevere(sg);
-                  return <option key={sg} value={sg}>{sg}{f != null ? ` — severe at +${f}h` : " — stays clear"}</option>;
-                })}
-              </select>
-            )}
-            {hiddenCount > 0 && (
-              <button onClick={() => setExtraExits(hiddenSegments)} style={{ padding: "3px 9px", borderRadius: 999, cursor: "pointer", fontSize: "0.71rem", fontWeight: 700, background: "#fff", border: "1px solid #dce2ef", color: "#475569" }}>
-                All {segments.length}
-              </button>
-            )}
-            {extraExits.length > 0 && (
-              <button onClick={() => setExtraExits([])} style={{ padding: "3px 6px", borderRadius: 999, cursor: "pointer", fontSize: "0.71rem", fontWeight: 600, background: "transparent", border: "none", color: "#94a3b8" }}>
-                reset
-              </button>
-            )}
-          </div>
-        </div>
-
-        <div style={{ width: "100%", height: `${chartHeight}px` }}>
-          <DashboardChart option={option} height={chartHeight} />
-        </div>
-      </div>
-
-      {/* Row 5: what to act on. Four rows; the rest in the dialog. */}
-      <div>
-        <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 12, marginBottom: 8 }}>
-          <h4 style={{ margin: 0, fontSize: "0.88rem", color: "#0f172a", fontWeight: 700 }}>
-            What to act on <span style={{ color: "#94a3b8", fontWeight: 500 }}>· {model.severeCount} severe, {alerts.length - model.severeCount} heavy</span>
-          </h4>
-          {alerts.length > VISIBLE_ALERTS && (
-            <button onClick={() => setAlertsOpen(true)} style={{ display: "inline-flex", alignItems: "center", gap: 6, border: "1px solid #dce2ef", background: "#fff", borderRadius: 999, padding: "4px 12px", fontSize: "0.74rem", fontWeight: 600, color: "#475569", cursor: "pointer" }}>
-              View all {alerts.length}
-              <svg width="12" height="12" viewBox="0 0 16 16" fill="none"><path d="M6 3.5L10.5 8L6 12.5" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" /></svg>
+          {hiddenCount > 0 && (
+            <button
+              onClick={() => setExtraExits(hiddenSegments)}
+              style={{
+                padding: "3px 9px", borderRadius: 999, cursor: "pointer", fontSize: "0.71rem",
+                fontWeight: 700, background: "var(--bg-surface, #fff)",
+                border: "1px solid var(--border-default, #dce2ef)", color: "#475569",
+              }}
+            >
+              All {segments.length}
+            </button>
+          )}
+          {extraExits.length > 0 && (
+            <button
+              onClick={() => setExtraExits([])}
+              style={{
+                padding: "3px 9px", borderRadius: 999, cursor: "pointer", fontSize: "0.71rem",
+                fontWeight: 600, background: "transparent", border: "none", color: "#94a3b8",
+              }}
+            >
+              reset
             </button>
           )}
         </div>
-        <div style={{ display: "grid", gap: 6 }}>
+      )}
+
+      <div>
+        <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: "12px", marginBottom: "10px" }}>
+          <h4 style={{ margin: 0, fontSize: "0.9rem", color: "#0f172a", fontWeight: 700 }}>
+            What to act on{" "}
+            <span style={{ color: "#94a3b8", fontWeight: 500 }}>
+              · {model.severeCount} severe, {alerts.length - model.severeCount} heavy
+            </span>
+          </h4>
+          {alerts.length > VISIBLE_ALERTS && (
+            <button
+              onClick={() => setAlertsOpen(true)}
+              style={{
+                display: "inline-flex", alignItems: "center", gap: "6px",
+                border: "1px solid #dce2ef", background: "#fff", borderRadius: "999px",
+                padding: "5px 13px", fontSize: "0.76rem", fontWeight: 600, color: "#475569", cursor: "pointer",
+              }}
+            >
+              View all {alerts.length}
+              <svg width="12" height="12" viewBox="0 0 16 16" fill="none">
+                <path d="M6 3.5L10.5 8L6 12.5" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+              </svg>
+            </button>
+          )}
+        </div>
+
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(320px, 1fr))", gap: "10px" }}>
           {alerts.length === 0 ? (
-            <div style={{ padding: "10px 12px", background: "#f0fdf4", border: "1px solid #bbf7d0", borderRadius: 8, fontSize: "0.84rem", color: "#166534" }}>
+            <div style={{ padding: "12px 14px", background: "#f0fdf4", border: "1px solid #bbf7d0", borderRadius: "8px", fontSize: "0.85rem", color: "#166534" }}>
               No heavy or severe congestion predicted in the next {hourLabels.length} hours.
             </div>
           ) : (
-            shown.map((a, i) => alertRow(a, `${a.segment}-${a.from}-${i}`))
+            shown.map((a, i) => alertCard(a, `${a.segment}-${a.from}-${i}`))
           )}
         </div>
       </div>
-
-      {/* Row 6: model evidence, behind one disclosure. */}
-      {hzAcc.length > 1 && hzFirst && hzLast && (
-        <details style={{ fontSize: "0.76rem", color: "#64748b", borderTop: "1px solid #eef2f7", paddingTop: 10 }}>
-          <summary style={{ cursor: "pointer", color: "#475569", fontWeight: 600, listStyle: "none", display: "flex", gap: 14, flexWrap: "wrap" }}>
-            <span>Details</span>
-            <span style={{ color: "#94a3b8" }}>
-              {(() => {
-                const a0 = hzFirst.accuracy ?? 0; const a1 = hzLast.accuracy ?? 0;
-                return a1 < a0 - 0.03 ? "accuracy fades with distance" : a1 > a0 + 0.03 ? "accuracy improves with distance" : "accuracy holds across the horizon";
-              })()} · {pct(hzFirst.accuracy)} at +1h → {pct(hzLast.accuracy)} at +{hzLast.horizon}h
-            </span>
-            <span style={{ color: "#94a3b8" }}>{beatsFrom ? "beats no-change" : "no better than no-change"}</span>
-          </summary>
-
-          <div style={{ display: "grid", gap: 10, marginTop: 10 }}>
-            <div style={{ display: "flex", alignItems: "flex-end", gap: 4, height: 34 }}>
-              {hzAcc.map((a) => {
-                const beats = a.accuracy != null && a.persistenceAccuracy != null && a.accuracy > a.persistenceAccuracy;
-                return (
-                  <span key={a.horizon} title={`+${a.horizon}h — model ${pct(a.accuracy)}, "nothing changes" ${pct(a.persistenceAccuracy)}`}
-                        style={{ width: 14, borderRadius: 2, background: beats ? "#16a34a" : "#cbd5e1", height: `${Math.max(4, ((a.accuracy ?? 0) - 0.5) * 110)}px` }} />
-                );
-              })}
-              <span style={{ marginLeft: 8, alignSelf: "center" }}>
-                Accuracy by hour ahead, +1h to +{hzLast.horizon}h · green where it beats assuming nothing changes
-                {beatsFrom && beatsFrom.horizon > 1 && <> (from +{beatsFrom.horizon}h)</>}
-                {hzLast.persistenceAccuracy != null && <> · that benchmark falls to {pct(hzLast.persistenceAccuracy)} by +{hzLast.horizon}h</>}
-              </span>
-            </div>
-            <p style={{ margin: 0, lineHeight: 1.55, color: "#94a3b8" }}>
-              {modelInfo?.model ?? "The model"} classifies each exit-hour as clear or severe from whether Waze jams were reported there and how slow they ran
-              {modelInfo?.baseline?.accuracy != null && <>, at {(modelInfo.accuracy! * 100).toFixed(1)}% against {(modelInfo.baseline.accuracy * 100).toFixed(1)}% for the {modelInfo.baseline.model.toLowerCase()} baseline</>}.
-              {!model.everHeavy && <> It never predicts Heavy: that would need jams averaging 30–60 km/h, and reported jams almost never do.</>}
-              {" "}Because most daytime hours on the corridor carry at least one jam report, the grid runs mostly red; the informative cells are the clear ones and the hour a run begins.
-              {" "}Confidence is the model&apos;s certainty in its classification, not the probability of congestion.
-            </p>
-          </div>
-        </details>
-      )}
 
       {/* Full list in a dialog — the inline expander pushed the rest of the
           page down and trapped 29 cards in a small scroll box. */}
       {alertsOpen && (
-        <div role="dialog" aria-modal="true" aria-label="All predicted congestion episodes" onClick={() => setAlertsOpen(false)}
-             style={{ position: "fixed", inset: 0, zIndex: 200, background: "rgba(15, 23, 42, 0.55)", display: "grid", placeItems: "center", padding: 24 }}>
-          <div onClick={(e) => e.stopPropagation()}
-               style={{ width: "min(980px, 100%)", maxHeight: "84vh", display: "flex", flexDirection: "column", background: "#fff", borderRadius: 14, boxShadow: "0 24px 60px rgba(15,23,42,0.3)", overflow: "hidden" }}>
-            <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 16, padding: "18px 22px", borderBottom: "1px solid #e2e8f0" }}>
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-label="All predicted congestion episodes"
+          onClick={() => setAlertsOpen(false)}
+          style={{
+            position: "fixed", inset: 0, zIndex: 200,
+            background: "rgba(15, 23, 42, 0.55)",
+            display: "grid", placeItems: "center", padding: "24px",
+          }}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            style={{
+              width: "min(980px, 100%)", maxHeight: "84vh",
+              display: "flex", flexDirection: "column",
+              background: "#fff", borderRadius: "14px",
+              boxShadow: "0 24px 60px rgba(15,23,42,0.3)", overflow: "hidden",
+            }}
+          >
+            <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: "16px", padding: "18px 22px", borderBottom: "1px solid #e2e8f0" }}>
               <div>
-                <h3 style={{ margin: 0, fontSize: "1.05rem", fontWeight: 700, color: "#0f172a" }}>Predicted congestion · next {hourLabels.length} hours</h3>
+                <h3 style={{ margin: 0, fontSize: "1.05rem", fontWeight: 700, color: "#0f172a" }}>
+                  Predicted congestion · next {hourLabels.length} hours
+                </h3>
                 <p style={{ margin: "4px 0 0 0", fontSize: "0.8rem", color: "#64748b" }}>
-                  {alerts.length} episodes across {bySegment.length} segments · <b style={{ color: "#b91c1c" }}>{model.severeCount} severe</b>, <b style={{ color: "#b45309" }}>{alerts.length - model.severeCount} heavy</b> · grouped by location
+                  {alerts.length} episodes across {bySegment.length} segments ·{" "}
+                  <b style={{ color: "#b91c1c" }}>{model.severeCount} severe</b>,{" "}
+                  <b style={{ color: "#b45309" }}>{alerts.length - model.severeCount} heavy</b> · grouped by location
                 </p>
               </div>
-              <button onClick={() => setAlertsOpen(false)} aria-label="Close"
-                      style={{ flex: "none", width: 32, height: 32, borderRadius: 8, border: "1px solid #e2e8f0", background: "#fff", color: "#475569", cursor: "pointer", display: "grid", placeItems: "center", fontSize: "1rem", lineHeight: 1 }}>
+              <button
+                onClick={() => setAlertsOpen(false)}
+                aria-label="Close"
+                style={{
+                  flex: "none", width: 32, height: 32, borderRadius: "8px",
+                  border: "1px solid #e2e8f0", background: "#fff", color: "#475569",
+                  cursor: "pointer", display: "grid", placeItems: "center", fontSize: "1rem", lineHeight: 1,
+                }}
+              >
                 ✕
               </button>
             </div>
-            <div style={{ overflowY: "auto", padding: "18px 22px", display: "flex", flexDirection: "column", gap: 16 }}>
+
+            <div style={{ overflowY: "auto", padding: "18px 22px", display: "flex", flexDirection: "column", gap: "18px" }}>
               {bySegment.map(({ seg, runs }) => (
                 <div key={seg}>
-                  <div style={{ display: "flex", alignItems: "baseline", gap: 8, marginBottom: 6 }}>
+                  <div style={{ display: "flex", alignItems: "baseline", gap: "8px", marginBottom: "8px" }}>
                     <span style={{ fontSize: "0.88rem", fontWeight: 700, color: "#0f172a" }}>{seg}</span>
                     <span style={{ fontSize: "0.74rem", color: "#94a3b8" }}>km {kmLabel(KMI.get(seg))}</span>
                     <span style={{ flex: 1, borderBottom: "1px solid #eef2f7" }} />
-                    <span style={{ fontSize: "0.74rem", color: "#94a3b8" }}>{runs.length} {runs.length === 1 ? "episode" : "episodes"}</span>
+                    <span style={{ fontSize: "0.74rem", color: "#94a3b8" }}>
+                      {runs.length} {runs.length === 1 ? "episode" : "episodes"}
+                    </span>
                   </div>
-                  <div style={{ display: "grid", gap: 6 }}>
-                    {runs.map((a, i) => alertRow(a, `modal-${seg}-${a.from}-${i}`))}
+                  <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(290px, 1fr))", gap: "8px" }}>
+                    {runs.map((a, i) => alertCard(a, `modal-${seg}-${a.from}-${i}`))}
                   </div>
                 </div>
               ))}
             </div>
+
             <div style={{ padding: "12px 22px", borderTop: "1px solid #e2e8f0", background: "#f8fafc", fontSize: "0.75rem", color: "#94a3b8" }}>
               Confidence is the model&apos;s certainty in its classification, not the probability of congestion. Press Esc to close.
             </div>

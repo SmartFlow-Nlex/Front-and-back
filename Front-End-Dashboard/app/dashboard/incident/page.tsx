@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { cachedJson } from "../../../lib/cached-json";
+import FeatureBriefing from "../../../components/dashboard/FeatureBriefing";
 import { attachCategoryClick } from "../../../lib/chart-click";
 import { useChartTheme, applyChartTheme, seriesRamp, seriesPair } from "../../../lib/chart-theme";
 import ReactECharts from "echarts-for-react";
@@ -169,10 +169,8 @@ export default function IncidentPage() {
     }
     if (weather !== "all") qs.set("weather", weather);
     if (source !== "all") qs.set("source", source);
-    // Memoised per query string: switching tabs or returning to this page
-    // renders from memory instead of refetching. Five minutes, refreshed
-    // quietly in the background once stale. See lib/cached-json.
-    cachedJson<{ success: boolean; message?: string; data: Analytics }>(`${BACKEND}/api/incident/analytics?${qs}`)
+    fetch(`${BACKEND}/api/incident/analytics?${qs}`, { cache: "no-store" })
+      .then((r) => r.json())
       .then((json) => {
         if (cancelled) return;
         if (!json.success) throw new Error(json.message ?? "Request failed");

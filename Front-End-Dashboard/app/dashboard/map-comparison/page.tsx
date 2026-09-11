@@ -1,13 +1,13 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { cachedJson } from "../../../lib/cached-json";
 import { ChevronDown, Clock, Map, Maximize2, Milestone, Navigation, Search, ZoomIn, ZoomOut } from "lucide-react";
 import type { Feature } from "geojson";
 import TrafficMapPanel from "../../../components/maps/TrafficMapPanel";
 import WazeLiveModal from "../../../components/maps/WazeLiveModal";
 import MapLegend from "../../../components/maps/MapLegend";
 import PageHeader from "../../../components/dashboard/PageHeader";
+import FeatureBriefing from "../../../components/dashboard/FeatureBriefing";
 
 const BACKEND = process.env.NEXT_PUBLIC_BACKEND_URL ?? "http://localhost:4000";
 
@@ -88,8 +88,9 @@ export default function MapComparisonPage() {
 
   useEffect(() => {
     let cancelled = false;
-    cachedJson<{ model?: unknown }>(`${BACKEND}/api/map-comparison/forecast?hours=1`, 10 * 60_000)
-      .then((j) => { if (!cancelled && j?.model) setForecastModel(j.model as never); })
+    fetch(`${BACKEND}/api/map-comparison/forecast?hours=1`, { cache: "no-store" })
+      .then((r) => r.json())
+      .then((j) => { if (!cancelled && j?.model) setForecastModel(j.model); })
       .catch(() => {/* the panel simply says nothing about the model */});
     return () => { cancelled = true; };
   }, []);
@@ -98,8 +99,8 @@ export default function MapComparisonPage() {
   useEffect(() => {
     async function fetchStats() {
       try {
-        // Shared with the Home corridor panel through the same memo.
-        const geojson = await cachedJson<{ features?: Feature[] }>(`${process.env.NEXT_PUBLIC_BACKEND_URL ?? "http://localhost:4000"}/api/map-comparison/real-time`, 25_000);
+        const response = await fetch(`${process.env.NEXT_PUBLIC_BACKEND_URL ?? "http://localhost:4000"}/api/map-comparison/real-time`, { cache: "no-store" });
+        const geojson = await response.json();
         if (geojson && geojson.features) {
           const features = geojson.features as Feature[];
 
@@ -384,6 +385,15 @@ export default function MapComparisonPage() {
         </div>
 
       </div>
+
+      {/* Reads the same corridor-status rows the map draws from, resolved
+          server-side, so the two cannot disagree about which exits are shut. */}
+      <FeatureBriefing
+        feature="corridor_status"
+        title="Corridor Conditions"
+        refreshable
+      />
+
       <WazeLiveModal open={wazeMax} onClose={() => setWazeMax(false)} />
     </section>
   );

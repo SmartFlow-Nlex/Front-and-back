@@ -17,6 +17,27 @@ const envSchema = z.object({
   FRONTEND_ORIGIN: z.string().default("http://localhost:3002"),
   CLIMATIQ_API_KEY: z.string().optional(),
 
+  // Z.ai (GLM) — powers the AI Sandbox natural-language command parser.
+  // Without a key the parser route reports itself unconfigured rather than
+  // failing at call time, so the sandbox stays usable with the manual controls.
+  GLM_API_KEY: z.string().optional(),
+  GLM_BASE_URL: z.string().default("https://api.z.ai/api/paas/v4"),
+  GLM_MODEL: z.string().default("glm-5.3-flash"),
+  // The Flash models reason before answering, which for a fixed extraction
+  // schema costs latency and tokens without improving the result. "enabled"
+  // restores it for a model that needs it or rejects the parameter.
+  GLM_THINKING: z.enum(["disabled", "enabled"]).default("disabled"),
+  // Z.ai's free tier queues requests for 10-40s under load; the paid tier
+  // answers in 1-2s. The ceiling has to clear the slow case.
+  GLM_TIMEOUT_MS: z.coerce.number().int().min(5_000).max(180_000).default(90_000),
+
+  // Zero Data Retention. Only meaningful when GLM_BASE_URL points at
+  // OpenRouter — Z.ai publishes no ZDR tier to request, so the flag has
+  // nothing to attach to there.
+  GLM_ZDR: z.enum(["on", "off"]).default("on"),
+  GLM_SITE_URL: z.string().default("http://localhost:3002"),
+  GLM_SITE_NAME: z.string().default("SmartFlow NLEX"),
+
   // Upstash Redis (live Waze feed). No default — these are real credentials and
   // must never be committed. Without them the map falls back to sample data.
   REDIS_REST_URL: z.string().optional(),

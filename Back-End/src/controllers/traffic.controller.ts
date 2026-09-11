@@ -5,6 +5,7 @@ import { getTrafficVolumesFromDb, getDirectionalFlowFromDb, getVehicleClassDistr
   getCongestionHorizonAccuracy,
   getEventSurgeMetrics
 } from "../services/traffic.service.js";
+import { cached } from "../utils/ttl-cache.js";
 
 // GET /api/traffic/analytics — descriptive dashboard aggregates
 export const getTrafficAnalytics = async (req: Request, res: Response) => {
@@ -75,9 +76,14 @@ export const getIncidents = async (req: Request, res: Response) => {
 // [REQ-01] GET /api/v1/traffic/forecast
 export const getForecast = async (req: Request, res: Response) => {
   const query = ForecastQuerySchema.parse(req.query);
-  
-  // Fetch real ML predictions from AWS PostgreSQL DB
-  const [volumes, congestion, events, modelMetrics, congestionModel, split, horizonAccuracy, congestionHorizon, eventMetrics, upcomingEvents] = await Promise.all([
+
+  /* Ten minutes, keyed by the full query. Everything below reads tables that
+     change only when a training script runs, yet the payload is ~600 KB and
+     the upcoming-events query alone rolls up a 1.1-million-row hourly table
+     (~0.8 s). Three cards on the Predictive tab request this within the same
+     second; with single-flight coalescing they share one run. */
+  const [volumes, congestion, events, modelMetrics, congestionModel, split, horizonAccuracy, congestionHorizon, eventMetrics, upcomingEvents] =
+    await cached(`forecast:${JSON.stringify(query)}`, 10 * 60_000, () => Promise.all([
     getMLPredictiveVolume({ months: query.months, from: query.from, to: query.to, split: query.split }),
     getMLPredictiveCongestion(),
     getMLEventSurge(query.eventDate),
@@ -94,7 +100,7 @@ export const getForecast = async (req: Request, res: Response) => {
     // The next Arena event days with a dated per-exit surge forecast each,
     // so the Prescriptive tab can plan for a real date rather than "an event".
     getUpcomingEventSurge()
-  ]);
+  ]));
 
   if (!volumes && !congestion && !events) {
     return res.status(503).json({ success: false, message: "ML Predictions unavailable: database not reachable" });

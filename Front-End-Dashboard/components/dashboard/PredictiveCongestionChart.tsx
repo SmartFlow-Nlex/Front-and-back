@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import type { EChartsOption } from "echarts";
 import DashboardChart from "./DashboardChart";
+import { loadForecast } from "./prescriptiveTraffic.shared";
 
 type State = "Low" | "Med" | "High";
 
@@ -100,7 +101,6 @@ type CellItem = {
   runStart?: boolean;
   label: { color: string };
 };
-const BACKEND = process.env.NEXT_PUBLIC_BACKEND_URL ?? "http://localhost:4000";
 
 type Alert = { segment: string; state: State; from: number; to: number; conf: number };
 
@@ -130,27 +130,28 @@ export default function PredictiveCongestionChart() {
   useEffect(() => {
     let cancelled = false;
     const timers: ReturnType<typeof setTimeout>[] = [];
-    // Previously this logged to the console and returned, which left `raw` null
-    // and the card stuck on "Loading ML congestion forecast from AWS..." with no
-    // error and no way to recover — a failure looked identical to a slow load.
+    // Reads the shared, cached forecast rather than fetching the ~600 KB
+    // payload again: the volume and event cards on this tab want the same
+    // response in the same second. A failure is not cached by the loader, so
+    // each retry here is a real retry. Previously a failure left the card
+    // stuck on "Loading…" with no way to recover.
     (async () => {
       const MAX_TRIES = 3;
       for (let tryNo = 1; tryNo <= MAX_TRIES; tryNo++) {
         try {
-          const res = await fetch(`${BACKEND}/api/traffic/forecast`);
-          const json = await res.json().catch(() => ({}));
+          const fc = await loadForecast();
           if (cancelled) return;
-          if (res.ok && json.success && json.data?.congestion) {
-            setRaw(json.data.congestion as RawRow[]);
-            setModelInfo(json.data.congestionModel ?? null);
-            if (Array.isArray(json.data.congestionHorizonAccuracy)) {
-              setHzAcc(json.data.congestionHorizonAccuracy as HzAcc[]);
+          if (fc.congestion.length > 0) {
+            setRaw(fc.congestion as unknown as RawRow[]);
+            setModelInfo((fc.extras.congestionModel as ModelInfo | undefined) ?? null);
+            if (Array.isArray(fc.extras.congestionHorizonAccuracy)) {
+              setHzAcc(fc.extras.congestionHorizonAccuracy as HzAcc[]);
             }
             setLoadError(null);
             return;
           }
           if (tryNo === MAX_TRIES) {
-            setLoadError(json.message ?? `HTTP ${res.status}`);
+            setLoadError("No congestion forecast in the payload");
             return;
           }
         } catch (e) {

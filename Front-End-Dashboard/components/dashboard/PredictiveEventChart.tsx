@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import type { EChartsOption } from "echarts";
 import DashboardChart from "./DashboardChart";
+import { loadForecast } from "./prescriptiveTraffic.shared";
 
 type RawRow = {
   exit: string;
@@ -52,7 +53,6 @@ const fmtK = (n: number) => (n >= 1000 ? `${(n / 1000).toFixed(0)}k` : String(n)
 // mistaken for the "Bocaue Interchange" that the event actually hits.
 const NON_EXIT = /barrier|ramp|spur/i;
 
-const BACKEND = process.env.NEXT_PUBLIC_BACKEND_URL ?? "http://localhost:4000";
 
 export default function PredictiveEventChart() {
   const [raw, setRaw] = useState<RawRow[] | null>(null);
@@ -68,13 +68,15 @@ export default function PredictiveEventChart() {
 
   useEffect(() => {
     let cancelled = false;
-    fetch(`${BACKEND}/api/traffic/forecast`)
-      .then((r) => r.json())
-      .then((json) => {
-        if (cancelled || !json.success || !json.data?.events?.length) return;
-        setRaw(json.data.events as RawRow[]);
-        if (Array.isArray(json.data?.eventSurgeMetrics)) setVal(json.data.eventSurgeMetrics);
-        if (Array.isArray(json.data?.upcomingEvents)) setUpcoming(json.data.upcomingEvents as UpcomingEvent[]);
+    // Shared, cached fetch -- see prescriptiveTraffic.shared. This card used to
+    // request the same ~600 KB payload the volume and congestion cards had
+    // already asked for.
+    loadForecast()
+      .then((fc) => {
+        if (cancelled || fc.events.length === 0) return;
+        setRaw(fc.events as unknown as RawRow[]);
+        if (Array.isArray(fc.extras.eventSurgeMetrics)) setVal(fc.extras.eventSurgeMetrics as typeof val);
+        setUpcoming(fc.upcomingEvents as unknown as UpcomingEvent[]);
       })
       .catch((err) => console.error("Failed to fetch ML event surge forecast", err));
     return () => {

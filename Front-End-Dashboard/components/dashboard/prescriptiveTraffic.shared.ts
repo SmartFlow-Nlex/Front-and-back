@@ -7,7 +7,9 @@
  * one row above it would be worse than no panel.
  *
  * The fetch is shared and cached at module scope so mounting three panels costs
- * one request, not three.
+ * one request, not three. The Predictive tab's congestion and event cards
+ * read from it too: the payload is ~600 KB, and each used to fetch it
+ * separately within the same second.
  */
 
 const BACKEND = process.env.NEXT_PUBLIC_BACKEND_URL ?? "http://localhost:4000";
@@ -63,6 +65,11 @@ export type ForecastPayload = {
   congestion: CongestionRow[];
   events: EventRow[];
   upcomingEvents: UpcomingEvent[];
+  /* The rest of the payload, untyped here, so the Predictive cards can share
+     this one fetch instead of each making their own. The congestion and event
+     cards read congestionModel, congestionHorizonAccuracy and
+     eventSurgeMetrics from it; they own those shapes. */
+  extras: Record<string, unknown>;
 };
 
 /* The calendar day a forecast row is FOR.
@@ -104,7 +111,9 @@ let cache: Promise<ForecastPayload> | null = null;
 
 export function loadForecast(): Promise<ForecastPayload> {
   if (!cache) {
-    cache = fetch(`${BACKEND}/api/traffic/forecast?months=all`, { cache: "no-store" })
+    // No cache:"no-store" -- the server now sets a cache and gzips, and the
+    // browser is allowed to keep the response for the same reasons.
+    cache = fetch(`${BACKEND}/api/traffic/forecast?months=all`)
       .then((r) => {
         if (!r.ok) throw new Error(`forecast ${r.status}`);
         return r.json();
@@ -118,6 +127,7 @@ export function loadForecast(): Promise<ForecastPayload> {
           congestion: Array.isArray(d.congestion) ? d.congestion : [],
           events: Array.isArray(d.events) ? d.events : [],
           upcomingEvents: Array.isArray(d.upcomingEvents) ? d.upcomingEvents : [],
+          extras: d,
         } as ForecastPayload;
       })
       .catch((e) => {

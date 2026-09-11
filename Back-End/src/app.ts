@@ -1,4 +1,5 @@
 import cors from "cors";
+import compression from "compression";
 import express from "express";
 import morgan from "morgan";
 import { rateLimit } from "express-rate-limit";
@@ -45,6 +46,9 @@ app.use(
     },
   }),
 );
+/* gzip every response. The forecast payload is ~615 KB of JSON and was going
+   over the wire uncompressed; text this repetitive compresses about 5:1. */
+app.use(compression());
 app.use(express.json({ limit: "2mb" }));
 app.use(morgan("dev"));
 

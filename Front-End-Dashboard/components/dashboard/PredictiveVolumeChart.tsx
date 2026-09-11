@@ -1050,7 +1050,11 @@ export default function PredictiveVolumeChart({ months = "all", from, to, weathe
   const hourLabels = Array.from({ length: 24 }, (_, h) => fmtHour(h));
   const hasActualHours = Boolean(anyHourly?.hours.some((h) => h.actual != null));
 
-  const hourlyWeatherSeries: Record<string, unknown>[] = (showWeather && anyHourly) ? [
+  // Weather is drawn only when this day has readings; an empty rainfall axis
+  // and two legend entries with nothing behind them were noise.
+  const hasWeatherHours = Boolean(anyHourly?.hours.some((h) => h.rainfall != null || h.temperature != null));
+  const drawWeather = showWeather && hasWeatherHours;
+  const hourlyWeatherSeries: Record<string, unknown>[] = (drawWeather && anyHourly) ? [
     {
       name: "Rainfall (mm)",
       type: "bar",
@@ -1082,7 +1086,7 @@ export default function PredictiveVolumeChart({ months = "all", from, to, weathe
 
   const hourlyOption: EChartsOption | null = anyHourly
     ? {
-        grid: { left: 80, right: showWeather ? 80 : 24, top: 28, bottom: 84 },
+        grid: { left: 64, right: drawWeather ? 64 : 24, top: 24, bottom: 64 },
         tooltip: {
           trigger: "axis",
           formatter: (params: unknown) => {
@@ -1106,7 +1110,7 @@ export default function PredictiveVolumeChart({ months = "all", from, to, weathe
           data: [
             ...(hasActualHours ? ["Actual Volume"] : []),
             ...visibleModels.filter((k) => hourlyByModel[k]?.hours.some((h) => h.predicted != null)).map((k) => `${metricsMeta[k].label} Prediction`),
-            ...(showWeather ? ["Rainfall (mm)", "Temperature (\u00B0C)"] : []),
+            ...(drawWeather ? ["Rainfall (mm)", "Temperature (\u00B0C)"] : []),
           ],
           bottom: 0,
           icon: "circle",
@@ -1116,27 +1120,27 @@ export default function PredictiveVolumeChart({ months = "all", from, to, weathe
         xAxis: {
           type: "category",
           data: hourLabels,
-          axisLabel: { color: "var(--text-secondary)", interval: 1, rotate: 45 },
+          axisLabel: { color: "var(--text-secondary)", interval: 1, rotate: 0, fontSize: 11 },
           axisLine: { lineStyle: { color: "var(--border-strong)" } },
         },
         yAxis: [
           {
             type: "value",
-            name: "Vehicle Volume",
+            name: "Vehicles per hour",
             nameLocation: "middle",
-            nameGap: 60,
+            nameGap: 48,
             axisLabel: { color: "var(--text-secondary)", formatter: (val: number) => `${(val / 1000).toFixed(0)}k` },
             splitLine: { lineStyle: { color: "var(--border-default)", type: "dashed" } },
           },
           {
             type: "value",
-            name: showWeather ? "Rainfall (mm)" : "",
+            name: drawWeather ? "Rainfall (mm)" : "",
             nameLocation: "middle",
-            nameGap: 50,
+            nameGap: 44,
             nameTextStyle: { color: "#0284c7", fontSize: 11, fontWeight: "bold" },
             position: "right",
-            axisLabel: { show: showWeather, color: "#0284c7", formatter: (val: number) => `${val.toFixed(0)}` },
-            axisLine: { show: showWeather, lineStyle: { color: "#0284c7" } },
+            axisLabel: { show: drawWeather, color: "#0284c7", formatter: (val: number) => `${val.toFixed(0)}` },
+            axisLine: { show: drawWeather, lineStyle: { color: "#0284c7" } },
             splitLine: { show: false },
             min: 0,
             max: (value: { max: number }) => Math.max(Math.ceil(value.max * 2.5), 10),
@@ -1188,6 +1192,7 @@ export default function PredictiveVolumeChart({ months = "all", from, to, weathe
           <div style={{ minWidth: 0 }}>
             <h3 style={{ fontSize: "1.05rem", color: "var(--text-primary)", fontWeight: 700, margin: 0, letterSpacing: "-0.01em", display: "flex", alignItems: "center", gap: "8px", flexWrap: "wrap" }}>
               Hourly Breakdown — {drillLabel}
+              <InfoTooltip text="Blue bars are the vehicles counted at the toll plazas in each hour of this day. The model line is that model's daily prediction spread across the day in the shape of a typical same-weekday, so you can see where the day ran above or below expectation." />
               {anyHourly && (
                 <span style={{ fontSize: "0.8rem", padding: "2px 8px", background: "var(--border-default)", color: "var(--text-secondary)", borderRadius: "12px", fontWeight: 600 }}>
                   {anyHourly.weekday}
@@ -1199,11 +1204,23 @@ export default function PredictiveVolumeChart({ months = "all", from, to, weathe
                 </span>
               )}
             </h3>
-            <p style={{ color: "var(--text-secondary)", fontSize: "0.82rem", margin: "4px 0 0 0", maxWidth: "80ch" }}>
-              {anyHourly?.profileSource === "weekday-profile"
-                ? `No hourly ground truth exists for a future date — each model's daily total is distributed over the typical ${anyHourly.weekday} shape from the last 90 days.`
-                : "Observed hourly volume for this day, with each model's daily prediction distributed across the same shape."}
-            </p>
+            {anyHourly && (() => {
+              const k = visibleModels[0];
+              const h = k ? hourlyByModel[k] : undefined;
+              const pct = h?.dayPredicted != null && anyHourly.dayActual ? ((h.dayPredicted - anyHourly.dayActual) / anyHourly.dayActual) * 100 : null;
+              return (
+                <p style={{ color: "var(--text-secondary)", fontSize: "0.84rem", margin: "6px 0 0 0" }}>
+                  {anyHourly.profileSource === "weekday-profile"
+                    ? <>Forecast day: each model&apos;s daily total spread over a typical {anyHourly.weekday}.</>
+                    : <>
+                        Peak <b style={{ color: "var(--text-primary)" }}>{extremeLabel(anyHourly.hours, "max")}</b> · quietest <b style={{ color: "var(--text-primary)" }}>{extremeLabel(anyHourly.hours, "min")}</b>
+                        {k && h?.dayPredicted != null && pct != null && (
+                          <> · {metricsMeta[k].label} was <b style={{ color: Math.abs(pct) <= 5 ? "var(--color-success)" : "var(--color-warning)" }}>{Math.abs(pct).toFixed(1)}% {pct < 0 ? "under" : "over"}</b> the day&apos;s actual</>
+                        )}
+                      </>}
+                </p>
+              );
+            })()}
             {weather !== "all" && (
               <p style={{ color: anyHourly && anyHourly.observedHours === 0 ? "var(--color-warning)" : "var(--text-secondary)", fontSize: "0.78rem", margin: "4px 0 0 0" }}>
                 {anyHourly && anyHourly.observedHours === 0
@@ -1272,7 +1289,14 @@ export default function PredictiveVolumeChart({ months = "all", from, to, weathe
               return (
                 <div key={k} style={{ background: "var(--bg-surface-hover)", padding: "12px 14px", borderRadius: "8px", border: "1px solid #e2e8f0" }}>
                   <div style={{ fontSize: "0.72rem", color: "var(--text-secondary)", textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: "4px" }}>{metricsMeta[k].label} Predicted</div>
-                  <div style={{ fontSize: "1.1rem", fontWeight: 700, color: metricsMeta[k].color }}>{h?.dayPredicted != null ? fmtVeh(h.dayPredicted) : "—"}</div>
+                  <div style={{ fontSize: "1.1rem", fontWeight: 700, color: metricsMeta[k].color }}>
+                    {h?.dayPredicted != null ? fmtVeh(h.dayPredicted) : "—"}
+                    {h?.dayPredicted != null && anyHourly.dayActual ? (
+                      <span style={{ marginLeft: 8, fontSize: "0.74rem", fontWeight: 600, color: "var(--text-secondary)" }}>
+                        {(((h.dayPredicted - anyHourly.dayActual) / anyHourly.dayActual) * 100).toFixed(1)}% vs actual
+                      </span>
+                    ) : null}
+                  </div>
                 </div>
               );
             })}

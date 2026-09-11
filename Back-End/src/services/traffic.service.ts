@@ -1048,13 +1048,15 @@ export async function getMLPredictiveVolumeHourly(
          FROM gold.ml_predictive_volume WHERE forecast_date = $1::date AND split_label = $2`,
         [date, split]
       ),
-      // Observed hourly totals, if this date has been recorded
+      // Observed hourly totals, if this date has been recorded. Entries and the
+      // 'Total' class only: the table also carries per-class rows and exit
+      // records, and summing everything gave bars adding to twice the day.
       wetFilter === null
         ? db.query(
             `SELECT u.hr - 1 AS hour, COALESCE(SUM(u.v), 0)::bigint AS v
              FROM nlex_traffic_volume t,
                   LATERAL unnest(${HOUR_ARRAY}) WITH ORDINALITY AS u(v, hr)
-             WHERE t.date = $1::date
+             WHERE t.date = $1::date AND t.type = 'Entries' AND t.vehicle_class = 'Total'
              GROUP BY 1 ORDER BY 1`,
             [date]
           )
@@ -1066,7 +1068,7 @@ export async function getMLPredictiveVolumeHourly(
                SELECT t.date AS d, u.hr - 1 AS hour, u.v AS v
                FROM nlex_traffic_volume t,
                     LATERAL unnest(${HOUR_ARRAY}) WITH ORDINALITY AS u(v, hr)
-               WHERE t.date = $1::date
+               WHERE t.date = $1::date AND t.type = 'Entries' AND t.vehicle_class = 'Total'
              )
              SELECT hv.hour, COALESCE(SUM(hv.v), 0)::bigint AS v
              FROM hv JOIN wx w ON w.d = hv.d AND w.h = hv.hour
@@ -1080,7 +1082,8 @@ export async function getMLPredictiveVolumeHourly(
            SELECT t.date, u.hr - 1 AS hour, u.v
            FROM nlex_traffic_volume t,
                 LATERAL unnest(${HOUR_ARRAY}) WITH ORDINALITY AS u(v, hr)
-           WHERE EXTRACT(dow FROM t.date) = EXTRACT(dow FROM $1::date)
+           WHERE t.type = 'Entries' AND t.vehicle_class = 'Total'
+             AND EXTRACT(dow FROM t.date) = EXTRACT(dow FROM $1::date)
              AND t.date < $1::date
              AND t.date >= $1::date - interval '90 days'
          )

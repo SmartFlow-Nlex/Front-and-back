@@ -334,6 +334,32 @@ export default function IncidentNarrative({
           {weather !== "all" ? ` · scored on ${weather} days only` : null}
         </p>
 
+      {/* Same rows the prose above was composed from, so the two cannot
+          describe different models. */}
+      <AiModelInsight
+        quantity="incidents"
+        horizonDays={horizonDays}
+        weatherMode={weather === "all" ? null : "with"}
+        labelFor={(name) => META[name as ModelKey]?.label ?? name}
+        metrics={selected
+          .map((k) => byModel.get(k))
+          .filter((r): r is ModelMetric => !!r)
+          .map<InsightMetric>((r) => ({
+            model: r.model,
+            wmape: r.WMAPE,
+            mae: r.MAE,
+            rmse: r.RMSE,
+            r2: r.R2,
+            mase: r.MASE,
+            // The incident pipeline marks one champion rather than ranking the
+            // roster, and scores every candidate — so there is no rank to send
+            // and nothing here is rejected.
+            rank: null,
+            accepted: true,
+            diagnosis: r.Diagnosis,
+          }))}
+      />
+
         {selected.map((k) => {
         const r = byModel.get(k);
         if (!r) {
@@ -458,31 +484,6 @@ export default function IncidentNarrative({
         last training run rather than the days currently on screen.
       </p>
 
-      {/* Same rows the prose above was composed from, so the two cannot
-          describe different models. */}
-      <AiModelInsight
-        quantity="incidents"
-        horizonDays={horizonDays}
-        weatherMode={weather === "all" ? null : "with"}
-        labelFor={(name) => META[name as ModelKey]?.label ?? name}
-        metrics={selected
-          .map((k) => byModel.get(k))
-          .filter((r): r is ModelMetric => !!r)
-          .map<InsightMetric>((r) => ({
-            model: r.model,
-            wmape: r.WMAPE,
-            mae: r.MAE,
-            rmse: r.RMSE,
-            r2: r.R2,
-            mase: r.MASE,
-            // The incident pipeline marks one champion rather than ranking the
-            // roster, and scores every candidate — so there is no rank to send
-            // and nothing here is rejected.
-            rank: null,
-            accepted: true,
-            diagnosis: r.Diagnosis,
-          }))}
-      />
       </div>
       )}
     </section>

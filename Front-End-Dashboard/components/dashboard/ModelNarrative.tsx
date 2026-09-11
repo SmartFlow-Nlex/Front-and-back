@@ -263,6 +263,36 @@ export default function ModelNarrative({
           {showWeather === undefined ? null : showWeather ? " · weather-driven variants" : " · weather-free variants"}
         </p>
 
+      {/* Same rows the prose above was composed from, so the two cannot
+          describe different models. */}
+      <AiModelInsight
+        quantity={quantity}
+        horizonDays={horizonDays}
+        scoredDays={scoredDays}
+        windowStart={windowStart}
+        windowEnd={windowEnd}
+        weatherMode={showWeather === undefined ? null : showWeather ? "with" : "without"}
+        labelFor={(name) => {
+          const key = Object.keys(DBN).find((k) => DBN[k] === name);
+          return key ? LBL[key] ?? name : name;
+        }}
+        metrics={selected
+          .map((k) => rowFor(k))
+          .filter((r): r is MetricRow => !!r)
+          .map<InsightMetric>((r) => ({
+            model: r.model_name,
+            wmape: r.wmape,
+            mae: r.mae,
+            rmse: r.rmse,
+            r2: r.r2,
+            mase: r.mase,
+            rank: r.rank,
+            accepted: r.accepted,
+            rejectedReason: r.rejected_reason,
+            diagnosis: r.diagnosis ?? null,
+          }))}
+      />
+
         {selected.map((k) => {
         const r = rowFor(k);
         if (!r) {
@@ -391,35 +421,6 @@ export default function ModelNarrative({
         {quantityNote ? <> {quantityNote}</> : null}
       </p>
 
-      {/* Same rows the prose above was composed from, so the two cannot
-          describe different models. */}
-      <AiModelInsight
-        quantity={quantity}
-        horizonDays={horizonDays}
-        scoredDays={scoredDays}
-        windowStart={windowStart}
-        windowEnd={windowEnd}
-        weatherMode={showWeather === undefined ? null : showWeather ? "with" : "without"}
-        labelFor={(name) => {
-          const key = Object.keys(DBN).find((k) => DBN[k] === name);
-          return key ? LBL[key] ?? name : name;
-        }}
-        metrics={selected
-          .map((k) => rowFor(k))
-          .filter((r): r is MetricRow => !!r)
-          .map<InsightMetric>((r) => ({
-            model: r.model_name,
-            wmape: r.wmape,
-            mae: r.mae,
-            rmse: r.rmse,
-            r2: r.r2,
-            mase: r.mase,
-            rank: r.rank,
-            accepted: r.accepted,
-            rejectedReason: r.rejected_reason,
-            diagnosis: r.diagnosis ?? null,
-          }))}
-      />
       </div>
       )}
     </section>

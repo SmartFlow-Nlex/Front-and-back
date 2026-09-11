@@ -1,5 +1,5 @@
 import { Router } from "express";
-import { modelNarrative, insightStatus } from "../controllers/ai-insight.controller.js";
+import { modelNarrative, insightStatus, explainFeature } from "../controllers/ai-insight.controller.js";
 
 const router = Router();
 
@@ -12,5 +12,6 @@ const router = Router();
  */
 router.get("/status", insightStatus);
 router.post("/model-narrative", modelNarrative);
+router.post("/explain", explainFeature);
 
 export default router;

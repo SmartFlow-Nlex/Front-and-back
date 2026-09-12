@@ -40,9 +40,16 @@ export default function FeatureBriefing({
   const [busy, setBusy] = useState(true);
   const [failed, setFailed] = useState(false);
   const [showFacts, setShowFacts] = useState(false);
-  const cancelled = useRef(false);
+  const mounted = useRef(true);
+  // Identifies the request whose answer is still wanted. Tying cancellation to
+  // the request rather than to the effect's lifetime means a re-render cannot
+  // orphan a call that is still running — which, on a request that takes the
+  // better part of a minute, is the difference between the panel resolving and
+  // it sitting on "Preparing the read-out…" indefinitely.
+  const reqId = useRef(0);
 
   const load = useCallback(() => {
+    const id = ++reqId.current;
     setBusy(true);
     setFailed(false);
     fetch(`${BACKEND}/api/ai-insight/explain`, {
@@ -52,21 +59,34 @@ export default function FeatureBriefing({
     })
       .then((r) => r.json())
       .then((j) => {
-        if (cancelled.current) return;
+        if (!mounted.current || reqId.current !== id) return; // superseded or gone
         if (j?.success) setData(j.data as Briefing);
         else setFailed(true);
       })
-      .catch(() => !cancelled.current && setFailed(true))
-      .finally(() => !cancelled.current && setBusy(false));
+      .catch(() => {
+        if (mounted.current && reqId.current === id) setFailed(true);
+      })
+      .finally(() => {
+        if (mounted.current && reqId.current === id) setBusy(false);
+      });
   }, [feature, months]);
 
+  // What has already been auto-loaded. Without this, React's development
+  // double-invoke fires the request twice on every mount — two calls of ~48s
+  // each, and twice the tokens, for one panel.
+  const autoLoadedFor = useRef<string | null>(null);
+
   useEffect(() => {
-    cancelled.current = false;
-    load();
+    mounted.current = true;
+    const wanted = `${feature}|${months ?? "12"}`;
+    if (autoLoadedFor.current !== wanted) {
+      autoLoadedFor.current = wanted;
+      load();
+    }
     return () => {
-      cancelled.current = true;
+      mounted.current = false;
     };
-  }, [load]);
+  }, [feature, months, load]);
 
   if (failed && !data) return null;
 

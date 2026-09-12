@@ -31,8 +31,19 @@ export type Vehicle = {
 };
 
 export type Interventions = {
-  closedLanes: boolean[]; // per-lane; closed from `closurePoint` to the end
-  closurePoint: number; // metres
+  closedLanes: boolean[]; // per-lane
+  /**
+   * Where a closure begins, in metres from the start of the simulated span.
+   * Traffic must merge out before reaching it.
+   */
+  closurePoint: number;
+  /**
+   * Where it ends and the lane reopens. Roadworks occupy a stretch, not a
+   * half-line: an operator closing lane 4 from km 0.20 to km 0.40 expects the
+   * lane back afterwards, and the tailback to clear once traffic is past it.
+   * Defaults to the end of the span, which is the old open-ended behaviour.
+   */
+  closureEnd: number;
   incidents: { lane: number; x: number }[]; // stalled obstacles
   speedLimitKmh: number | null; // applies in the speed zone
   speedZone: [number, number]; // [from, to] metres
@@ -118,6 +129,58 @@ export class TrafficSim {
   private rng: () => number;
   private nextId = 1;
   private spawnAccumulator = 0;
+
+  /**
+   * Vehicles per lane, ordered by position, rebuilt once per step.
+   *
+   * Finding the vehicle in front used to scan every vehicle on the road, and
+   * it is asked several times per vehicle per step — its own lane, each
+   * candidate lane during a lane-change decision, and the prospective follower
+   * in that lane. That is quadratic, and at corridor length it dominated: 980
+   * vehicles cost 22 ms a step, so the animation could not keep up before any
+   * drawing had happened. One sort per lane per step makes each lookup a binary
+   * search instead.
+   */
+  private laneIndex: Vehicle[][] = [];
+
+  private rebuildLaneIndex() {
+    const lanes = this.cfg.laneCount;
+    this.laneIndex = Array.from({ length: lanes }, () => [] as Vehicle[]);
+    for (const v of this.vehicles) {
+      if (v.lane >= 0 && v.lane < lanes) this.laneIndex[v.lane].push(v);
+    }
+    for (const row of this.laneIndex) row.sort((a, b) => a.x - b.x);
+  }
+
+  /** First vehicle in `lane` strictly beyond `x`, or null. */
+  private firstAfter(lane: number, x: number, exclude?: Vehicle): Vehicle | null {
+    const row = this.laneIndex[lane];
+    if (!row || row.length === 0) return null;
+    let lo = 0;
+    let hi = row.length;
+    while (lo < hi) {
+      const mid = (lo + hi) >> 1;
+      if (row[mid].x > x) hi = mid;
+      else lo = mid + 1;
+    }
+    for (let i = lo; i < row.length; i++) if (row[i] !== exclude) return row[i];
+    return null;
+  }
+
+  /** Last vehicle in `lane` strictly before `x`, or null. */
+  private lastBefore(lane: number, x: number, exclude?: Vehicle): Vehicle | null {
+    const row = this.laneIndex[lane];
+    if (!row || row.length === 0) return null;
+    let lo = 0;
+    let hi = row.length;
+    while (lo < hi) {
+      const mid = (lo + hi) >> 1;
+      if (row[mid].x < x) lo = mid + 1;
+      else hi = mid;
+    }
+    for (let i = lo - 1; i >= 0; i--) if (row[i] !== exclude) return row[i];
+    return null;
+  }
   private completedTimes: number[] = []; // travel times, rolling
   private completedInWindow: number[] = []; // completion timestamps, rolling
   private co2Window: { t: number; g: number }[] = [];
@@ -128,11 +191,82 @@ export class TrafficSim {
     this.interventions = {
       closedLanes: Array(cfg.laneCount).fill(false),
       closurePoint: cfg.length * 0.55,
+      closureEnd: cfg.length,
       incidents: [],
       speedLimitKmh: null,
       speedZone: [cfg.length * 0.35, cfg.length * 0.75],
       ...interventions,
     };
+    this.prefill();
+  }
+
+  /**
+   * Put traffic on the road before the first step.
+   *
+   * Vehicles only ever enter at x = 0, so a freshly built simulation was an
+   * empty carriageway that filled from the left at traffic speed: about 13
+   * seconds for a 280 m stretch, 52 for a kilometre. Since changing the
+   * segment, the lane count or the route rebuilds the simulation, an operator
+   * adjusting any of those watched an empty road and reasonably concluded it
+   * had broken.
+   *
+   * The road is seeded at the headway the configured inflow implies, so it
+   * starts in roughly the state it would have converged to anyway. Interventions
+   * are not applied here — a closure should be seen to cause its queue, not
+   * begin with one — so a closed lane simply starts empty.
+   */
+  private prefill() {
+    const lanes = this.cfg.laneCount;
+    const openLanes = Array.from({ length: lanes }, (_, i) => i).filter(
+      (i) => !this.interventions.closedLanes[i],
+    );
+    const { closurePoint: cFrom, closureEnd: cTo } = this.interventions;
+    if (openLanes.length === 0) return;
+
+    // Equilibrium headway: seconds between vehicles in one lane at this flow.
+    const perLanePerSec = this.cfg.inflowVehPerHour / 3600 / openLanes.length;
+    if (perLanePerSec <= 0) return;
+    const headwaySec = 1 / perLanePerSec;
+
+    for (const lane of openLanes) {
+      // Stagger lanes so the seed does not read as a grid of rows.
+      let x = this.cfg.length - this.rng() * headwaySec * 20;
+      while (x > 0) {
+        // A closed stretch starts empty even in an open lane's neighbour — a
+        // vehicle seeded inside the works would be there before the closure
+        // caused anything.
+        if (this.interventions.closedLanes[lane] && x >= cFrom && x <= cTo) {
+          x -= 10;
+          continue;
+        }
+        const vClass = this.pickClass();
+        const profile = this.pickProfile();
+        const c = CLASS[vClass];
+        const p = PROFILE[profile];
+        const v0 = c.v0 * p.v0f;
+        const v = v0 * (0.85 + 0.15 * this.rng());
+        this.vehicles.push({
+          id: this.nextId++,
+          lane,
+          x,
+          v,
+          vClass,
+          profile,
+          v0,
+          length: c.len,
+          // Negative so the first throughput readings are not skewed by a
+          // cohort that appears to have crossed the segment instantly.
+          spawnTime: -(this.cfg.length - x) / Math.max(1, v),
+          co2: 0,
+          laneCooldown: 0,
+          color: varyColor(c.color, this.rng()),
+        });
+        // Spacing from the headway, never closer than the car-following model
+        // would tolerate.
+        const gap = Math.max(v * headwaySec, c.len + S0 + 2);
+        x -= gap * (0.85 + 0.3 * this.rng());
+      }
+    }
   }
 
   private pickClass(): VehicleClass {
@@ -192,10 +326,10 @@ export class TrafficSim {
     let bestX = Infinity;
     let leadV = 0;
     let leadLen = 0;
-    // real vehicles
-    for (const o of this.vehicles) {
-      if (o === v || o.lane !== lane) continue;
-      if (o.x > v.x && o.x < bestX) {
+    // real vehicles — nearest ahead, from the per-lane index
+    {
+      const o = this.firstAfter(lane, v.x, v);
+      if (o) {
         bestX = o.x;
         leadV = o.v;
         leadLen = o.length;
@@ -209,8 +343,15 @@ export class TrafficSim {
         leadLen = INCIDENT_LENGTH;
       }
     }
-    // lane closure acts as a stopped obstacle at the taper point
-    if (this.interventions.closedLanes[lane] && this.interventions.closurePoint > v.x && this.interventions.closurePoint < bestX) {
+    // A closure acts as a stopped obstacle at its taper — but only for traffic
+    // that has not already passed the far end. Without the second test a
+    // vehicle that has cleared the works still braked for a barrier behind it.
+    if (
+      this.interventions.closedLanes[lane] &&
+      v.x < this.interventions.closureEnd &&
+      this.interventions.closurePoint > v.x &&
+      this.interventions.closurePoint < bestX
+    ) {
       bestX = this.interventions.closurePoint;
       leadV = 0;
       leadLen = 0;
@@ -250,21 +391,19 @@ export class TrafficSim {
   private considerLaneChange(v: Vehicle) {
     if (v.laneCooldown > 0) return;
     const here = this.idmAccel(v, v.lane);
-    const mustEscape = this.interventions.closedLanes[v.lane] && v.x < this.interventions.closurePoint;
-    const candidates = [v.lane - 1, v.lane + 1].filter((l) => l >= 0 && l < this.cfg.laneCount && !this.interventions.closedLanes[l]);
+    // Blocked for THIS vehicle only while it is upstream of the works.
+    const blockedFor = (lane: number) =>
+      this.interventions.closedLanes[lane] && v.x < this.interventions.closureEnd;
+    const mustEscape = blockedFor(v.lane) && v.x < this.interventions.closurePoint;
+    const candidates = [v.lane - 1, v.lane + 1].filter(
+      (l) => l >= 0 && l < this.cfg.laneCount && !blockedFor(l),
+    );
     let best: { lane: number; gain: number } | null = null;
     for (const lane of candidates) {
       // never change lanes onto (or right up against) an accident
       if (this.incidentTooCloseInLane(lane, v.x, v.length)) continue;
       // safety: would the new follower have to brake harder than B_SAFE?
-      let follower: Vehicle | null = null;
-      let fx = -Infinity;
-      for (const o of this.vehicles) {
-        if (o.lane === lane && o.x < v.x && o.x > fx) {
-          fx = o.x;
-          follower = o;
-        }
-      }
+      const follower = this.lastBefore(lane, v.x, v);
       if (follower) {
         const gapToMe = v.x - follower.x - follower.length;
         if (gapToMe < S0) continue;
@@ -316,7 +455,8 @@ export class TrafficSim {
     }
     if (this.interventions.closedLanes[lane]) {
       const cp = this.interventions.closurePoint;
-      if (cp >= fromX && cp < wall) wall = cp;
+      // Only a wall to traffic that still has to get past the works.
+      if (fromX < this.interventions.closureEnd && cp >= fromX && cp < wall) wall = cp;
     }
     return wall;
   }
@@ -334,6 +474,9 @@ export class TrafficSim {
 
   step(dt: number) {
     this.time += dt;
+    // Every lookup below reads this; it must reflect the positions the
+    // decisions are made against, so it is built before any of them.
+    this.rebuildLaneIndex();
 
     // Inflow across ALL lanes — a lane closure is a downstream work zone, so
     // vehicles still enter the closing lane and must merge out at the taper.

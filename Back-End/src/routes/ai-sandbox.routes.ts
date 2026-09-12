@@ -1,6 +1,6 @@
 import { Router } from "express";
 import { triggerSimulation, configLanes, getResults } from "../controllers/ai-sandbox.controller.js";
-import { parseSandboxCommand, commandStatus } from "../controllers/sandbox-command.controller.js";
+import { parseSandboxCommand, commandStatus, scenarioContext } from "../controllers/sandbox-command.controller.js";
 import { authenticateToken, authorizeRoles } from "../middleware/auth.middleware.js";
 
 const router = Router();
@@ -19,6 +19,7 @@ const router = Router();
  */
 router.get("/command/status", commandStatus);
 router.post("/command", parseSandboxCommand);
+router.get("/scenario", scenarioContext);
 
 // Apply auth middleware to the remaining ai-sandbox endpoints
 router.use(authenticateToken);

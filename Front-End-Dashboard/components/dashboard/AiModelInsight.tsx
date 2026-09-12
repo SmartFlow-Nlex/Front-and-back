@@ -68,40 +68,73 @@ export default function AiModelInsight({
   const key = JSON.stringify([quantity, weatherMode, metrics.map((m) => m.model)]);
   const lastKey = useRef<string | null>(null);
 
+  // Everything the request needs, read at fetch time rather than captured in the
+  // dependency array. `metrics` is rebuilt inline by the parent on every render,
+  // so listing it here re-ran this effect constantly: the cleanup cancelled the
+  // in-flight request, the key guard then returned early without starting a new
+  // one, and `busy` was left true forever — the panel sat on "Preparing the
+  // read-out…" and never recovered. A 48-second call only has to survive one
+  // parent re-render for that to happen, which it never did.
+  const latest = useRef({
+    quantity,
+    metrics,
+    horizonDays,
+    scoredDays,
+    windowStart,
+    windowEnd,
+    weatherMode,
+  });
+  latest.current = { quantity, metrics, horizonDays, scoredDays, windowStart, windowEnd, weatherMode };
+
+  // Unmounting the panel (collapsing the report) must not leave a resolved
+  // request writing into a component that is gone.
+  const mounted = useRef(true);
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+    };
+  }, []);
+
   useEffect(() => {
     if (!metrics.length || lastKey.current === key) return;
     lastKey.current = key;
 
-    let cancelled = false;
+    // Cancellation is keyed to the request, not to the effect's lifetime, so a
+    // re-render cannot orphan a call that is still in flight. Only a newer
+    // request for a different selection supersedes an older one.
+    const token = key;
     setBusy(true);
     setFailed(false);
 
+    const p = latest.current;
     fetch(`${BACKEND}/api/ai-insight/model-narrative`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        quantity,
-        metrics,
-        horizonDays,
-        scoredDays: scoredDays ?? null,
-        windowStart: windowStart ?? null,
-        windowEnd: windowEnd ?? null,
-        weatherMode: weatherMode ?? null,
+        quantity: p.quantity,
+        metrics: p.metrics,
+        horizonDays: p.horizonDays,
+        scoredDays: p.scoredDays ?? null,
+        windowStart: p.windowStart ?? null,
+        windowEnd: p.windowEnd ?? null,
+        weatherMode: p.weatherMode ?? null,
       }),
     })
       .then((r) => r.json())
       .then((j) => {
-        if (cancelled) return;
+        if (!mounted.current || lastKey.current !== token) return; // superseded or gone
         if (j?.success) setInsight(j.data as Insight);
         else setFailed(true);
       })
-      .catch(() => !cancelled && setFailed(true))
-      .finally(() => !cancelled && setBusy(false));
-
-    return () => {
-      cancelled = true;
-    };
-  }, [key, quantity, metrics, horizonDays, scoredDays, windowStart, windowEnd, weatherMode]);
+      .catch(() => {
+        if (mounted.current && lastKey.current === token) setFailed(true);
+      })
+      .finally(() => {
+        if (mounted.current && lastKey.current === token) setBusy(false);
+      });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [key]);
 
   // A failure leaves no trace: the metrics narrative above is complete on its
   // own, so an error box here would report a problem the reader cannot act on

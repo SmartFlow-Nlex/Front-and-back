@@ -2488,8 +2488,6 @@ body {
 .sandbox-page {
   display: flex;
   flex-direction: column;
-  min-height: 0;
-  overflow: hidden;
 }
 
 .sandbox-page .dm-head,
@@ -2497,16 +2495,7 @@ body {
   flex-shrink: 0;
 }
 
-.sandbox-page .sandbox-grid {
-  flex: 1;
-  min-height: 0;
-  grid-template-rows: minmax(0, 1fr);
-}
 
-.sandbox-page .sandbox-main,
-.sandbox-page .sandbox-side {
-  min-height: 0;
-}
 
 /* Left card: let the simulation canvas grow to fill the card so there is no
    empty space below the prescriptive recommendation. */
@@ -2515,17 +2504,98 @@ body {
   flex-direction: column;
 }
 
-.sandbox-page .sandbox-canvas {
-  flex: 1;
-  height: auto;
-  min-height: 280px;
+/* Each card is as tall as its own contents — stretching the shorter one to
+   match the taller only ever produced empty space inside it. */
+.sandbox-page .sandbox-grid {
+  align-items: start;
 }
 
-/* Scenario card becomes a fixed-height column: pinned title + scrolling body */
-.sandbox-page .sandbox-side {
+/* Docked, the wrapper is invisible to layout — the legend and recommendation
+   remain direct children of the card, exactly as before. */
+.sandbox-footbar {
+  display: contents;
+}
+
+/* ── Expanded simulation ──────────────────────────────────────────────────────
+   Full screen is not the docked card made bigger; it is a different reading of
+   the same thing. The card furniture goes, the road takes the viewport, and the
+   controls and read-out become bars over it — so the pixels go to the corridor
+   rather than to margins.
+
+   A flex column, not a grid: the card has four children and a three-row grid
+   quietly created a second column and scattered them across it. */
+.sandbox-main.is-expanded {
+  position: fixed;
+  inset: 0;
+  z-index: 300;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+  background: #0b1020;
   display: flex;
   flex-direction: column;
   overflow: hidden;
+}
+
+.sandbox-main.is-expanded .sandbox-head {
+  flex: 0 0 auto;
+  padding: 12px 20px;
+  background: rgba(11, 16, 32, 0.82);
+  backdrop-filter: blur(8px);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+.sandbox-main.is-expanded .sandbox-head h2 {
+  color: #f1f5f9;
+}
+
+.sandbox-main.is-expanded .sandbox-canvas {
+  flex: 1 1 auto;
+  min-height: 0;
+  width: 100%;
+  height: auto !important;
+  margin: 0;
+  border-radius: 0;
+}
+
+/* One bar along the bottom rather than two stacked blocks, so the road keeps
+   the height they would otherwise take. */
+.sandbox-main.is-expanded .sandbox-footbar {
+  display: flex;
+  align-items: center;
+  gap: 20px;
+  flex: 0 0 auto;
+  padding: 10px 20px;
+  background: rgba(11, 16, 32, 0.82);
+  backdrop-filter: blur(8px);
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+}
+.sandbox-main.is-expanded .sandbox-legend {
+  flex: 0 0 auto;
+  margin: 0;
+  color: #cbd5e1;
+}
+.sandbox-main.is-expanded .sandbox-reco {
+  flex: 1 1 auto;
+  margin: 0;
+  background: rgba(255, 255, 255, 0.05);
+  border-left-color: rgba(255, 255, 255, 0.35);
+}
+.sandbox-main.is-expanded .sandbox-reco strong {
+  color: #94a3b8;
+}
+.sandbox-main.is-expanded .sandbox-reco p {
+  color: #f1f5f9;
+}
+
+body:has(.sandbox-main.is-expanded) {
+  overflow: hidden;
+}
+
+.sandbox-page .sandbox-side {
+  display: flex;
+  flex-direction: column;
 }
 
 .sandbox-page .sandbox-side > h2,
@@ -2533,13 +2603,14 @@ body {
   flex-shrink: 0;
 }
 
+/* The controls used to live in their own scroll box inside a viewport-locked
+   card. That only worked while the rest of the page was short enough to leave
+   it room; with the forecast strip above it there was about 140px left — a
+   scrollbar that technically moved and was useless to use. The page now scrolls
+   as a whole, like every other tab, and this is a plain container. */
 .sandbox-side-scroll {
-  flex: 1;
-  min-height: 0;
-  overflow-y: auto;
-  /* pull the scrollbar to the card edge without shifting the controls */
-  margin-right: -8px;
-  padding-right: 8px;
+  display: flex;
+  flex-direction: column;
 }
 
 .sandbox-main,
@@ -3279,6 +3350,10 @@ body {
   .sandbox-page,
   .sandbox-page .sandbox-side {
     overflow: visible;
+  }
+
+  .sandbox-page {
+    max-height: none;
   }
 
   .sandbox-page .sandbox-grid {
@@ -6186,3 +6261,254 @@ body {
   background: transparent;
 }
 .ai-plan-discard:hover { background: var(--bg-subtle, #f5f5f7); }
+
+/* ── AI Sandbox: forecast-day strip ───────────────────────────────────────────
+   Sits between the page header and the metric row, so it must not compete with
+   the simulation grid for height — the grid is what scrolls, and an
+   unconstrained flex child here squeezed it until the side card's scroll area
+   collapsed. Fixed at its content height, and kept deliberately compact. */
+.sandbox-page .sandbox-forecast {
+  flex-shrink: 0;
+}
+
+.sandbox-forecast {
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-lg);
+  background: var(--bg-surface);
+  box-shadow: var(--shadow-card);
+  padding: 12px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.sandbox-forecast-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.sandbox-forecast-head h3 {
+  margin: 0;
+  font-size: 0.92rem;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+.sandbox-forecast-head p {
+  margin: 2px 0 0;
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+}
+.sandbox-forecast-title { flex: 1; min-width: 200px; }
+
+.sandbox-forecast select {
+  padding: 6px 10px;
+  border-radius: 8px;
+  border: 1px solid var(--border-default);
+  background: var(--bg-surface);
+  color: var(--text-primary);
+  font: inherit;
+  font-size: 0.8rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.sandbox-forecast-apply {
+  padding: 7px 16px;
+  border: 0;
+  border-radius: 999px;
+  font-size: 0.79rem;
+  font-weight: 700;
+  color: #fff;
+  cursor: pointer;
+  background: linear-gradient(90deg, #7c3aed, #2d46d2);
+  transition: filter var(--transition-fast), opacity var(--transition-fast);
+}
+.sandbox-forecast-apply:hover:not(:disabled) { filter: brightness(1.08); }
+/* Disabled state was white text on a pale fill — the label vanished. */
+.sandbox-forecast-apply:disabled {
+  cursor: not-allowed;
+  background: var(--bg-surface-hover, #eef2f7);
+  color: var(--text-muted);
+  border: 1px solid var(--border-default);
+}
+.sandbox-forecast-apply.is-applied {
+  background: var(--color-success-bg, #f0fdf4);
+  color: var(--color-success, #15803d);
+  border: 1px solid var(--color-success-border, #bbf7d0);
+}
+
+/* Dense metric strip — four figures on one line at desktop width. */
+.sandbox-forecast-tiles {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(165px, 1fr));
+  gap: 8px;
+}
+.sandbox-forecast-tile {
+  border: 1px solid var(--border-default);
+  border-radius: 10px;
+  padding: 8px 10px;
+  min-width: 0;
+}
+.sandbox-forecast-tile.accent {
+  border-color: #c7b6f0;
+  background: var(--color-purple-bg, #f6f3ff);
+}
+.sandbox-forecast-tile .k {
+  font-size: 0.66rem;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+.sandbox-forecast-tile .v {
+  font-size: 1rem;
+  font-weight: 700;
+  color: var(--text-primary);
+  margin-top: 1px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.sandbox-forecast-tile .s {
+  font-size: 0.68rem;
+  color: var(--text-secondary);
+  margin-top: 1px;
+  line-height: 1.35;
+}
+
+.sandbox-forecast-foot {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  flex-wrap: wrap;
+  font-size: 0.74rem;
+  color: var(--text-secondary);
+  line-height: 1.5;
+}
+.sandbox-forecast-foot b { color: var(--text-primary); }
+.sandbox-forecast-note {
+  margin: 0;
+  font-size: 0.74rem;
+  line-height: 1.5;
+  color: var(--color-amber-text, #b54708);
+  background: var(--color-amber-bg, #fffaeb);
+  border-left: 3px solid #f79009;
+  border-radius: 8px;
+  padding: 7px 10px;
+}
+.sandbox-forecast-help {
+  border: 0;
+  background: transparent;
+  padding: 0;
+  cursor: pointer;
+  font: inherit;
+  font-size: 0.73rem;
+  font-weight: 600;
+  color: var(--text-muted);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+/* Km-post entry for the sandbox's segment range. */
+.sandbox-km-input {
+  width: 100%;
+  padding: 6px 9px;
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-md);
+  background: var(--bg-surface);
+  color: var(--text-primary);
+  font: inherit;
+  font-size: 0.86rem;
+  font-weight: 600;
+}
+.sandbox-km-input:focus {
+  outline: none;
+  border-color: var(--brand-primary);
+  box-shadow: 0 0 0 3px rgba(49, 83, 232, 0.15);
+}
+
+/* Baseline vs current, shown when an intervention is active. */
+.sandbox-compare {
+  margin-top: 12px;
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-md);
+  background: var(--bg-surface);
+  padding: 10px 12px;
+}
+.sandbox-compare-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  font-size: 0.78rem;
+  color: var(--text-secondary);
+  margin-bottom: 8px;
+}
+.sandbox-compare-head b { color: var(--text-primary); }
+.sandbox-compare-rows {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+  gap: 6px 18px;
+}
+.sandbox-compare-row {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  font-size: 0.8rem;
+  white-space: nowrap;
+}
+.sandbox-compare-row .l { flex: 1; color: var(--text-secondary); }
+.sandbox-compare-row .was { color: var(--text-muted); }
+.sandbox-compare-row .arrow { color: var(--text-muted); }
+.sandbox-compare-row .now { font-weight: 700; color: var(--text-primary); }
+.sandbox-compare-row .now i { font-style: normal; font-weight: 500; color: var(--text-secondary); font-size: 0.72rem; }
+.sandbox-compare-row .d { min-width: 44px; text-align: right; font-weight: 700; color: var(--text-muted); }
+.sandbox-compare-row .d.good { color: var(--color-success, #15803d); }
+.sandbox-compare-row .d.bad { color: var(--color-danger, #dc2626); }
+.sandbox-main.is-expanded .sandbox-compare { display: none; }
+
+/* Intervention controls carried into the expanded view. */
+.sandbox-fs-bar {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  padding: 8px 20px;
+  background: rgba(11, 16, 32, 0.9);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+.sandbox-fs-bar .k {
+  font-size: 0.74rem;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  color: #94a3b8;
+  white-space: nowrap;
+}
+.sandbox-fs-bar .btn-muted {
+  background: rgba(255, 255, 255, 0.07);
+  color: #e2e8f0;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+}
+.sandbox-fs-bar .btn-muted:hover:not(:disabled) { background: rgba(255, 255, 255, 0.13); }
+.sandbox-fs-bar .btn-muted.active {
+  background: rgba(124, 58, 237, 0.35);
+  border-color: rgba(167, 139, 250, 0.8);
+  color: #fff;
+}
+.sandbox-fs-bar .btn-muted:disabled { opacity: 0.45; }
+
+/* Km fields inside the expanded control bar. */
+.sandbox-fs-bar .sandbox-km-input {
+  background: rgba(255, 255, 255, 0.08);
+  border-color: rgba(255, 255, 255, 0.16);
+  color: #f1f5f9;
+  padding: 5px 8px;
+  font-size: 0.8rem;
+}
+.sandbox-fs-bar .sandbox-km-input:focus {
+  border-color: #a78bfa;
+  box-shadow: 0 0 0 3px rgba(167, 139, 250, 0.25);
+}

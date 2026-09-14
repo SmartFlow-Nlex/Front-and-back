@@ -1,0 +1,170 @@
+.wrap {
+  position: relative;
+  display: inline-block;
+}
+
+/* Matches the compact controls in the sandbox forecast strip. */
+.trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  border-radius: 8px;
+  border: 1px solid var(--border-default, #dce2ef);
+  background: var(--bg-surface, #ffffff);
+  color: var(--text-primary, #0f172a);
+  font: inherit;
+  font-size: 0.8rem;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: border-color 150ms ease, box-shadow 150ms ease;
+}
+.trigger:hover:not(:disabled) {
+  border-color: var(--border-strong, #c4ccdf);
+}
+.trigger:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+.triggerOpen {
+  border-color: var(--brand-primary, #3153e8);
+  box-shadow: 0 0 0 3px rgba(49, 83, 232, 0.15);
+}
+.trigger svg {
+  color: var(--text-muted, #64748b);
+  flex-shrink: 0;
+}
+.chev {
+  margin-left: 2px;
+}
+
+.popover {
+  position: fixed;
+  z-index: 1000;
+  background: var(--bg-surface, #ffffff);
+  border: 1px solid var(--border-default, #e2e8f0);
+  border-radius: 12px;
+  box-shadow: 0 12px 28px -8px rgba(15, 23, 42, 0.22), 0 4px 10px -4px rgba(15, 23, 42, 0.08);
+  padding: 12px;
+  animation: pop 160ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+@keyframes pop {
+  from { opacity: 0; transform: translateY(-6px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+}
+.title {
+  font-size: 0.9rem;
+  font-weight: 700;
+  color: var(--text-primary, #0f172a);
+}
+.nav {
+  width: 28px;
+  height: 28px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 6px;
+  border: 1px solid var(--border-default, #e2e8f0);
+  background: transparent;
+  color: var(--text-secondary, #475569);
+  cursor: pointer;
+}
+.nav:hover:not(:disabled) {
+  background: var(--bg-surface-hover, #f1f5f9);
+}
+.nav:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+
+.grid {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  gap: 2px;
+}
+.weekday {
+  text-align: center;
+  font-size: 0.66rem;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  color: var(--text-muted, #64748b);
+  padding: 4px 0;
+}
+
+.day {
+  position: relative;
+  aspect-ratio: 1;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--text-primary, #0f172a);
+  font: inherit;
+  font-size: 0.8rem;
+  font-weight: 500;
+  cursor: pointer;
+}
+.day:hover:not(:disabled):not(.selected) {
+  background: var(--bg-surface-hover, #eef2f7);
+}
+.day:disabled {
+  color: var(--text-muted, #94a3b8);
+  opacity: 0.4;
+  cursor: default;
+}
+.selected {
+  background: var(--brand-primary, #3153e8);
+  color: #ffffff;
+  font-weight: 700;
+}
+
+/* Incident forecast available on this day. */
+.dot {
+  position: absolute;
+  left: 50%;
+  bottom: 3px;
+  width: 4px;
+  height: 4px;
+  margin-left: -2px;
+  border-radius: 50%;
+  background: #7c3aed;
+}
+.selected .dot {
+  background: #ffffff;
+}
+.dotInline {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #7c3aed;
+  vertical-align: middle;
+  margin-right: 2px;
+}
+
+.foot {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border-default, #e2e8f0);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 0.7rem;
+  line-height: 1.4;
+  color: var(--text-secondary, #475569);
+}
+.legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+}
+.range {
+  color: var(--text-muted, #64748b);
+}

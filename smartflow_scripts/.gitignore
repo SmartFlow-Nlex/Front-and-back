@@ -1,0 +1,10 @@
+# Real credentials
+config/.env
+
+# Caches, intermediate files, logs, outputs
+_work/*
+!_work/README.md
+
+node_modules/
+__pycache__/
+*.pyc

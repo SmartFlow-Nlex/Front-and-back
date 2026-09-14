@@ -112,8 +112,21 @@ export const getMapRealtime = async (_req: Request, res: Response) => {
     /* The feed's own freshness travels with it. The Home tab needs it to
        say how old the newest report is, and that was the only reason it
        had to read a different endpoint with a different pipeline. */
-    const [fc, feed] = await Promise.all([getLiveMapGeoJson(), getFeedFreshness()]);
-    return res.json({ ...fc, feed });
+    //
+    // Caught here because Express 4 does not catch a rejected async handler:
+    // a dropped RDS connection during getLiveMapGeoJson() became an unhandled
+    // rejection and took the whole server down, so every page — not just the
+    // map — reported the backend as unreachable.
+    try {
+      const [fc, feed] = await Promise.all([getLiveMapGeoJson(), getFeedFreshness()]);
+      return res.json({ ...fc, feed });
+    } catch (error) {
+      console.error("Live map query failed:", (error as Error).message);
+      return res.status(503).json({
+        success: false,
+        message: "Live map data is temporarily unavailable (database connection). Try again shortly.",
+      });
+    }
   }
 
   try {

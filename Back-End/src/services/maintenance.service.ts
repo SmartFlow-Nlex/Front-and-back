@@ -101,7 +101,9 @@ export async function updateMaintenanceStatusInDb(id: string, status: Maintenanc
        RETURNING ${ROW_COLUMNS}`,
       [id, status, reason ?? null]
     );
-    return { row: rows[0] };
+    // `from` is returned on success as well as on conflict: the audit trail needs
+    // the real prior status to measure how long the schedule sat in it.
+    return { row: rows[0], from };
   } catch (error) {
     console.error("Database query failed for maintenance status update:", error);
     return null;

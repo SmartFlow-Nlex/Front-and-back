@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import ForecastDayPicker from "./ForecastDayPicker";
 
 /**
  * The seam between the three predictive modules and the sandbox.
@@ -9,6 +10,11 @@ import { useEffect, useRef, useState } from "react";
  * each expect for it, and seeds the simulation's arrival rate from the volume
  * champion's prediction — so a scenario runs against a predicted Saturday rather
  * than against a flat annual average.
+ *
+ * The day picker runs the full traffic/CO₂ horizon (3 months). The incident
+ * model's horizon is shorter: days inside it carry a dot in the calendar, and
+ * days past it show incident figures as "no forecast" — never a number borrowed
+ * from another day. When the incident horizon grows, the dots follow.
  *
  * Deliberately compact. It sits above a simulation grid that is sized to the
  * viewport, so every row of height taken here is taken from the road the
@@ -38,6 +44,8 @@ type Scenario = {
     wmape: number | null;
   };
   incidents: {
+    covered: boolean;
+    coverageEnd: string | null;
     predictedForDate: number | null;
     model: string | null;
     byExit: { exitName: string; km: number; perDay: number }[];
@@ -60,9 +68,13 @@ const dayLabel = (iso: string) =>
     year: "numeric",
   });
 
+const shortDay = (iso: string) =>
+  new Date(`${iso}T00:00:00`).toLocaleDateString("en-US", { month: "short", day: "numeric" });
+
 export default function ScenarioForecastPanel({
   onApplyInflow,
   onHotspot,
+  onIncidentCoverage,
 }: {
   /** Hands the derived arrival rate, and the day it came from, to the page. */
   onApplyInflow: (vehPerHour: number, forecastDate: string) => void;
@@ -73,6 +85,8 @@ export default function ScenarioForecastPanel({
    * prescriptive tool rather than a generic simulator.
    */
   onHotspot?: (exitName: string, km: number) => void;
+  /** Whether the chosen day has an incident forecast, so the page never credits one it lacks. */
+  onIncidentCoverage?: (covered: boolean) => void;
 }) {
   const [data, setData] = useState<Scenario | null>(null);
   const [date, setDate] = useState<string | null>(null);
@@ -103,6 +117,7 @@ export default function ScenarioForecastPanel({
           const d = j.data as Scenario;
           setData(d);
           if (!date) setDate(d.date);
+          onIncidentCoverage?.(d.incidents.covered);
           const top = d.incidents.byExit[0];
           if (top && onHotspot) onHotspot(top.exitName, top.km);
         } else setFailed(true);
@@ -119,6 +134,7 @@ export default function ScenarioForecastPanel({
   if (failed && !data) return null;
 
   const v = data?.volume;
+  const inc = data?.incidents;
   const isApplied = applied != null && applied === data?.date;
   const canApply = v?.peakHourInflow != null && !busy && !isApplied;
 
@@ -126,6 +142,11 @@ export default function ScenarioForecastPanel({
   // sit in the past whenever ingestion has fallen behind. Saying so turns a
   // number that looks broken into a limitation the reader can weigh.
   const lastDay = data?.availableDates[data.availableDates.length - 1];
+
+  // Days past the incident horizon carry traffic and CO₂ only. Dates are
+  // zero-padded YYYY-MM-DD, so a string comparison orders them chronologically.
+  const coverageEnd = inc?.coverageEnd ?? null;
+  const hasPartial = coverageEnd != null && lastDay != null && lastDay > coverageEnd;
 
   return (
     <article className="sandbox-forecast">
@@ -135,21 +156,16 @@ export default function ScenarioForecastPanel({
           <p>Starts the scenario from what the traffic, incident and emission models predict</p>
         </div>
 
-        <select
-          value={date ?? ""}
-          onChange={(e) => {
-            setDate(e.target.value);
+        <ForecastDayPicker
+          value={date}
+          dates={data?.availableDates ?? []}
+          coverageEnd={coverageEnd}
+          onChange={(d) => {
+            setDate(d);
             setApplied(null);
           }}
           disabled={!data}
-          aria-label="Forecast day"
-        >
-          {(data?.availableDates ?? []).map((d) => (
-            <option key={d} value={d}>
-              {dayLabel(d)}
-            </option>
-          ))}
-        </select>
+        />
 
         <button
           className={`sandbox-forecast-apply${isApplied ? " is-applied" : ""}`}
@@ -164,7 +180,7 @@ export default function ScenarioForecastPanel({
         </button>
       </div>
 
-      {data && (
+      {data && inc && (
         <>
           <div className="sandbox-forecast-tiles">
             <Tile
@@ -184,8 +200,14 @@ export default function ScenarioForecastPanel({
             />
             <Tile
               k="Predicted incidents"
-              v={fmt(data.incidents.predictedForDate, 1)}
-              s={`corridor-wide · ${data.incidents.model ?? "—"}`}
+              v={inc.covered ? fmt(inc.predictedForDate, 1) : "No forecast"}
+              s={
+                inc.covered
+                  ? `corridor-wide · ${inc.model ?? "—"}`
+                  : coverageEnd
+                    ? `incident forecast runs to ${shortDay(coverageEnd)}`
+                    : "incident forecast unavailable"
+              }
             />
             <Tile
               k="Predicted CO₂"
@@ -197,10 +219,10 @@ export default function ScenarioForecastPanel({
           </div>
 
           <div className="sandbox-forecast-foot">
-            {data.incidents.byExit.length > 0 && (
+            {inc.byExit.length > 0 && (
               <span>
                 <b>Highest risk:</b>{" "}
-                {data.incidents.byExit
+                {inc.byExit
                   .slice(0, 3)
                   .map((e) => `${e.exitName} (${e.perDay.toFixed(1)}/day)`)
                   .join(", ")}
@@ -222,6 +244,13 @@ export default function ScenarioForecastPanel({
                   {" "}
                   Forecasts run from the end of observed data, which is why the horizon ends{" "}
                   {dayLabel(lastDay)}.
+                </>
+              )}
+              {coverageEnd && hasPartial && (
+                <>
+                  {" "}
+                  The incident model currently forecasts through {dayLabel(coverageEnd)}; later days
+                  carry traffic and CO₂ forecasts only.
                 </>
               )}
             </div>

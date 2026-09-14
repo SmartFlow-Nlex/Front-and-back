@@ -44,6 +44,17 @@ export type Interventions = {
    * Defaults to the end of the span, which is the old open-ended behaviour.
    */
   closureEnd: number;
+  /**
+   * Display only — draw the closure stretch as a dashed outline even though no
+   * lane is closed. A closure acts on closed lanes alone, so without this an
+   * operator who set the stretch first saw nothing happen.
+   */
+  showClosurePreview?: boolean;
+  /**
+   * Display only — the stretch being drawn with two clicks, in metres from the
+   * start of the span, before the second click commits it.
+   */
+  closureDraft?: { from: number; to: number } | null;
   incidents: { lane: number; x: number }[]; // stalled obstacles
   speedLimitKmh: number | null; // applies in the speed zone
   speedZone: [number, number]; // [from, to] metres

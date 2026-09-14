@@ -229,6 +229,10 @@ export default function AiSandboxPage() {
   // Exit the incident model rates highest for the chosen day, when the sandbox
   // has been positioned there.
   const [hotspot, setHotspot] = useState<string | null>(null);
+  // Whether the selected forecast day has an incident forecast. Days past the
+  // incident model's horizon still carry traffic and CO2 forecasts, so they are
+  // offered, but the hint must not credit the incident model for choosing the place.
+  const [incidentCovered, setIncidentCovered] = useState(true);
   const [simSpeed, setSimSpeed] = useState<(typeof SPEED_STEPS)[number]>(1);
   const [running, setRunning] = useState(true);
 
@@ -260,6 +264,9 @@ export default function AiSandboxPage() {
   const [zoneToKm, setZoneToKm] = useState<number | null>(null);
   const [placingIncident, setPlacingIncident] = useState(false);
   const [placingClosure, setPlacingClosure] = useState(false);
+  // First click of the two that mark a closed stretch, as a km-post. Null until
+  // the start has been clicked.
+  const [closureDraftKm, setClosureDraftKm] = useState<number | null>(null);
 
   // Simulation Controls card can flip between the manual controls and a
   // natural-language command prompt for the NLEX corridor. The prompt is parsed
@@ -337,6 +344,21 @@ export default function AiSandboxPage() {
   const closureEndAtKm = clampKm(Math.max(closureEndKm ?? toKm, closureAtKm + 0.01));
   const closureM = (closureAtKm - fromKm) * 1000;
   const closureEndM = (closureEndAtKm - fromKm) * 1000;
+
+  // Typed ends always keep the value the operator typed. The previous clamp
+  // (end = max(end, start + 0.01)) silently discarded a "To" below the current
+  // start — typing Km 0.30 while the start sat at the default 0.33 did nothing.
+  // Now the OTHER end moves out of the way instead.
+  const commitClosureStart = (km: number) => {
+    const a = clampKm(km);
+    setClosureKm(a);
+    if (a >= closureEndAtKm) setClosureEndKm(clampKm(a + 0.1));
+  };
+  const commitClosureEnd = (km: number) => {
+    const b = clampKm(km);
+    if (b <= closureAtKm) setClosureKm(clampKm(b - 0.1));
+    setClosureEndKm(b);
+  };
   const zoneM: [number, number] = [(zoneA - fromKm) * 1000, (zoneB - fromKm) * 1000];
 
 
@@ -348,8 +370,9 @@ export default function AiSandboxPage() {
     sim.interventions.speedLimitKmh = speedLimit;
     sim.interventions.closurePoint = closureM;
     sim.interventions.closureEnd = closureEndM;
+    sim.interventions.showClosurePreview = closureKm != null || closureEndKm != null || placingClosure;
     sim.interventions.speedZone = zoneM;
-  }, [closedLanes, speedLimit, closureM, closureEndM, zoneM]);
+  }, [closedLanes, speedLimit, closureM, closureEndM, zoneM, closureKm, closureEndKm, placingClosure]);
 
   // Animation + physics loop.
   useEffect(() => {
@@ -420,8 +443,19 @@ export default function AiSandboxPage() {
     const lane = Math.max(0, Math.min(lanes - 1, Math.floor((cy - roadTop) / laneH)));
     const x = Math.max(0, Math.min(L, (cx / cssW) * L));
     if (placingClosure) {
-      // Same geometry as an incident drop, read as a km-post rather than a lane.
-      setClosureKm(Number((fromKm + x / 1000).toFixed(2)));
+      // Two clicks mark the stretch an operator actually closes — "Km 0.20 to
+      // 0.30" — in either order. One click used to move only the start, so the
+      // works always ran on to the end of the span.
+      const km = Number((fromKm + x / 1000).toFixed(2));
+      if (closureDraftKm == null) {
+        setClosureDraftKm(km);
+        sim.interventions.closureDraft = { from: x, to: x };
+        return;
+      }
+      const a = Math.min(closureDraftKm, km);
+      const b = Math.max(Math.max(closureDraftKm, km), Math.min(toKm, a + 0.01));
+      setClosureKm(a);
+      setClosureEndKm(b);
       setPlacingClosure(false);
       return;
     }
@@ -429,6 +463,25 @@ export default function AiSandboxPage() {
     setIncidentCount(sim.interventions.incidents.length);
     setPlacingIncident(false); // one accident per click; re-arm to drop another
   };
+
+  // Follow the cursor after the first click so the stretch is seen before it is set.
+  const previewClosureAt = (e: React.MouseEvent<HTMLCanvasElement>) => {
+    const sim = simRef.current;
+    const canvas = canvasRef.current;
+    if (!sim || !canvas || !placingClosure || closureDraftKm == null) return;
+    const rect = canvas.getBoundingClientRect();
+    const L = sim.cfg.length;
+    const x = Math.max(0, Math.min(L, ((e.clientX - rect.left) / rect.width) * L));
+    const startM = (closureDraftKm - fromKm) * 1000;
+    sim.interventions.closureDraft = { from: Math.min(startM, x), to: Math.max(startM, x) };
+  };
+
+  // Leaving placing mode, by any route, discards a half-drawn stretch.
+  useEffect(() => {
+    if (placingClosure) return;
+    setClosureDraftKm(null);
+    if (simRef.current) simRef.current.interventions.closureDraft = null;
+  }, [placingClosure]);
 
   // Esc leaves either placing mode.
   useEffect(() => {
@@ -633,6 +686,7 @@ export default function AiSandboxPage() {
           setSegToKm(Number((from + DEFAULT_SEG_M / 1000).toFixed(2)));
           setHotspot(name);
         }}
+        onIncidentCoverage={setIncidentCovered}
       />
 
       <div className="sandbox-metric-row">
@@ -709,7 +763,7 @@ export default function AiSandboxPage() {
               <span className="k">Closed Km</span>
               <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
                 <div style={{ width: 84 }}>
-                  <KmInput value={closureAtKm} min={fromKm} max={toKm} onCommit={setClosureKm} />
+                  <KmInput value={closureAtKm} min={fromKm} max={toKm} onCommit={commitClosureStart} />
                 </div>
                 <span className="k" style={{ opacity: 0.7 }}>to</span>
                 <div style={{ width: 84 }}>
@@ -717,7 +771,7 @@ export default function AiSandboxPage() {
                     value={closureEndAtKm}
                     min={fromKm}
                     max={toKm}
-                    onCommit={setClosureEndKm}
+                    onCommit={commitClosureEnd}
                   />
                 </div>
                 <span className="k" style={{ opacity: 0.7 }}>
@@ -732,7 +786,7 @@ export default function AiSandboxPage() {
                   setPlacingIncident(false);
                 }}
               >
-                {placingClosure ? "Click the road…" : "Set closure point"}
+                {placingClosure ? (closureDraftKm == null ? "Click start…" : "Click end…") : "Set closed stretch"}
               </button>
               <button
                 className={`btn-muted ${placingIncident ? "active" : ""}`}
@@ -746,6 +800,7 @@ export default function AiSandboxPage() {
               <button className="btn-muted" onClick={clearIncidents} disabled={incidentCount === 0}>
                 Clear ({incidentCount})
               </button>
+              <ClosureHint placing={placingClosure} draftKm={closureDraftKm} anyClosed={closedLanes.some(Boolean)} laneCount={laneCount} dark />
             </div>
           )}
 
@@ -759,6 +814,7 @@ export default function AiSandboxPage() {
             className={`sandbox-canvas ${placingIncident || placingClosure ? "placing" : ""}`}
             style={expanded ? undefined : { height: laneCount * LANE_PX + CANVAS_PAD * 2 }}
             onClick={placeIncidentAt}
+            onMouseMove={previewClosureAt}
           />
 
           {/* Wrapper so the legend and the recommendation can sit side by side
@@ -935,7 +991,9 @@ export default function AiSandboxPage() {
             </div>
             <span className="sandbox-slider-hint">
               {hotspot
-                ? `Opened at ${hotspot} — the highest incident risk on this route for the selected day. `
+                ? incidentCovered
+                  ? `Opened at ${hotspot} — the highest incident risk on this route for the selected day. `
+                  : `Opened at ${hotspot}, chosen on an earlier forecast day — the selected day has no incident forecast yet. `
                 : ""}
               {`Route runs Km ${routeFromKm.toFixed(2)}–${routeToKm.toFixed(2)}.`}
               {tooFineToDraw
@@ -993,16 +1051,16 @@ export default function AiSandboxPage() {
             <div style={{ display: "flex", gap: 8, marginTop: 4 }}>
               <label style={{ flex: 1, minWidth: 0 }}>
                 <span className="sandbox-slider-hint" style={{ display: "block", marginBottom: 3 }}>From km</span>
-                <KmInput value={closureAtKm} min={fromKm} max={toKm} onCommit={setClosureKm} />
+                <KmInput value={closureAtKm} min={fromKm} max={toKm} onCommit={commitClosureStart} />
               </label>
               <label style={{ flex: 1, minWidth: 0 }}>
                 <span className="sandbox-slider-hint" style={{ display: "block", marginBottom: 3 }}>To km</span>
-                <KmInput value={closureEndAtKm} min={fromKm} max={toKm} onCommit={setClosureEndKm} />
+                <KmInput value={closureEndAtKm} min={fromKm} max={toKm} onCommit={commitClosureEnd} />
               </label>
             </div>
             <span className="sandbox-slider-hint">
-              Traffic merges out before the start and the lane reopens after the end. Click the road
-              with &quot;Set closure point&quot; armed to move the start.
+              Traffic merges out before the start and the lane reopens after the end. Type the Km
+              range, or press &quot;Set closed stretch&quot; and click the road twice — start, then end.
             </span>
           </div>
 
@@ -1014,9 +1072,10 @@ export default function AiSandboxPage() {
                 setPlacingIncident(false);
               }}
             >
-              {placingClosure ? "Click the road…" : "Set closure point"}
+              {placingClosure ? (closureDraftKm == null ? "Click start…" : "Click end…") : "Set closed stretch"}
             </button>
           </div>
+          <ClosureHint placing={placingClosure} draftKm={closureDraftKm} anyClosed={closedLanes.some(Boolean)} laneCount={laneCount} />
 
           <div className="sandbox-btn-row">
             <button
@@ -1311,6 +1370,37 @@ function kmTickStep(spanKm: number): number {
   return 10;
 }
 
+/** Tells the operator the one step a closure needs that the controls don't show. */
+function ClosureHint({
+  placing,
+  draftKm,
+  anyClosed,
+  laneCount,
+  dark,
+}: {
+  placing: boolean;
+  draftKm: number | null;
+  anyClosed: boolean;
+  laneCount: number;
+  dark?: boolean;
+}) {
+  const text = placing
+    ? draftKm == null
+      ? "Click the road where the closure starts · Esc to cancel"
+      : `Starts at Km ${draftKm.toFixed(2)} — now click where it ends · Esc to cancel`
+    : !anyClosed
+      ? `A closure applies to closed lanes only — pick L1–L${laneCount} to apply it`
+      : null;
+  if (!text) return null;
+  return dark ? (
+    <span className="k" style={{ textTransform: "none", letterSpacing: 0, color: "#fca5a5" }}>
+      {text}
+    </span>
+  ) : (
+    <p className="sandbox-place-hint">{text}</p>
+  );
+}
+
 function render(
   ctx: CanvasRenderingContext2D,
   canvas: HTMLCanvasElement,
@@ -1406,6 +1496,63 @@ function render(
     ctx.moveTo(x0, y + laneH / 2);
     ctx.lineTo(x0 + 14, y + laneH - 4);
     ctx.stroke();
+  }
+
+  // A closure acts on closed lanes only, so with none closed the hatching above
+  // draws nothing and setting the stretch looked like it did nothing. Once the
+  // operator has touched the closure, outline the stretch until a lane is picked.
+  if (sim.interventions.showClosurePreview && !sim.interventions.closureDraft && !sim.interventions.closedLanes.some(Boolean)) {
+    const x0 = xPx(sim.interventions.closurePoint);
+    const x1 = Math.min(cssW, xPx(sim.interventions.closureEnd));
+    ctx.save();
+    ctx.strokeStyle = "rgba(252,165,165,0.8)";
+    ctx.lineWidth = 1.5;
+    ctx.setLineDash([6, 5]);
+    ctx.strokeRect(x0 + 0.75, roadTop + 0.75, Math.max(2, x1 - x0 - 1.5), roadH - 1.5);
+    ctx.setLineDash([]);
+    const label = "Closure stretch · close a lane to apply";
+    ctx.font = "600 11px Inter, system-ui, sans-serif";
+    ctx.textBaseline = "top";
+    ctx.textAlign = "left"; // other layers leave it centred
+    const tw = ctx.measureText(label).width;
+    const lx = Math.max(4, Math.min(x0 + 6, cssW - tw - 10));
+    ctx.fillStyle = "rgba(15,23,42,0.75)";
+    ctx.fillRect(lx - 4, roadTop + 4, tw + 8, 17);
+    ctx.fillStyle = "rgba(254,202,202,0.98)";
+    ctx.fillText(label, lx, roadTop + 7);
+    ctx.restore();
+  }
+
+  // The stretch being drawn: shaded between the first click and the cursor,
+  // with both ends labelled as km-posts.
+  const draftStretch = sim.interventions.closureDraft;
+  if (draftStretch) {
+    const x0 = xPx(draftStretch.from);
+    const x1 = Math.min(cssW, xPx(draftStretch.to));
+    ctx.save();
+    ctx.fillStyle = "rgba(220,38,38,0.22)";
+    ctx.fillRect(x0, roadTop, Math.max(2, x1 - x0), roadH);
+    ctx.strokeStyle = "rgba(252,165,165,0.95)";
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(x0, roadTop);
+    ctx.lineTo(x0, roadTop + roadH);
+    ctx.moveTo(x1, roadTop);
+    ctx.lineTo(x1, roadTop + roadH);
+    ctx.stroke();
+    const kmA = (marks.fromKm + draftStretch.from / 1000).toFixed(2);
+    const kmB = (marks.fromKm + draftStretch.to / 1000).toFixed(2);
+    const label = kmA === kmB ? `Km ${kmA} → click the end` : `Km ${kmA} – ${kmB}`;
+    ctx.font = "700 12px Inter, system-ui, sans-serif";
+    ctx.textBaseline = "top";
+    ctx.textAlign = "left"; // other layers leave it centred
+    const tw = ctx.measureText(label).width;
+    const lx = Math.max(4, Math.min(x0 + 6, cssW - tw - 10));
+    ctx.fillStyle = "rgba(15,23,42,0.85)";
+    ctx.fillRect(lx - 5, roadTop + 4, tw + 10, 19);
+    ctx.fillStyle = "#fecaca";
+    ctx.fillText(label, lx, roadTop + 7);
+    ctx.restore();
   }
 
   // vehicles — top-down sprites, front facing the direction of travel (right).

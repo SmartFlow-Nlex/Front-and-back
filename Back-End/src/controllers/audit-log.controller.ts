@@ -1,5 +1,5 @@
 import type { Request, Response } from "express";
-import { saveAuditEventInDb, getAuditLogsFromDb } from "../services/audit-log.service.js";
+import { getAuditAnalyticsFromDb, saveAuditEventInDb, getAuditLogsFromDb } from "../services/audit-log.service.js";
 import { AuditEventSchema, AuditQuerySchema } from "../validators/audit-log.validator.js";
 
 // [DEV-01] POST /api/v1/audit-log/event
@@ -43,4 +43,15 @@ export const exportAuditLogs = async (req: Request, res: Response) => {
   res.setHeader('Content-Type', 'application/json');
   res.setHeader('Content-Disposition', 'attachment; filename="audit_export.json"');
   res.send(JSON.stringify(dataToExport, null, 2));
+};
+
+
+// GET /api/audit-log/analytics?module=maintenance
+export const getAuditAnalytics = async (req: Request, res: Response) => {
+  const mod = typeof req.query.module === "string" ? req.query.module : undefined;
+  const data = await getAuditAnalyticsFromDb(mod);
+  if (!data) {
+    return res.status(503).json({ success: false, message: "Audit analytics unavailable: database not reachable" });
+  }
+  res.json({ success: true, source: "database", data });
 };

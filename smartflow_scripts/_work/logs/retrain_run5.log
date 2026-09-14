@@ -1,0 +1,44 @@
+
+====================================================================
+  STEP 1: Loading traffic and weather
+====================================================================
+  Traffic :  2398 days  2020-01-01 -> 2026-07-25
+  Weather :  2416 days  2020-01-01 -> 2026-08-12
+  Rainfall: mean 6.8 mm/day, max 150.4 mm/day
+  Joint   :  2398 days  2020-01-01 -> 2026-07-25
+
+====================================================================
+  STEP 2: Rolling-origin evaluation (6 origins, h=14d)
+====================================================================
+  First origin: 2026-05-03   Last: 2026-07-12
+  Every model refits at every origin and forecasts 14 days blind.
+
+  Origin 1/6  train=2314d  predict 2026-05-03 -> 2026-05-16
+Importing plotly failed. Interactive plots will not work.
+04:24:42 - cmdstanpy - INFO - Chain [1] start processing
+04:24:43 - cmdstanpy - INFO - Chain [1] done processing
+WARNING: All log messages before absl::InitializeLog() is called are written to STDERR
+I0000 00:00:1786739085.194813   11484 port.cc:153] oneDNN custom operations are on. You may see slightly different numerical results due to floating-point round-off errors from different computation orders. To turn them off, set the environment variable `TF_ENABLE_ONEDNN_OPTS=0`.
+WARNING: All log messages before absl::InitializeLog() is called are written to STDERR
+I0000 00:00:1786739099.951577   11484 port.cc:153] oneDNN custom operations are on. You may see slightly different numerical results due to floating-point round-off errors from different computation orders. To turn them off, set the environment variable `TF_ENABLE_ONEDNN_OPTS=0`.
+WARNING:tensorflow:TensorFlow GPU support is not available on native Windows for TensorFlow >= 2.11. Even if CUDA/cuDNN are installed, GPU will not be used. Please use WSL2 or the TensorFlow-DirectML plugin.
+04:25:46 - cmdstanpy - INFO - Chain [1] start processing
+04:25:46 - cmdstanpy - INFO - Chain [1] done processing
+  Origin 2/6  train=2328d  predict 2026-05-17 -> 2026-05-30
+04:26:30 - cmdstanpy - INFO - Chain [1] start processing
+04:26:31 - cmdstanpy - INFO - Chain [1] done processing
+04:27:13 - cmdstanpy - INFO - Chain [1] start processing
+04:27:14 - cmdstanpy - INFO - Chain [1] done processing
+  Origin 3/6  train=2342d  predict 2026-05-31 -> 2026-06-13
+04:27:53 - cmdstanpy - INFO - Chain [1] start processing
+04:27:53 - cmdstanpy - INFO - Chain [1] done processing
+04:28:30 - cmdstanpy - INFO - Chain [1] start processing
+04:28:31 - cmdstanpy - INFO - Chain [1] done processing
+  Origin 4/6  train=2356d  predict 2026-06-14 -> 2026-06-27
+04:29:08 - cmdstanpy - INFO - Chain [1] start processing
+04:29:09 - cmdstanpy - INFO - Chain [1] done processing
+04:29:46 - cmdstanpy - INFO - Chain [1] start processing
+04:29:46 - cmdstanpy - INFO - Chain [1] done processing
+  Origin 5/6  train=2370d  predict 2026-06-28 -> 2026-07-11
+04:30:23 - cmdstanpy - INFO - Chain [1] start processing
+04:30:23 - cmdstanpy - INFO - Chain [1] done processing

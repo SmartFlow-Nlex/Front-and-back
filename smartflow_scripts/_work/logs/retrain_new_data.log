@@ -1,0 +1,309 @@
+
+====================================================================
+  STEP 1: Loading traffic and weather
+====================================================================
+  Traffic :  2398 days  2020-01-01 -> 2026-07-25
+  Weather :  2416 days  2020-01-01 -> 2026-08-12
+  Rainfall: mean 6.8 mm/day, max 150.4 mm/day
+  Joint   :  2398 days  2020-01-01 -> 2026-07-25
+
+====================================================================
+  STEP 2: Rolling-origin evaluation (34 origins, h=14d)
+====================================================================
+  First origin: 2025-04-06   Last: 2026-07-12
+  Every model refits at every origin and forecasts 14 days blind.
+
+  [resume] checkpoint ignored — config changed since it was written
+  Origin 1/34  train=1922d  predict 2025-04-06 -> 2025-04-19
+Importing plotly failed. Interactive plots will not work.
+17:01:13 - cmdstanpy - INFO - Chain [1] start processing
+17:01:13 - cmdstanpy - INFO - Chain [1] done processing
+WARNING: All log messages before absl::InitializeLog() is called are written to STDERR
+I0000 00:00:1787994076.367556   30804 port.cc:153] oneDNN custom operations are on. You may see slightly different numerical results due to floating-point round-off errors from different computation orders. To turn them off, set the environment variable `TF_ENABLE_ONEDNN_OPTS=0`.
+WARNING: All log messages before absl::InitializeLog() is called are written to STDERR
+I0000 00:00:1787994094.886878   30804 port.cc:153] oneDNN custom operations are on. You may see slightly different numerical results due to floating-point round-off errors from different computation orders. To turn them off, set the environment variable `TF_ENABLE_ONEDNN_OPTS=0`.
+WARNING:tensorflow:TensorFlow GPU support is not available on native Windows for TensorFlow >= 2.11. Even if CUDA/cuDNN are installed, GPU will not be used. Please use WSL2 or the TensorFlow-DirectML plugin.
+17:02:11 - cmdstanpy - INFO - Chain [1] start processing
+17:02:11 - cmdstanpy - INFO - Chain [1] done processing
+  Origin 2/34  train=1936d  predict 2025-04-20 -> 2025-05-03
+17:02:38 - cmdstanpy - INFO - Chain [1] start processing
+17:02:38 - cmdstanpy - INFO - Chain [1] done processing
+17:03:05 - cmdstanpy - INFO - Chain [1] start processing
+17:03:05 - cmdstanpy - INFO - Chain [1] done processing
+  Origin 3/34  train=1950d  predict 2025-05-04 -> 2025-05-17
+17:03:32 - cmdstanpy - INFO - Chain [1] start processing
+17:03:32 - cmdstanpy - INFO - Chain [1] done processing
+17:03:54 - cmdstanpy - INFO - Chain [1] start processing
+17:03:54 - cmdstanpy - INFO - Chain [1] done processing
+  Origin 4/34  train=1964d  predict 2025-05-18 -> 2025-05-31
+17:04:17 - cmdstanpy - INFO - Chain [1] start processing
+17:04:17 - cmdstanpy - INFO - Chain [1] done processing
+17:04:43 - cmdstanpy - INFO - Chain [1] start processing
+17:04:43 - cmdstanpy - INFO - Chain [1] done processing
+  Origin 5/34  train=1978d  predict 2025-06-01 -> 2025-06-14
+17:05:10 - cmdstanpy - INFO - Chain [1] start processing
+17:05:10 - cmdstanpy - INFO - Chain [1] done processing
+17:05:36 - cmdstanpy - INFO - Chain [1] start processing
+17:05:36 - cmdstanpy - INFO - Chain [1] done processing
+  Origin 6/34  train=1992d  predict 2025-06-15 -> 2025-06-28
+17:06:08 - cmdstanpy - INFO - Chain [1] start processing
+17:06:08 - cmdstanpy - INFO - Chain [1] done processing
+17:06:41 - cmdstanpy - INFO - Chain [1] start processing
+17:06:41 - cmdstanpy - INFO - Chain [1] done processing
+  Origin 7/34  train=2006d  predict 2025-06-29 -> 2025-07-12
+17:07:14 - cmdstanpy - INFO - Chain [1] start processing
+17:07:15 - cmdstanpy - INFO - Chain [1] done processing
+17:07:46 - cmdstanpy - INFO - Chain [1] start processing
+17:07:46 - cmdstanpy - INFO - Chain [1] done processing
+  Origin 8/34  train=2020d  predict 2025-07-13 -> 2025-07-26
+17:08:18 - cmdstanpy - INFO - Chain [1] start processing
+17:08:19 - cmdstanpy - INFO - Chain [1] done processing
+17:08:50 - cmdstanpy - INFO - Chain [1] start processing
+17:08:50 - cmdstanpy - INFO - Chain [1] done processing
+  Origin 9/34  train=2034d  predict 2025-07-27 -> 2025-08-09
+17:09:23 - cmdstanpy - INFO - Chain [1] start processing
+17:09:24 - cmdstanpy - INFO - Chain [1] done processing
+17:09:56 - cmdstanpy - INFO - Chain [1] start processing
+17:09:56 - cmdstanpy - INFO - Chain [1] done processing
+  Origin 10/34  train=2048d  predict 2025-08-10 -> 2025-08-23
+17:10:29 - cmdstanpy - INFO - Chain [1] start processing
+17:10:29 - cmdstanpy - INFO - Chain [1] done processing
+17:11:02 - cmdstanpy - INFO - Chain [1] start processing
+17:11:02 - cmdstanpy - INFO - Chain [1] done processing
+  Origin 11/34  train=2062d  predict 2025-08-24 -> 2025-09-06
+17:11:36 - cmdstanpy - INFO - Chain [1] start processing
+17:11:36 - cmdstanpy - INFO - Chain [1] done processing
+17:12:09 - cmdstanpy - INFO - Chain [1] start processing
+17:12:09 - cmdstanpy - INFO - Chain [1] done processing
+  Origin 12/34  train=2076d  predict 2025-09-07 -> 2025-09-20
+17:12:42 - cmdstanpy - INFO - Chain [1] start processing
+17:12:42 - cmdstanpy - INFO - Chain [1] done processing
+17:13:15 - cmdstanpy - INFO - Chain [1] start processing
+17:13:16 - cmdstanpy - INFO - Chain [1] done processing
+  Origin 13/34  train=2090d  predict 2025-09-21 -> 2025-10-04
+17:13:49 - cmdstanpy - INFO - Chain [1] start processing
+17:13:49 - cmdstanpy - INFO - Chain [1] done processing
+17:14:22 - cmdstanpy - INFO - Chain [1] start processing
+17:14:22 - cmdstanpy - INFO - Chain [1] done processing
+  Origin 14/34  train=2104d  predict 2025-10-05 -> 2025-10-18
+17:14:56 - cmdstanpy - INFO - Chain [1] start processing
+17:14:56 - cmdstanpy - INFO - Chain [1] done processing
+17:15:29 - cmdstanpy - INFO - Chain [1] start processing
+17:15:30 - cmdstanpy - INFO - Chain [1] done processing
+  Origin 15/34  train=2118d  predict 2025-10-19 -> 2025-11-01
+17:16:04 - cmdstanpy - INFO - Chain [1] start processing
+17:16:04 - cmdstanpy - INFO - Chain [1] done processing
+17:16:38 - cmdstanpy - INFO - Chain [1] start processing
+17:16:39 - cmdstanpy - INFO - Chain [1] done processing
+  Origin 16/34  train=2132d  predict 2025-11-02 -> 2025-11-15
+17:17:14 - cmdstanpy - INFO - Chain [1] start processing
+17:17:14 - cmdstanpy - INFO - Chain [1] done processing
+17:17:49 - cmdstanpy - INFO - Chain [1] start processing
+17:17:49 - cmdstanpy - INFO - Chain [1] done processing
+  Origin 17/34  train=2146d  predict 2025-11-16 -> 2025-11-29
+17:18:23 - cmdstanpy - INFO - Chain [1] start processing
+17:18:24 - cmdstanpy - INFO - Chain [1] done processing
+17:18:58 - cmdstanpy - INFO - Chain [1] start processing
+17:18:58 - cmdstanpy - INFO - Chain [1] done processing
+  Origin 18/34  train=2160d  predict 2025-11-30 -> 2025-12-13
+17:19:33 - cmdstanpy - INFO - Chain [1] start processing
+17:19:33 - cmdstanpy - INFO - Chain [1] done processing
+17:20:07 - cmdstanpy - INFO - Chain [1] start processing
+17:20:08 - cmdstanpy - INFO - Chain [1] done processing
+  Origin 19/34  train=2174d  predict 2025-12-14 -> 2025-12-27
+17:20:42 - cmdstanpy - INFO - Chain [1] start processing
+17:20:42 - cmdstanpy - INFO - Chain [1] done processing
+17:21:12 - cmdstanpy - INFO - Chain [1] start processing
+17:21:12 - cmdstanpy - INFO - Chain [1] done processing
+  Origin 20/34  train=2188d  predict 2025-12-28 -> 2026-01-10
+17:21:42 - cmdstanpy - INFO - Chain [1] start processing
+17:21:42 - cmdstanpy - INFO - Chain [1] done processing
+17:22:17 - cmdstanpy - INFO - Chain [1] start processing
+17:22:17 - cmdstanpy - INFO - Chain [1] done processing
+  Origin 21/34  train=2202d  predict 2026-01-11 -> 2026-01-24
+17:22:53 - cmdstanpy - INFO - Chain [1] start processing
+17:22:54 - cmdstanpy - INFO - Chain [1] done processing
+17:23:28 - cmdstanpy - INFO - Chain [1] start processing
+17:23:29 - cmdstanpy - INFO - Chain [1] done processing
+  Origin 22/34  train=2216d  predict 2026-01-25 -> 2026-02-07
+17:24:04 - cmdstanpy - INFO - Chain [1] start processing
+17:24:04 - cmdstanpy - INFO - Chain [1] done processing
+17:24:40 - cmdstanpy - INFO - Chain [1] start processing
+17:24:40 - cmdstanpy - INFO - Chain [1] done processing
+  Origin 23/34  train=2230d  predict 2026-02-08 -> 2026-02-21
+17:25:16 - cmdstanpy - INFO - Chain [1] start processing
+17:25:16 - cmdstanpy - INFO - Chain [1] done processing
+17:25:52 - cmdstanpy - INFO - Chain [1] start processing
+17:25:52 - cmdstanpy - INFO - Chain [1] done processing
+  Origin 24/34  train=2244d  predict 2026-02-22 -> 2026-03-07
+17:26:28 - cmdstanpy - INFO - Chain [1] start processing
+17:26:28 - cmdstanpy - INFO - Chain [1] done processing
+17:27:03 - cmdstanpy - INFO - Chain [1] start processing
+17:27:03 - cmdstanpy - INFO - Chain [1] done processing
+  Origin 25/34  train=2258d  predict 2026-03-08 -> 2026-03-21
+17:27:40 - cmdstanpy - INFO - Chain [1] start processing
+17:27:40 - cmdstanpy - INFO - Chain [1] done processing
+17:28:15 - cmdstanpy - INFO - Chain [1] start processing
+17:28:16 - cmdstanpy - INFO - Chain [1] done processing
+  Origin 26/34  train=2272d  predict 2026-03-22 -> 2026-04-04
+17:28:52 - cmdstanpy - INFO - Chain [1] start processing
+17:28:53 - cmdstanpy - INFO - Chain [1] done processing
+17:29:29 - cmdstanpy - INFO - Chain [1] start processing
+17:29:29 - cmdstanpy - INFO - Chain [1] done processing
+  Origin 27/34  train=2286d  predict 2026-04-05 -> 2026-04-18
+17:30:06 - cmdstanpy - INFO - Chain [1] start processing
+17:30:07 - cmdstanpy - INFO - Chain [1] done processing
+17:30:43 - cmdstanpy - INFO - Chain [1] start processing
+17:30:43 - cmdstanpy - INFO - Chain [1] done processing
+  Origin 28/34  train=2300d  predict 2026-04-19 -> 2026-05-02
+17:31:20 - cmdstanpy - INFO - Chain [1] start processing
+17:31:20 - cmdstanpy - INFO - Chain [1] done processing
+17:31:56 - cmdstanpy - INFO - Chain [1] start processing
+17:31:56 - cmdstanpy - INFO - Chain [1] done processing
+  Origin 29/34  train=2314d  predict 2026-05-03 -> 2026-05-16
+17:32:33 - cmdstanpy - INFO - Chain [1] start processing
+17:32:33 - cmdstanpy - INFO - Chain [1] done processing
+17:33:10 - cmdstanpy - INFO - Chain [1] start processing
+17:33:10 - cmdstanpy - INFO - Chain [1] done processing
+  Origin 30/34  train=2328d  predict 2026-05-17 -> 2026-05-30
+17:33:47 - cmdstanpy - INFO - Chain [1] start processing
+17:33:47 - cmdstanpy - INFO - Chain [1] done processing
+17:34:24 - cmdstanpy - INFO - Chain [1] start processing
+17:34:24 - cmdstanpy - INFO - Chain [1] done processing
+  Origin 31/34  train=2342d  predict 2026-05-31 -> 2026-06-13
+17:35:01 - cmdstanpy - INFO - Chain [1] start processing
+17:35:02 - cmdstanpy - INFO - Chain [1] done processing
+17:35:38 - cmdstanpy - INFO - Chain [1] start processing
+17:35:39 - cmdstanpy - INFO - Chain [1] done processing
+  Origin 32/34  train=2356d  predict 2026-06-14 -> 2026-06-27
+17:36:16 - cmdstanpy - INFO - Chain [1] start processing
+17:36:16 - cmdstanpy - INFO - Chain [1] done processing
+17:36:53 - cmdstanpy - INFO - Chain [1] start processing
+17:36:53 - cmdstanpy - INFO - Chain [1] done processing
+  Origin 33/34  train=2370d  predict 2026-06-28 -> 2026-07-11
+17:37:32 - cmdstanpy - INFO - Chain [1] start processing
+17:37:32 - cmdstanpy - INFO - Chain [1] done processing
+17:38:10 - cmdstanpy - INFO - Chain [1] start processing
+17:38:10 - cmdstanpy - INFO - Chain [1] done processing
+  Origin 34/34  train=2384d  predict 2026-07-12 -> 2026-07-25
+17:38:48 - cmdstanpy - INFO - Chain [1] start processing
+17:38:48 - cmdstanpy - INFO - Chain [1] done processing
+17:39:25 - cmdstanpy - INFO - Chain [1] start processing
+17:39:26 - cmdstanpy - INFO - Chain [1] done processing
+17:40:06 - cmdstanpy - INFO - Chain [1] start processing
+17:40:06 - cmdstanpy - INFO - Chain [1] done processing
+17:40:40 - cmdstanpy - INFO - Chain [1] start processing
+17:40:40 - cmdstanpy - INFO - Chain [1] done processing
+
+====================================================================
+  STEP 3: Results
+====================================================================
+
+  Evaluated on 476 days: 2025-04-06 -> 2026-07-25
+
+                wmape         mae        rmse   mase      r2  failed_origins
+model                                                                       
+Climatology    9.3987 33,627.5068 49,270.0535 1.1433  0.3113               0
+HoltWinters   10.1472 36,305.6455 54,286.7085 1.2344  0.1639               0
+SARIMAX       10.3846 37,154.8068 55,331.1431 1.2632  0.1314               0
+SARIMAX_nw    10.5497 37,745.6857 55,559.6512 1.2833  0.1242               0
+Prophet       10.8370 38,773.6892 56,773.9569 1.3183  0.0855               0
+Prophet_nw    10.9639 39,227.6592 57,442.1836 1.3337  0.0639               0
+SeasonalNaive 11.3029 40,440.3151 61,134.9913 1.3749 -0.0604               0
+Holts_Linear  12.8084 45,827.0637 61,681.8874 1.5581 -0.0794               0
+LSTM_nw       12.9642 46,384.3133 61,801.6487 1.5770 -0.0836               0
+LSTM          12.9683 46,399.0988 60,837.3624 1.5775 -0.0501               0
+
+  Baseline to beat (best of naive/climatology): WMAPE 9.40%
+
+  DOES WEATHER HELP? (same model, same protocol, weather in vs out)
+    SARIMAX     10.38%   vs   no-weather  10.55%   -> weather HELPS by +0.17 pts
+    Prophet     10.84%   vs   no-weather  10.96%   -> weather HELPS by +0.13 pts
+    LSTM        12.97%   vs   no-weather  12.96%   -> no meaningful difference
+
+  VERDICT
+    HoltWinters    WMAPE   10.15%   MASE  1.234   rejected — does not beat the baseline
+    SARIMAX        WMAPE   10.38%   MASE  1.263   rejected — does not beat the baseline
+    SARIMAX_nw     WMAPE   10.55%   MASE  1.283   rejected — does not beat the baseline
+    Prophet        WMAPE   10.84%   MASE  1.318   rejected — does not beat the baseline
+    Prophet_nw     WMAPE   10.96%   MASE  1.334   rejected — does not beat the baseline
+    Holts_Linear   WMAPE   12.81%   MASE  1.558   rejected — does not beat the baseline
+    LSTM_nw        WMAPE   12.96%   MASE  1.577   rejected — does not beat the baseline
+    LSTM           WMAPE   12.97%   MASE  1.578   rejected — does not beat the baseline
+
+====================================================================
+  STEP 3b: Does error grow with horizon? (week 1 vs week 2 ahead)
+====================================================================
+  Week 1 = days 1-7 ahead (238 days)   Week 2 = days 8-14 ahead (238 days)
+
+  model             wk1 WMAPE  wk2 WMAPE      change
+  SeasonalNaive        10.21%     12.40%      +2.19 pts
+  Climatology           8.16%     10.65%      +2.49 pts
+  HoltWinters           8.80%     11.50%      +2.71 pts
+  Holts_Linear         11.96%     13.66%      +1.70 pts
+  SARIMAX               8.95%     11.82%      +2.87 pts
+  Prophet               9.73%     11.95%      +2.21 pts
+  LSTM                 11.81%     14.14%      +2.33 pts
+  SARIMAX_nw            9.08%     12.03%      +2.95 pts
+  Prophet_nw            9.84%     12.09%      +2.25 pts
+  LSTM_nw              11.67%     14.27%      +2.59 pts
+
+====================================================================
+  STEP 4: Weekday-only R2 — is the forecast just a repeating week?
+====================================================================
+  ACTUAL traffic   0.1535   <- reference
+  SeasonalNaive    0.1270
+  Climatology      0.2798
+  HoltWinters      0.1917
+  Holts_Linear     0.0000
+  SARIMAX          0.1498
+  Prophet          0.5154
+  LSTM             0.0055
+  SARIMAX_nw       0.1540
+  Prophet_nw       0.5323
+  LSTM_nw          0.0075
+
+  A model far ABOVE the reference is emitting a repeating weekly average
+  rather than reacting to conditions.
+
+====================================================================
+  STEP 4c: AIC / BIC (ARIMA-family structure comparison)
+====================================================================
+  HoltWinters    AIC       50,305.4   BIC       50,369.0
+  Holts_Linear   AIC       51,539.3   BIC       51,562.4
+  SARIMAX        AIC       56,974.6   BIC       57,026.6
+  SARIMAX_nw     AIC       56,974.9   BIC       57,003.8
+  Prophet        n/a — not a likelihood-based model
+  LSTM           n/a — not a likelihood-based model
+  Prophet_nw     n/a — not a likelihood-based model
+  LSTM_nw        n/a — not a likelihood-based model
+
+  Lower is better, and ONLY comparable within this family. AIC/BIC cannot
+  rank SARIMAX against Prophet or the LSTM — different likelihoods, or none.
+
+====================================================================
+  STEP 5: FUTURE forecast (28 days past the last actual)
+====================================================================
+  2026-07-26 -> 2026-08-22
+  Weather for this window is day-of-year climatology, not observation.
+  Metrics were validated at h=14d; error grows beyond that.
+
+  SeasonalNaive  ok   mean 357,398
+  Climatology    ok   mean 348,795
+  HoltWinters    ok   mean 364,641
+  Holts_Linear   ok   mean 366,519
+  SARIMAX        ok   mean 360,449
+  Prophet        ok   mean 350,072
+  LSTM           ok   mean 364,757
+  SARIMAX_nw     ok   mean 357,022
+  Prophet_nw     ok   mean 352,955
+  LSTM_nw        ok   mean 377,343
+
+====================================================================
+  STEP 6: Writing to AWS
+====================================================================
+  ml_predictive_volume: 1922 PAST + 476 PRESENT + 28 FUTURE
+  ml_model_metrics: 8 models
+
+  Metrics and chart now describe the same forecasts at the same horizon.
+

@@ -2,8 +2,11 @@
 config/.env
 
 # Caches, intermediate files, logs, outputs
-_work/*
-!_work/README.md
+# Run artifacts (logs, results, the migration manifest) are kept as the record
+# of what produced the numbers. Only the binary caches are ignored.
+_work/cache/
+# compiled scratch from test_resolver.mjs / build_fact.mjs
+_work/*.mjs
 
 node_modules/
 __pycache__/

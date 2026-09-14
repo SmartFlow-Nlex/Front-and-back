@@ -1,0 +1,70 @@
+WARNING: All log messages before absl::InitializeLog() is called are written to STDERR
+I0000 00:00:1788574130.759698   19792 port.cc:153] oneDNN custom operations are on. You may see slightly different numerical results due to floating-point round-off errors from different computation orders. To turn them off, set the environment variable `TF_ENABLE_ONEDNN_OPTS=0`.
+WARNING: All log messages before absl::InitializeLog() is called are written to STDERR
+I0000 00:00:1788574133.080003   19792 port.cc:153] oneDNN custom operations are on. You may see slightly different numerical results due to floating-point round-off errors from different computation orders. To turn them off, set the environment variable `TF_ENABLE_ONEDNN_OPTS=0`.
+I0000 00:00:1788574134.028378   19792 cpu_feature_guard.cc:227] This TensorFlow binary is optimized to use available CPU instructions in performance-critical operations.
+To enable the following instructions: SSE3 SSE4.1 SSE4.2 AVX AVX2 FMA, in other operations, rebuild TensorFlow with the appropriate compiler flags.
+WARNING:tensorflow:TensorFlow GPU support is not available on native Windows for TensorFlow >= 2.11. Even if CUDA/cuDNN are installed, GPU will not be used. Please use WSL2 or the TensorFlow-DirectML plugin.
+
+======================================================================
+  STEP 1: Loading the corridor CO2 series
+======================================================================
+  1,461 days  2022-01-01 -> 2025-12-31
+  CO2/day: mean 425.2 t   min 128.2   max 549.5
+
+======================================================================
+  STEP 2: Features
+======================================================================
+  usable rows after lags: 1,433   features: 15
+  42 origins, h=7d  ->  294 scored days (20.5%)
+  first origin 2025-03-13   last 2025-12-25
+
+======================================================================
+  STEP 3: Rolling-origin evaluation (42 origins, h=7d)
+======================================================================
+  reusing cached predictions (emissions_preds.pkl) - series and protocol unchanged
+
+======================================================================
+  STEP 4: Results
+======================================================================
+
+  Evaluated on 294 days
+
+        model    mape   wmape     rmse     mae   mase      r2
+   Polynomial  8.5790  6.7899  47.7114 29.7801 0.8185  0.6560
+          GBR  8.2062  6.7916  48.7279 29.7874 0.8187  0.6412
+         LSTM 10.4612  8.1887  58.2908 35.9147 0.9871  0.4865
+SeasonalNaive 20.8349 15.9975 103.1667 70.1639 1.9284 -0.6084
+  Climatology 22.1169 19.2312 100.5122 84.3466 2.3182 -0.5267
+
+  Baseline to beat: 16.00% WMAPE (SeasonalNaive)
+
+  TIE (Polynomial 6.7899%, GBR 6.7916%) - within 0.15pp WMAPE.
+  Ordering between these is not meaningful; they are co-champions.
+
+  VERDICT
+    Polynomial   MAPE   8.58%  WMAPE   6.79%  MASE 0.818  accepted
+    GBR          MAPE   8.21%  WMAPE   6.79%  MASE 0.819  accepted
+    LSTM         MAPE  10.46%  WMAPE   8.19%  MASE 0.987  accepted
+
+  failed origins: {'GBR': 0, 'Polynomial': 0, 'LSTM': 0}
+
+======================================================================
+  STEP 5: Writing to AWS
+======================================================================
+  ml_model_metrics: 5 rows under target='Corridor CO2'
+  champion: Polynomial
+
+======================================================================
+  STEP 6: Writing the served forecast
+======================================================================
+  champion: Polynomial  (WMAPE 6.79%, MASE 0.818)
+  GBR          2026-01-01 .. 2026-03-31  mean 312.0 t/day
+  Polynomial   2026-01-01 .. 2026-03-31  mean 435.3 t/day
+  LSTM         2026-01-01 .. 2026-03-31  mean 365.8 t/day
+  ml_predictive_emissions: 1,139 PAST + 294 PRESENT + 90 FUTURE
+  emissions_results.json written
+
+======================================================================
+  DONE
+======================================================================

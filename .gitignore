@@ -27,10 +27,14 @@ Back-End/.env.*
 
 # Local backups taken before a merge — not part of the project.
 .merge-backup/
-# Script credentials — filled-in copies are never committed.
-All_Scripts/.env
+# Scripts bundle: real credentials and local caches/logs are never committed.
+smartflow_scripts/config/.env
+smartflow_scripts/_work/cache/
+smartflow_scripts/**/__pycache__/
 
 .env
 **/.env
 .env.example
 **/.env.example
+# The scripts' blank settings template holds no values, so teammates need it.
+!smartflow_scripts/config/.env.example

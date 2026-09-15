@@ -1,0 +1,10 @@
+{
+  "name": "smartflow-scripts",
+  "private": true,
+  "description": "Data loading, training/testing, audits and reports for the SmartFlow NLEX dashboard",
+  "dependencies": {
+    "esbuild": "^0.25.0",
+    "pg": "^8.13.3",
+    "pg-copy-streams": "^6.0.6"
+  }
+}

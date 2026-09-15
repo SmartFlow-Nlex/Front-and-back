@@ -1,0 +1,188 @@
+
+====================================================================
+  STEP 1: Loading traffic and weather
+====================================================================
+  Traffic :  1461 days  2022-01-01 -> 2025-12-31
+  Weather :  2428 days  2020-01-01 -> 2026-08-30
+  Rainfall: mean 6.9 mm/day, max 150.4 mm/day
+  Joint   :  1461 days  2022-01-01 -> 2025-12-31
+
+====================================================================
+  STEP 2: Rolling-origin evaluation (10 origins, h=14d)
+====================================================================
+  First origin: 2025-08-14   Last: 2025-12-18
+  Every model refits at every origin and forecasts 14 days blind.
+
+  Origin 1/10  train=1321d  predict 2025-08-14 -> 2025-08-27
+Importing plotly failed. Interactive plots will not work.
+13:17:00 - cmdstanpy - INFO - Chain [1] start processing
+13:17:00 - cmdstanpy - INFO - Chain [1] done processing
+WARNING: All log messages before absl::InitializeLog() is called are written to STDERR
+I0000 00:00:1788326222.718159   26184 port.cc:153] oneDNN custom operations are on. You may see slightly different numerical results due to floating-point round-off errors from different computation orders. To turn them off, set the environment variable `TF_ENABLE_ONEDNN_OPTS=0`.
+WARNING: All log messages before absl::InitializeLog() is called are written to STDERR
+I0000 00:00:1788326240.284058   26184 port.cc:153] oneDNN custom operations are on. You may see slightly different numerical results due to floating-point round-off errors from different computation orders. To turn them off, set the environment variable `TF_ENABLE_ONEDNN_OPTS=0`.
+WARNING:tensorflow:TensorFlow GPU support is not available on native Windows for TensorFlow >= 2.11. Even if CUDA/cuDNN are installed, GPU will not be used. Please use WSL2 or the TensorFlow-DirectML plugin.
+13:17:45 - cmdstanpy - INFO - Chain [1] start processing
+13:17:45 - cmdstanpy - INFO - Chain [1] done processing
+  Origin 2/10  train=1335d  predict 2025-08-28 -> 2025-09-10
+13:18:04 - cmdstanpy - INFO - Chain [1] start processing
+13:18:04 - cmdstanpy - INFO - Chain [1] done processing
+13:18:22 - cmdstanpy - INFO - Chain [1] start processing
+13:18:23 - cmdstanpy - INFO - Chain [1] done processing
+  Origin 3/10  train=1349d  predict 2025-09-11 -> 2025-09-24
+13:18:41 - cmdstanpy - INFO - Chain [1] start processing
+13:18:41 - cmdstanpy - INFO - Chain [1] done processing
+13:19:00 - cmdstanpy - INFO - Chain [1] start processing
+13:19:00 - cmdstanpy - INFO - Chain [1] done processing
+  Origin 4/10  train=1363d  predict 2025-09-25 -> 2025-10-08
+13:19:19 - cmdstanpy - INFO - Chain [1] start processing
+13:19:19 - cmdstanpy - INFO - Chain [1] done processing
+13:19:38 - cmdstanpy - INFO - Chain [1] start processing
+13:19:38 - cmdstanpy - INFO - Chain [1] done processing
+  Origin 5/10  train=1377d  predict 2025-10-09 -> 2025-10-22
+13:19:59 - cmdstanpy - INFO - Chain [1] start processing
+13:19:59 - cmdstanpy - INFO - Chain [1] done processing
+13:20:23 - cmdstanpy - INFO - Chain [1] start processing
+13:20:23 - cmdstanpy - INFO - Chain [1] done processing
+  Origin 6/10  train=1391d  predict 2025-10-23 -> 2025-11-05
+13:20:46 - cmdstanpy - INFO - Chain [1] start processing
+13:20:46 - cmdstanpy - INFO - Chain [1] done processing
+13:21:08 - cmdstanpy - INFO - Chain [1] start processing
+13:21:08 - cmdstanpy - INFO - Chain [1] done processing
+  Origin 7/10  train=1405d  predict 2025-11-06 -> 2025-11-19
+13:21:32 - cmdstanpy - INFO - Chain [1] start processing
+13:21:32 - cmdstanpy - INFO - Chain [1] done processing
+13:21:54 - cmdstanpy - INFO - Chain [1] start processing
+13:21:55 - cmdstanpy - INFO - Chain [1] done processing
+  Origin 8/10  train=1419d  predict 2025-11-20 -> 2025-12-03
+13:22:17 - cmdstanpy - INFO - Chain [1] start processing
+13:22:17 - cmdstanpy - INFO - Chain [1] done processing
+13:22:40 - cmdstanpy - INFO - Chain [1] start processing
+13:22:40 - cmdstanpy - INFO - Chain [1] done processing
+  Origin 9/10  train=1433d  predict 2025-12-04 -> 2025-12-17
+13:23:05 - cmdstanpy - INFO - Chain [1] start processing
+13:23:05 - cmdstanpy - INFO - Chain [1] done processing
+13:23:31 - cmdstanpy - INFO - Chain [1] start processing
+13:23:31 - cmdstanpy - INFO - Chain [1] done processing
+  Origin 10/10  train=1447d  predict 2025-12-18 -> 2025-12-31
+13:23:56 - cmdstanpy - INFO - Chain [1] start processing
+13:23:56 - cmdstanpy - INFO - Chain [1] done processing
+13:24:20 - cmdstanpy - INFO - Chain [1] start processing
+13:24:20 - cmdstanpy - INFO - Chain [1] done processing
+13:24:46 - cmdstanpy - INFO - Chain [1] start processing
+13:24:46 - cmdstanpy - INFO - Chain [1] done processing
+13:25:13 - cmdstanpy - INFO - Chain [1] start processing
+13:25:13 - cmdstanpy - INFO - Chain [1] done processing
+
+====================================================================
+  STEP 3: Results
+====================================================================
+
+  Evaluated on 140 days: 2025-08-14 -> 2025-12-31
+
+                wmape         mae        rmse   mase      r2  failed_origins
+model                                                                       
+HoltWinters    5.8219 20,584.5621 36,319.7802 0.8729  0.3305               0
+SARIMAX        5.8306 20,615.4763 36,866.9894 0.8742  0.3102               0
+Prophet        5.9757 21,128.4462 31,036.0488 0.8959  0.5111               0
+SARIMAX_nw     6.0376 21,347.2613 37,271.0261 0.9052  0.2950               0
+Prophet_nw     6.3454 22,435.7750 34,045.0908 0.9514  0.4117               0
+SeasonalNaive  6.7423 23,839.1071 40,794.6676 1.0109  0.1554               0
+Climatology    7.3876 26,120.4304 37,804.4823 1.1076  0.2746               0
+Holts_Linear   8.7992 31,111.5014 43,241.9095 1.3193  0.0510               0
+LSTM          10.4599 36,983.1968 45,471.5047 1.5683 -0.0494               0
+LSTM_nw       10.8115 38,226.6007 45,954.5152 1.6210 -0.0718               0
+
+  Baseline to beat (best of naive/climatology): WMAPE 6.74%
+
+  DOES WEATHER HELP? (same model, same protocol, weather in vs out)
+    SARIMAX      5.83%   vs   no-weather   6.04%   -> weather HELPS by +0.21 pts
+    Prophet      5.98%   vs   no-weather   6.35%   -> weather HELPS by +0.37 pts
+    LSTM        10.46%   vs   no-weather  10.81%   -> weather HELPS by +0.35 pts
+
+  VERDICT
+    HoltWinters    WMAPE    5.82%   MASE  0.873   accepted (rank #1)
+    SARIMAX        WMAPE    5.83%   MASE  0.874   accepted (rank #2)
+    Prophet        WMAPE    5.98%   MASE  0.896   accepted (rank #3)
+    SARIMAX_nw     WMAPE    6.04%   MASE  0.905   accepted (rank #4)
+    Prophet_nw     WMAPE    6.35%   MASE  0.951   accepted (rank #5)
+    Holts_Linear   WMAPE    8.80%   MASE  1.319   rejected — does not beat the baseline
+    LSTM           WMAPE   10.46%   MASE  1.568   rejected — does not beat the baseline
+    LSTM_nw        WMAPE   10.81%   MASE  1.621   rejected — does not beat the baseline
+
+====================================================================
+  STEP 3b: Does error grow with horizon? (week 1 vs week 2 ahead)
+====================================================================
+  Week 1 = days 1-7 ahead (70 days)   Week 2 = days 8-14 ahead (70 days)
+
+  model             wk1 WMAPE  wk2 WMAPE      change
+  SeasonalNaive         6.21%      7.28%      +1.07 pts
+  Climatology           7.64%      7.13%      -0.51 pts
+  HoltWinters           5.19%      6.46%      +1.27 pts
+  Holts_Linear          8.75%      8.85%      +0.10 pts
+  SARIMAX               4.97%      6.70%      +1.73 pts
+  Prophet               6.02%      5.93%      -0.09 pts
+  LSTM                 10.50%     10.42%      -0.08 pts
+  SARIMAX_nw            5.31%      6.77%      +1.45 pts
+  Prophet_nw            6.53%      6.16%      -0.38 pts
+  LSTM_nw              10.52%     11.11%      +0.59 pts
+
+====================================================================
+  STEP 4: Weekday-only R2 — is the forecast just a repeating week?
+====================================================================
+  ACTUAL traffic   0.3300   <- reference
+  SeasonalNaive    0.4540
+  Climatology      0.8499
+  HoltWinters      0.6455
+  Holts_Linear     0.0002
+  SARIMAX          0.5729
+  Prophet          0.6305
+  LSTM             0.0197
+  SARIMAX_nw       0.6433
+  Prophet_nw       0.6671
+  LSTM_nw          0.0072
+
+  A model far ABOVE the reference is emitting a repeating weekly average
+  rather than reacting to conditions.
+
+====================================================================
+  STEP 4c: AIC / BIC (ARIMA-family structure comparison)
+====================================================================
+  HoltWinters    AIC       29,936.2   BIC       29,994.3
+  Holts_Linear   AIC       30,862.8   BIC       30,883.9
+  SARIMAX        AIC       33,913.0   BIC       33,960.4
+  SARIMAX_nw     AIC       33,898.1   BIC       33,924.5
+  Prophet        n/a — not a likelihood-based model
+  LSTM           n/a — not a likelihood-based model
+  Prophet_nw     n/a — not a likelihood-based model
+  LSTM_nw        n/a — not a likelihood-based model
+
+  Lower is better, and ONLY comparable within this family. AIC/BIC cannot
+  rank SARIMAX against Prophet or the LSTM — different likelihoods, or none.
+
+====================================================================
+  STEP 5: FUTURE forecast (28 days past the last actual)
+====================================================================
+  2026-01-01 -> 2026-01-28
+  Weather for this window is day-of-year climatology, not observation.
+  Metrics were validated at h=14d; error grows beyond that.
+
+  SeasonalNaive  ok   mean 342,953
+  Climatology    ok   mean 366,231
+  HoltWinters    ok   mean 267,174
+  Holts_Linear   ok   mean 353,780
+  SARIMAX        ok   mean 270,525
+  Prophet        ok   mean 346,914
+  LSTM           ok   mean 347,876
+  SARIMAX_nw     ok   mean 299,418
+  Prophet_nw     ok   mean 346,404
+  LSTM_nw        ok   mean 340,839
+
+====================================================================
+  STEP 6: Writing to AWS
+====================================================================
+  ml_predictive_volume: 1321 PAST + 140 PRESENT + 28 FUTURE
+  ml_model_metrics: 8 models
+
+  Metrics and chart now describe the same forecasts at the same horizon.
+

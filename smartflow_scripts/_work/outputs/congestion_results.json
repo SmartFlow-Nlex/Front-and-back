@@ -1,0 +1,78 @@
+{
+  "generated": "2026-09-01",
+  "source": "silver.fact_waze_jams (Waze Partner Hub)",
+  "window": {
+    "from": "2026-08-04",
+    "to": "2026-09-01",
+    "days": 28
+  },
+  "grid_cells": 12960,
+  "train_rows": 115200,
+  "test_rows": 40320,
+  "test_days": 7,
+  "label_rule": {
+    "free_flow": "no jam reported (inferred)",
+    "heavy": "30-60 km/h",
+    "severe": "<30 km/h"
+  },
+  "metrics": {
+    "accuracy": 0.7358630952380952,
+    "macro_f1": 0.4994578229294418,
+    "weighted_f1": 0.7166659291573636,
+    "log_loss": 0.8314226876215145
+  },
+  "per_class": {
+    "Free flow": {
+      "precision": 0.6617236398651902,
+      "recall": 0.5664358720738543,
+      "f1": 0.6103832659768175,
+      "support": 12132
+    },
+    "Heavy": {
+      "precision": 0.19027484143763213,
+      "recall": 0.0436046511627907,
+      "f1": 0.07094994087504927,
+      "support": 2064
+    },
+    "Severe": {
+      "precision": 0.7707555495214174,
+      "recall": 0.8692390139335477,
+      "f1": 0.8170402619364588,
+      "support": 26124
+    }
+  },
+  "confusion_matrix": [
+    [
+      6872,
+      92,
+      5168
+    ],
+    [
+      388,
+      90,
+      1586
+    ],
+    [
+      3125,
+      291,
+      22708
+    ]
+  ],
+  "baselines": {
+    "Majority class": 0.6479166666666667,
+    "Persistence (t-24h)": 0.6904761904761905,
+    "Exit-hour profile": 0.7449404761904762
+  },
+  "accepted": false,
+  "rejected_reason": "accuracy 0.7359 does not beat best baseline 0.7449",
+  "feature_importance": {
+    "lag24_jams": 0.2584016025066376,
+    "lag24": 0.16994407773017883,
+    "lag48": 0.1242482140660286,
+    "h": 0.11909489333629608,
+    "exit_code": 0.11387821286916733,
+    "dow": 0.11078950017690659,
+    "is_weekend": 0.10139576345682144,
+    "horizon": 0.0022477852180600166
+  }
+}

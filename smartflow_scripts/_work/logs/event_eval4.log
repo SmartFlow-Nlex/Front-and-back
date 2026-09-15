@@ -1,0 +1,94 @@
+C:\Users\Hans\AppData\Local\Packages\PythonSoftwareFoundation.Python.3.13_qbz5n2kfra8p0\LocalCache\local-packages\Python313\site-packages\statsmodels\base\model.py:607: ConvergenceWarning: Maximum Likelihood optimization failed to converge. Check mle_retvals
+  warnings.warn("Maximum Likelihood optimization failed to "
+Importing plotly failed. Interactive plots will not work.
+03:11:43 - cmdstanpy - INFO - Chain [1] start processing
+03:11:43 - cmdstanpy - INFO - Chain [1] done processing
+03:11:43 - cmdstanpy - INFO - Chain [1] start processing
+03:11:43 - cmdstanpy - INFO - Chain [1] done processing
+03:11:43 - cmdstanpy - INFO - Chain [1] start processing
+03:11:43 - cmdstanpy - INFO - Chain [1] done processing
+03:11:44 - cmdstanpy - INFO - Chain [1] start processing
+03:11:44 - cmdstanpy - INFO - Chain [1] done processing
+03:11:44 - cmdstanpy - INFO - Chain [1] start processing
+03:11:44 - cmdstanpy - INFO - Chain [1] done processing
+03:11:44 - cmdstanpy - INFO - Chain [1] start processing
+03:11:44 - cmdstanpy - INFO - Chain [1] done processing
+03:11:44 - cmdstanpy - INFO - Chain [1] start processing
+03:11:45 - cmdstanpy - INFO - Chain [1] done processing
+03:11:45 - cmdstanpy - INFO - Chain [1] start processing
+03:11:45 - cmdstanpy - INFO - Chain [1] done processing
+03:11:45 - cmdstanpy - INFO - Chain [1] start processing
+03:11:45 - cmdstanpy - INFO - Chain [1] done processing
+03:11:45 - cmdstanpy - INFO - Chain [1] start processing
+03:11:45 - cmdstanpy - INFO - Chain [1] done processing
+03:11:46 - cmdstanpy - INFO - Chain [1] start processing
+03:11:46 - cmdstanpy - INFO - Chain [1] done processing
+03:11:46 - cmdstanpy - INFO - Chain [1] start processing
+03:11:46 - cmdstanpy - INFO - Chain [1] done processing
+03:11:46 - cmdstanpy - INFO - Chain [1] start processing
+03:11:46 - cmdstanpy - INFO - Chain [1] done processing
+03:11:47 - cmdstanpy - INFO - Chain [1] start processing
+03:11:47 - cmdstanpy - INFO - Chain [1] done processing
+03:11:47 - cmdstanpy - INFO - Chain [1] start processing
+03:11:47 - cmdstanpy - INFO - Chain [1] done processing
+03:11:47 - cmdstanpy - INFO - Chain [1] start processing
+03:11:47 - cmdstanpy - INFO - Chain [1] done processing
+03:11:47 - cmdstanpy - INFO - Chain [1] start processing
+03:11:47 - cmdstanpy - INFO - Chain [1] done processing
+03:11:48 - cmdstanpy - INFO - Chain [1] start processing
+03:11:48 - cmdstanpy - INFO - Chain [1] done processing
+03:11:48 - cmdstanpy - INFO - Chain [1] start processing
+03:11:48 - cmdstanpy - INFO - Chain [1] done processing
+
+========================================================================
+  STEP 1: Event days
+========================================================================
+  anchor CDV/PH Arena | 48 event days
+  train 34 events  2023-03-26 -> 2025-06-25
+  test  14 events  2025-10-03 -> 2025-11-23  (never seen while fitting)
+
+========================================================================
+  STEP 2: Fit uplift on TRAIN events only
+========================================================================
+  learned per-exit uplift for 19 exits | flat corridor uplift 1.074x
+
+========================================================================
+  STEP 3: Predict the HELD-OUT events
+========================================================================
+  scoring 266 exit-days (14 event days x 19 exits)
+
+========================================================================
+  STEP 3b: Do ML candidates beat the simple estimator?
+========================================================================
+  fitting on 25,951 exit-days before 2025-10-03 (646 of them event days)
+  SARIMAX fitted for 19/19 exits (event dummy as exog)
+  Prophet fitted for 19/19 exits (event days as holidays)
+
+  method                               WMAPE%   MAPE%    MAE veh       R2
+  Per-exit uplift                        5.49    5.72      1,053   0.9913
+  Gradient Boosting                      6.62    7.64      1,270   0.9897
+  XGBoost                                5.56    6.04      1,066   0.9921
+  Random Forest                          5.89    6.53      1,131   0.9912
+  SARIMAX                               87.76   89.77     16,839  -0.4870
+  Prophet (event holidays)               6.81    6.83      1,307   0.9885
+  Flat uplift (baseline)                 7.85    9.68      1,507   0.9834
+  No event adjustment (baseline)        11.54   11.94      2,214   0.9667
+
+  baseline to beat: 7.85%
+    #1 Per-exit uplift           5.49%   ACCEPTED
+    #2 XGBoost                   5.56%   ACCEPTED
+    #3 Random Forest             5.89%   ACCEPTED
+    #4 Gradient Boosting         6.62%   ACCEPTED
+    #5 Prophet (event holidays)    6.81%   ACCEPTED
+    #6 SARIMAX                  87.76%   rejected
+  winner: Per-exit uplift at 5.49% WMAPE
+  improvement over ignoring events entirely: +6.05 pts WMAPE
+
+========================================================================
+  STEP 4: Recording the result
+========================================================================
+  gold.ml_model_metrics: 8 rows under target='Event Surge'
+
+========================================================================
+  DONE
+========================================================================

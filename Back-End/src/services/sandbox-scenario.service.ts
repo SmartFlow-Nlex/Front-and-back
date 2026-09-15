@@ -18,11 +18,14 @@ import {
    day, so a simulation can start from a predicted Tuesday rather than from an
    annual average.
 
-   Only dates every module actually forecasts are offered. The horizons differ —
-   volume and emissions store 90 future days, incidents 28 — and a picker that
-   offered a date two of the three could not speak to would produce a scenario
-   half-seeded from a forecast and half from a default, with nothing on screen
-   saying which.
+   The dates offered are the ones the VOLUME and EMISSION forecasts both cover,
+   because the volume forecast is what actually seeds the simulation. The
+   horizons differ — volume and emissions store 90 future days, incidents
+   currently 28 — so a date past the incident horizon is still offered, but its
+   incident figures are returned as absent (covered: false) with a note saying
+   so. They are never filled from a default or stretched from another date:
+   a scenario is seeded only from what a model actually forecast for that day.
+   When the incident model's horizon grows, the covered range grows with it.
 
    Nothing here decides policy. It reports what was forecast and how accurate
    each forecast has been; the operator decides what to simulate against it.
@@ -56,7 +59,7 @@ const INFLOW_MAX = 12_000;
 
 export type ScenarioContext = {
   date: string;
-  /** Every date all three modules forecast. The picker offers only these. */
+  /** Every date the volume and emission forecasts both cover. The picker offers only these. */
   availableDates: string[];
   volume: {
     /** Corridor-wide daily total the champion predicts for this date. */
@@ -71,13 +74,19 @@ export type ScenarioContext = {
     wmape: number | null;
   };
   incidents: {
+    /** Whether the incident model forecasts THIS date. When false, every figure below is empty. */
+    covered: boolean;
+    /** Last date the incident model forecasts, or null if its forecast is unavailable. */
+    coverageEnd: string | null;
     /** Corridor-wide expected incidents on this date. */
     predictedForDate: number | null;
     model: string | null;
     /**
      * Expected incidents at each exit ON THIS DATE — the module publishes an
      * apportionment over its whole horizon, divided here by the horizon length
-     * so the figure beside a one-day scenario is a one-day figure.
+     * so the figure beside a one-day scenario is a one-day figure. Empty for a
+     * date outside that horizon: the apportionment describes those 28 days, not
+     * any later one.
      */
     byExit: { exitName: string; km: number; perDay: number }[];
     horizonDays: number;
@@ -87,7 +96,7 @@ export type ScenarioContext = {
     model: string | null;
     wmape: number | null;
   };
-  /** Set when a module forecasts the date but stored no value for it. */
+  /** Set when a module forecasts the date but stored no value for it, or does not forecast it. */
   notes: string[];
 };
 
@@ -112,6 +121,14 @@ const iso = (value: unknown): string => {
   return new Date(d.getTime() + MANILA_OFFSET_MS).toISOString().slice(0, 10);
 };
 
+const readableDay = (isoDay: string) =>
+  new Date(`${isoDay}T00:00:00Z`).toLocaleDateString("en-US", {
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+    timeZone: "UTC",
+  });
+
 export async function getScenarioContext(date?: string): Promise<ScenarioContext | null> {
   const anchors = await getIncidentPredictiveAnchors();
 
@@ -125,9 +142,12 @@ export async function getScenarioContext(date?: string): Promise<ScenarioContext
     getTrafficAnalyticsFromDb({ months: "12" }),
   ]);
 
-  if (!volumes || !emissions || !incidents) return null;
+  // Volume seeds the simulation and emissions define the offered range, so
+  // both are required. Incidents are not: a missing incident forecast leaves
+  // those figures empty rather than taking the whole panel down.
+  if (!volumes || !emissions) return null;
 
-  // ── the dates all three can speak to ────────────────────────────────────────
+  // ── the dates on offer ──────────────────────────────────────────────────────
   const volFuture = new Map<string, any>();
   for (const r of volumes as any[]) if (r.is_future) volFuture.set(iso(r.date), r);
 
@@ -137,13 +157,13 @@ export async function getScenarioContext(date?: string): Promise<ScenarioContext
   }
 
   const incFuture = new Map<string, any>();
-  for (const r of (incidents as any).daily ?? []) {
+  for (const r of (incidents as any)?.daily ?? []) {
     if (r.predictionType === "future") incFuture.set(iso(r.date), r);
   }
+  const incDates = [...incFuture.keys()].sort();
+  const coverageEnd = incDates.length > 0 ? incDates[incDates.length - 1] : null;
 
-  const availableDates = [...volFuture.keys()]
-    .filter((d) => emiFuture.has(d) && incFuture.has(d))
-    .sort();
+  const availableDates = [...volFuture.keys()].filter((d) => emiFuture.has(d)).sort();
 
   if (availableDates.length === 0) return null;
 
@@ -208,17 +228,28 @@ export async function getScenarioContext(date?: string): Promise<ScenarioContext
   }
 
   // ── incidents ───────────────────────────────────────────────────────────────
+  const covered = incFuture.has(chosen);
   const iRow = incFuture.get(chosen);
-  const horizonDays = Math.max(1, Number((incidents as any).corridorForecastDays) || incFuture.size);
-  const byExit = ((incidents as any).corridorForecast ?? [])
-    .map((x: any) => ({
-      exitName: String(x.exitName),
-      km: Number(x.km),
-      // The published figure covers the whole horizon; a one-day scenario needs
-      // a one-day number.
-      perDay: Number(x.predictedIncidents) / horizonDays,
-    }))
-    .sort((a: any, b: any) => b.perDay - a.perDay);
+  const horizonDays = Math.max(1, Number((incidents as any)?.corridorForecastDays) || incFuture.size);
+  const byExit = covered
+    ? ((incidents as any)?.corridorForecast ?? [])
+        .map((x: any) => ({
+          exitName: String(x.exitName),
+          km: Number(x.km),
+          // The published figure covers the whole horizon; a one-day scenario
+          // needs a one-day number.
+          perDay: Number(x.predictedIncidents) / horizonDays,
+        }))
+        .sort((a: any, b: any) => b.perDay - a.perDay)
+    : [];
+
+  if (!covered) {
+    notes.push(
+      coverageEnd
+        ? `No incident forecast for this date — the incident model currently forecasts through ${readableDay(coverageEnd)}. Traffic and CO₂ are still forecast; place incidents yourself to test a response.`
+        : "The incident forecast is unavailable, so no incident figures are shown. Traffic and CO₂ are still forecast.",
+    );
+  }
 
   // ── emissions ───────────────────────────────────────────────────────────────
   const eRow = emiFuture.get(chosen);
@@ -238,8 +269,10 @@ export async function getScenarioContext(date?: string): Promise<ScenarioContext
       wmape: champion?.wmape ?? null,
     },
     incidents: {
-      predictedForDate: iRow?.predicted != null ? Number(iRow.predicted) : null,
-      model: (incidents as any).summary?.championModel ?? null,
+      covered,
+      coverageEnd,
+      predictedForDate: covered && iRow?.predicted != null ? Number(iRow.predicted) : null,
+      model: (incidents as any)?.summary?.championModel ?? null,
       byExit,
       horizonDays,
     },

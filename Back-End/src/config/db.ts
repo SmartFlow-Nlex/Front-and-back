@@ -54,11 +54,26 @@ function createPool(): Pool | null {
     // "database not reachable" even though the database was fine.
     connectionTimeoutMillis: 45_000,
     idleTimeoutMillis: 30_000,
-    // Keep a few connections warm so a slow handshake is paid once, not per
-    // request, during those periods.
-    min: 2,
     max: 10,
   });
+
+  // `min: 2` used to sit here to "keep connections warm". node-postgres has no
+  // `min` option — it was silently ignored, so nothing was kept warm at all.
+  // Every connection closed after idleTimeoutMillis and the next request paid a
+  // full TLS handshake to RDS over the public internet: measured at 19.2s cold
+  // against 0.09-0.41s warm, which is why a dashboard panel could sit on
+  // "Loading..." long enough to look broken.
+  //
+  // A heartbeat inside the idle window keeps one connection alive and, as a
+  // side effect, detects a dead socket before a user's request does.
+  const HEARTBEAT_MS = 20_000;
+  const beat = setInterval(() => {
+    pool.query("SELECT 1").catch((err) => {
+      console.warn("[db] heartbeat failed:", (err as Error).message);
+    });
+  }, HEARTBEAT_MS);
+  // Never hold the process open just for the heartbeat.
+  if (typeof beat.unref === "function") beat.unref();
 
   // A pool-level error (dropped backend, RDS failover) is emitted on the pool,
   // not on the query — without this listener it becomes an unhandled 'error'

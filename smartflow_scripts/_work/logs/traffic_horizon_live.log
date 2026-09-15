@@ -1,0 +1,77 @@
+Importing plotly failed. Interactive plots will not work.
+10:57:33 - cmdstanpy - INFO - Chain [1] start processing
+10:57:34 - cmdstanpy - INFO - Chain [1] done processing
+WARNING: All log messages before absl::InitializeLog() is called are written to STDERR
+I0000 00:00:1788577054.281864   35672 port.cc:153] oneDNN custom operations are on. You may see slightly different numerical results due to floating-point round-off errors from different computation orders. To turn them off, set the environment variable `TF_ENABLE_ONEDNN_OPTS=0`.
+WARNING: All log messages before absl::InitializeLog() is called are written to STDERR
+I0000 00:00:1788577055.754675   35672 port.cc:153] oneDNN custom operations are on. You may see slightly different numerical results due to floating-point round-off errors from different computation orders. To turn them off, set the environment variable `TF_ENABLE_ONEDNN_OPTS=0`.
+WARNING:tensorflow:TensorFlow GPU support is not available on native Windows for TensorFlow >= 2.11. Even if CUDA/cuDNN are installed, GPU will not be used. Please use WSL2 or the TensorFlow-DirectML plugin.
+10:58:06 - cmdstanpy - INFO - Chain [1] start processing
+10:58:06 - cmdstanpy - INFO - Chain [1] done processing
+10:58:44 - cmdstanpy - INFO - Chain [1] start processing
+10:58:44 - cmdstanpy - INFO - Chain [1] done processing
+10:58:44 - cmdstanpy - INFO - Chain [1] start processing
+10:58:44 - cmdstanpy - INFO - Chain [1] done processing
+10:58:44 - cmdstanpy - INFO - Chain [1] start processing
+10:58:44 - cmdstanpy - INFO - Chain [1] done processing
+10:58:45 - cmdstanpy - INFO - Chain [1] start processing
+10:58:45 - cmdstanpy - INFO - Chain [1] done processing
+10:58:45 - cmdstanpy - INFO - Chain [1] start processing
+10:58:45 - cmdstanpy - INFO - Chain [1] done processing
+10:58:45 - cmdstanpy - INFO - Chain [1] start processing
+10:58:45 - cmdstanpy - INFO - Chain [1] done processing
+10:58:45 - cmdstanpy - INFO - Chain [1] start processing
+10:58:46 - cmdstanpy - INFO - Chain [1] done processing
+10:58:46 - cmdstanpy - INFO - Chain [1] start processing
+10:58:46 - cmdstanpy - INFO - Chain [1] done processing
+10:58:46 - cmdstanpy - INFO - Chain [1] start processing
+10:58:46 - cmdstanpy - INFO - Chain [1] done processing
+
+====================================================================
+  STEP 1: Loading traffic and weather
+====================================================================
+  Traffic :  1461 days  2022-01-01 -> 2025-12-31
+  Weather :  2428 days  2020-01-01 -> 2026-08-30
+  Rainfall: mean 6.9 mm/day, max 150.4 mm/day
+  Joint   :  1461 days  2022-01-01 -> 2025-12-31
+
+series: 1,461 days, last actual 2025-12-31
+projecting 90 days: 2026-01-01 -> 2026-03-31
+weather over this window is day-of-year climatology, not observation
+
+  HoltWinters    ok    mean   262,312   range 202,969 .. 297,274
+  Holts_Linear   ok    mean   356,922   range 352,412 .. 361,432
+  SARIMAX        ok    mean   181,585   range 21,569 .. 323,409
+  Prophet        ok    mean   354,245   range 287,990 .. 391,362
+  LSTM           ok    mean   348,113   range 344,621 .. 356,338
+  SARIMAX_nw     ok    mean   266,817   range 179,359 .. 337,671
+  Prophet_nw     ok    mean   353,800   range 289,380 .. 389,111
+  LSTM_nw        ok    mean   328,451   range 322,252 .. 345,468
+
+split arms present: ['80_20', '90_10']
+existing future rows (all arms): 180
+  wrote 90 future rows for split_label=80_20
+  wrote 90 future rows for split_label=90_10
+
+horizon study: champion = Prophet
+  9 origins, h=90d, step=30d
+    origin 1/9  2025-01-06 -> 2025-04-05
+    origin 2/9  2025-02-05 -> 2025-05-05
+    origin 3/9  2025-03-07 -> 2025-06-04
+    origin 4/9  2025-04-06 -> 2025-07-04
+    origin 5/9  2025-05-06 -> 2025-08-03
+    origin 6/9  2025-06-05 -> 2025-09-02
+    origin 7/9  2025-07-05 -> 2025-10-02
+    origin 8/9  2025-08-04 -> 2025-11-01
+    origin 9/9  2025-09-03 -> 2025-12-01
+
+  MASE denominator (seasonal naive, 1101 training days): 22,714 veh
+  range        WMAPE%   MAPE%    MASE    MAE veh  baseline%   verdict
+  d1-7           4.46    4.77   0.688     15,630       5.76   USABLE
+  d8-14          5.00    5.92   0.769     17,478       7.27   USABLE
+  d15-30         6.07    7.41   0.914     20,761       8.92   USABLE
+  d31-60         5.65    6.68   0.858     19,500       8.51   USABLE
+  d61-90         6.33    7.77   0.961     21,819       7.81   USABLE
+
+80_20 future window now: 2026-01-01 -> 2026-03-31  (90 days)
+gold.ml_horizon_accuracy: 5 buckets stored

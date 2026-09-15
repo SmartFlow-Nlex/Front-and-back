@@ -2817,6 +2817,25 @@ body:has(.sandbox-main.is-expanded) {
   border-color: var(--color-danger-border);
   color: var(--color-danger);
 }
+/* In the full-screen bar the toggles sit in an unsized flex row, so `flex: 1`
+   collapsed them to slivers and the closed state was hard to see on the dark
+   background. Give them a real size and a dark-bar palette. */
+.sandbox-fs-bar .sandbox-lane-toggles button {
+  flex: 0 0 auto;
+  min-width: 38px;
+  padding: 5px 10px;
+  background: rgba(255, 255, 255, 0.07);
+  border-color: rgba(255, 255, 255, 0.16);
+  color: #e2e8f0;
+}
+.sandbox-fs-bar .sandbox-lane-toggles button:hover {
+  background: rgba(255, 255, 255, 0.13);
+}
+.sandbox-fs-bar .sandbox-lane-toggles button.closed {
+  background: rgba(220, 38, 38, 0.35);
+  border-color: rgba(252, 165, 165, 0.85);
+  color: #ffffff;
+}
 .sandbox-btn-row { display: flex; gap: 8px; margin-top: 10px; }
 .sandbox-btn-row .btn-primary, .sandbox-btn-row .btn-muted { margin-left: 0; }
 

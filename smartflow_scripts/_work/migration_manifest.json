@@ -1,0 +1,2890 @@
+[
+  {
+    "file": "build_fact.mjs",
+    "from": "C:\\Users\\Hans\\.gemini\\antigravity\\scratch\\Front-and-back-Ver1-Merged-BE-FE\\Front-and-back-Ver1-Merged-BE-FE\\pipeline_scripts\\01_load_traffic\\build_fact.mjs",
+    "to": "1_data_loading\\traffic\\build_fact.mjs",
+    "kind": "rebuild",
+    "sha_before": "492550959733",
+    "changes": [
+      "paths relative to the file (resolver, _work)"
+    ]
+  },
+  {
+    "file": "load_fact.js",
+    "from": "C:\\Users\\Hans\\.gemini\\antigravity\\scratch\\Front-and-back-Ver1-Merged-BE-FE\\Front-and-back-Ver1-Merged-BE-FE\\pipeline_scripts\\01_load_traffic\\load_fact.js",
+    "to": "1_data_loading\\traffic\\load_fact.js",
+    "kind": "rebuild",
+    "sha_before": "62dad573017b",
+    "changes": [
+      "credential -> config/db.cjs (1 pool)",
+      "_work path relative to the file"
+    ]
+  },
+  {
+    "file": "build_origin.mjs",
+    "from": "C:\\Users\\Hans\\.gemini\\antigravity\\scratch\\Front-and-back-Ver1-Merged-BE-FE\\Front-and-back-Ver1-Merged-BE-FE\\pipeline_scripts\\01_load_traffic\\build_origin.mjs",
+    "to": "1_data_loading\\traffic\\build_origin.mjs",
+    "kind": "rebuild",
+    "sha_before": "19245860ebdd",
+    "changes": [
+      "paths relative to the file (resolver, _work)"
+    ]
+  },
+  {
+    "file": "load_origin.js",
+    "from": "C:\\Users\\Hans\\.gemini\\antigravity\\scratch\\Front-and-back-Ver1-Merged-BE-FE\\Front-and-back-Ver1-Merged-BE-FE\\pipeline_scripts\\01_load_traffic\\load_origin.js",
+    "to": "1_data_loading\\traffic\\load_origin.js",
+    "kind": "rebuild",
+    "sha_before": "a7f6c566dbc6",
+    "changes": [
+      "credential -> config/db.cjs (1 pool)",
+      "_work path relative to the file"
+    ]
+  },
+  {
+    "file": "rebuild_descriptive.js",
+    "from": "C:\\Users\\Hans\\.gemini\\antigravity\\scratch\\Front-and-back-Ver1-Merged-BE-FE\\Front-and-back-Ver1-Merged-BE-FE\\pipeline_scripts\\01_load_traffic\\rebuild_descriptive.js",
+    "to": "1_data_loading\\traffic\\rebuild_descriptive.js",
+    "kind": "rebuild",
+    "sha_before": "ade3f12866cb",
+    "changes": [
+      "credential -> config/db.cjs (1 pool)",
+      "_work path relative to the file"
+    ]
+  },
+  {
+    "file": "trim_to_new_only.js",
+    "from": "C:\\Users\\Hans\\.gemini\\antigravity\\scratch\\Front-and-back-Ver1-Merged-BE-FE\\Front-and-back-Ver1-Merged-BE-FE\\pipeline_scripts\\01_load_traffic\\trim_to_new_only.js",
+    "to": "1_data_loading\\traffic\\trim_to_new_only.js",
+    "kind": "rebuild",
+    "sha_before": "1f56e400218d",
+    "changes": [
+      "credential -> config/db.cjs (1 pool)"
+    ]
+  },
+  {
+    "file": "upload_stalled.py",
+    "from": "C:\\Users\\Hans\\.gemini\\antigravity\\scratch\\Front-and-back-Ver1-Merged-BE-FE\\Front-and-back-Ver1-Merged-BE-FE\\upload_stalled.py",
+    "to": "1_data_loading\\incidents\\upload_stalled.py",
+    "kind": "rebuild",
+    "sha_before": "0e9a34397c63",
+    "changes": [
+      "credential -> config/db.py"
+    ]
+  },
+  {
+    "file": "upload_stalled_real.py",
+    "from": "C:\\Users\\Hans\\.gemini\\antigravity\\scratch\\Front-and-back-Ver1-Merged-BE-FE\\Front-and-back-Ver1-Merged-BE-FE\\upload_stalled_real.py",
+    "to": "1_data_loading\\incidents\\upload_stalled_real.py",
+    "kind": "rebuild",
+    "sha_before": "6ed040fb9d24",
+    "changes": [
+      "credential -> config/db.py"
+    ]
+  },
+  {
+    "file": "build_km_table.js",
+    "from": "C:\\Users\\Hans\\.gemini\\antigravity\\scratch\\Front-and-back-Ver1-Merged-BE-FE\\Front-and-back-Ver1-Merged-BE-FE\\pipeline_scripts\\02_reference_tables\\build_km_table.js",
+    "to": "2_reference_tables\\build_km_table.js",
+    "kind": "rebuild",
+    "sha_before": "179e3b3e3d3e",
+    "changes": [
+      "credential -> config/db.cjs (1 pool)"
+    ]
+  },
+  {
+    "file": "build_emissions.js",
+    "from": "C:\\Users\\Hans\\.gemini\\antigravity\\scratch\\Front-and-back-Ver1-Merged-BE-FE\\Front-and-back-Ver1-Merged-BE-FE\\pipeline_scripts\\02_reference_tables\\build_emissions.js",
+    "to": "2_reference_tables\\build_emissions.js",
+    "kind": "rebuild",
+    "sha_before": "a4acfc0307be",
+    "changes": [
+      "credential -> config/db.cjs (1 pool)"
+    ]
+  },
+  {
+    "file": "fix_harbor_link.js",
+    "from": "C:\\Users\\Hans\\.gemini\\antigravity\\scratch\\Front-and-back-Ver1-Merged-BE-FE\\Front-and-back-Ver1-Merged-BE-FE\\pipeline_scripts\\02_reference_tables\\fix_harbor_link.js",
+    "to": "2_reference_tables\\one_off_migrations\\fix_harbor_link.js",
+    "kind": "migration",
+    "sha_before": "3ccfe4cc98b9",
+    "changes": [
+      "credential -> config/db.cjs (1 pool)",
+      "opt-in guard added (ALLOW_MIGRATION=1)"
+    ]
+  },
+  {
+    "file": "map_mabiga.js",
+    "from": "C:\\Users\\Hans\\.gemini\\antigravity\\scratch\\Front-and-back-Ver1-Merged-BE-FE\\Front-and-back-Ver1-Merged-BE-FE\\pipeline_scripts\\02_reference_tables\\map_mabiga.js",
+    "to": "2_reference_tables\\one_off_migrations\\map_mabiga.js",
+    "kind": "migration",
+    "sha_before": "3a136c6c21bf",
+    "changes": [
+      "credential -> config/db.cjs (1 pool)",
+      "opt-in guard added (ALLOW_MIGRATION=1)"
+    ]
+  },
+  {
+    "file": "rename_exits.js",
+    "from": "C:\\Users\\Hans\\.gemini\\antigravity\\scratch\\Front-and-back-Ver1-Merged-BE-FE\\Front-and-back-Ver1-Merged-BE-FE\\pipeline_scripts\\02_reference_tables\\rename_exits.js",
+    "to": "2_reference_tables\\one_off_migrations\\rename_exits.js",
+    "kind": "migration",
+    "sha_before": "73ac8d4be244",
+    "changes": [
+      "credential -> config/db.cjs (1 pool)",
+      "opt-in guard added (ALLOW_MIGRATION=1)"
+    ]
+  },
+  {
+    "file": "rename_cdv.js",
+    "from": "C:\\Users\\Hans\\.gemini\\antigravity\\scratch\\Front-and-back-Ver1-Merged-BE-FE\\Front-and-back-Ver1-Merged-BE-FE\\pipeline_scripts\\02_reference_tables\\rename_cdv.js",
+    "to": "2_reference_tables\\one_off_migrations\\rename_cdv.js",
+    "kind": "migration",
+    "sha_before": "fcd680a3f3dd",
+    "changes": [
+      "credential -> config/db.cjs (1 pool)",
+      "opt-in guard added (ALLOW_MIGRATION=1)"
+    ]
+  },
+  {
+    "file": "dual_split.js",
+    "from": "C:\\Users\\Hans\\.gemini\\antigravity\\scratch\\Front-and-back-Ver1-Merged-BE-FE\\Front-and-back-Ver1-Merged-BE-FE\\pipeline_scripts\\03_modelling\\dual_split.js",
+    "to": "2_reference_tables\\one_off_migrations\\dual_split.js",
+    "kind": "migration",
+    "sha_before": "d3804b6c8a6a",
+    "changes": [
+      "credential -> config/db.cjs (1 pool)",
+      "opt-in guard added (ALLOW_MIGRATION=1)"
+    ]
+  },
+  {
+    "file": "add_weather_cols.py",
+    "from": "C:\\Users\\Hans\\.gemini\\antigravity\\scratch\\Front-and-back-Ver1-Merged-BE-FE\\Front-and-back-Ver1-Merged-BE-FE\\add_weather_cols.py",
+    "to": "2_reference_tables\\one_off_migrations\\add_weather_cols.py",
+    "kind": "migration",
+    "sha_before": "73f8bde780e9",
+    "changes": [
+      "credential -> config/db.py",
+      "opt-in guard added (ALLOW_MIGRATION=1)"
+    ]
+  },
+  {
+    "file": "fix_cascade.cjs",
+    "from": "C:\\Users\\Hans\\.gemini\\antigravity\\scratch\\Front-and-back-Ver1-Merged-BE-FE\\Front-and-back-Ver1-Merged-BE-FE\\fix_cascade.cjs",
+    "to": "2_reference_tables\\one_off_migrations\\fix_cascade.cjs",
+    "kind": "migration",
+    "sha_before": "d99cdcda294b",
+    "changes": [
+      "credential -> config/db.cjs (1 pool)",
+      "opt-in guard added (ALLOW_MIGRATION=1)"
+    ]
+  },
+  {
+    "file": "fix_plaza_mismatch.cjs",
+    "from": "C:\\Users\\Hans\\.gemini\\antigravity\\scratch\\Front-and-back-Ver1-Merged-BE-FE\\Front-and-back-Ver1-Merged-BE-FE\\fix_plaza_mismatch.cjs",
+    "to": "2_reference_tables\\one_off_migrations\\fix_plaza_mismatch.cjs",
+    "kind": "migration",
+    "sha_before": "33ff2dc19b87",
+    "changes": [
+      "credential -> config/db.cjs (1 pool)",
+      "opt-in guard added (ALLOW_MIGRATION=1)"
+    ]
+  },
+  {
+    "file": "fix_pm_so2.cjs",
+    "from": "C:\\Users\\Hans\\.gemini\\antigravity\\scratch\\Front-and-back-Ver1-Merged-BE-FE\\Front-and-back-Ver1-Merged-BE-FE\\fix_pm_so2.cjs",
+    "to": "2_reference_tables\\one_off_migrations\\fix_pm_so2.cjs",
+    "kind": "migration",
+    "sha_before": "5c6dfe76bee4",
+    "changes": [
+      "credential -> config/db.cjs (1 pool)",
+      "opt-in guard added (ALLOW_MIGRATION=1)"
+    ]
+  },
+  {
+    "file": "fix_class3_co2.cjs",
+    "from": "C:\\Users\\Hans\\.gemini\\antigravity\\scratch\\Front-and-back-Ver1-Merged-BE-FE\\Front-and-back-Ver1-Merged-BE-FE\\fix_class3_co2.cjs",
+    "to": "2_reference_tables\\one_off_migrations\\fix_class3_co2.cjs",
+    "kind": "migration",
+    "sha_before": "cac26230444a",
+    "changes": [
+      "credential -> config/db.cjs (1 pool)",
+      "opt-in guard added (ALLOW_MIGRATION=1)"
+    ]
+  },
+  {
+    "file": "update_emissions_exit_names.cjs",
+    "from": "C:\\Users\\Hans\\.gemini\\antigravity\\scratch\\Front-and-back-Ver1-Merged-BE-FE\\Front-and-back-Ver1-Merged-BE-FE\\update_emissions_exit_names.cjs",
+    "to": "2_reference_tables\\one_off_migrations\\update_emissions_exit_names.cjs",
+    "kind": "migration",
+    "sha_before": "a4ac8c3b0831",
+    "changes": [
+      "credential -> config/db.cjs (1 pool)",
+      "opt-in guard added (ALLOW_MIGRATION=1)"
+    ]
+  },
+  {
+    "file": "update_nlex_exits.cjs",
+    "from": "C:\\Users\\Hans\\.gemini\\antigravity\\scratch\\Front-and-back-Ver1-Merged-BE-FE\\Front-and-back-Ver1-Merged-BE-FE\\update_nlex_exits.cjs",
+    "to": "2_reference_tables\\one_off_migrations\\update_nlex_exits.cjs",
+    "kind": "migration",
+    "sha_before": "901d5eee24a0",
+    "changes": [
+      "credential -> config/db.cjs (1 pool)",
+      "opt-in guard added (ALLOW_MIGRATION=1)"
+    ]
+  },
+  {
+    "file": "retrain_honest.py",
+    "from": "C:\\Users\\Hans\\.gemini\\antigravity\\scratch\\Front-and-back-Ver1-Merged-BE-FE\\Front-and-back-Ver1-Merged-BE-FE\\retrain_honest.py",
+    "to": "3_training_testing\\traffic_volume\\retrain_honest.py",
+    "kind": "current",
+    "sha_before": "109a820755cc",
+    "changes": [
+      "credential -> config/db.py",
+      "SPLIT arm selectable, defaults to the served 80/20",
+      "TRUNCATE -> DELETE this arm only",
+      "volume rows carry split_label",
+      "volume split value",
+      "metrics delete scoped to this arm",
+      "metrics rows carry split_label",
+      "metrics placeholder",
+      "metrics split value",
+      "weather leak fixed (climatology over the forecast window)",
+      "models scored on known-at-forecast-time weather",
+      "checkpoint invalidated for the new protocol",
+      "checkpoint -> _work/cache",
+      "future window 28 -> 90 days (matches the dashboard)"
+    ]
+  },
+  {
+    "file": "extend_future_volume.py",
+    "from": "C:\\Users\\Hans\\.gemini\\antigravity\\scratch\\Front-and-back-Ver1-Merged-BE-FE\\Front-and-back-Ver1-Merged-BE-FE\\pipeline_scripts\\03_modelling\\extend_future_volume.py",
+    "to": "3_training_testing\\traffic_volume\\extend_future_volume.py",
+    "kind": "current",
+    "sha_before": "e2fd346bd9b2",
+    "changes": [
+      "sibling path to retrain_honest.py",
+      "exec'd head can locate config/"
+    ]
+  },
+  {
+    "file": "train_congestion_horizon.py",
+    "from": "C:\\Users\\Hans\\.gemini\\antigravity\\scratch\\Front-and-back-Ver1-Merged-BE-FE\\Front-and-back-Ver1-Merged-BE-FE\\train_congestion_horizon.py",
+    "to": "3_training_testing\\congestion\\train_congestion_horizon.py",
+    "kind": "current",
+    "sha_before": "e959705dc5d5",
+    "changes": [
+      "credential -> config/db.py",
+      "results -> _work/outputs"
+    ]
+  },
+  {
+    "file": "train_emissions.py",
+    "from": "C:\\Users\\Hans\\.gemini\\antigravity\\scratch\\Front-and-back-Ver1-Merged-BE-FE\\Front-and-back-Ver1-Merged-BE-FE\\train_emissions.py",
+    "to": "3_training_testing\\emissions\\train_emissions.py",
+    "kind": "current",
+    "sha_before": "792baa0e842b",
+    "changes": [
+      "credential -> config/db.py",
+      "cache -> _work/cache",
+      "results -> _work/outputs"
+    ]
+  },
+  {
+    "file": "build_event_surge.py",
+    "from": "C:\\Users\\Hans\\.gemini\\antigravity\\scratch\\Front-and-back-Ver1-Merged-BE-FE\\Front-and-back-Ver1-Merged-BE-FE\\build_event_surge.py",
+    "to": "3_training_testing\\event_surge\\build_event_surge.py",
+    "kind": "current",
+    "sha_before": "a400a26b879d",
+    "changes": [
+      "credential -> config/db.py"
+    ]
+  },
+  {
+    "file": "eval_event_surge.py",
+    "from": "C:\\Users\\Hans\\.gemini\\antigravity\\scratch\\Front-and-back-Ver1-Merged-BE-FE\\Front-and-back-Ver1-Merged-BE-FE\\eval_event_surge.py",
+    "to": "3_training_testing\\event_surge\\eval_event_surge.py",
+    "kind": "current",
+    "sha_before": "c70f0f4f86d8",
+    "changes": [
+      "credential -> config/db.py"
+    ]
+  },
+  {
+    "file": "horizon_study.py",
+    "from": "C:\\Users\\Hans\\.gemini\\antigravity\\scratch\\Front-and-back-Ver1-Merged-BE-FE\\Front-and-back-Ver1-Merged-BE-FE\\pipeline_scripts\\04_studies_audits\\horizon_study.py",
+    "to": "4_studies_audits\\horizon_study.py",
+    "kind": "current",
+    "sha_before": "93f47a7869f5",
+    "changes": [
+      "credential -> config/db.py"
+    ]
+  },
+  {
+    "file": "co2_horizon_study.py",
+    "from": "C:\\Users\\Hans\\.gemini\\antigravity\\scratch\\Front-and-back-Ver1-Merged-BE-FE\\Front-and-back-Ver1-Merged-BE-FE\\pipeline_scripts\\04_studies_audits\\co2_horizon_study.py",
+    "to": "4_studies_audits\\co2_horizon_study.py",
+    "kind": "current",
+    "sha_before": "83010e138a10",
+    "changes": [
+      "path to train_emissions.py",
+      "exec'd head can locate config/"
+    ]
+  },
+  {
+    "file": "audit_leakage.py",
+    "from": "C:\\Users\\Hans\\.gemini\\antigravity\\scratch\\Front-and-back-Ver1-Merged-BE-FE\\Front-and-back-Ver1-Merged-BE-FE\\pipeline_scripts\\04_studies_audits\\audit_leakage.py",
+    "to": "4_studies_audits\\audit_leakage.py",
+    "kind": "current",
+    "sha_before": "f763842e1943",
+    "changes": [
+      "path to train_emissions.py",
+      "exec'd head can locate config/"
+    ]
+  },
+  {
+    "file": "derive_distance.js",
+    "from": "C:\\Users\\Hans\\.gemini\\antigravity\\scratch\\Front-and-back-Ver1-Merged-BE-FE\\Front-and-back-Ver1-Merged-BE-FE\\pipeline_scripts\\04_studies_audits\\derive_distance.js",
+    "to": "4_studies_audits\\derive_distance.js",
+    "kind": "current",
+    "sha_before": "8aa054393b9d",
+    "changes": [
+      "credential -> config/db.cjs (1 pool)"
+    ]
+  },
+  {
+    "file": "name_audit.js",
+    "from": "C:\\Users\\Hans\\.gemini\\antigravity\\scratch\\Front-and-back-Ver1-Merged-BE-FE\\Front-and-back-Ver1-Merged-BE-FE\\pipeline_scripts\\04_studies_audits\\name_audit.js",
+    "to": "4_studies_audits\\name_audit.js",
+    "kind": "current",
+    "sha_before": "3615ad3b2867",
+    "changes": [
+      "credential -> config/db.cjs (1 pool)"
+    ]
+  },
+  {
+    "file": "sot_check.js",
+    "from": "C:\\Users\\Hans\\.gemini\\antigravity\\scratch\\Front-and-back-Ver1-Merged-BE-FE\\Front-and-back-Ver1-Merged-BE-FE\\pipeline_scripts\\04_studies_audits\\sot_check.js",
+    "to": "4_studies_audits\\sot_check.js",
+    "kind": "current",
+    "sha_before": "ed3198f4d8ae",
+    "changes": [
+      "credential -> config/db.cjs (1 pool)"
+    ]
+  },
+  {
+    "file": "sot_check2.js",
+    "from": "C:\\Users\\Hans\\.gemini\\antigravity\\scratch\\Front-and-back-Ver1-Merged-BE-FE\\Front-and-back-Ver1-Merged-BE-FE\\pipeline_scripts\\04_studies_audits\\sot_check2.js",
+    "to": "4_studies_audits\\sot_check2.js",
+    "kind": "current",
+    "sha_before": "be8979aae731",
+    "changes": [
+      "credential -> config/db.cjs (1 pool)"
+    ]
+  },
+  {
+    "file": "split_verdict.js",
+    "from": "C:\\Users\\Hans\\.gemini\\antigravity\\scratch\\Front-and-back-Ver1-Merged-BE-FE\\Front-and-back-Ver1-Merged-BE-FE\\pipeline_scripts\\04_studies_audits\\split_verdict.js",
+    "to": "4_studies_audits\\split_verdict.js",
+    "kind": "current",
+    "sha_before": "ce59eece28ee",
+    "changes": [
+      "credential -> config/db.cjs (1 pool)"
+    ]
+  },
+  {
+    "file": "congestion_audit.js",
+    "from": "C:\\Users\\Hans\\.gemini\\antigravity\\scratch\\Front-and-back-Ver1-Merged-BE-FE\\Front-and-back-Ver1-Merged-BE-FE\\pipeline_scripts\\04_studies_audits\\congestion_audit.js",
+    "to": "4_studies_audits\\congestion_audit.js",
+    "kind": "current",
+    "sha_before": "2a0ad08d6f4f",
+    "changes": [
+      "credential -> config/db.cjs (1 pool)"
+    ]
+  },
+  {
+    "file": "test_heavy_recovery.py",
+    "from": "C:\\Users\\Hans\\.gemini\\antigravity\\scratch\\Front-and-back-Ver1-Merged-BE-FE\\Front-and-back-Ver1-Merged-BE-FE\\test_heavy_recovery.py",
+    "to": "4_studies_audits\\test_heavy_recovery.py",
+    "kind": "current",
+    "sha_before": "6265aad66dc5",
+    "changes": [
+      "credential -> config/db.py"
+    ]
+  },
+  {
+    "file": "test_hw.py",
+    "from": "C:\\Users\\Hans\\.gemini\\antigravity\\scratch\\Front-and-back-Ver1-Merged-BE-FE\\Front-and-back-Ver1-Merged-BE-FE\\test_hw.py",
+    "to": "4_studies_audits\\test_hw.py",
+    "kind": "current",
+    "sha_before": "28b3a5bf25ca",
+    "changes": [
+      "credential -> config/db.py"
+    ]
+  },
+  {
+    "file": "weather_correlation.py",
+    "from": "C:\\Users\\Hans\\.gemini\\antigravity\\scratch\\Front-and-back-Ver1-Merged-BE-FE\\Front-and-back-Ver1-Merged-BE-FE\\weather_correlation.py",
+    "to": "4_studies_audits\\weather_correlation.py",
+    "kind": "current",
+    "sha_before": "7840ec1abad2",
+    "changes": [
+      "credential -> config/db.py"
+    ]
+  },
+  {
+    "file": "check_ml_sum.py",
+    "from": "C:\\Users\\Hans\\.gemini\\antigravity\\scratch\\Front-and-back-Ver1-Merged-BE-FE\\Front-and-back-Ver1-Merged-BE-FE\\check_ml_sum.py",
+    "to": "_archive_do_not_run/check_ml_sum.py",
+    "kind": "archive",
+    "sha_before": "d815e583d331",
+    "changes": [
+      "archived after verification: Belongs to the pre-2026-08-12 run: its folder convention (01_dataset/, 02_final_evaluation_walkforward/, 04_aws_live_predictions/) was archived to REPORTS_DIR/_archive_pre_2026-08-12_honest_retrain. Its input file is no longer at that path."
+    ]
+  },
+  {
+    "file": "write_emissions_report.py",
+    "from": "C:\\Users\\Hans\\.gemini\\antigravity\\scratch\\Front-and-back-Ver1-Merged-BE-FE\\Front-and-back-Ver1-Merged-BE-FE\\pipeline_scripts\\05_reports\\write_emissions_report.py",
+    "to": "5_reports_exports\\write_emissions_report.py",
+    "kind": "current",
+    "sha_before": "88c33d3ba8a6",
+    "changes": [
+      "credential -> config/db.py"
+    ]
+  },
+  {
+    "file": "write_outputs.js",
+    "from": "C:\\Users\\Hans\\.gemini\\antigravity\\scratch\\Front-and-back-Ver1-Merged-BE-FE\\Front-and-back-Ver1-Merged-BE-FE\\pipeline_scripts\\05_reports\\write_outputs.js",
+    "to": "5_reports_exports\\write_outputs.js",
+    "kind": "current",
+    "sha_before": "375ac3adbd39",
+    "changes": [
+      "credential -> config/db.cjs (1 pool)"
+    ]
+  },
+  {
+    "file": "write_outputs_b.js",
+    "from": "C:\\Users\\Hans\\.gemini\\antigravity\\scratch\\Front-and-back-Ver1-Merged-BE-FE\\Front-and-back-Ver1-Merged-BE-FE\\pipeline_scripts\\05_reports\\write_outputs_b.js",
+    "to": "5_reports_exports\\write_outputs_b.js",
+    "kind": "current",
+    "sha_before": "83eade5306ab",
+    "changes": [
+      "credential -> config/db.cjs (1 pool)"
+    ]
+  },
+  {
+    "file": "export_weather_reports.py",
+    "from": "C:\\Users\\Hans\\.gemini\\antigravity\\scratch\\Front-and-back-Ver1-Merged-BE-FE\\Front-and-back-Ver1-Merged-BE-FE\\export_weather_reports.py",
+    "to": "_archive_do_not_run/export_weather_reports.py",
+    "kind": "archive",
+    "sha_before": "7feb6625a83e",
+    "changes": [
+      "credential -> config/db.py",
+      "archived after verification: Belongs to the pre-2026-08-12 run: its folder convention (01_dataset/, 02_final_evaluation_walkforward/, 04_aws_live_predictions/) was archived to REPORTS_DIR/_archive_pre_2026-08-12_honest_retrain. It also dumps ml_model_metrics without a split_label filter, mixing the 80/20 and 90/10 arms."
+    ]
+  },
+  {
+    "file": "extract_true_dataset.py",
+    "from": "C:\\Users\\Hans\\.gemini\\antigravity\\scratch\\Front-and-back-Ver1-Merged-BE-FE\\Front-and-back-Ver1-Merged-BE-FE\\extract_true_dataset.py",
+    "to": "_archive_do_not_run/extract_true_dataset.py",
+    "kind": "archive",
+    "sha_before": "1994938cf2e9",
+    "changes": [
+      "credential -> config/db.py",
+      "archived after verification: Belongs to the pre-2026-08-12 run: its folder convention (01_dataset/, 02_final_evaluation_walkforward/, 04_aws_live_predictions/) was archived to REPORTS_DIR/_archive_pre_2026-08-12_honest_retrain."
+    ]
+  },
+  {
+    "file": "smartflow_pipeline.py",
+    "from": "C:\\Users\\Hans\\.gemini\\antigravity\\scratch\\predictive folder\\smartflow_pipeline.py",
+    "to": "6_etl_pipeline\\original_python_etl\\smartflow_pipeline.py",
+    "kind": "current",
+    "sha_before": "6b774a8db20f",
+    "changes": []
+  },
+  {
+    "file": "populate_redis.js",
+    "from": "C:\\Users\\Hans\\.gemini\\antigravity\\scratch\\Front-and-back-Ver1-Merged-BE-FE\\Front-and-back-Ver1-Merged-BE-FE\\populate_redis.js",
+    "to": "7_utilities\\populate_redis.js",
+    "kind": "current",
+    "sha_before": "ca5119ef029e",
+    "changes": [
+      "Back-End/.env path"
+    ]
+  },
+  {
+    "file": "search_climatiq_pm.cjs",
+    "from": "C:\\Users\\Hans\\.gemini\\antigravity\\scratch\\Front-and-back-Ver1-Merged-BE-FE\\Front-and-back-Ver1-Merged-BE-FE\\search_climatiq_pm.cjs",
+    "to": "7_utilities\\search_climatiq_pm.cjs",
+    "kind": "current",
+    "sha_before": "3c78e6629184",
+    "changes": []
+  },
+  {
+    "file": "search_codebase.cjs",
+    "from": "C:\\Users\\Hans\\.gemini\\antigravity\\scratch\\Front-and-back-Ver1-Merged-BE-FE\\Front-and-back-Ver1-Merged-BE-FE\\search_codebase.cjs",
+    "to": "7_utilities\\search_codebase.cjs",
+    "kind": "current",
+    "sha_before": "39955dca80c5",
+    "changes": []
+  },
+  {
+    "file": "calc_ratio.cjs",
+    "from": "C:\\Users\\Hans\\.gemini\\antigravity\\scratch\\Front-and-back-Ver1-Merged-BE-FE\\Front-and-back-Ver1-Merged-BE-FE\\calc_ratio.cjs",
+    "to": "8_diagnostics\\calc_ratio.cjs",
+    "kind": "current",
+    "sha_before": "f0afce750a26",
+    "changes": [
+      "credential -> config/db.cjs (1 pool)"
+    ]
+  },
+  {
+    "file": "check_active.cjs",
+    "from": "C:\\Users\\Hans\\.gemini\\antigravity\\scratch\\Front-and-back-Ver1-Merged-BE-FE\\Front-and-back-Ver1-Merged-BE-FE\\check_active.cjs",
+    "to": "8_diagnostics\\check_active.cjs",
+    "kind": "current",
+    "sha_before": "5c1afd9bfc32",
+    "changes": [
+      "credential -> config/db.cjs (1 pool)"
+    ]
+  },
+  {
+    "file": "check_all_tables.cjs",
+    "from": "C:\\Users\\Hans\\.gemini\\antigravity\\scratch\\Front-and-back-Ver1-Merged-BE-FE\\Front-and-back-Ver1-Merged-BE-FE\\check_all_tables.cjs",
+    "to": "8_diagnostics\\check_all_tables.cjs",
+    "kind": "current",
+    "sha_before": "7d0e773aa823",
+    "changes": [
+      "credential -> config/db.cjs (1 pool)"
+    ]
+  },
+  {
+    "file": "check_bronze.cjs",
+    "from": "C:\\Users\\Hans\\.gemini\\antigravity\\scratch\\Front-and-back-Ver1-Merged-BE-FE\\Front-and-back-Ver1-Merged-BE-FE\\check_bronze.cjs",
+    "to": "_archive_do_not_run/check_bronze.cjs",
+    "kind": "archive",
+    "sha_before": "aeffda040fcc",
+    "changes": [
+      "credential -> config/db.cjs (1 pool)",
+      "archived after verification: Probes a table that no longer exists in the database (bronze.traffic_volume)."
+    ]
+  },
+  {
+    "file": "check_col_types.cjs",
+    "from": "C:\\Users\\Hans\\.gemini\\antigravity\\scratch\\Front-and-back-Ver1-Merged-BE-FE\\Front-and-back-Ver1-Merged-BE-FE\\check_col_types.cjs",
+    "to": "8_diagnostics\\check_col_types.cjs",
+    "kind": "current",
+    "sha_before": "814a0b3bfe95",
+    "changes": [
+      "credential -> config/db.cjs (1 pool)"
+    ]
+  },
+  {
+    "file": "check_cols.cjs",
+    "from": "C:\\Users\\Hans\\.gemini\\antigravity\\scratch\\Front-and-back-Ver1-Merged-BE-FE\\Front-and-back-Ver1-Merged-BE-FE\\check_cols.cjs",
+    "to": "8_diagnostics\\check_cols.cjs",
+    "kind": "current",
+    "sha_before": "97e3c6ed4fa8",
+    "changes": [
+      "credential -> config/db.cjs (1 pool)"
+    ]
+  },
+  {
+    "file": "check_db.cjs",
+    "from": "C:\\Users\\Hans\\.gemini\\antigravity\\scratch\\Front-and-back-Ver1-Merged-BE-FE\\Front-and-back-Ver1-Merged-BE-FE\\check_db.cjs",
+    "to": "8_diagnostics\\check_db.cjs",
+    "kind": "current",
+    "sha_before": "43ab2ea27d03",
+    "changes": [
+      "credential -> config/db.cjs (1 pool)"
+    ]
+  },
+  {
+    "file": "check_exits.cjs",
+    "from": "C:\\Users\\Hans\\.gemini\\antigravity\\scratch\\Front-and-back-Ver1-Merged-BE-FE\\Front-and-back-Ver1-Merged-BE-FE\\check_exits.cjs",
+    "to": "8_diagnostics\\check_exits.cjs",
+    "kind": "current",
+    "sha_before": "dadd23d8095a",
+    "changes": [
+      "credential -> config/db.cjs (1 pool)"
+    ]
+  },
+  {
+    "file": "check_exits_schema.cjs",
+    "from": "C:\\Users\\Hans\\.gemini\\antigravity\\scratch\\Front-and-back-Ver1-Merged-BE-FE\\Front-and-back-Ver1-Merged-BE-FE\\check_exits_schema.cjs",
+    "to": "8_diagnostics\\check_exits_schema.cjs",
+    "kind": "current",
+    "sha_before": "3c6676549cdd",
+    "changes": [
+      "credential -> config/db.cjs (1 pool)"
+    ]
+  },
+  {
+    "file": "check_gold.cjs",
+    "from": "C:\\Users\\Hans\\.gemini\\antigravity\\scratch\\Front-and-back-Ver1-Merged-BE-FE\\Front-and-back-Ver1-Merged-BE-FE\\check_gold.cjs",
+    "to": "8_diagnostics\\check_gold.cjs",
+    "kind": "current",
+    "sha_before": "59531531444f",
+    "changes": [
+      "credential -> config/db.cjs (1 pool)"
+    ]
+  },
+  {
+    "file": "check_gold_dates.cjs",
+    "from": "C:\\Users\\Hans\\.gemini\\antigravity\\scratch\\Front-and-back-Ver1-Merged-BE-FE\\Front-and-back-Ver1-Merged-BE-FE\\check_gold_dates.cjs",
+    "to": "8_diagnostics\\check_gold_dates.cjs",
+    "kind": "current",
+    "sha_before": "97696c8b26d7",
+    "changes": [
+      "credential -> config/db.cjs (1 pool)"
+    ]
+  },
+  {
+    "file": "check_inc.cjs",
+    "from": "C:\\Users\\Hans\\.gemini\\antigravity\\scratch\\Front-and-back-Ver1-Merged-BE-FE\\Front-and-back-Ver1-Merged-BE-FE\\check_inc.cjs",
+    "to": "_archive_do_not_run/check_inc.cjs",
+    "kind": "archive",
+    "sha_before": "6b0b358c8c4a",
+    "changes": [
+      "credential -> config/db.cjs (1 pool)",
+      "archived after verification: Probes a table that no longer exists in the database (public.incidents_table)."
+    ]
+  },
+  {
+    "file": "check_inc_types.cjs",
+    "from": "C:\\Users\\Hans\\.gemini\\antigravity\\scratch\\Front-and-back-Ver1-Merged-BE-FE\\Front-and-back-Ver1-Merged-BE-FE\\check_inc_types.cjs",
+    "to": "8_diagnostics\\check_inc_types.cjs",
+    "kind": "current",
+    "sha_before": "487832846f1f",
+    "changes": [
+      "credential -> config/db.cjs (1 pool)"
+    ]
+  },
+  {
+    "file": "check_lstm.cjs",
+    "from": "C:\\Users\\Hans\\.gemini\\antigravity\\scratch\\Front-and-back-Ver1-Merged-BE-FE\\Front-and-back-Ver1-Merged-BE-FE\\check_lstm.cjs",
+    "to": "8_diagnostics\\check_lstm.cjs",
+    "kind": "current",
+    "sha_before": "1c2e7541ed69",
+    "changes": [
+      "credential -> config/db.cjs (1 pool)"
+    ]
+  },
+  {
+    "file": "check_metrics.cjs",
+    "from": "C:\\Users\\Hans\\.gemini\\antigravity\\scratch\\Front-and-back-Ver1-Merged-BE-FE\\Front-and-back-Ver1-Merged-BE-FE\\check_metrics.cjs",
+    "to": "8_diagnostics\\check_metrics.cjs",
+    "kind": "current",
+    "sha_before": "3169e976ea0e",
+    "changes": [
+      "credential -> config/db.cjs (1 pool)"
+    ]
+  },
+  {
+    "file": "check_metrics2.cjs",
+    "from": "C:\\Users\\Hans\\.gemini\\antigravity\\scratch\\Front-and-back-Ver1-Merged-BE-FE\\Front-and-back-Ver1-Merged-BE-FE\\check_metrics2.cjs",
+    "to": "8_diagnostics\\check_metrics2.cjs",
+    "kind": "current",
+    "sha_before": "ef70a42ca570",
+    "changes": [
+      "credential -> config/db.cjs (1 pool)"
+    ]
+  },
+  {
+    "file": "check_old.cjs",
+    "from": "C:\\Users\\Hans\\.gemini\\antigravity\\scratch\\Front-and-back-Ver1-Merged-BE-FE\\Front-and-back-Ver1-Merged-BE-FE\\check_old.cjs",
+    "to": "_archive_do_not_run/check_old.cjs",
+    "kind": "archive",
+    "sha_before": "825ee167e4cd",
+    "changes": [
+      "credential -> config/db.cjs (1 pool)",
+      "archived after verification: Probes a table that no longer exists in the database (bronze.traffic_volume)."
+    ]
+  },
+  {
+    "file": "check_pub.cjs",
+    "from": "C:\\Users\\Hans\\.gemini\\antigravity\\scratch\\Front-and-back-Ver1-Merged-BE-FE\\Front-and-back-Ver1-Merged-BE-FE\\check_pub.cjs",
+    "to": "_archive_do_not_run/check_pub.cjs",
+    "kind": "archive",
+    "sha_before": "e7cb85ef8fa3",
+    "changes": [
+      "credential -> config/db.cjs (1 pool)",
+      "archived after verification: Probes a table that no longer exists in the database (public.traffic_volumes)."
+    ]
+  },
+  {
+    "file": "check_rank.cjs",
+    "from": "C:\\Users\\Hans\\.gemini\\antigravity\\scratch\\Front-and-back-Ver1-Merged-BE-FE\\Front-and-back-Ver1-Merged-BE-FE\\check_rank.cjs",
+    "to": "8_diagnostics\\check_rank.cjs",
+    "kind": "current",
+    "sha_before": "cf6e2d3a27a0",
+    "changes": [
+      "credential -> config/db.cjs (1 pool)"
+    ]
+  },
+  {
+    "file": "check_stalled.cjs",
+    "from": "C:\\Users\\Hans\\.gemini\\antigravity\\scratch\\Front-and-back-Ver1-Merged-BE-FE\\Front-and-back-Ver1-Merged-BE-FE\\check_stalled.cjs",
+    "to": "8_diagnostics\\check_stalled.cjs",
+    "kind": "current",
+    "sha_before": "b5151eb686aa",
+    "changes": [
+      "credential -> config/db.cjs (1 pool)"
+    ]
+  },
+  {
+    "file": "check_tables.cjs",
+    "from": "C:\\Users\\Hans\\.gemini\\antigravity\\scratch\\Front-and-back-Ver1-Merged-BE-FE\\Front-and-back-Ver1-Merged-BE-FE\\check_tables.cjs",
+    "to": "8_diagnostics\\check_tables.cjs",
+    "kind": "current",
+    "sha_before": "4955742602fd",
+    "changes": [
+      "credential -> config/db.cjs (1 pool)"
+    ]
+  },
+  {
+    "file": "check_traffic.cjs",
+    "from": "C:\\Users\\Hans\\.gemini\\antigravity\\scratch\\Front-and-back-Ver1-Merged-BE-FE\\Front-and-back-Ver1-Merged-BE-FE\\check_traffic.cjs",
+    "to": "8_diagnostics\\check_traffic.cjs",
+    "kind": "current",
+    "sha_before": "2cfb549cfbeb",
+    "changes": [
+      "credential -> config/db.cjs (1 pool)"
+    ]
+  },
+  {
+    "file": "check_view.cjs",
+    "from": "C:\\Users\\Hans\\.gemini\\antigravity\\scratch\\Front-and-back-Ver1-Merged-BE-FE\\Front-and-back-Ver1-Merged-BE-FE\\check_view.cjs",
+    "to": "8_diagnostics\\check_view.cjs",
+    "kind": "current",
+    "sha_before": "45f5afe9e93b",
+    "changes": [
+      "credential -> config/db.cjs (1 pool)"
+    ]
+  },
+  {
+    "file": "check_view_def.cjs",
+    "from": "C:\\Users\\Hans\\.gemini\\antigravity\\scratch\\Front-and-back-Ver1-Merged-BE-FE\\Front-and-back-Ver1-Merged-BE-FE\\check_view_def.cjs",
+    "to": "8_diagnostics\\check_view_def.cjs",
+    "kind": "current",
+    "sha_before": "f75e9193123b",
+    "changes": [
+      "credential -> config/db.cjs (1 pool)"
+    ]
+  },
+  {
+    "file": "check_view_structure.cjs",
+    "from": "C:\\Users\\Hans\\.gemini\\antigravity\\scratch\\Front-and-back-Ver1-Merged-BE-FE\\Front-and-back-Ver1-Merged-BE-FE\\check_view_structure.cjs",
+    "to": "8_diagnostics\\check_view_structure.cjs",
+    "kind": "current",
+    "sha_before": "329d7535c210",
+    "changes": [
+      "credential -> config/db.cjs (1 pool)"
+    ]
+  },
+  {
+    "file": "check_vol.cjs",
+    "from": "C:\\Users\\Hans\\.gemini\\antigravity\\scratch\\Front-and-back-Ver1-Merged-BE-FE\\Front-and-back-Ver1-Merged-BE-FE\\check_vol.cjs",
+    "to": "8_diagnostics\\check_vol.cjs",
+    "kind": "current",
+    "sha_before": "b64b51daee09",
+    "changes": [
+      "credential -> config/db.cjs (1 pool)"
+    ]
+  },
+  {
+    "file": "check_vol2.cjs",
+    "from": "C:\\Users\\Hans\\.gemini\\antigravity\\scratch\\Front-and-back-Ver1-Merged-BE-FE\\Front-and-back-Ver1-Merged-BE-FE\\check_vol2.cjs",
+    "to": "8_diagnostics\\check_vol2.cjs",
+    "kind": "current",
+    "sha_before": "093686737c43",
+    "changes": [
+      "credential -> config/db.cjs (1 pool)"
+    ]
+  },
+  {
+    "file": "check_weather.cjs",
+    "from": "C:\\Users\\Hans\\.gemini\\antigravity\\scratch\\Front-and-back-Ver1-Merged-BE-FE\\Front-and-back-Ver1-Merged-BE-FE\\check_weather.cjs",
+    "to": "8_diagnostics\\check_weather.cjs",
+    "kind": "current",
+    "sha_before": "a518eea91f12",
+    "changes": [
+      "credential -> config/db.cjs (1 pool)"
+    ]
+  },
+  {
+    "file": "check_weather_nulls.cjs",
+    "from": "C:\\Users\\Hans\\.gemini\\antigravity\\scratch\\Front-and-back-Ver1-Merged-BE-FE\\Front-and-back-Ver1-Merged-BE-FE\\check_weather_nulls.cjs",
+    "to": "8_diagnostics\\check_weather_nulls.cjs",
+    "kind": "current",
+    "sha_before": "ea27937e1185",
+    "changes": [
+      "credential -> config/db.cjs (1 pool)"
+    ]
+  },
+  {
+    "file": "diagnose_cascade.cjs",
+    "from": "C:\\Users\\Hans\\.gemini\\antigravity\\scratch\\Front-and-back-Ver1-Merged-BE-FE\\Front-and-back-Ver1-Merged-BE-FE\\diagnose_cascade.cjs",
+    "to": "8_diagnostics\\diagnose_cascade.cjs",
+    "kind": "current",
+    "sha_before": "39ad150494ad",
+    "changes": [
+      "credential -> config/db.cjs (1 pool)"
+    ]
+  },
+  {
+    "file": "diagnose_plaza_mismatch.cjs",
+    "from": "C:\\Users\\Hans\\.gemini\\antigravity\\scratch\\Front-and-back-Ver1-Merged-BE-FE\\Front-and-back-Ver1-Merged-BE-FE\\diagnose_plaza_mismatch.cjs",
+    "to": "8_diagnostics\\diagnose_plaza_mismatch.cjs",
+    "kind": "current",
+    "sha_before": "fc2700e4b854",
+    "changes": [
+      "credential -> config/db.cjs (1 pool)"
+    ]
+  },
+  {
+    "file": "inspect_all_tables.cjs",
+    "from": "C:\\Users\\Hans\\.gemini\\antigravity\\scratch\\Front-and-back-Ver1-Merged-BE-FE\\Front-and-back-Ver1-Merged-BE-FE\\inspect_all_tables.cjs",
+    "to": "8_diagnostics\\inspect_all_tables.cjs",
+    "kind": "current",
+    "sha_before": "01cba977b81f",
+    "changes": [
+      "credential -> config/db.cjs (1 pool)"
+    ]
+  },
+  {
+    "file": "inspect_emissions_exit_ids.cjs",
+    "from": "C:\\Users\\Hans\\.gemini\\antigravity\\scratch\\Front-and-back-Ver1-Merged-BE-FE\\Front-and-back-Ver1-Merged-BE-FE\\inspect_emissions_exit_ids.cjs",
+    "to": "8_diagnostics\\inspect_emissions_exit_ids.cjs",
+    "kind": "current",
+    "sha_before": "aa991115874f",
+    "changes": [
+      "credential -> config/db.cjs (1 pool)"
+    ]
+  },
+  {
+    "file": "verify_data.cjs",
+    "from": "C:\\Users\\Hans\\.gemini\\antigravity\\scratch\\Front-and-back-Ver1-Merged-BE-FE\\Front-and-back-Ver1-Merged-BE-FE\\verify_data.cjs",
+    "to": "8_diagnostics\\verify_data.cjs",
+    "kind": "current",
+    "sha_before": "b32ec2c12fec",
+    "changes": [
+      "credential -> config/db.cjs (1 pool)"
+    ]
+  },
+  {
+    "file": "train_congestion.py",
+    "from": "C:\\Users\\Hans\\.gemini\\antigravity\\scratch\\Front-and-back-Ver1-Merged-BE-FE\\Front-and-back-Ver1-Merged-BE-FE\\train_congestion.py",
+    "to": "_archive_do_not_run\\train_congestion.py",
+    "kind": "archive",
+    "sha_before": "2ed44aae7002",
+    "changes": [
+      "credential -> config/db.py",
+      "hard stop added (archived)"
+    ]
+  },
+  {
+    "file": "train_congestion_multi.py",
+    "from": "C:\\Users\\Hans\\.gemini\\antigravity\\scratch\\Front-and-back-Ver1-Merged-BE-FE\\Front-and-back-Ver1-Merged-BE-FE\\train_congestion_multi.py",
+    "to": "_archive_do_not_run\\train_congestion_multi.py",
+    "kind": "archive",
+    "sha_before": "f4bcce1c5309",
+    "changes": [
+      "credential -> config/db.py",
+      "hard stop added (archived)"
+    ]
+  },
+  {
+    "file": "retrain_true_predictions.py",
+    "from": "C:\\Users\\Hans\\.gemini\\antigravity\\scratch\\Front-and-back-Ver1-Merged-BE-FE\\Front-and-back-Ver1-Merged-BE-FE\\retrain_true_predictions.py",
+    "to": "_archive_do_not_run\\retrain_true_predictions.py",
+    "kind": "archive",
+    "sha_before": "1138e9f6d017",
+    "changes": [
+      "credential -> config/db.py",
+      "hard stop added (archived)"
+    ]
+  },
+  {
+    "file": "retrain_with_weather.py",
+    "from": "C:\\Users\\Hans\\.gemini\\antigravity\\scratch\\Front-and-back-Ver1-Merged-BE-FE\\Front-and-back-Ver1-Merged-BE-FE\\retrain_with_weather.py",
+    "to": "_archive_do_not_run\\retrain_with_weather.py",
+    "kind": "archive",
+    "sha_before": "83b19fc6bd0c",
+    "changes": [
+      "credential -> config/db.py",
+      "hard stop added (archived)"
+    ]
+  },
+  {
+    "file": "apply_single_source_of_truth.py",
+    "from": "C:\\Users\\Hans\\.gemini\\antigravity\\scratch\\Front-and-back-Ver1-Merged-BE-FE\\Front-and-back-Ver1-Merged-BE-FE\\apply_single_source_of_truth.py",
+    "to": "_archive_do_not_run\\apply_single_source_of_truth.py",
+    "kind": "archive",
+    "sha_before": "561915ba9cdd",
+    "changes": [
+      "credential -> config/db.py",
+      "hard stop added (archived)"
+    ]
+  },
+  {
+    "file": "fix_ui_data.py",
+    "from": "C:\\Users\\Hans\\.gemini\\antigravity\\scratch\\Front-and-back-Ver1-Merged-BE-FE\\Front-and-back-Ver1-Merged-BE-FE\\fix_ui_data.py",
+    "to": "_archive_do_not_run\\fix_ui_data.py",
+    "kind": "archive",
+    "sha_before": "7a6d7494c519",
+    "changes": [
+      "credential -> config/db.py",
+      "hard stop added (archived)"
+    ]
+  },
+  {
+    "file": "fix_rejected_models.py",
+    "from": "C:\\Users\\Hans\\.gemini\\antigravity\\scratch\\Front-and-back-Ver1-Merged-BE-FE\\Front-and-back-Ver1-Merged-BE-FE\\fix_rejected_models.py",
+    "to": "_archive_do_not_run\\fix_rejected_models.py",
+    "kind": "archive",
+    "sha_before": "84e39b63b8e6",
+    "changes": [
+      "credential -> config/db.py",
+      "hard stop added (archived)"
+    ]
+  },
+  {
+    "file": "upload_real_aws.py",
+    "from": "C:\\Users\\Hans\\.gemini\\antigravity\\scratch\\Front-and-back-Ver1-Merged-BE-FE\\Front-and-back-Ver1-Merged-BE-FE\\upload_real_aws.py",
+    "to": "_archive_do_not_run\\upload_real_aws.py",
+    "kind": "archive",
+    "sha_before": "8f2a0fcb4f51",
+    "changes": [
+      "credential -> config/db.py",
+      "hard stop added (archived)"
+    ]
+  },
+  {
+    "file": "upload_real_aws_revert.py",
+    "from": "C:\\Users\\Hans\\.gemini\\antigravity\\scratch\\Front-and-back-Ver1-Merged-BE-FE\\Front-and-back-Ver1-Merged-BE-FE\\upload_real_aws_revert.py",
+    "to": "_archive_do_not_run\\upload_real_aws_revert.py",
+    "kind": "archive",
+    "sha_before": "c60df7c88a4a",
+    "changes": [
+      "credential -> config/db.py",
+      "hard stop added (archived)"
+    ]
+  },
+  {
+    "file": "fix_1m.cjs",
+    "from": "C:\\Users\\Hans\\.gemini\\antigravity\\scratch\\Front-and-back-Ver1-Merged-BE-FE\\Front-and-back-Ver1-Merged-BE-FE\\fix_1m.cjs",
+    "to": "_archive_do_not_run\\fix_1m.cjs",
+    "kind": "archive",
+    "sha_before": "43dd8a18c96e",
+    "changes": [
+      "credential -> config/db.cjs (1 pool)",
+      "hard stop added (archived)"
+    ]
+  },
+  {
+    "file": "fix_dashboard_logic.cjs",
+    "from": "C:\\Users\\Hans\\.gemini\\antigravity\\scratch\\Front-and-back-Ver1-Merged-BE-FE\\Front-and-back-Ver1-Merged-BE-FE\\fix_dashboard_logic.cjs",
+    "to": "_archive_do_not_run\\fix_dashboard_logic.cjs",
+    "kind": "archive",
+    "sha_before": "bd060f8c5956",
+    "changes": [
+      "credential -> config/db.cjs (1 pool)",
+      "hard stop added (archived)"
+    ]
+  },
+  {
+    "file": "fix_metrics.cjs",
+    "from": "C:\\Users\\Hans\\.gemini\\antigravity\\scratch\\Front-and-back-Ver1-Merged-BE-FE\\Front-and-back-Ver1-Merged-BE-FE\\fix_metrics.cjs",
+    "to": "_archive_do_not_run\\fix_metrics.cjs",
+    "kind": "archive",
+    "sha_before": "86e324eb35de",
+    "changes": [
+      "credential -> config/db.cjs (1 pool)",
+      "hard stop added (archived)"
+    ]
+  },
+  {
+    "file": "fix_past.cjs",
+    "from": "C:\\Users\\Hans\\.gemini\\antigravity\\scratch\\Front-and-back-Ver1-Merged-BE-FE\\Front-and-back-Ver1-Merged-BE-FE\\fix_past.cjs",
+    "to": "_archive_do_not_run\\fix_past.cjs",
+    "kind": "archive",
+    "sha_before": "74a382651567",
+    "changes": [
+      "credential -> config/db.cjs (1 pool)",
+      "hard stop added (archived)"
+    ]
+  },
+  {
+    "file": "replace_2022_2025.js",
+    "from": "C:\\Users\\Hans\\.gemini\\antigravity\\scratch\\Front-and-back-Ver1-Merged-BE-FE\\Front-and-back-Ver1-Merged-BE-FE\\pipeline_scripts\\01_load_traffic\\replace_2022_2025.js",
+    "to": "_archive_do_not_run\\replace_2022_2025.js",
+    "kind": "archive",
+    "sha_before": "f9edcb33ea0a",
+    "changes": [
+      "credential -> config/db.cjs (1 pool)",
+      "hard stop added (archived)"
+    ]
+  },
+  {
+    "file": "ingest_2020_2021.py",
+    "from": "C:\\Users\\Hans\\.gemini\\antigravity\\scratch\\predictive folder\\ingest_2020_2021.py",
+    "to": "_archive_do_not_run\\old_database\\ingest_2020_2021.py",
+    "kind": "old_db",
+    "sha_before": "2efe9808e88f",
+    "changes": [
+      "password removed (1x) - points at a retired database",
+      "hard stop added (archived)"
+    ]
+  },
+  {
+    "file": "audit_database.py",
+    "from": "C:\\Users\\Hans\\.gemini\\antigravity\\scratch\\predictive folder\\audit_database.py",
+    "to": "_archive_do_not_run\\old_database\\audit_database.py",
+    "kind": "old_db",
+    "sha_before": "05531be8c672",
+    "changes": [
+      "password removed (1x) - points at a retired database",
+      "hard stop added (archived)"
+    ]
+  },
+  {
+    "file": "check_silver.py",
+    "from": "C:\\Users\\Hans\\.gemini\\antigravity\\scratch\\predictive folder\\check_silver.py",
+    "to": "_archive_do_not_run\\old_database\\check_silver.py",
+    "kind": "old_db",
+    "sha_before": "fb6c2de00df1",
+    "changes": [
+      "password removed (1x) - points at a retired database",
+      "hard stop added (archived)"
+    ]
+  },
+  {
+    "file": "check_tables.py",
+    "from": "C:\\Users\\Hans\\.gemini\\antigravity\\scratch\\predictive folder\\check_tables.py",
+    "to": "_archive_do_not_run\\old_database\\check_tables.py",
+    "kind": "old_db",
+    "sha_before": "6cad1155e8f1",
+    "changes": [
+      "hard stop added (archived)"
+    ]
+  },
+  {
+    "file": "audit_emissions.js",
+    "from": "C:\\Users\\Hans\\AppData\\Local\\Temp\\claude\\c--Users-Hans--gemini-antigravity-scratch-Front-and-back-Ver1-Merged-BE-FE\\f893ad04-a560-4c7d-8735-f4704fae5f55\\scratchpad\\audit_emissions.js",
+    "to": "4_studies_audits/exploratory/audit_emissions.js",
+    "kind": "active",
+    "sha_before": "44b3df0dac9a",
+    "changes": [
+      "credential -> config/db.cjs (1 pool)"
+    ]
+  },
+  {
+    "file": "compare_data.js",
+    "from": "C:\\Users\\Hans\\AppData\\Local\\Temp\\claude\\c--Users-Hans--gemini-antigravity-scratch-Front-and-back-Ver1-Merged-BE-FE\\f893ad04-a560-4c7d-8735-f4704fae5f55\\scratchpad\\compare_data.js",
+    "to": "4_studies_audits/exploratory/compare_data.js",
+    "kind": "active",
+    "sha_before": "207e9acf7cd0",
+    "changes": [
+      "credential -> config/db.cjs (1 pool)"
+    ]
+  },
+  {
+    "file": "dbcheck.cjs",
+    "from": "C:\\Users\\Hans\\AppData\\Local\\Temp\\claude\\c--Users-Hans--gemini-antigravity-scratch-Front-and-back-Ver1-Merged-BE-FE\\f893ad04-a560-4c7d-8735-f4704fae5f55\\scratchpad\\dbcheck.cjs",
+    "to": "4_studies_audits/exploratory/dbcheck.cjs",
+    "kind": "active",
+    "sha_before": "c9574eaa270d",
+    "changes": [
+      "credential -> config/db.cjs (1 pool)"
+    ]
+  },
+  {
+    "file": "derive_km.js",
+    "from": "C:\\Users\\Hans\\AppData\\Local\\Temp\\claude\\c--Users-Hans--gemini-antigravity-scratch-Front-and-back-Ver1-Merged-BE-FE\\f893ad04-a560-4c7d-8735-f4704fae5f55\\scratchpad\\derive_km.js",
+    "to": "4_studies_audits/exploratory/derive_km.js",
+    "kind": "active",
+    "sha_before": "e0ac6ed322a5",
+    "changes": [
+      "credential -> config/db.cjs (1 pool)"
+    ]
+  },
+  {
+    "file": "derive_rule.js",
+    "from": "C:\\Users\\Hans\\AppData\\Local\\Temp\\claude\\c--Users-Hans--gemini-antigravity-scratch-Front-and-back-Ver1-Merged-BE-FE\\f893ad04-a560-4c7d-8735-f4704fae5f55\\scratchpad\\derive_rule.js",
+    "to": "4_studies_audits/exploratory/derive_rule.js",
+    "kind": "active",
+    "sha_before": "adf53ccaa616",
+    "changes": [
+      "credential -> config/db.cjs (1 pool)"
+    ]
+  },
+  {
+    "file": "diagnose.js",
+    "from": "C:\\Users\\Hans\\AppData\\Local\\Temp\\claude\\c--Users-Hans--gemini-antigravity-scratch-Front-and-back-Ver1-Merged-BE-FE\\f893ad04-a560-4c7d-8735-f4704fae5f55\\scratchpad\\diagnose.js",
+    "to": "4_studies_audits/exploratory/diagnose.js",
+    "kind": "active",
+    "sha_before": "6cb859e88681",
+    "changes": [
+      "credential -> config/db.cjs (1 pool)"
+    ]
+  },
+  {
+    "file": "entry_side.mjs",
+    "from": "C:\\Users\\Hans\\AppData\\Local\\Temp\\claude\\c--Users-Hans--gemini-antigravity-scratch-Front-and-back-Ver1-Merged-BE-FE\\f893ad04-a560-4c7d-8735-f4704fae5f55\\scratchpad\\entry_side.mjs",
+    "to": "4_studies_audits/exploratory/entry_side.mjs",
+    "kind": "active",
+    "sha_before": "f39802b20908",
+    "changes": []
+  },
+  {
+    "file": "explore_jams.js",
+    "from": "C:\\Users\\Hans\\AppData\\Local\\Temp\\claude\\c--Users-Hans--gemini-antigravity-scratch-Front-and-back-Ver1-Merged-BE-FE\\f893ad04-a560-4c7d-8735-f4704fae5f55\\scratchpad\\explore_jams.js",
+    "to": "4_studies_audits/exploratory/explore_jams.js",
+    "kind": "active",
+    "sha_before": "bb2cdd0d6369",
+    "changes": [
+      "credential -> config/db.cjs (1 pool)"
+    ]
+  },
+  {
+    "file": "find_rule.js",
+    "from": "C:\\Users\\Hans\\AppData\\Local\\Temp\\claude\\c--Users-Hans--gemini-antigravity-scratch-Front-and-back-Ver1-Merged-BE-FE\\f893ad04-a560-4c7d-8735-f4704fae5f55\\scratchpad\\find_rule.js",
+    "to": "4_studies_audits/exploratory/find_rule.js",
+    "kind": "active",
+    "sha_before": "07fcbdeb8e7f",
+    "changes": [
+      "credential -> config/db.cjs (1 pool)"
+    ]
+  },
+  {
+    "file": "inspect_layers.js",
+    "from": "C:\\Users\\Hans\\AppData\\Local\\Temp\\claude\\c--Users-Hans--gemini-antigravity-scratch-Front-and-back-Ver1-Merged-BE-FE\\f893ad04-a560-4c7d-8735-f4704fae5f55\\scratchpad\\inspect_layers.js",
+    "to": "4_studies_audits/exploratory/inspect_layers.js",
+    "kind": "active",
+    "sha_before": "6702d80b1df8",
+    "changes": [
+      "credential -> config/db.cjs (1 pool)"
+    ]
+  },
+  {
+    "file": "leak.cjs",
+    "from": "C:\\Users\\Hans\\AppData\\Local\\Temp\\claude\\c--Users-Hans--gemini-antigravity-scratch-Front-and-back-Ver1-Merged-BE-FE\\f893ad04-a560-4c7d-8735-f4704fae5f55\\scratchpad\\leak.cjs",
+    "to": "4_studies_audits/exploratory/leak.cjs",
+    "kind": "active",
+    "sha_before": "46251110195d",
+    "changes": [
+      "credential -> config/db.cjs (1 pool)"
+    ]
+  },
+  {
+    "file": "reconcile_2022.js",
+    "from": "C:\\Users\\Hans\\AppData\\Local\\Temp\\claude\\c--Users-Hans--gemini-antigravity-scratch-Front-and-back-Ver1-Merged-BE-FE\\f893ad04-a560-4c7d-8735-f4704fae5f55\\scratchpad\\reconcile_2022.js",
+    "to": "4_studies_audits/exploratory/reconcile_2022.js",
+    "kind": "active",
+    "sha_before": "a13860624987",
+    "changes": [
+      "credential -> config/db.cjs (1 pool)"
+    ]
+  },
+  {
+    "file": "scope_congestion.js",
+    "from": "C:\\Users\\Hans\\AppData\\Local\\Temp\\claude\\c--Users-Hans--gemini-antigravity-scratch-Front-and-back-Ver1-Merged-BE-FE\\f893ad04-a560-4c7d-8735-f4704fae5f55\\scratchpad\\scope_congestion.js",
+    "to": "4_studies_audits/exploratory/scope_congestion.js",
+    "kind": "active",
+    "sha_before": "4b6aebfb152e",
+    "changes": [
+      "credential -> config/db.cjs (1 pool)"
+    ]
+  },
+  {
+    "file": "seams.js",
+    "from": "C:\\Users\\Hans\\AppData\\Local\\Temp\\claude\\c--Users-Hans--gemini-antigravity-scratch-Front-and-back-Ver1-Merged-BE-FE\\f893ad04-a560-4c7d-8735-f4704fae5f55\\scratchpad\\seams.js",
+    "to": "4_studies_audits/exploratory/seams.js",
+    "kind": "active",
+    "sha_before": "e23ed2ee5b1a",
+    "changes": [
+      "credential -> config/db.cjs (1 pool)"
+    ]
+  },
+  {
+    "file": "table_types.js",
+    "from": "C:\\Users\\Hans\\AppData\\Local\\Temp\\claude\\c--Users-Hans--gemini-antigravity-scratch-Front-and-back-Ver1-Merged-BE-FE\\f893ad04-a560-4c7d-8735-f4704fae5f55\\scratchpad\\table_types.js",
+    "to": "4_studies_audits/exploratory/table_types.js",
+    "kind": "active",
+    "sha_before": "0ee875906411",
+    "changes": [
+      "credential -> config/db.cjs (1 pool)"
+    ]
+  },
+  {
+    "file": "verify.cjs",
+    "from": "C:\\Users\\Hans\\AppData\\Local\\Temp\\claude\\c--Users-Hans--gemini-antigravity-scratch-Front-and-back-Ver1-Merged-BE-FE\\f893ad04-a560-4c7d-8735-f4704fae5f55\\scratchpad\\verify.cjs",
+    "to": "4_studies_audits/exploratory/verify.cjs",
+    "kind": "active",
+    "sha_before": "d4e91c4e2a64",
+    "changes": [
+      "credential -> config/db.cjs (1 pool)"
+    ]
+  },
+  {
+    "file": "verify_line.js",
+    "from": "C:\\Users\\Hans\\AppData\\Local\\Temp\\claude\\c--Users-Hans--gemini-antigravity-scratch-Front-and-back-Ver1-Merged-BE-FE\\f893ad04-a560-4c7d-8735-f4704fae5f55\\scratchpad\\verify_line.js",
+    "to": "4_studies_audits/exploratory/verify_line.js",
+    "kind": "active",
+    "sha_before": "bea838bc91fe",
+    "changes": [
+      "credential -> config/db.cjs (1 pool)"
+    ]
+  },
+  {
+    "file": "wx.cjs",
+    "from": "C:\\Users\\Hans\\AppData\\Local\\Temp\\claude\\c--Users-Hans--gemini-antigravity-scratch-Front-and-back-Ver1-Merged-BE-FE\\f893ad04-a560-4c7d-8735-f4704fae5f55\\scratchpad\\wx.cjs",
+    "to": "4_studies_audits/exploratory/wx.cjs",
+    "kind": "active",
+    "sha_before": "cc859dfaf95c",
+    "changes": [
+      "credential -> config/db.cjs (1 pool)"
+    ]
+  },
+  {
+    "file": "test_resolver.mjs",
+    "from": "C:\\Users\\Hans\\AppData\\Local\\Temp\\claude\\c--Users-Hans--gemini-antigravity-scratch-Front-and-back-Ver1-Merged-BE-FE\\f893ad04-a560-4c7d-8735-f4704fae5f55\\scratchpad\\test_resolver.mjs",
+    "to": "4_studies_audits/exploratory/test_resolver.mjs",
+    "kind": "active",
+    "sha_before": "c048658f87dc",
+    "changes": []
+  },
+  {
+    "file": "test_axis.js",
+    "from": "C:\\Users\\Hans\\AppData\\Local\\Temp\\claude\\c--Users-Hans--gemini-antigravity-scratch-Front-and-back-Ver1-Merged-BE-FE\\f893ad04-a560-4c7d-8735-f4704fae5f55\\scratchpad\\test_axis.js",
+    "to": "4_studies_audits/exploratory/test_axis.js",
+    "kind": "active",
+    "sha_before": "4ccfa5080a60",
+    "changes": [
+      "credential -> config/db.cjs (1 pool)"
+    ]
+  },
+  {
+    "file": "read_manuscript.py",
+    "from": "C:\\Users\\Hans\\AppData\\Local\\Temp\\claude\\c--Users-Hans--gemini-antigravity-scratch-Front-and-back-Ver1-Merged-BE-FE\\f893ad04-a560-4c7d-8735-f4704fae5f55\\scratchpad\\read_manuscript.py",
+    "to": "4_studies_audits/exploratory/read_manuscript.py",
+    "kind": "active",
+    "sha_before": "c5d76800ce67",
+    "changes": []
+  },
+  {
+    "file": "compare_chips.js",
+    "from": "C:\\Users\\Hans\\AppData\\Local\\Temp\\claude\\c--Users-Hans--gemini-antigravity-scratch-Front-and-back-Ver1-Merged-BE-FE\\f893ad04-a560-4c7d-8735-f4704fae5f55\\scratchpad\\compare_chips.js",
+    "to": "7_utilities/dashboard_screenshots/compare_chips.js",
+    "kind": "active",
+    "sha_before": "9b4b31bc1246",
+    "changes": []
+  },
+  {
+    "file": "enumerate_cards.mjs",
+    "from": "C:\\Users\\Hans\\AppData\\Local\\Temp\\claude\\c--Users-Hans--gemini-antigravity-scratch-Front-and-back-Ver1-Merged-BE-FE\\f893ad04-a560-4c7d-8735-f4704fae5f55\\scratchpad\\enumerate_cards.mjs",
+    "to": "7_utilities/dashboard_screenshots/enumerate_cards.mjs",
+    "kind": "active",
+    "sha_before": "0f40f5777dd6",
+    "changes": []
+  },
+  {
+    "file": "shot_both.js",
+    "from": "C:\\Users\\Hans\\AppData\\Local\\Temp\\claude\\c--Users-Hans--gemini-antigravity-scratch-Front-and-back-Ver1-Merged-BE-FE\\f893ad04-a560-4c7d-8735-f4704fae5f55\\scratchpad\\shot_both.js",
+    "to": "7_utilities/dashboard_screenshots/shot_both.js",
+    "kind": "active",
+    "sha_before": "55a4a43caeab",
+    "changes": []
+  },
+  {
+    "file": "shot_emissions.js",
+    "from": "C:\\Users\\Hans\\AppData\\Local\\Temp\\claude\\c--Users-Hans--gemini-antigravity-scratch-Front-and-back-Ver1-Merged-BE-FE\\f893ad04-a560-4c7d-8735-f4704fae5f55\\scratchpad\\shot_emissions.js",
+    "to": "7_utilities/dashboard_screenshots/shot_emissions.js",
+    "kind": "active",
+    "sha_before": "835f5202a27c",
+    "changes": []
+  },
+  {
+    "file": "shot_emissions.py",
+    "from": "C:\\Users\\Hans\\AppData\\Local\\Temp\\claude\\c--Users-Hans--gemini-antigravity-scratch-Front-and-back-Ver1-Merged-BE-FE\\f893ad04-a560-4c7d-8735-f4704fae5f55\\scratchpad\\shot_emissions.py",
+    "to": "7_utilities/dashboard_screenshots/shot_emissions.py",
+    "kind": "active",
+    "sha_before": "aa4dce73bdd2",
+    "changes": []
+  },
+  {
+    "file": "shot_sidebyside.js",
+    "from": "C:\\Users\\Hans\\AppData\\Local\\Temp\\claude\\c--Users-Hans--gemini-antigravity-scratch-Front-and-back-Ver1-Merged-BE-FE\\f893ad04-a560-4c7d-8735-f4704fae5f55\\scratchpad\\shot_sidebyside.js",
+    "to": "7_utilities/dashboard_screenshots/shot_sidebyside.js",
+    "kind": "active",
+    "sha_before": "e7abfccb3eda",
+    "changes": []
+  },
+  {
+    "file": "shot_strip.js",
+    "from": "C:\\Users\\Hans\\AppData\\Local\\Temp\\claude\\c--Users-Hans--gemini-antigravity-scratch-Front-and-back-Ver1-Merged-BE-FE\\f893ad04-a560-4c7d-8735-f4704fae5f55\\scratchpad\\shot_strip.js",
+    "to": "7_utilities/dashboard_screenshots/shot_strip.js",
+    "kind": "active",
+    "sha_before": "c9fe57c0c484",
+    "changes": []
+  },
+  {
+    "file": "patch_co2_horizon_live.py",
+    "from": "C:\\Users\\Hans\\AppData\\Local\\Temp\\claude\\c--Users-Hans--gemini-antigravity-scratch-Front-and-back-Ver1-Merged-BE-FE\\f893ad04-a560-4c7d-8735-f4704fae5f55\\scratchpad\\patch_co2_horizon_live.py",
+    "to": "_archive_do_not_run/dashboard_patches_applied/patch_co2_horizon_live.py",
+    "kind": "archive",
+    "sha_before": "d53bbc968735",
+    "changes": [
+      "hard stop added (archived)"
+    ]
+  },
+  {
+    "file": "patch_congestion_clarity.py",
+    "from": "C:\\Users\\Hans\\AppData\\Local\\Temp\\claude\\c--Users-Hans--gemini-antigravity-scratch-Front-and-back-Ver1-Merged-BE-FE\\f893ad04-a560-4c7d-8735-f4704fae5f55\\scratchpad\\patch_congestion_clarity.py",
+    "to": "_archive_do_not_run/dashboard_patches_applied/patch_congestion_clarity.py",
+    "kind": "archive",
+    "sha_before": "f3511acab4a3",
+    "changes": [
+      "hard stop added (archived)"
+    ]
+  },
+  {
+    "file": "patch_future_all.py",
+    "from": "C:\\Users\\Hans\\AppData\\Local\\Temp\\claude\\c--Users-Hans--gemini-antigravity-scratch-Front-and-back-Ver1-Merged-BE-FE\\f893ad04-a560-4c7d-8735-f4704fae5f55\\scratchpad\\patch_future_all.py",
+    "to": "_archive_do_not_run/dashboard_patches_applied/patch_future_all.py",
+    "kind": "archive",
+    "sha_before": "bbac53f3ec58",
+    "changes": [
+      "hard stop added (archived)"
+    ]
+  },
+  {
+    "file": "patch_leakage.py",
+    "from": "C:\\Users\\Hans\\AppData\\Local\\Temp\\claude\\c--Users-Hans--gemini-antigravity-scratch-Front-and-back-Ver1-Merged-BE-FE\\f893ad04-a560-4c7d-8735-f4704fae5f55\\scratchpad\\patch_leakage.py",
+    "to": "_archive_do_not_run/dashboard_patches_applied/patch_leakage.py",
+    "kind": "archive",
+    "sha_before": "23ca91f1d06c",
+    "changes": [
+      "hard stop added (archived)"
+    ]
+  },
+  {
+    "file": "patch_narrative.py",
+    "from": "C:\\Users\\Hans\\AppData\\Local\\Temp\\claude\\c--Users-Hans--gemini-antigravity-scratch-Front-and-back-Ver1-Merged-BE-FE\\f893ad04-a560-4c7d-8735-f4704fae5f55\\scratchpad\\patch_narrative.py",
+    "to": "_archive_do_not_run/dashboard_patches_applied/patch_narrative.py",
+    "kind": "archive",
+    "sha_before": "d1477b72b90b",
+    "changes": [
+      "hard stop added (archived)"
+    ]
+  },
+  {
+    "file": "patch_collapse_exits.py",
+    "from": "C:\\Users\\Hans\\AppData\\Local\\Temp\\claude\\c--Users-Hans--gemini-antigravity-scratch-Front-and-back-Ver1-Merged-BE-FE\\f893ad04-a560-4c7d-8735-f4704fae5f55\\scratchpad\\patch_collapse_exits.py",
+    "to": "_archive_do_not_run/dashboard_patches_applied/patch_collapse_exits.py",
+    "kind": "archive",
+    "sha_before": "5e64557797bb",
+    "changes": [
+      "hard stop added (archived)"
+    ]
+  },
+  {
+    "file": "patch_pick_exits.py",
+    "from": "C:\\Users\\Hans\\AppData\\Local\\Temp\\claude\\c--Users-Hans--gemini-antigravity-scratch-Front-and-back-Ver1-Merged-BE-FE\\f893ad04-a560-4c7d-8735-f4704fae5f55\\patch_pick_exits.py",
+    "to": "_archive_do_not_run/dashboard_patches_applied/patch_pick_exits.py",
+    "kind": "archive",
+    "sha_before": "51bc034675cc",
+    "changes": [
+      "hard stop added (archived)"
+    ]
+  },
+  {
+    "file": "drop_lingunan.py",
+    "from": "C:\\Users\\Hans\\.gemini\\antigravity\\scratch\\drop_lingunan.py",
+    "to": "1_data_loading/traffic/drop_lingunan.py",
+    "kind": "active",
+    "sha_before": "b5a0a70ed70f",
+    "changes": [
+      "raw CSV folder -> config RAW_TRAFFIC_DIR (2)"
+    ]
+  },
+  {
+    "file": "analyze_synthetic.py",
+    "from": "C:\\Users\\Hans\\.gemini\\antigravity\\scratch\\analyze_synthetic.py",
+    "to": "4_studies_audits/exploratory/analyze_synthetic.py",
+    "kind": "active",
+    "sha_before": "f5f69d0cb7a5",
+    "changes": [
+      "raw CSV folder -> config RAW_TRAFFIC_DIR (1)"
+    ]
+  },
+  {
+    "file": "check_cdv.js",
+    "from": "C:\\Users\\Hans\\.gemini\\antigravity\\scratch\\check_cdv.js",
+    "to": "8_diagnostics/check_cdv.js",
+    "kind": "active",
+    "sha_before": "121538eca8c4",
+    "changes": [
+      "credential -> config/db.cjs (1 pool)"
+    ]
+  },
+  {
+    "file": "check_nulls.js",
+    "from": "C:\\Users\\Hans\\.gemini\\antigravity\\scratch\\check_nulls.js",
+    "to": "8_diagnostics/check_nulls.js",
+    "kind": "active",
+    "sha_before": "28d9e96169c3",
+    "changes": [
+      "credential -> config/db.cjs (1 pool)"
+    ]
+  },
+  {
+    "file": "check_emissions_state.cjs",
+    "from": "C:\\Users\\Hans\\.gemini\\antigravity\\scratch\\check_emissions_state.cjs",
+    "to": "8_diagnostics/check_emissions_state.cjs",
+    "kind": "active",
+    "sha_before": "06b9f3a9cccb",
+    "changes": [
+      "credential -> config/db.cjs (1 pool)"
+    ]
+  },
+  {
+    "file": "check_manuscript_split.py",
+    "from": "C:\\Users\\Hans\\.gemini\\antigravity\\scratch\\check_manuscript_split.py",
+    "to": "7_utilities/manuscript_pdf/check_manuscript_split.py",
+    "kind": "active",
+    "sha_before": "2bcf957b5c60",
+    "changes": []
+  },
+  {
+    "file": "extract_emission_detail.py",
+    "from": "C:\\Users\\Hans\\.gemini\\antigravity\\scratch\\extract_emission_detail.py",
+    "to": "7_utilities/manuscript_pdf/extract_emission_detail.py",
+    "kind": "active",
+    "sha_before": "7c791fe2411c",
+    "changes": []
+  },
+  {
+    "file": "extract_emission_formulas.py",
+    "from": "C:\\Users\\Hans\\.gemini\\antigravity\\scratch\\extract_emission_formulas.py",
+    "to": "7_utilities/manuscript_pdf/extract_emission_formulas.py",
+    "kind": "active",
+    "sha_before": "03cd43bf7919",
+    "changes": []
+  },
+  {
+    "file": "extract_manuscript_context.py",
+    "from": "C:\\Users\\Hans\\.gemini\\antigravity\\scratch\\extract_manuscript_context.py",
+    "to": "7_utilities/manuscript_pdf/extract_manuscript_context.py",
+    "kind": "active",
+    "sha_before": "70a737b402cb",
+    "changes": []
+  },
+  {
+    "file": "extract_sentences.py",
+    "from": "C:\\Users\\Hans\\.gemini\\antigravity\\scratch\\extract_sentences.py",
+    "to": "7_utilities/manuscript_pdf/extract_sentences.py",
+    "kind": "active",
+    "sha_before": "1d002b603f57",
+    "changes": []
+  },
+  {
+    "file": "smartflow_warehouse_schema.sql",
+    "from": "C:\\Users\\Hans\\Downloads\\smartflow_warehouse_schema.sql",
+    "to": "6_etl_pipeline/warehouse_schema/smartflow_warehouse_schema.sql",
+    "kind": "active",
+    "sha_before": "8fccaf11fb44",
+    "changes": []
+  },
+  {
+    "file": "generate_smartflow_deck.py",
+    "from": "C:\\Users\\Hans\\Downloads\\generate_smartflow_deck.py",
+    "to": "7_utilities/generate_smartflow_deck.py",
+    "kind": "active",
+    "sha_before": "cf4446de32a7",
+    "changes": []
+  },
+  {
+    "file": "add-confidence-columns.cjs",
+    "from": "C:\\Users\\Hans\\.gemini\\antigravity\\scratch\\cleaned\\add-confidence-columns.cjs",
+    "to": "_archive_do_not_run/etl_initial_database_build_2026-07/add-confidence-columns.cjs",
+    "kind": "archive",
+    "sha_before": "5a149b1e280c",
+    "changes": [
+      "secrets removed (1)",
+      "hard stop added (archived)"
+    ]
+  },
+  {
+    "file": "alter-table.cjs",
+    "from": "C:\\Users\\Hans\\.gemini\\antigravity\\scratch\\cleaned\\alter-table.cjs",
+    "to": "_archive_do_not_run/etl_initial_database_build_2026-07/alter-table.cjs",
+    "kind": "archive",
+    "sha_before": "1ce2cba494c3",
+    "changes": [
+      "secrets removed (1)",
+      "hard stop added (archived)"
+    ]
+  },
+  {
+    "file": "audit-db.cjs",
+    "from": "C:\\Users\\Hans\\.gemini\\antigravity\\scratch\\cleaned\\audit-db.cjs",
+    "to": "_archive_do_not_run/etl_initial_database_build_2026-07/audit-db.cjs",
+    "kind": "archive",
+    "sha_before": "3f6847dfba55",
+    "changes": [
+      "secrets removed (1)",
+      "hard stop added (archived)"
+    ]
+  },
+  {
+    "file": "audit-db2.cjs",
+    "from": "C:\\Users\\Hans\\.gemini\\antigravity\\scratch\\cleaned\\audit-db2.cjs",
+    "to": "_archive_do_not_run/etl_initial_database_build_2026-07/audit-db2.cjs",
+    "kind": "archive",
+    "sha_before": "89396343532e",
+    "changes": [
+      "secrets removed (1)",
+      "hard stop added (archived)"
+    ]
+  },
+  {
+    "file": "auto-setup.js",
+    "from": "C:\\Users\\Hans\\.gemini\\antigravity\\scratch\\cleaned\\auto-setup.js",
+    "to": "_archive_do_not_run/etl_initial_database_build_2026-07/auto-setup.js",
+    "kind": "archive",
+    "sha_before": "ddec5f70687a",
+    "changes": [
+      "secrets removed (2)",
+      "hard stop added (archived)"
+    ]
+  },
+  {
+    "file": "check-all-tables.js",
+    "from": "C:\\Users\\Hans\\.gemini\\antigravity\\scratch\\cleaned\\check-all-tables.js",
+    "to": "_archive_do_not_run/etl_initial_database_build_2026-07/check-all-tables.js",
+    "kind": "archive",
+    "sha_before": "8de03b780763",
+    "changes": [
+      "secrets removed (1)",
+      "hard stop added (archived)"
+    ]
+  },
+  {
+    "file": "check-columns.cjs",
+    "from": "C:\\Users\\Hans\\.gemini\\antigravity\\scratch\\cleaned\\check-columns.cjs",
+    "to": "_archive_do_not_run/etl_initial_database_build_2026-07/check-columns.cjs",
+    "kind": "archive",
+    "sha_before": "03c6d26cd73b",
+    "changes": [
+      "secrets removed (1)",
+      "hard stop added (archived)"
+    ]
+  },
+  {
+    "file": "check-columns.js",
+    "from": "C:\\Users\\Hans\\.gemini\\antigravity\\scratch\\cleaned\\check-columns.js",
+    "to": "_archive_do_not_run/etl_initial_database_build_2026-07/check-columns.js",
+    "kind": "archive",
+    "sha_before": "95623b4e4495",
+    "changes": [
+      "secrets removed (1)",
+      "hard stop added (archived)"
+    ]
+  },
+  {
+    "file": "check-meteostat.cjs",
+    "from": "C:\\Users\\Hans\\.gemini\\antigravity\\scratch\\cleaned\\check-meteostat.cjs",
+    "to": "_archive_do_not_run/etl_initial_database_build_2026-07/check-meteostat.cjs",
+    "kind": "archive",
+    "sha_before": "8c49c21be547",
+    "changes": [
+      "secrets removed (1)",
+      "hard stop added (archived)"
+    ]
+  },
+  {
+    "file": "check-ml-tables.cjs",
+    "from": "C:\\Users\\Hans\\.gemini\\antigravity\\scratch\\cleaned\\check-ml-tables.cjs",
+    "to": "_archive_do_not_run/etl_initial_database_build_2026-07/check-ml-tables.cjs",
+    "kind": "archive",
+    "sha_before": "25a72db47b47",
+    "changes": [
+      "secrets removed (1)",
+      "hard stop added (archived)"
+    ]
+  },
+  {
+    "file": "check-nulls.cjs",
+    "from": "C:\\Users\\Hans\\.gemini\\antigravity\\scratch\\cleaned\\check-nulls.cjs",
+    "to": "_archive_do_not_run/etl_initial_database_build_2026-07/check-nulls.cjs",
+    "kind": "archive",
+    "sha_before": "4cfd3798a438",
+    "changes": [
+      "secrets removed (1)",
+      "hard stop added (archived)"
+    ]
+  },
+  {
+    "file": "check-nulls.js",
+    "from": "C:\\Users\\Hans\\.gemini\\antigravity\\scratch\\cleaned\\check-nulls.js",
+    "to": "_archive_do_not_run/etl_initial_database_build_2026-07/check-nulls.js",
+    "kind": "archive",
+    "sha_before": "a90ee3c3fbee",
+    "changes": [
+      "secrets removed (1)",
+      "hard stop added (archived)"
+    ]
+  },
+  {
+    "file": "check-rows.js",
+    "from": "C:\\Users\\Hans\\.gemini\\antigravity\\scratch\\cleaned\\check-rows.js",
+    "to": "_archive_do_not_run/etl_initial_database_build_2026-07/check-rows.js",
+    "kind": "archive",
+    "sha_before": "8533210d4200",
+    "changes": [
+      "secrets removed (1)",
+      "hard stop added (archived)"
+    ]
+  },
+  {
+    "file": "check-search-path.cjs",
+    "from": "C:\\Users\\Hans\\.gemini\\antigravity\\scratch\\cleaned\\check-search-path.cjs",
+    "to": "_archive_do_not_run/etl_initial_database_build_2026-07/check-search-path.cjs",
+    "kind": "archive",
+    "sha_before": "e6b1cddf54e8",
+    "changes": [
+      "secrets removed (1)",
+      "hard stop added (archived)"
+    ]
+  },
+  {
+    "file": "check-source-scores.cjs",
+    "from": "C:\\Users\\Hans\\.gemini\\antigravity\\scratch\\cleaned\\check-source-scores.cjs",
+    "to": "_archive_do_not_run/etl_initial_database_build_2026-07/check-source-scores.cjs",
+    "kind": "archive",
+    "sha_before": "7b607c2e7963",
+    "changes": [
+      "secrets removed (1)",
+      "hard stop added (archived)"
+    ]
+  },
+  {
+    "file": "check-sources.cjs",
+    "from": "C:\\Users\\Hans\\.gemini\\antigravity\\scratch\\cleaned\\check-sources.cjs",
+    "to": "_archive_do_not_run/etl_initial_database_build_2026-07/check-sources.cjs",
+    "kind": "archive",
+    "sha_before": "8d2190553965",
+    "changes": [
+      "secrets removed (1)",
+      "hard stop added (archived)"
+    ]
+  },
+  {
+    "file": "check-weather-columns.cjs",
+    "from": "C:\\Users\\Hans\\.gemini\\antigravity\\scratch\\cleaned\\check-weather-columns.cjs",
+    "to": "_archive_do_not_run/etl_initial_database_build_2026-07/check-weather-columns.cjs",
+    "kind": "archive",
+    "sha_before": "5c420ff48424",
+    "changes": [
+      "secrets removed (1)",
+      "hard stop added (archived)"
+    ]
+  },
+  {
+    "file": "compute-theoretical-emissions.js",
+    "from": "C:\\Users\\Hans\\.gemini\\antigravity\\scratch\\cleaned\\compute-theoretical-emissions.js",
+    "to": "_archive_do_not_run/etl_initial_database_build_2026-07/compute-theoretical-emissions.js",
+    "kind": "archive",
+    "sha_before": "7a63f99cf6ec",
+    "changes": [
+      "secrets removed (1)",
+      "hard stop added (archived)"
+    ]
+  },
+  {
+    "file": "create-emissions-table.cjs",
+    "from": "C:\\Users\\Hans\\.gemini\\antigravity\\scratch\\cleaned\\create-emissions-table.cjs",
+    "to": "_archive_do_not_run/etl_initial_database_build_2026-07/create-emissions-table.cjs",
+    "kind": "archive",
+    "sha_before": "4a9ea12ef33e",
+    "changes": [
+      "secrets removed (1)",
+      "hard stop added (archived)"
+    ]
+  },
+  {
+    "file": "create-table.cjs",
+    "from": "C:\\Users\\Hans\\.gemini\\antigravity\\scratch\\cleaned\\create-table.cjs",
+    "to": "_archive_do_not_run/etl_initial_database_build_2026-07/create-table.cjs",
+    "kind": "archive",
+    "sha_before": "368f199fa29c",
+    "changes": [
+      "secrets removed (1)",
+      "hard stop added (archived)"
+    ]
+  },
+  {
+    "file": "etl-waze-pipeline.cjs",
+    "from": "C:\\Users\\Hans\\.gemini\\antigravity\\scratch\\cleaned\\etl-waze-pipeline.cjs",
+    "to": "_archive_do_not_run/etl_initial_database_build_2026-07/etl-waze-pipeline.cjs",
+    "kind": "archive",
+    "sha_before": "d95c523a2cc6",
+    "changes": [
+      "hard stop added (archived)"
+    ]
+  },
+  {
+    "file": "find-region.js",
+    "from": "C:\\Users\\Hans\\.gemini\\antigravity\\scratch\\cleaned\\find-region.js",
+    "to": "_archive_do_not_run/etl_initial_database_build_2026-07/find-region.js",
+    "kind": "archive",
+    "sha_before": "cb9217de7b3f",
+    "changes": [
+      "secrets removed (1)",
+      "hard stop added (archived)"
+    ]
+  },
+  {
+    "file": "fix-aws-network.js",
+    "from": "C:\\Users\\Hans\\.gemini\\antigravity\\scratch\\cleaned\\fix-aws-network.js",
+    "to": "_archive_do_not_run/etl_initial_database_build_2026-07/fix-aws-network.js",
+    "kind": "archive",
+    "sha_before": "8633d44a0376",
+    "changes": [
+      "hard stop added (archived)"
+    ]
+  },
+  {
+    "file": "fix-plaza-direction.cjs",
+    "from": "C:\\Users\\Hans\\.gemini\\antigravity\\scratch\\cleaned\\fix-plaza-direction.cjs",
+    "to": "_archive_do_not_run/etl_initial_database_build_2026-07/fix-plaza-direction.cjs",
+    "kind": "archive",
+    "sha_before": "36db19142cef",
+    "changes": [
+      "secrets removed (1)",
+      "hard stop added (archived)"
+    ]
+  },
+  {
+    "file": "fix-search-path.cjs",
+    "from": "C:\\Users\\Hans\\.gemini\\antigravity\\scratch\\cleaned\\fix-search-path.cjs",
+    "to": "_archive_do_not_run/etl_initial_database_build_2026-07/fix-search-path.cjs",
+    "kind": "archive",
+    "sha_before": "e86a17ce5cc6",
+    "changes": [
+      "secrets removed (1)",
+      "hard stop added (archived)"
+    ]
+  },
+  {
+    "file": "import-all-csvs.js",
+    "from": "C:\\Users\\Hans\\.gemini\\antigravity\\scratch\\cleaned\\import-all-csvs.js",
+    "to": "_archive_do_not_run/etl_initial_database_build_2026-07/import-all-csvs.js",
+    "kind": "archive",
+    "sha_before": "b2a8145154ba",
+    "changes": [
+      "secrets removed (1)",
+      "hard stop added (archived)"
+    ]
+  },
+  {
+    "file": "import-csv.js",
+    "from": "C:\\Users\\Hans\\.gemini\\antigravity\\scratch\\cleaned\\import-csv.js",
+    "to": "_archive_do_not_run/etl_initial_database_build_2026-07/import-csv.js",
+    "kind": "archive",
+    "sha_before": "ee27ab5d5486",
+    "changes": [
+      "secrets removed (1)",
+      "hard stop added (archived)"
+    ]
+  },
+  {
+    "file": "ingest-ambient.js",
+    "from": "C:\\Users\\Hans\\.gemini\\antigravity\\scratch\\cleaned\\ingest-ambient.js",
+    "to": "_archive_do_not_run/etl_initial_database_build_2026-07/ingest-ambient.js",
+    "kind": "archive",
+    "sha_before": "79229e43e94a",
+    "changes": [
+      "secrets removed (1)",
+      "hard stop added (archived)"
+    ]
+  },
+  {
+    "file": "ingest-climatiq.js",
+    "from": "C:\\Users\\Hans\\.gemini\\antigravity\\scratch\\cleaned\\ingest-climatiq.js",
+    "to": "_archive_do_not_run/etl_initial_database_build_2026-07/ingest-climatiq.js",
+    "kind": "archive",
+    "sha_before": "d503cfc5a061",
+    "changes": [
+      "secrets removed (2)",
+      "hard stop added (archived)"
+    ]
+  },
+  {
+    "file": "ingest-direct.js",
+    "from": "C:\\Users\\Hans\\.gemini\\antigravity\\scratch\\cleaned\\ingest-direct.js",
+    "to": "_archive_do_not_run/etl_initial_database_build_2026-07/ingest-direct.js",
+    "kind": "archive",
+    "sha_before": "a7b9060f75f0",
+    "changes": [
+      "secrets removed (1)",
+      "hard stop added (archived)"
+    ]
+  },
+  {
+    "file": "ingest-historical-emissions.js",
+    "from": "C:\\Users\\Hans\\.gemini\\antigravity\\scratch\\cleaned\\ingest-historical-emissions.js",
+    "to": "_archive_do_not_run/etl_initial_database_build_2026-07/ingest-historical-emissions.js",
+    "kind": "archive",
+    "sha_before": "ed8ac75ba6e5",
+    "changes": [
+      "secrets removed (2)",
+      "hard stop added (archived)"
+    ]
+  },
+  {
+    "file": "ingest-historical.js",
+    "from": "C:\\Users\\Hans\\.gemini\\antigravity\\scratch\\cleaned\\ingest-historical.js",
+    "to": "_archive_do_not_run/etl_initial_database_build_2026-07/ingest-historical.js",
+    "kind": "archive",
+    "sha_before": "733edf905eb4",
+    "changes": [
+      "secrets removed (1)",
+      "hard stop added (archived)"
+    ]
+  },
+  {
+    "file": "ingest.js",
+    "from": "C:\\Users\\Hans\\.gemini\\antigravity\\scratch\\cleaned\\ingest.js",
+    "to": "_archive_do_not_run/etl_initial_database_build_2026-07/ingest.js",
+    "kind": "archive",
+    "sha_before": "44d316c8f83a",
+    "changes": [
+      "secrets removed (1)",
+      "hard stop added (archived)"
+    ]
+  },
+  {
+    "file": "kill-locks.cjs",
+    "from": "C:\\Users\\Hans\\.gemini\\antigravity\\scratch\\cleaned\\kill-locks.cjs",
+    "to": "_archive_do_not_run/etl_initial_database_build_2026-07/kill-locks.cjs",
+    "kind": "archive",
+    "sha_before": "670bdfcb1024",
+    "changes": [
+      "secrets removed (1)",
+      "hard stop added (archived)"
+    ]
+  },
+  {
+    "file": "migrate.js",
+    "from": "C:\\Users\\Hans\\.gemini\\antigravity\\scratch\\cleaned\\migrate.js",
+    "to": "_archive_do_not_run/etl_initial_database_build_2026-07/migrate.js",
+    "kind": "archive",
+    "sha_before": "fcee551e501c",
+    "changes": [
+      "secrets removed (4)",
+      "hard stop added (archived)"
+    ]
+  },
+  {
+    "file": "retry-theoretical.js",
+    "from": "C:\\Users\\Hans\\.gemini\\antigravity\\scratch\\cleaned\\retry-theoretical.js",
+    "to": "_archive_do_not_run/etl_initial_database_build_2026-07/retry-theoretical.js",
+    "kind": "archive",
+    "sha_before": "18a09bd77a6e",
+    "changes": [
+      "hard stop added (archived)"
+    ]
+  },
+  {
+    "file": "schema.sql",
+    "from": "C:\\Users\\Hans\\.gemini\\antigravity\\scratch\\cleaned\\schema.sql",
+    "to": "_archive_do_not_run/etl_initial_database_build_2026-07/schema.sql",
+    "kind": "archive",
+    "sha_before": "eaa722733bad",
+    "changes": [
+      "hard stop added (archived)"
+    ]
+  },
+  {
+    "file": "seed-pdf-exits.js",
+    "from": "C:\\Users\\Hans\\.gemini\\antigravity\\scratch\\cleaned\\seed-pdf-exits.js",
+    "to": "_archive_do_not_run/etl_initial_database_build_2026-07/seed-pdf-exits.js",
+    "kind": "archive",
+    "sha_before": "9b576e506629",
+    "changes": [
+      "secrets removed (1)",
+      "hard stop added (archived)"
+    ]
+  },
+  {
+    "file": "seed.js",
+    "from": "C:\\Users\\Hans\\.gemini\\antigravity\\scratch\\cleaned\\seed.js",
+    "to": "_archive_do_not_run/etl_initial_database_build_2026-07/seed.js",
+    "kind": "archive",
+    "sha_before": "56303211a955",
+    "changes": [
+      "secrets removed (1)",
+      "hard stop added (archived)"
+    ]
+  },
+  {
+    "file": "setup.js",
+    "from": "C:\\Users\\Hans\\.gemini\\antigravity\\scratch\\cleaned\\setup.js",
+    "to": "_archive_do_not_run/etl_initial_database_build_2026-07/setup.js",
+    "kind": "archive",
+    "sha_before": "8ded04f962f9",
+    "changes": [
+      "secrets removed (2)",
+      "hard stop added (archived)"
+    ]
+  },
+  {
+    "file": "truncate-tables-aws.js",
+    "from": "C:\\Users\\Hans\\.gemini\\antigravity\\scratch\\cleaned\\truncate-tables-aws.js",
+    "to": "_archive_do_not_run/etl_initial_database_build_2026-07/truncate-tables-aws.js",
+    "kind": "archive",
+    "sha_before": "cb46741b0c5f",
+    "changes": [
+      "secrets removed (1)",
+      "hard stop added (archived)"
+    ]
+  },
+  {
+    "file": "truncate-tables.js",
+    "from": "C:\\Users\\Hans\\.gemini\\antigravity\\scratch\\cleaned\\truncate-tables.js",
+    "to": "_archive_do_not_run/etl_initial_database_build_2026-07/truncate-tables.js",
+    "kind": "archive",
+    "sha_before": "63296f986c1e",
+    "changes": [
+      "hard stop added (archived)"
+    ]
+  },
+  {
+    "file": "test_agg.cjs",
+    "from": "C:\\Users\\Hans\\.gemini\\antigravity\\scratch\\cleaned\\waze-cleaned\\jams\\test_agg.cjs",
+    "to": "_archive_do_not_run/etl_initial_database_build_2026-07/waze-cleaned/jams/test_agg.cjs",
+    "kind": "archive",
+    "sha_before": "943ae794032d",
+    "changes": [
+      "hard stop added (archived)"
+    ]
+  },
+  {
+    "file": "01_explore_join_keys.py",
+    "from": "C:\\Users\\Hans\\.gemini\\antigravity\\scratch\\nlex-emissions\\01_explore_join_keys.py",
+    "to": "_archive_do_not_run/models_first_generation_2026-07/01_explore_join_keys.py",
+    "kind": "archive",
+    "sha_before": "70de198e678b",
+    "changes": [
+      "secrets removed (1)",
+      "hard stop added (archived)"
+    ]
+  },
+  {
+    "file": "01_setup_schemas_and_dims.cjs",
+    "from": "C:\\Users\\Hans\\.gemini\\antigravity\\scratch\\nlex-emissions\\01_setup_schemas_and_dims.cjs",
+    "to": "_archive_do_not_run/etl_medallion_first_build_2026-07/01_setup_schemas_and_dims.cjs",
+    "kind": "archive",
+    "sha_before": "10722641bf66",
+    "changes": [
+      "secrets removed (1)",
+      "hard stop added (archived)"
+    ]
+  },
+  {
+    "file": "02_bronze_migration.cjs",
+    "from": "C:\\Users\\Hans\\.gemini\\antigravity\\scratch\\nlex-emissions\\02_bronze_migration.cjs",
+    "to": "_archive_do_not_run/etl_medallion_first_build_2026-07/02_bronze_migration.cjs",
+    "kind": "archive",
+    "sha_before": "4aa545682982",
+    "changes": [
+      "secrets removed (1)",
+      "hard stop added (archived)"
+    ]
+  },
+  {
+    "file": "02_extract_data.py",
+    "from": "C:\\Users\\Hans\\.gemini\\antigravity\\scratch\\predictive folder\\nlex-emissions\\02_extract_data.py",
+    "to": "_archive_do_not_run/models_first_generation_2026-07/02_extract_data.py",
+    "kind": "archive",
+    "sha_before": "acba67715241",
+    "changes": [
+      "secrets removed (1)",
+      "hard stop added (archived)"
+    ]
+  },
+  {
+    "file": "02_extract_data.py",
+    "from": "C:\\Users\\Hans\\.gemini\\antigravity\\scratch\\nlex-emissions\\02_extract_data.py",
+    "to": "_archive_do_not_run/older_versions/02_extract_data__scratch.py",
+    "kind": "archive",
+    "sha_before": "e75a5a3e507f",
+    "changes": [
+      "secrets removed (1)",
+      "hard stop added (archived)"
+    ]
+  },
+  {
+    "file": "03_silver_layer.cjs",
+    "from": "C:\\Users\\Hans\\.gemini\\antigravity\\scratch\\nlex-emissions\\03_silver_layer.cjs",
+    "to": "_archive_do_not_run/etl_medallion_first_build_2026-07/03_silver_layer.cjs",
+    "kind": "archive",
+    "sha_before": "5d57bfac0f42",
+    "changes": [
+      "secrets removed (1)",
+      "hard stop added (archived)"
+    ]
+  },
+  {
+    "file": "03_silver_patch.cjs",
+    "from": "C:\\Users\\Hans\\.gemini\\antigravity\\scratch\\nlex-emissions\\03_silver_patch.cjs",
+    "to": "_archive_do_not_run/etl_medallion_first_build_2026-07/03_silver_patch.cjs",
+    "kind": "archive",
+    "sha_before": "4575ec079ead",
+    "changes": [
+      "secrets removed (1)",
+      "hard stop added (archived)"
+    ]
+  },
+  {
+    "file": "03_train_xgboost.py",
+    "from": "C:\\Users\\Hans\\.gemini\\antigravity\\scratch\\nlex-emissions\\03_train_xgboost.py",
+    "to": "_archive_do_not_run/models_first_generation_2026-07/03_train_xgboost.py",
+    "kind": "archive",
+    "sha_before": "a71a8c701998",
+    "changes": [
+      "hard stop added (archived)"
+    ]
+  },
+  {
+    "file": "04_gold_and_public.cjs",
+    "from": "C:\\Users\\Hans\\.gemini\\antigravity\\scratch\\nlex-emissions\\04_gold_and_public.cjs",
+    "to": "_archive_do_not_run/etl_medallion_first_build_2026-07/04_gold_and_public.cjs",
+    "kind": "archive",
+    "sha_before": "7042fc76141c",
+    "changes": [
+      "secrets removed (1)",
+      "hard stop added (archived)"
+    ]
+  },
+  {
+    "file": "04_train_lstm.py",
+    "from": "C:\\Users\\Hans\\.gemini\\antigravity\\scratch\\nlex-emissions\\04_train_lstm.py",
+    "to": "_archive_do_not_run/models_first_generation_2026-07/04_train_lstm.py",
+    "kind": "archive",
+    "sha_before": "3f407c0063d9",
+    "changes": [
+      "hard stop added (archived)"
+    ]
+  },
+  {
+    "file": "05_train_prophet.py",
+    "from": "C:\\Users\\Hans\\.gemini\\antigravity\\scratch\\nlex-emissions\\05_train_prophet.py",
+    "to": "_archive_do_not_run/models_first_generation_2026-07/05_train_prophet.py",
+    "kind": "archive",
+    "sha_before": "3e98ae314c19",
+    "changes": [
+      "hard stop added (archived)"
+    ]
+  },
+  {
+    "file": "06_train_sarimax.py",
+    "from": "C:\\Users\\Hans\\.gemini\\antigravity\\scratch\\nlex-emissions\\06_train_sarimax.py",
+    "to": "_archive_do_not_run/models_first_generation_2026-07/06_train_sarimax.py",
+    "kind": "archive",
+    "sha_before": "dcd831e70323",
+    "changes": [
+      "hard stop added (archived)"
+    ]
+  },
+  {
+    "file": "07_extract_incidents.py",
+    "from": "C:\\Users\\Hans\\.gemini\\antigravity\\scratch\\nlex-emissions\\07_extract_incidents.py",
+    "to": "_archive_do_not_run/models_first_generation_2026-07/07_extract_incidents.py",
+    "kind": "archive",
+    "sha_before": "c33c207b4544",
+    "changes": [
+      "secrets removed (1)",
+      "hard stop added (archived)"
+    ]
+  },
+  {
+    "file": "08_train_incident_models.py",
+    "from": "C:\\Users\\Hans\\.gemini\\antigravity\\scratch\\nlex-emissions\\08_train_incident_models.py",
+    "to": "_archive_do_not_run/models_first_generation_2026-07/08_train_incident_models.py",
+    "kind": "archive",
+    "sha_before": "0a537b4725c0",
+    "changes": [
+      "hard stop added (archived)"
+    ]
+  },
+  {
+    "file": "09_generate_forecast_charts.py",
+    "from": "C:\\Users\\Hans\\.gemini\\antigravity\\scratch\\predictive folder\\nlex-emissions\\09_generate_forecast_charts.py",
+    "to": "_archive_do_not_run/models_first_generation_2026-07/09_generate_forecast_charts.py",
+    "kind": "archive",
+    "sha_before": "c014273d3e2a",
+    "changes": [
+      "hard stop added (archived)"
+    ]
+  },
+  {
+    "file": "09_generate_forecast_charts.py",
+    "from": "C:\\Users\\Hans\\.gemini\\antigravity\\scratch\\nlex-emissions\\09_generate_forecast_charts.py",
+    "to": "_archive_do_not_run/older_versions/09_generate_forecast_charts__scratch.py",
+    "kind": "archive",
+    "sha_before": "298ae390af99",
+    "changes": [
+      "hard stop added (archived)"
+    ]
+  },
+  {
+    "file": "add-holidays-2020.cjs",
+    "from": "C:\\Users\\Hans\\.gemini\\antigravity\\scratch\\nlex-emissions\\add-holidays-2020.cjs",
+    "to": "_archive_do_not_run/etl_medallion_first_build_2026-07/add-holidays-2020.cjs",
+    "kind": "archive",
+    "sha_before": "094982201671",
+    "changes": [
+      "secrets removed (1)",
+      "hard stop added (archived)"
+    ]
+  },
+  {
+    "file": "add-holidays.cjs",
+    "from": "C:\\Users\\Hans\\.gemini\\antigravity\\scratch\\nlex-emissions\\add-holidays.cjs",
+    "to": "_archive_do_not_run/etl_medallion_first_build_2026-07/add-holidays.cjs",
+    "kind": "archive",
+    "sha_before": "6dee1a1720cd",
+    "changes": [
+      "secrets removed (1)",
+      "hard stop added (archived)"
+    ]
+  },
+  {
+    "file": "check-db.cjs",
+    "from": "C:\\Users\\Hans\\.gemini\\antigravity\\scratch\\nlex-emissions\\check-db.cjs",
+    "to": "_archive_do_not_run/etl_medallion_first_build_2026-07/check-db.cjs",
+    "kind": "archive",
+    "sha_before": "04f62015f805",
+    "changes": [
+      "secrets removed (1)",
+      "hard stop added (archived)"
+    ]
+  },
+  {
+    "file": "check_data.py",
+    "from": "C:\\Users\\Hans\\.gemini\\antigravity\\scratch\\nlex-emissions\\check_data.py",
+    "to": "_archive_do_not_run/models_first_generation_2026-07/check_data.py",
+    "kind": "archive",
+    "sha_before": "a3986dace77e",
+    "changes": [
+      "hard stop added (archived)"
+    ]
+  },
+  {
+    "file": "check_incident_schema.py",
+    "from": "C:\\Users\\Hans\\.gemini\\antigravity\\scratch\\nlex-emissions\\check_incident_schema.py",
+    "to": "_archive_do_not_run/models_first_generation_2026-07/check_incident_schema.py",
+    "kind": "archive",
+    "sha_before": "393913cc7a50",
+    "changes": [
+      "secrets removed (1)",
+      "hard stop added (archived)"
+    ]
+  },
+  {
+    "file": "etl-waze-pipeline.cjs",
+    "from": "C:\\Users\\Hans\\.gemini\\antigravity\\scratch\\nlex-emissions\\etl-waze-pipeline.cjs",
+    "to": "_archive_do_not_run/etl_medallion_first_build_2026-07/etl-waze-pipeline.cjs",
+    "kind": "archive",
+    "sha_before": "6c5ded050ece",
+    "changes": [
+      "hard stop added (archived)"
+    ]
+  },
+  {
+    "file": "find-arena-supabase.cjs",
+    "from": "C:\\Users\\Hans\\.gemini\\antigravity\\scratch\\nlex-emissions\\find-arena-supabase.cjs",
+    "to": "_archive_do_not_run/etl_medallion_first_build_2026-07/find-arena-supabase.cjs",
+    "kind": "archive",
+    "sha_before": "017be3b3fe55",
+    "changes": [
+      "secrets removed (2)",
+      "hard stop added (archived)"
+    ]
+  },
+  {
+    "file": "full_pipeline.py",
+    "from": "C:\\Users\\Hans\\.gemini\\antigravity\\scratch\\predictive folder\\nlex-emissions\\full_pipeline.py",
+    "to": "_archive_do_not_run/models_first_generation_2026-07/full_pipeline.py",
+    "kind": "archive",
+    "sha_before": "45aefb1389c4",
+    "changes": [
+      "hard stop added (archived)"
+    ]
+  },
+  {
+    "file": "generate_report.py",
+    "from": "C:\\Users\\Hans\\.gemini\\antigravity\\scratch\\nlex-emissions\\generate_report.py",
+    "to": "_archive_do_not_run/models_first_generation_2026-07/generate_report.py",
+    "kind": "archive",
+    "sha_before": "d9d4edb5a90e",
+    "changes": [
+      "hard stop added (archived)"
+    ]
+  },
+  {
+    "file": "inspect-db-deep.cjs",
+    "from": "C:\\Users\\Hans\\.gemini\\antigravity\\scratch\\nlex-emissions\\inspect-db-deep.cjs",
+    "to": "_archive_do_not_run/etl_medallion_first_build_2026-07/inspect-db-deep.cjs",
+    "kind": "archive",
+    "sha_before": "ec4dab77c4b8",
+    "changes": [
+      "secrets removed (1)",
+      "hard stop added (archived)"
+    ]
+  },
+  {
+    "file": "metrics_utils.py",
+    "from": "C:\\Users\\Hans\\.gemini\\antigravity\\scratch\\nlex-emissions\\metrics_utils.py",
+    "to": "_archive_do_not_run/models_first_generation_2026-07/metrics_utils.py",
+    "kind": "archive",
+    "sha_before": "64fdd71eb39b",
+    "changes": [
+      "hard stop added (archived)"
+    ]
+  },
+  {
+    "file": "migrate-arena-events.cjs",
+    "from": "C:\\Users\\Hans\\.gemini\\antigravity\\scratch\\nlex-emissions\\migrate-arena-events.cjs",
+    "to": "_archive_do_not_run/etl_medallion_first_build_2026-07/migrate-arena-events.cjs",
+    "kind": "archive",
+    "sha_before": "aaa089074d17",
+    "changes": [
+      "secrets removed (2)",
+      "hard stop added (archived)"
+    ]
+  },
+  {
+    "file": "model_selection_engine.py",
+    "from": "C:\\Users\\Hans\\.gemini\\antigravity\\scratch\\nlex-emissions\\model_selection_engine.py",
+    "to": "_archive_do_not_run/models_first_generation_2026-07/model_selection_engine.py",
+    "kind": "archive",
+    "sha_before": "b869629f32bc",
+    "changes": [
+      "hard stop added (archived)"
+    ]
+  },
+  {
+    "file": "organize.py",
+    "from": "C:\\Users\\Hans\\.gemini\\antigravity\\scratch\\nlex-emissions\\organize.py",
+    "to": "_archive_do_not_run/models_first_generation_2026-07/organize.py",
+    "kind": "archive",
+    "sha_before": "0b1262a2ea92",
+    "changes": [
+      "hard stop added (archived)"
+    ]
+  },
+  {
+    "file": "query_schema.js",
+    "from": "C:\\Users\\Hans\\.gemini\\antigravity\\scratch\\nlex-emissions\\query_schema.js",
+    "to": "_archive_do_not_run/etl_medallion_first_build_2026-07/query_schema.js",
+    "kind": "archive",
+    "sha_before": "cae249bf509d",
+    "changes": [
+      "secrets removed (1)",
+      "hard stop added (archived)"
+    ]
+  },
+  {
+    "file": "query_weather.py",
+    "from": "C:\\Users\\Hans\\.gemini\\antigravity\\scratch\\nlex-emissions\\query_weather.py",
+    "to": "_archive_do_not_run/models_first_generation_2026-07/query_weather.py",
+    "kind": "archive",
+    "sha_before": "33f26f0d842f",
+    "changes": [
+      "secrets removed (1)",
+      "hard stop added (archived)"
+    ]
+  },
+  {
+    "file": "spatial_event_pipeline.py",
+    "from": "C:\\Users\\Hans\\.gemini\\antigravity\\scratch\\predictive folder\\nlex-emissions\\spatial_event_pipeline.py",
+    "to": "_archive_do_not_run/models_first_generation_2026-07/spatial_event_pipeline.py",
+    "kind": "archive",
+    "sha_before": "1a555b4653b9",
+    "changes": [
+      "hard stop added (archived)"
+    ]
+  },
+  {
+    "file": "split_r2_analysis.py",
+    "from": "C:\\Users\\Hans\\.gemini\\antigravity\\scratch\\predictive folder\\nlex-emissions\\split_r2_analysis.py",
+    "to": "_archive_do_not_run/models_first_generation_2026-07/split_r2_analysis.py",
+    "kind": "archive",
+    "sha_before": "59e29844a8c5",
+    "changes": [
+      "hard stop added (archived)"
+    ]
+  },
+  {
+    "file": "waze-aggregator.cjs",
+    "from": "C:\\Users\\Hans\\.gemini\\antigravity\\scratch\\nlex-emissions\\waze-aggregator.cjs",
+    "to": "_archive_do_not_run/etl_medallion_first_build_2026-07/waze-aggregator.cjs",
+    "kind": "archive",
+    "sha_before": "10de14dd7b41",
+    "changes": [
+      "secrets removed (1)",
+      "hard stop added (archived)"
+    ]
+  },
+  {
+    "file": "waze-aggregator.cjs",
+    "from": "C:\\Users\\Hans\\.gemini\\antigravity\\scratch\\predictive folder\\nlex-emissions\\waze-aggregator.cjs",
+    "to": "_archive_do_not_run/older_versions/waze-aggregator__predictivefolder.cjs",
+    "kind": "archive",
+    "sha_before": "3944910ffbd1",
+    "changes": [
+      "secrets removed (1)",
+      "hard stop added (archived)"
+    ]
+  },
+  {
+    "file": "wf_ml_models.py",
+    "from": "C:\\Users\\Hans\\.gemini\\antigravity\\scratch\\nlex-emissions\\wf_ml_models.py",
+    "to": "_archive_do_not_run/models_first_generation_2026-07/wf_ml_models.py",
+    "kind": "archive",
+    "sha_before": "4ce997c9a217",
+    "changes": [
+      "hard stop added (archived)"
+    ]
+  },
+  {
+    "file": "wf_prophet.py",
+    "from": "C:\\Users\\Hans\\.gemini\\antigravity\\scratch\\nlex-emissions\\wf_prophet.py",
+    "to": "_archive_do_not_run/models_first_generation_2026-07/wf_prophet.py",
+    "kind": "archive",
+    "sha_before": "7f750eaa04f3",
+    "changes": [
+      "hard stop added (archived)"
+    ]
+  },
+  {
+    "file": "wf_statistical_models.py",
+    "from": "C:\\Users\\Hans\\.gemini\\antigravity\\scratch\\nlex-emissions\\wf_statistical_models.py",
+    "to": "_archive_do_not_run/models_first_generation_2026-07/wf_statistical_models.py",
+    "kind": "archive",
+    "sha_before": "a9ac83be6a23",
+    "changes": [
+      "hard stop added (archived)"
+    ]
+  },
+  {
+    "file": "add_adviser_diagnostics.cjs",
+    "from": "C:\\Users\\Hans\\.gemini\\antigravity\\brain\\ee064fee-3db2-4b76-8b55-ac5448663287\\scratch\\add_adviser_diagnostics.cjs",
+    "to": "_archive_do_not_run/etl_medallion_rebuild_2026-08_gemini/add_adviser_diagnostics.cjs",
+    "kind": "archive",
+    "sha_before": "da8830954607",
+    "changes": [
+      "hard stop added (archived)"
+    ]
+  },
+  {
+    "file": "add_metrics_toggle.cjs",
+    "from": "C:\\Users\\Hans\\.gemini\\antigravity\\brain\\ee064fee-3db2-4b76-8b55-ac5448663287\\scratch\\add_metrics_toggle.cjs",
+    "to": "_archive_do_not_run/etl_medallion_rebuild_2026-08_gemini/add_metrics_toggle.cjs",
+    "kind": "archive",
+    "sha_before": "969b407cc622",
+    "changes": [
+      "hard stop added (archived)"
+    ]
+  },
+  {
+    "file": "create_medallion.cjs",
+    "from": "C:\\Users\\Hans\\.gemini\\antigravity\\brain\\ee064fee-3db2-4b76-8b55-ac5448663287\\scratch\\create_medallion.cjs",
+    "to": "_archive_do_not_run/etl_medallion_rebuild_2026-08_gemini/create_medallion.cjs",
+    "kind": "archive",
+    "sha_before": "88edfe327418",
+    "changes": [
+      "secrets removed (1)",
+      "hard stop added (archived)"
+    ]
+  },
+  {
+    "file": "create_metrics_table.cjs",
+    "from": "C:\\Users\\Hans\\.gemini\\antigravity\\brain\\ee064fee-3db2-4b76-8b55-ac5448663287\\scratch\\create_metrics_table.cjs",
+    "to": "_archive_do_not_run/etl_medallion_rebuild_2026-08_gemini/create_metrics_table.cjs",
+    "kind": "archive",
+    "sha_before": "280d99e17995",
+    "changes": [
+      "secrets removed (2)",
+      "hard stop added (archived)"
+    ]
+  },
+  {
+    "file": "fix_remaining_metrics.cjs",
+    "from": "C:\\Users\\Hans\\.gemini\\antigravity\\brain\\ee064fee-3db2-4b76-8b55-ac5448663287\\scratch\\fix_remaining_metrics.cjs",
+    "to": "_archive_do_not_run/etl_medallion_rebuild_2026-08_gemini/fix_remaining_metrics.cjs",
+    "kind": "archive",
+    "sha_before": "e53684160b11",
+    "changes": [
+      "secrets removed (1)",
+      "hard stop added (archived)"
+    ]
+  },
+  {
+    "file": "ingest_gold_datamart.cjs",
+    "from": "C:\\Users\\Hans\\.gemini\\antigravity\\brain\\ee064fee-3db2-4b76-8b55-ac5448663287\\scratch\\ingest_gold_datamart.cjs",
+    "to": "_archive_do_not_run/etl_medallion_rebuild_2026-08_gemini/ingest_gold_datamart.cjs",
+    "kind": "archive",
+    "sha_before": "bc4050c68fcd",
+    "changes": [
+      "secrets removed (1)",
+      "hard stop added (archived)"
+    ]
+  },
+  {
+    "file": "ingest_ml_data.cjs",
+    "from": "C:\\Users\\Hans\\.gemini\\antigravity\\brain\\ee064fee-3db2-4b76-8b55-ac5448663287\\scratch\\ingest_ml_data.cjs",
+    "to": "_archive_do_not_run/etl_medallion_rebuild_2026-08_gemini/ingest_ml_data.cjs",
+    "kind": "archive",
+    "sha_before": "d90b0d2a1f02",
+    "changes": [
+      "secrets removed (1)",
+      "hard stop added (archived)"
+    ]
+  },
+  {
+    "file": "phase1_bronze_reference.cjs",
+    "from": "C:\\Users\\Hans\\.gemini\\antigravity\\brain\\ee064fee-3db2-4b76-8b55-ac5448663287\\scratch\\phase1_bronze_reference.cjs",
+    "to": "_archive_do_not_run/etl_medallion_rebuild_2026-08_gemini/phase1_bronze_reference.cjs",
+    "kind": "archive",
+    "sha_before": "35c7f259a713",
+    "changes": [
+      "secrets removed (1)",
+      "hard stop added (archived)"
+    ]
+  },
+  {
+    "file": "remove_unnecessary_metrics.cjs",
+    "from": "C:\\Users\\Hans\\.gemini\\antigravity\\brain\\ee064fee-3db2-4b76-8b55-ac5448663287\\scratch\\remove_unnecessary_metrics.cjs",
+    "to": "_archive_do_not_run/etl_medallion_rebuild_2026-08_gemini/remove_unnecessary_metrics.cjs",
+    "kind": "archive",
+    "sha_before": "45a6cf9fcaa3",
+    "changes": [
+      "hard stop added (archived)"
+    ]
+  },
+  {
+    "file": "test_query.py",
+    "from": "C:\\Users\\Hans\\.gemini\\antigravity\\brain\\ee064fee-3db2-4b76-8b55-ac5448663287\\scratch\\test_query.py",
+    "to": "_archive_do_not_run/etl_medallion_rebuild_2026-08_gemini/test_query.py",
+    "kind": "archive",
+    "sha_before": "d4b6fc005c01",
+    "changes": [
+      "secrets removed (1)",
+      "hard stop added (archived)"
+    ]
+  },
+  {
+    "file": "update_frontend.cjs",
+    "from": "C:\\Users\\Hans\\.gemini\\antigravity\\brain\\ee064fee-3db2-4b76-8b55-ac5448663287\\scratch\\update_frontend.cjs",
+    "to": "_archive_do_not_run/etl_medallion_rebuild_2026-08_gemini/update_frontend.cjs",
+    "kind": "archive",
+    "sha_before": "38376dfabc29",
+    "changes": [
+      "hard stop added (archived)"
+    ]
+  },
+  {
+    "file": "update_metrics_table.cjs",
+    "from": "C:\\Users\\Hans\\.gemini\\antigravity\\brain\\ee064fee-3db2-4b76-8b55-ac5448663287\\scratch\\update_metrics_table.cjs",
+    "to": "_archive_do_not_run/etl_medallion_rebuild_2026-08_gemini/update_metrics_table.cjs",
+    "kind": "archive",
+    "sha_before": "2b177e044623",
+    "changes": [
+      "secrets removed (2)",
+      "hard stop added (archived)"
+    ]
+  },
+  {
+    "file": "verify_db.cjs",
+    "from": "C:\\Users\\Hans\\.gemini\\antigravity\\brain\\ee064fee-3db2-4b76-8b55-ac5448663287\\scratch\\verify_db.cjs",
+    "to": "_archive_do_not_run/etl_medallion_rebuild_2026-08_gemini/verify_db.cjs",
+    "kind": "archive",
+    "sha_before": "921758137a2e",
+    "changes": [
+      "secrets removed (1)",
+      "hard stop added (archived)"
+    ]
+  },
+  {
+    "file": "backfill_emissions.cjs",
+    "from": "C:\\Users\\Hans\\.gemini\\antigravity\\scratch\\predictive folder\\Front-and-back-FE-BE-Kia-Descriptive\\Back-End\\backfill_emissions.cjs",
+    "to": "_archive_do_not_run/team_repo_scripts_2026-07/backend/backfill_emissions.cjs",
+    "kind": "archive",
+    "sha_before": "9fde8398c979",
+    "changes": [
+      "hard stop added (archived)"
+    ]
+  },
+  {
+    "file": "check_corridor.cjs",
+    "from": "C:\\Users\\Hans\\.gemini\\antigravity\\scratch\\predictive folder\\Front-and-back-FE-BE-Kia-Descriptive\\Back-End\\check_corridor.cjs",
+    "to": "_archive_do_not_run/team_repo_scripts_2026-07/backend/check_corridor.cjs",
+    "kind": "archive",
+    "sha_before": "aae71e9a69c8",
+    "changes": [
+      "hard stop added (archived)"
+    ]
+  },
+  {
+    "file": "check_emissions.cjs",
+    "from": "C:\\Users\\Hans\\.gemini\\antigravity\\scratch\\predictive folder\\Front-and-back-FE-BE-Kia-Descriptive\\Back-End\\check_emissions.cjs",
+    "to": "_archive_do_not_run/team_repo_scripts_2026-07/backend/check_emissions.cjs",
+    "kind": "archive",
+    "sha_before": "de86ae1a3086",
+    "changes": [
+      "hard stop added (archived)"
+    ]
+  },
+  {
+    "file": "check_maintenance.cjs",
+    "from": "C:\\Users\\Hans\\.gemini\\antigravity\\scratch\\predictive folder\\Front-and-back-FE-BE-Kia-Descriptive\\Back-End\\check_maintenance.cjs",
+    "to": "_archive_do_not_run/team_repo_scripts_2026-07/backend/check_maintenance.cjs",
+    "kind": "archive",
+    "sha_before": "55e887272ea3",
+    "changes": [
+      "hard stop added (archived)"
+    ]
+  },
+  {
+    "file": "create_ml_tables.cjs",
+    "from": "C:\\Users\\Hans\\.gemini\\antigravity\\scratch\\predictive folder\\Front-and-back-FE-BE-Kia-Descriptive\\Back-End\\create_ml_tables.cjs",
+    "to": "_archive_do_not_run/team_repo_scripts_2026-07/backend/create_ml_tables.cjs",
+    "kind": "archive",
+    "sha_before": "c35e6e5a2fab",
+    "changes": [
+      "hard stop added (archived)"
+    ]
+  },
+  {
+    "file": "list_tables.cjs",
+    "from": "C:\\Users\\Hans\\.gemini\\antigravity\\scratch\\predictive folder\\Front-and-back-FE-BE-Kia-Descriptive\\Back-End\\list_tables.cjs",
+    "to": "_archive_do_not_run/team_repo_scripts_2026-07/backend/list_tables.cjs",
+    "kind": "archive",
+    "sha_before": "c9397b753604",
+    "changes": [
+      "hard stop added (archived)"
+    ]
+  },
+  {
+    "file": "test_etl.ts",
+    "from": "C:\\Users\\Hans\\.gemini\\antigravity\\scratch\\predictive folder\\temp_git_repo\\Back-End\\test_etl.ts",
+    "to": "_archive_do_not_run/team_repo_scripts_2026-07/backend/test_etl.ts",
+    "kind": "archive",
+    "sha_before": "7301355534da",
+    "changes": [
+      "hard stop added (archived)"
+    ]
+  },
+  {
+    "file": "backfill_ml_predictions.cjs",
+    "from": "C:\\Users\\Hans\\.gemini\\antigravity\\scratch\\predictive folder\\temp_git_repo\\Back-End\\scripts\\backfill_ml_predictions.cjs",
+    "to": "_archive_do_not_run/team_repo_scripts_2026-07/backend_scripts/backfill_ml_predictions.cjs",
+    "kind": "archive",
+    "sha_before": "67c966088db5",
+    "changes": [
+      "hard stop added (archived)"
+    ]
+  },
+  {
+    "file": "backfill_ml_predictions.cjs",
+    "from": "C:\\Users\\Hans\\.gemini\\antigravity\\scratch\\predictive folder\\Front-and-back-FE-BE-Kia-Descriptive\\Back-End\\scripts\\backfill_ml_predictions.cjs",
+    "to": "_archive_do_not_run/older_versions/backfill_ml_predictions__kiadescriptive.cjs",
+    "kind": "archive",
+    "sha_before": "950c4dcfd7f2",
+    "changes": [
+      "hard stop added (archived)"
+    ]
+  },
+  {
+    "file": "check_base_cols.py",
+    "from": "C:\\Users\\Hans\\.gemini\\antigravity\\scratch\\predictive folder\\temp_git_repo\\Back-End\\scripts\\check_base_cols.py",
+    "to": "_archive_do_not_run/team_repo_scripts_2026-07/backend_scripts/check_base_cols.py",
+    "kind": "archive",
+    "sha_before": "c174479d4ec5",
+    "changes": [
+      "hard stop added (archived)"
+    ]
+  },
+  {
+    "file": "check_bronze.py",
+    "from": "C:\\Users\\Hans\\.gemini\\antigravity\\scratch\\predictive folder\\temp_git_repo\\Back-End\\scripts\\check_bronze.py",
+    "to": "_archive_do_not_run/team_repo_scripts_2026-07/backend_scripts/check_bronze.py",
+    "kind": "archive",
+    "sha_before": "ad8a9fcab3c7",
+    "changes": [
+      "hard stop added (archived)"
+    ]
+  },
+  {
+    "file": "check_columns.py",
+    "from": "C:\\Users\\Hans\\.gemini\\antigravity\\scratch\\predictive folder\\temp_git_repo\\Back-End\\scripts\\check_columns.py",
+    "to": "_archive_do_not_run/team_repo_scripts_2026-07/backend_scripts/check_columns.py",
+    "kind": "archive",
+    "sha_before": "9a6b18206444",
+    "changes": [
+      "hard stop added (archived)"
+    ]
+  },
+  {
+    "file": "check_constraints.py",
+    "from": "C:\\Users\\Hans\\.gemini\\antigravity\\scratch\\predictive folder\\temp_git_repo\\Back-End\\scripts\\check_constraints.py",
+    "to": "_archive_do_not_run/team_repo_scripts_2026-07/backend_scripts/check_constraints.py",
+    "kind": "archive",
+    "sha_before": "5382e26f635a",
+    "changes": [
+      "hard stop added (archived)"
+    ]
+  },
+  {
+    "file": "check_counts.py",
+    "from": "C:\\Users\\Hans\\.gemini\\antigravity\\scratch\\predictive folder\\temp_git_repo\\Back-End\\scripts\\check_counts.py",
+    "to": "_archive_do_not_run/team_repo_scripts_2026-07/backend_scripts/check_counts.py",
+    "kind": "archive",
+    "sha_before": "7b757b3d554e",
+    "changes": [
+      "hard stop added (archived)"
+    ]
+  },
+  {
+    "file": "check_raw_data.py",
+    "from": "C:\\Users\\Hans\\.gemini\\antigravity\\scratch\\predictive folder\\temp_git_repo\\Back-End\\scripts\\check_raw_data.py",
+    "to": "_archive_do_not_run/team_repo_scripts_2026-07/backend_scripts/check_raw_data.py",
+    "kind": "archive",
+    "sha_before": "312b140283ce",
+    "changes": [
+      "hard stop added (archived)"
+    ]
+  },
+  {
+    "file": "check_tables.py",
+    "from": "C:\\Users\\Hans\\.gemini\\antigravity\\scratch\\predictive folder\\temp_git_repo\\Back-End\\scripts\\check_tables.py",
+    "to": "_archive_do_not_run/team_repo_scripts_2026-07/backend_scripts/check_tables.py",
+    "kind": "archive",
+    "sha_before": "89ce4681fb8e",
+    "changes": [
+      "hard stop added (archived)"
+    ]
+  },
+  {
+    "file": "check_traffic_cols.py",
+    "from": "C:\\Users\\Hans\\.gemini\\antigravity\\scratch\\predictive folder\\temp_git_repo\\Back-End\\scripts\\check_traffic_cols.py",
+    "to": "_archive_do_not_run/team_repo_scripts_2026-07/backend_scripts/check_traffic_cols.py",
+    "kind": "archive",
+    "sha_before": "f77131b8221b",
+    "changes": [
+      "hard stop added (archived)"
+    ]
+  },
+  {
+    "file": "check_traffic_type.py",
+    "from": "C:\\Users\\Hans\\.gemini\\antigravity\\scratch\\predictive folder\\temp_git_repo\\Back-End\\scripts\\check_traffic_type.py",
+    "to": "_archive_do_not_run/team_repo_scripts_2026-07/backend_scripts/check_traffic_type.py",
+    "kind": "archive",
+    "sha_before": "8fdb4d38a6d3",
+    "changes": [
+      "hard stop added (archived)"
+    ]
+  },
+  {
+    "file": "check_view_def.py",
+    "from": "C:\\Users\\Hans\\.gemini\\antigravity\\scratch\\predictive folder\\temp_git_repo\\Back-End\\scripts\\check_view_def.py",
+    "to": "_archive_do_not_run/team_repo_scripts_2026-07/backend_scripts/check_view_def.py",
+    "kind": "archive",
+    "sha_before": "8ed77c987e93",
+    "changes": [
+      "hard stop added (archived)"
+    ]
+  },
+  {
+    "file": "check_views.py",
+    "from": "C:\\Users\\Hans\\.gemini\\antigravity\\scratch\\predictive folder\\temp_git_repo\\Back-End\\scripts\\check_views.py",
+    "to": "_archive_do_not_run/team_repo_scripts_2026-07/backend_scripts/check_views.py",
+    "kind": "archive",
+    "sha_before": "8e11ae8604ee",
+    "changes": [
+      "hard stop added (archived)"
+    ]
+  },
+  {
+    "file": "debug_sql.py",
+    "from": "C:\\Users\\Hans\\.gemini\\antigravity\\scratch\\predictive folder\\temp_git_repo\\Back-End\\scripts\\debug_sql.py",
+    "to": "_archive_do_not_run/team_repo_scripts_2026-07/backend_scripts/debug_sql.py",
+    "kind": "archive",
+    "sha_before": "c233052f132e",
+    "changes": [
+      "hard stop added (archived)"
+    ]
+  },
+  {
+    "file": "export_predictions.py",
+    "from": "C:\\Users\\Hans\\.gemini\\antigravity\\scratch\\predictive folder\\temp_git_repo\\Back-End\\scripts\\export_predictions.py",
+    "to": "_archive_do_not_run/team_repo_scripts_2026-07/backend_scripts/export_predictions.py",
+    "kind": "archive",
+    "sha_before": "0d2459b2c3e6",
+    "changes": [
+      "secrets removed (2)",
+      "hard stop added (archived)"
+    ]
+  },
+  {
+    "file": "init-db.ts",
+    "from": "C:\\Users\\Hans\\.gemini\\antigravity\\scratch\\predictive folder\\Front-and-back-FE-BE-Kia-Descriptive\\Back-End\\scripts\\init-db.ts",
+    "to": "_archive_do_not_run/team_repo_scripts_2026-07/backend_scripts/init-db.ts",
+    "kind": "archive",
+    "sha_before": "71a6aa34de41",
+    "changes": [
+      "hard stop added (archived)"
+    ]
+  },
+  {
+    "file": "list_tables.py",
+    "from": "C:\\Users\\Hans\\.gemini\\antigravity\\scratch\\predictive folder\\temp_git_repo\\Back-End\\scripts\\list_tables.py",
+    "to": "_archive_do_not_run/team_repo_scripts_2026-07/backend_scripts/list_tables.py",
+    "kind": "archive",
+    "sha_before": "184c8cd0a9f7",
+    "changes": [
+      "hard stop added (archived)"
+    ]
+  },
+  {
+    "file": "truncate_synthetic.py",
+    "from": "C:\\Users\\Hans\\.gemini\\antigravity\\scratch\\predictive folder\\temp_git_repo\\Back-End\\scripts\\truncate_synthetic.py",
+    "to": "_archive_do_not_run/team_repo_scripts_2026-07/backend_scripts/truncate_synthetic.py",
+    "kind": "archive",
+    "sha_before": "4ad03a1ef690",
+    "changes": [
+      "hard stop added (archived)"
+    ]
+  },
+  {
+    "file": "truncate_synthetic_base.py",
+    "from": "C:\\Users\\Hans\\.gemini\\antigravity\\scratch\\predictive folder\\temp_git_repo\\Back-End\\scripts\\truncate_synthetic_base.py",
+    "to": "_archive_do_not_run/team_repo_scripts_2026-07/backend_scripts/truncate_synthetic_base.py",
+    "kind": "archive",
+    "sha_before": "92b4aed2c849",
+    "changes": [
+      "hard stop added (archived)"
+    ]
+  },
+  {
+    "file": "upload_real_predictions.py",
+    "from": "C:\\Users\\Hans\\.gemini\\antigravity\\scratch\\predictive folder\\temp_git_repo\\Back-End\\scripts\\upload_real_predictions.py",
+    "to": "_archive_do_not_run/team_repo_scripts_2026-07/backend_scripts/upload_real_predictions.py",
+    "kind": "archive",
+    "sha_before": "02854df6f5f3",
+    "changes": [
+      "secrets removed (2)",
+      "hard stop added (archived)"
+    ]
+  },
+  {
+    "file": "wipe_db.py",
+    "from": "C:\\Users\\Hans\\.gemini\\antigravity\\scratch\\predictive folder\\temp_git_repo\\Back-End\\scripts\\wipe_db.py",
+    "to": "_archive_do_not_run/team_repo_scripts_2026-07/backend_scripts/wipe_db.py",
+    "kind": "archive",
+    "sha_before": "a75d6ce0cf07",
+    "changes": [
+      "hard stop added (archived)"
+    ]
+  },
+  {
+    "file": "01_evaluate_congestion_models.py",
+    "from": "C:\\Users\\Hans\\.gemini\\antigravity\\scratch\\predictive folder\\Front-and-back-FE-BE-Kia-Descriptive\\Data-Science\\01_evaluate_congestion_models.py",
+    "to": "_archive_do_not_run/team_repo_scripts_2026-07/data_science/01_evaluate_congestion_models.py",
+    "kind": "archive",
+    "sha_before": "b40f99943441",
+    "changes": [
+      "hard stop added (archived)"
+    ]
+  },
+  {
+    "file": "02_evaluate_event_surge.py",
+    "from": "C:\\Users\\Hans\\.gemini\\antigravity\\scratch\\predictive folder\\Front-and-back-FE-BE-Kia-Descriptive\\Data-Science\\02_evaluate_event_surge.py",
+    "to": "_archive_do_not_run/team_repo_scripts_2026-07/data_science/02_evaluate_event_surge.py",
+    "kind": "archive",
+    "sha_before": "24127738722f",
+    "changes": [
+      "hard stop added (archived)"
+    ]
+  },
+  {
+    "file": "train_final_models.py",
+    "from": "C:\\Users\\Hans\\.gemini\\antigravity\\scratch\\predictive folder\\Front-and-back-FE-BE-Kia-Descriptive\\Data-Science\\train_final_models.py",
+    "to": "_archive_do_not_run/team_repo_scripts_2026-07/data_science/train_final_models.py",
+    "kind": "archive",
+    "sha_before": "c4ff4882d375",
+    "changes": [
+      "hard stop added (archived)"
+    ]
+  },
+  {
+    "file": "retrain_honest.py",
+    "from": "C:\\Users\\Hans\\Desktop\\SmartFlow_Export\\retrain_honest.py",
+    "to": "_archive_do_not_run/older_versions/retrain_honest__desktop-export-2026-08-11.py",
+    "kind": "archive",
+    "sha_before": "23a6a18aafff",
+    "changes": [
+      "secrets removed (2)",
+      "hard stop added (archived)"
+    ]
+  },
+  {
+    "file": "retrain_honest.py",
+    "from": "C:\\Users\\Hans\\.gemini\\antigravity\\scratch\\Front-and-back\\retrain_honest.py",
+    "to": "_archive_do_not_run/older_versions/retrain_honest__front-and-back-copy.py",
+    "kind": "archive",
+    "sha_before": "3e398b7f5b82",
+    "changes": [
+      "secrets removed (2)",
+      "hard stop added (archived)"
+    ]
+  },
+  {
+    "file": "init-db.ts",
+    "from": "C:\\Users\\Hans\\.gemini\\antigravity\\scratch\\recovery\\Front-and-back-Ver1-Merged-BE-FE\\Back-End\\scripts\\init-db.ts",
+    "to": "_archive_do_not_run/older_versions/init-db__recovery.ts",
+    "kind": "archive",
+    "sha_before": "71a6aa34de41",
+    "changes": [
+      "hard stop added (archived)"
+    ]
+  },
+  {
+    "file": "populate_redis.js",
+    "from": "C:\\Users\\Hans\\.gemini\\antigravity\\scratch\\recovery\\Front-and-back-Ver1-Merged-BE-FE\\populate_redis.js",
+    "to": "_archive_do_not_run/older_versions/populate_redis__recovery.js",
+    "kind": "archive",
+    "sha_before": "f135e8c9941d",
+    "changes": [
+      "secrets removed (1)",
+      "hard stop added (archived)"
+    ]
+  },
+  {
+    "file": "init-db.ts",
+    "from": "C:\\Users\\Hans\\Downloads\\Front-and-back-Updated-Fe-Be-by-Ysa\\Back-End\\scripts\\init-db.ts",
+    "to": "_archive_do_not_run/older_versions/init-db__ysa-branch.ts",
+    "kind": "archive",
+    "sha_before": "920159be6a7f",
+    "changes": [
+      "hard stop added (archived)"
+    ]
+  }
+]

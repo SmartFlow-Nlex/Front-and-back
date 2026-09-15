@@ -1,7 +1,7 @@
 @echo off
 title Start SmartFlow Project
 echo ===================================================
-echo   Starting SmartFlow NLEX Dashboard & Backend
+echo   Starting SmartFlow NLEX Dashboard ^& Backend
 echo ===================================================
 echo.
 

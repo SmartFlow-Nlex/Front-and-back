@@ -1,0 +1,94 @@
+{
+  "generated": "2026-09-05",
+  "source": "gold.fact_emissions_hourly (rebuilt from gold.fact_traffic_hourly)",
+  "series": {
+    "days": 1461,
+    "from": "2022-01-01",
+    "to": "2025-12-31",
+    "mean_tonnes_per_day": 425.20604514049285
+  },
+  "protocol": {
+    "origins": 42,
+    "horizon": 7,
+    "step": 7,
+    "season": 7,
+    "scored_days": 294
+  },
+  "baseline": {
+    "name": "SeasonalNaive",
+    "wmape": 10.441545526720226
+  },
+  "results": [
+    {
+      "model": "Polynomial",
+      "n": 294,
+      "mape": 8.579012653393615,
+      "wmape": 6.789944776520689,
+      "rmse": 47.71144354372946,
+      "mae": 29.780135574161168,
+      "mase": 0.8184764817698074,
+      "r2": 0.655991524374552,
+      "accepted": true,
+      "rank": 1,
+      "tied_with_best": true,
+      "diagnosis": "tied with GBR - within 0.15pp WMAPE, the measured run-to-run jitter, so the ordering between them is not meaningful"
+    },
+    {
+      "model": "GBR",
+      "n": 294,
+      "mape": 8.20622369202642,
+      "wmape": 6.79161216300274,
+      "rmse": 48.72788198105246,
+      "mae": 29.78744859320983,
+      "mase": 0.8186774725976416,
+      "r2": 0.6411779700772791,
+      "accepted": true,
+      "rank": 2,
+      "tied_with_best": true,
+      "diagnosis": "tied with Polynomial - within 0.15pp WMAPE, the measured run-to-run jitter, so the ordering between them is not meaningful"
+    },
+    {
+      "model": "LSTM",
+      "n": 294,
+      "mape": 10.46120870113061,
+      "wmape": 8.188650551768712,
+      "rmse": 58.290759635281,
+      "mae": 35.914743289865235,
+      "mase": 0.9870798827745998,
+      "r2": 0.48652008634297106,
+      "accepted": true,
+      "rank": 3,
+      "tied_with_best": false,
+      "diagnosis": null
+    },
+    {
+      "model": "SeasonalNaive",
+      "n": 294,
+      "mape": 20.83494510860679,
+      "wmape": 15.997542608509102,
+      "rmse": 103.16668183687854,
+      "mae": 70.163897265,
+      "mase": 1.9283827515729166,
+      "r2": -0.6084329244463518,
+      "accepted": false,
+      "rank": null,
+      "tied_with_best": false,
+      "diagnosis": "baseline, not a candidate"
+    },
+    {
+      "model": "Climatology",
+      "n": 294,
+      "mape": 22.116937772612946,
+      "wmape": 19.231230792767843,
+      "rmse": 100.51217037604437,
+      "mae": 84.34658588785716,
+      "mase": 2.318179401664217,
+      "r2": -0.5267268071469076,
+      "accepted": false,
+      "rank": null,
+      "tied_with_best": false,
+      "diagnosis": "baseline, not a candidate"
+    }
+  ],
+  "champion": "Polynomial"
+}

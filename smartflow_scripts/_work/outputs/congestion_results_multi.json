@@ -1,0 +1,79 @@
+{
+  "generated": "2026-09-01",
+  "source": "silver.fact_waze_jams (Waze Partner Hub)",
+  "candidates": [
+    {
+      "model": "GRU",
+      "accuracy": 0.780952380952381,
+      "macro_f1": 0.5140696052472564,
+      "weighted_f1": 0.7587070804845422,
+      "log_loss": 0.5558292213144462,
+      "heavy_recall": 0.0,
+      "accepted": true,
+      "rank": 1
+    },
+    {
+      "model": "XGBoost",
+      "accuracy": 0.740625,
+      "macro_f1": 0.5025649687094135,
+      "weighted_f1": 0.7218622397340645,
+      "log_loss": 0.7989576311836792,
+      "heavy_recall": 0.0436046511627907,
+      "accepted": false,
+      "rank": 2
+    },
+    {
+      "model": "QRF",
+      "accuracy": 0.7273065476190477,
+      "macro_f1": 0.47131109705009777,
+      "weighted_f1": 0.7035179681757373,
+      "log_loss": 0.7000865517684707,
+      "heavy_recall": 0.011627906976744186,
+      "accepted": false,
+      "rank": 3
+    },
+    {
+      "model": "SARIMAX",
+      "accuracy": 0.5702380952380952,
+      "macro_f1": 0.33291659828287606,
+      "weighted_f1": 0.559593745526573,
+      "log_loss": 1.347532187801297,
+      "heavy_recall": 0.313953488372093,
+      "accepted": false,
+      "rank": 4
+    }
+  ],
+  "baselines": {
+    "Majority class": 0.6526785714285714,
+    "Persistence (t-24h)": 0.6949404761904762,
+    "Exit-hour profile": 0.749702380952381
+  },
+  "best_baseline": {
+    "name": "Exit-hour profile",
+    "accuracy": 0.749702380952381
+  },
+  "any_accepted": true,
+  "confusion_best": [
+    [
+      8196,
+      0,
+      3744
+    ],
+    [
+      420,
+      0,
+      1644
+    ],
+    [
+      3024,
+      0,
+      23292
+    ]
+  ],
+  "limits": [
+    "28 days only",
+    "no traffic-volume feature (no date overlap)",
+    "Heavy is 4.5% of cells",
+    "free flow inferred from absence of a jam"
+  ]
+}

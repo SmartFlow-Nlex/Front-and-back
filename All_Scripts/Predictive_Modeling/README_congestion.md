@@ -15,8 +15,14 @@ run out, so the script has to run regularly for the map to mean anything.
 ## Staying fresh automatically
 
 `refresh_congestion.bat` runs the `--fast` path and appends to
-`refresh_congestion.log`. It is registered as a Windows Scheduled Task that
-fires every hour:
+`refresh_congestion.log`. The Scheduled Task calls it through
+`refresh_congestion_hidden.ps1`, which starts it with no visible window: run
+directly, the task opened a console on the desktop every hour, and one was
+closed by hand mid-run, which killed the refresh before it published. The task
+fires every hour and is registered by `register-task4.ps1`-style code, i.e.
+`Register-ScheduledTask` with the launcher path quoted (an earlier
+`schtasks /TR` registration left the spaces in the path unquoted and every run
+failed with "file not found"):
 
 ```
 schtasks /Query  /TN "SmartFlow congestion refresh"   # is it registered?

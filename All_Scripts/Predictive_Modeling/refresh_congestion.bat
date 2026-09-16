@@ -27,7 +27,12 @@ set "LOG=%~dp0refresh_congestion.log"
 echo ============================================================ >> "%LOG%"
 echo Run started %DATE% %TIME% >> "%LOG%"
 
-python -u train_congestion_horizon.py --fast >> "%LOG%" 2>&1
+REM The bare "python" is a Store app alias that only resolves in some shells.
+REM Prefer the versioned alias the user's shell actually runs; fall back to
+REM whatever "python" resolves to if that ever moves.
+set "PY=%LOCALAPPDATA%\Microsoft\WindowsApps\PythonSoftwareFoundation.Python.3.13_qbz5n2kfra8p0\python.exe"
+if not exist "%PY%" set "PY=python"
+"%PY%" -u train_congestion_horizon.py --fast >> "%LOG%" 2>&1
 set "RC=%ERRORLEVEL%"
 
 echo Run finished %DATE% %TIME% with exit code %RC% >> "%LOG%"

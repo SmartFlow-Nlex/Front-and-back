@@ -331,14 +331,11 @@ export default function PredictiveEventChart() {
             })}
           </select>
         </label>
-        <span
-          style={{ cursor: "help" }}
-          title={`Baseline is the same weekday and month on non-event days, so events cannot inflate their own baseline.${
+        <InfoTooltip
+          text={`Baseline is the same weekday and month on non-event days, so events cannot inflate their own baseline.${
             meta?.firstEvent && meta?.lastEvent ? ` Events span ${meta.firstEvent} to ${meta.lastEvent}.` : ""
           }`}
-        >
-          method ⓘ
-        </span>
+        />
       </div>
 
       {/* Row 3: the finding, in one sentence, event first. */}
@@ -366,7 +363,7 @@ export default function PredictiveEventChart() {
       {/* Row 4: the numbers, once each, on one line. */}
       {/* Two by two, not auto-fit: in a half-width card four stats wrapped 3+1
           and left the last one orphaned on its own line. */}
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", gap: "10px 16px", padding: "10px 14px", background: "#f8fafc", border: "1px solid #e2e8f0", borderRadius: 10 }}>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", gap: "12px 18px", padding: "12px 16px", background: "var(--bg-surface-hover)", borderRadius: "10px" }}>
         {stat(`+${fmtVeh(totalAdded)}`, "extra vehicles", SURGE_COLOR)}
         {stat(`${affected.length} of ${totalPlazas}`, "exits with a material rise")}
         {stat(`+${((totalAdded / affectedBaseline) * 100).toFixed(0)}%`, "uplift at those exits", SURGE_COLOR)}

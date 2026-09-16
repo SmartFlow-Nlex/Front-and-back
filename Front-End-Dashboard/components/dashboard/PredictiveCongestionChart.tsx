@@ -354,7 +354,14 @@ export default function PredictiveCongestionChart() {
     // busy for twelve hours without one Severe hour in it — so "congested"
     // has to mean Heavy or Severe, or the card reports zero on a red day.
     const allHours = alerts.length > 0 && alerts.every((a) => a.from === 1 && a.to === maxHour);
-    const severeConfs = alerts.map((a) => a.conf).sort((x, y) => x - y);
+    /* Over every congested CELL, not over episode peaks. An episode carries the
+       highest confidence in its run, so taking the range across episodes
+       reported a floor of 44% while the least confident cell on the grid was
+       38% — a tile labelled "confidence on severe cells" that no cell had. */
+    const severeConfs = cells
+      .filter((c) => c.state !== "Low")
+      .map((c) => c.conf)
+      .sort((x, y) => x - y);
 
     const peakIdx = perHour.indexOf(Math.max(...perHour));
     const worstIdx = perSegment.indexOf(Math.max(...perSegment));
@@ -765,7 +772,7 @@ export default function PredictiveCongestionChart() {
     ? `Traffic is forecast to keep moving at every exit for the next ${hourLabels.length} hours.`
     : firstCount < peakCount
     ? `Congestion builds: ${firstCount} of ${segments.length} exit${firstCount === 1 ? "" : "s"} congested at +1h, rising to ${peakCount} by +${peakAt}h. By the peak it is ${whoText}${nSevere > 0 ? `, with ${nSevere} crawling under 10 km/h` : ""}.`
-    : `${whoText.charAt(0).toUpperCase()}${whoText.slice(1)} — forecast ${worstWord} from +1h${model.allHours ? ` and holding for the whole ${model.maxHour}-hour window` : ""}.`;
+    : `${whoText.charAt(0).toUpperCase()}${whoText.slice(1)} — congested from the first hour${model.allHours ? ` and holding for the whole ${model.maxHour}-hour window` : ""}${nSevere > 0 ? `, ${nSevere} of them crawling under 10 km/h at some point` : ", none of it severe"}.`;
 
   const stat = (value: string, label: string, tone?: string) => (
     <div style={{ display: "flex", flexDirection: "column", gap: 1, minWidth: 0 }}>
@@ -848,12 +855,12 @@ export default function PredictiveCongestionChart() {
       </div>
 
       {/* Row 3: how many, where, how long, how sure — once each, one line. */}
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(4, minmax(0, 1fr))", gap: "10px 16px", padding: "10px 14px", background: "#f8fafc", border: "1px solid #e2e8f0", borderRadius: 10 }}>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(4, minmax(0, 1fr))", gap: "12px 18px", padding: "12px 16px", background: "var(--bg-surface-hover)", borderRadius: "10px" }}>
         {stat(`${nCongested} of ${segments.length}`, nCongested > 0 ? "exits with a jam expected" : "exits affected · all moving", nCongested > 0 ? (nSevere > 0 ? "#b91c1c" : "#b45309") : "#15803d")}
         {stat(kmSpan != null ? `km ${model.kmFrom}–${model.kmTo}` : "—", kmSpan != null ? `${kmSpan} km${model.contiguous ? ", one stretch" : ", not contiguous"}` : "no congestion predicted")}
         {stat(model.allHours ? `all ${model.maxHour}h` : model.worstSegment ? `${model.worstSegmentCount} of ${hourLabels.length}h` : "—", model.flatHours ? "same every hour" : "at the worst exit")}
         {stat(model.confLo != null && model.confHi != null ? `${Math.round(model.confLo * 100)}–${Math.round(model.confHi * 100)}%` : "—",
-              model.confLo != null && model.confLo < LOW_CONF ? "confidence · below 80%, indicative" : "confidence on severe cells",
+              model.confLo != null && model.confLo < LOW_CONF ? "confidence · some cells under 80%" : "confidence across congested cells",
               model.confLo != null && model.confLo < LOW_CONF ? "#b45309" : undefined)}
       </div>
 
@@ -872,16 +879,13 @@ export default function PredictiveCongestionChart() {
                 </span>
               );
             })}
-            {model.lowConfCount > 0 && <span style={{ color: "#94a3b8", whiteSpace: "nowrap" }}><b>*</b> confidence under 80%</span>}
-            <span style={{ color: "#94a3b8" }} title="States come from Waze jam reports at each exit, hour by hour. Severe means the hour's jams averaged under 10 km/h, Heavy 10-20 km/h, and Moving means either no jam was reported or traffic was still over 20 km/h.">
-              · from Waze jam reports ⓘ
-            </span>
+            {model.lowConfCount > 0 && <span style={{ color: "#94a3b8", whiteSpace: "nowrap" }}><b>*</b> under 80% sure</span>}
           </div>
 
           {/* Which exits are drawn. A select instead of fifteen chips: the
               reader pulls in the two or three they are responsible for. */}
           <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: "0.72rem", color: "#64748b", flexWrap: "wrap" }}>
-            <span>{shownSegments.length} of {segments.length} exits</span>
+            <span>Showing <b style={{ color: "#475569" }}>{shownSegments.length}</b> of {segments.length} exits</span>
             {hiddenCount > 0 && (
               <select
                 value=""

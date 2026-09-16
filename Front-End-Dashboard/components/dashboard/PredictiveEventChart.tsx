@@ -4,6 +4,8 @@ import { useEffect, useMemo, useState } from "react";
 import type { EChartsOption } from "echarts";
 import DashboardChart from "./DashboardChart";
 import InfoTooltip from "./InfoTooltip";
+import EventSurgeNarrative from "./EventSurgeNarrative";
+import { ShieldCheck, ChevronRight } from "lucide-react";
 import { loadForecast } from "./prescriptiveTraffic.shared";
 
 type RawRow = {
@@ -380,13 +382,70 @@ export default function PredictiveEventChart() {
           Validation as a table, matching how the volume card above shows its
           models; the long tail and unchanged exits as one chip row, there so
           "13 of 19" can be checked, not to be read. */}
+      {/* The model's own read-out, in the open: the control that asks for it
+          has to be visible, and it is the same panel the other Predictive
+          cards carry so the tab reads as one system. */}
+      {champ && (
+        <EventSurgeNarrative
+          models={[champ, ...others].map((m) => ({
+            model: m.model,
+            wmape: m.wmape ?? null,
+            accepted: m.accepted ?? null,
+            diagnosis: m.diagnosis ?? null,
+          }))}
+          noAdjustment={noAdj?.wmape != null ? { model: noAdj.model, wmape: noAdj.wmape } : null}
+          eventDays={meta?.nEvents ?? null}
+          firstEvent={meta?.firstEvent ?? null}
+          lastEvent={meta?.lastEvent ?? null}
+          mode={chosen ? "upcoming" : "observed"}
+          eventTitle={chosen ? chosen.title : null}
+          eventDate={chosen ? chosenDateLong : null}
+          venue={chosen ? chosen.venue : null}
+          exitsMaterial={affected.length}
+          exitsTotal={totalPlazas}
+          totalAdded={totalAdded}
+          upliftPct={affectedBaseline > 0 ? (totalAdded / affectedBaseline) * 100 : null}
+          topExit={top?.exit ?? null}
+          topAdded={top?.added ?? null}
+          topSharePct={top?.shareOfSurge ?? null}
+          top2SharePct={top2Share}
+        />
+      )}
+
       <details style={{ fontSize: "0.76rem", color: "#64748b", borderTop: "1px solid #eef2f7", paddingTop: 10 }}>
-        <summary style={{ cursor: "pointer", color: "#475569", fontWeight: 600, listStyle: "none", display: "flex", gap: 14, flexWrap: "wrap" }}>
-          <span>Details</span>
-          {champ?.wmape != null && <span style={{ color: "#94a3b8" }}>model comparison</span>}
-          {(minorAffected.length > 0 || otherExits.length > 0) && (
-            <span style={{ color: "#94a3b8" }}>the other {minorAffected.length + otherExits.length} exits</span>
+        <summary
+          className="evidence-summary"
+          style={{ cursor: "pointer", listStyle: "none", display: "flex", gap: 12, flexWrap: "wrap", alignItems: "center" }}
+        >
+          <span style={{
+            display: "grid", placeItems: "center", width: 28, height: 28, borderRadius: 8,
+            background: "color-mix(in srgb, var(--color-success) 14%, transparent)", color: "var(--color-success)", flex: "none",
+          }}>
+            <ShieldCheck size={16} strokeWidth={2.4} />
+          </span>
+          <span style={{ fontSize: "0.98rem", fontWeight: 800, letterSpacing: "-0.01em", color: "var(--text-primary)" }}>
+            Validation evidence
+          </span>
+          {champ?.wmape != null && (
+            <span style={{
+              display: "inline-flex", alignItems: "center", gap: 6, padding: "3px 10px", borderRadius: 999,
+              background: "var(--bg-surface-hover)", border: "1px solid var(--border-default)",
+              fontSize: "0.74rem", fontWeight: 600, color: "var(--text-secondary)", fontVariantNumeric: "tabular-nums",
+            }}>
+              {champ.model} · {champ.wmape.toFixed(2)}% on held-out events
+              {noAdj?.wmape != null && <> · vs {noAdj.wmape.toFixed(2)}% ignoring the event</>}
+            </span>
           )}
+          {(minorAffected.length > 0 || otherExits.length > 0) && (
+            <span style={{ color: "var(--text-muted)", fontSize: "0.74rem" }}>
+              the other {minorAffected.length + otherExits.length} exits
+            </span>
+          )}
+          <span className="evidence-chevron" style={{ marginLeft: "auto", display: "inline-flex", alignItems: "center", gap: 4, fontSize: "0.74rem", fontWeight: 600, color: "var(--text-secondary)" }}>
+            <span className="evidence-open-label">Show</span>
+            <span className="evidence-close-label">Hide</span>
+            <ChevronRight size={15} strokeWidth={2.4} />
+          </span>
         </summary>
 
         <div style={{ display: "grid", gap: 14, marginTop: 10 }}>

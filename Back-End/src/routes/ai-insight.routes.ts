@@ -1,5 +1,11 @@
 import { Router } from "express";
-import { modelNarrative, congestionNarrative, insightStatus, explainFeature } from "../controllers/ai-insight.controller.js";
+import {
+  modelNarrative,
+  congestionNarrative,
+  eventSurgeNarrative,
+  insightStatus,
+  explainFeature,
+} from "../controllers/ai-insight.controller.js";
 
 const router = Router();
 
@@ -13,6 +19,7 @@ const router = Router();
 router.get("/status", insightStatus);
 router.post("/model-narrative", modelNarrative);
 router.post("/congestion-narrative", congestionNarrative);
+router.post("/event-surge-narrative", eventSurgeNarrative);
 router.post("/explain", explainFeature);
 
 export default router;

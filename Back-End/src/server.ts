@@ -66,9 +66,25 @@ function startCacheWarmer(): void {
     ["/emissions/forecast", 9 * 60_000],
     ["/dashboard/overview", 9 * 60_000],
   ];
-  for (const [path, every] of jobs) {
-    void warm(path);
-    const t = setInterval(() => void warm(path), every);
-    t.unref(); // never keep the process alive on its own
-  }
+  /* Stagger them.
+   *
+   * Firing all thirteen at once put thirteen concurrent queries against a pool
+   * of ten, on an instance where a cold connection can take several seconds.
+   * The pool saturated at every boot: the slowest warm requests were measured
+   * at 32 s, 37 s and 64 s, and anything a browser asked for meanwhile waited
+   * behind them and timed out at 45 s. The dashboard looked broken for the
+   * first minute of every restart.
+   *
+   * A second and a half apart costs twenty seconds to warm everything once,
+   * which no one is waiting on, and keeps the pool free for real requests.
+   * The repeat is offset by the same amount so the groups never re-align. */
+  const STAGGER_MS = 1_500;
+  jobs.forEach(([path, every], i) => {
+    const start = setTimeout(() => {
+      void warm(path);
+      const t = setInterval(() => void warm(path), every);
+      t.unref();
+    }, i * STAGGER_MS);
+    start.unref();
+  });
 }

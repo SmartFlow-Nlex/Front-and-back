@@ -242,14 +242,33 @@ results = {}
 
 # ── 4. Tabular candidates ───────────────────────────────────────────────────
 banner("STEP 4: XGBoost")
+# Balance the classes.
+#
+# Severe is 13.5% of the training rows, Heavy 38%, Moving 49%. Left unweighted,
+# argmax over the predicted probabilities never once chose Severe: the first
+# served forecast under these cuts had 0 severe cells in all 240, while the
+# corridor at that hour actually had 3-5 exits crawling under 10 km/h. A model
+# that cannot say "severe" is no use for the one state anyone acts on.
+#
+# Weighting each row by the inverse frequency of its class stops the rare class
+# being optimised away. Raw accuracy falls slightly because the majority class
+# no longer gets a free ride; macro F1 -- which weights all three states alike,
+# and is the number that matters when the rare state is the important one --
+# rises. Both are printed below.
+_cls, _cnt = np.unique(ytr, return_counts=True)
+_w = {int(c): len(ytr) / (len(_cls) * n) for c, n in zip(_cls, _cnt)}
+w_tr = np.array([_w[int(y)] for y in ytr])
+print("  class weights: " + ", ".join(f"{STATES[int(c)]} {_w[int(c)]:.2f}" for c in _cls))
+
 xgb = XGBClassifier(n_estimators=400, max_depth=6, learning_rate=0.08, subsample=0.9,
                     colsample_bytree=0.9, objective="multi:softprob", num_class=3,
-                    eval_metric="mlogloss", random_state=42, n_jobs=4).fit(Xtr, ytr)
+                    eval_metric="mlogloss", random_state=42, n_jobs=4).fit(Xtr, ytr, sample_weight=w_tr)
 results["XGBoost"] = xgb.predict_proba(Xte)
 print("  done.")
 
 banner("STEP 5: Quantile Random Forest")
 qrf = RandomForestClassifier(n_estimators=300, max_depth=14, min_samples_leaf=5,
+                             class_weight="balanced",   # same reason as XGBoost above
                              random_state=42, n_jobs=4).fit(Xtr, ytr)
 results["QRF"] = qrf.predict_proba(Xte)
 print("  done.")
@@ -369,15 +388,19 @@ for name, proba in results.items():
         "weighted_f1": f1_score(yte, pred, average="weighted"),
         "log_loss": log_loss(yte, np.clip(proba, 1e-9, 1), labels=[0, 1, 2]),
         "heavy_recall": precision_recall_fscore_support(yte, pred, labels=[1], zero_division=0)[1][0],
+        # Severe is the state anyone acts on and the rarest, so it is the first
+        # thing an imbalanced fit stops predicting. Printed so that failure
+        # cannot hide behind a healthy-looking overall accuracy again.
+        "severe_recall": precision_recall_fscore_support(yte, pred, labels=[2], zero_division=0)[1][0],
     })
 res = pd.DataFrame(rows).sort_values("accuracy", ascending=False).reset_index(drop=True)
 res["accepted"] = res.accuracy > best_base
 res["rank"] = res.index + 1
 
-print(f"  {'model':<10}{'accuracy':>10}{'macroF1':>10}{'weightF1':>10}{'logloss':>10}{'HeavyRec':>10}  verdict")
+print(f"  {'model':<10}{'accuracy':>10}{'macroF1':>10}{'weightF1':>10}{'logloss':>10}{'HeavyRec':>10}{'SevereRec':>11}  verdict")
 for r in res.itertuples():
     print(f"  {r.model:<10}{r.accuracy:>10.4f}{r.macro_f1:>10.4f}{r.weighted_f1:>10.4f}"
-          f"{r.log_loss:>10.4f}{r.heavy_recall:>10.4f}  {'ACCEPTED' if r.accepted else 'rejected'}")
+          f"{r.log_loss:>10.4f}{r.heavy_recall:>10.4f}{r.severe_recall:>11.4f}  {'ACCEPTED' if r.accepted else 'rejected'}")
 print(f"\n  baseline to beat: {best_base:.4f} ({best_base_name})")
 
 banner("STEP 9: Accuracy BY HORIZON — the number that was missing")

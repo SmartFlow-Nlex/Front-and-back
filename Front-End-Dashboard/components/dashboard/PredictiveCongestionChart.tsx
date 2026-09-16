@@ -98,7 +98,9 @@ const kmLabel = (e?: { km: number | null; est: boolean }) =>
 
 type CellItem = {
   value: [number, number, number];
-  state: State;
+  /** "Pending" marks an hour inside the frame the stored forecast does not
+      reach yet -- drawn blank, filled by the next hourly refresh. */
+  state: State | "Pending";
   conf: number;
   /** First cell of a contiguous run of this state — the only one that is labelled. */
   runStart?: boolean;
@@ -246,6 +248,20 @@ export default function PredictiveCongestionChart() {
       return clock ? `${rel}\n${clock}` : rel;
     });
 
+    /* The frame is always the stored width, like a weather strip that always
+       shows the same number of hours. Dropping past hours used to shrink the
+       grid -- twelve columns at 3 PM, four by 11 PM -- which read as the
+       forecast "deducting" itself. Hours the stored run does not reach are
+       kept as blank columns labelled with their clock time, so the frame holds
+       still and the gap says plainly that a refresh is due. */
+    const frameHours = storedHours;
+    const frameLabels = Array.from({ length: frameHours }, (_, i) => {
+      const clock = hourClock(baseTs, skippedHours + i + 1);
+      const t = startOf(skippedHours + i + 1);
+      const rel = relLabel(t == null ? i + 1 : Math.round((t - thisHourStart) / hourMs));
+      return clock ? `${rel}\n${clock}` : rel;
+    });
+
     // ECharts draws a category y-axis bottom-up, so reverse to read north-bound
     // down the page (Balintawak on top).
     const segments = [...byKm].reverse();
@@ -272,6 +288,13 @@ export default function PredictiveCongestionChart() {
       const [x, y] = c.value;
       c.runStart = x === 0 || states[y][x - 1] !== c.state;
     });
+
+    // Blank cells for the hours the stored forecast does not reach.
+    for (let y = 0; y < segments.length; y++) {
+      for (let x = maxHour; x < frameHours; x++) {
+        cells.push({ value: [x, y, 3], state: "Pending", conf: 0, label: { color: "#94a3b8" } });
+      }
+    }
 
     // ---- Operational summary ----
     const atRisk = new Set<string>();
@@ -398,6 +421,8 @@ export default function PredictiveCongestionChart() {
       storedHours,
       skippedHours,
       relHours,
+      frameHours,
+      frameLabels,
       confLo: severeConfs.length ? severeConfs[0] : null,
       confHi: severeConfs.length ? severeConfs[severeConfs.length - 1] : null,
       // Whether the model EVER predicts Heavy. It does not, and a legend entry
@@ -439,7 +464,7 @@ export default function PredictiveCongestionChart() {
     );
   }
 
-  const { segments, hourLabels, cells, perHour, alerts } = model;
+  const { segments, hourLabels, cells, perHour, alerts, frameLabels, frameHours } = model;
   const maxPerHour = Math.max(...perHour, 1);
 
   // A stored forecast does not know it has aged. base_ts only advances when the
@@ -461,8 +486,12 @@ export default function PredictiveCongestionChart() {
   const skippedHours = model.skippedHours;
   // A state earns a text label only while it is the exception. Free flow is
   // included: when the corridor is mostly severe, the clear cells are the news.
+  // Shares are over the FORECAST cells only. Counting the blank not-yet-
+  // forecast columns in the denominator made every real state look like a
+  // minority, and the grid labelled "SEVERE" on all forty of its red cells.
+  const forecastCells = cells.filter((c) => c.state !== "Pending");
   const stateShare = (["Low", "Med", "High"] as State[]).map((st) => ({
-    st, share: cells.filter((c) => c.state === st).length / Math.max(cells.length, 1),
+    st, share: forecastCells.filter((c) => c.state === st).length / Math.max(forecastCells.length, 1),
   }));
   const minorityStates = new Set(stateShare.filter((x) => x.share > 0 && x.share < 0.25).map((x) => x.st));
   // 20 segments at 34px was a 680px grid, and with the header, banner, KPI row
@@ -523,6 +552,7 @@ export default function PredictiveCongestionChart() {
         { value: 0, color: STATE_META.Low.color },
         { value: 1, color: STATE_META.Med.color },
         { value: 2, color: STATE_META.High.color },
+        { value: 3, color: "#f1f5f9" },   // pending: not yet forecast
       ],
     },
     tooltip: {
@@ -534,10 +564,18 @@ export default function PredictiveCongestionChart() {
       formatter: (params: unknown) => {
         const p = params as { seriesIndex: number; data: CellItem | number; dataIndex: number };
         if (p.seriesIndex === 1) {
-          const n = p.data as number;
-          return `<b>${hourLabels[p.dataIndex]}</b><br/>${n} of ${segments.length} segments congested`;
+          const n = (p as { value?: number | null }).value;
+          if (n == null) return `<b>${frameLabels[p.dataIndex]}</b><br/>Not yet forecast — filled by the next hourly refresh`;
+          return `<b>${frameLabels[p.dataIndex]}</b><br/>${n} of ${segments.length} segments congested`;
         }
         const d = p.data as CellItem;
+        if (d.state === "Pending") {
+          return `
+          <div style="padding:2px 4px; min-width:215px;">
+            <b style="font-size:1.05em; color:#0f172a;">${shownSegments[d.value[1]]}</b>
+            <div style="margin-top:6px; color:#64748b;">${frameLabels[d.value[0]]?.replace("\n", " · ")}: not yet forecast. The stored run does not reach this hour; the hourly refresh will fill it.</div>
+          </div>`;
+        }
         const [x, y] = d.value;
         const meta = STATE_META[d.state];
         const low = d.conf < LOW_CONF;
@@ -562,7 +600,7 @@ export default function PredictiveCongestionChart() {
       {
         gridIndex: 0,
         type: "category",
-        data: hourLabels,
+        data: frameLabels,
         position: "top",
         axisTick: { show: false },
         axisLine: { show: false },
@@ -589,7 +627,7 @@ export default function PredictiveCongestionChart() {
       {
         gridIndex: 1,
         type: "category",
-        data: hourLabels,
+        data: frameLabels,
         axisTick: { show: false },
         axisLine: { lineStyle: { color: "#e2e8f0" } },
         // The reader read these bars as a running total. It is a total
@@ -670,7 +708,8 @@ export default function PredictiveCongestionChart() {
           // grid, which flips automatically if the forecast flips.
           formatter: (params: unknown) => {
             const d = (params as { data: CellItem }).data;
-            if (!d.runStart || !minorityStates.has(d.state)) return "";
+            if (d.state === "Pending") return "";
+            if (!d.runStart || !minorityStates.has(d.state as State)) return "";
             return d.conf < LOW_CONF ? `${STATE_META[d.state].short}*` : STATE_META[d.state].short;
           },
           fontSize: 9,
@@ -685,11 +724,15 @@ export default function PredictiveCongestionChart() {
         type: "bar",
         xAxisIndex: 1,
         yAxisIndex: 1,
-        data: perHour.map((n) => ({
-          value: n,
-          itemStyle: { color: n === maxPerHour && n > 0 ? "#475569" : "#e2e8f0", borderRadius: [3, 3, 0, 0] },
-          label: { color: n === maxPerHour && n > 0 ? "#334155" : "#94a3b8" },
-        })),
+        data: Array.from({ length: frameHours }, (_, i) => {
+          if (i >= perHour.length) return { value: null, itemStyle: { color: "transparent" }, label: { show: false } };
+          const n = perHour[i];
+          return {
+            value: n,
+            itemStyle: { color: n === maxPerHour && n > 0 ? "#475569" : "#e2e8f0", borderRadius: [3, 3, 0, 0] },
+            label: { color: n === maxPerHour && n > 0 ? "#334155" : "#94a3b8" },
+          };
+        }),
         barMaxWidth: 40,
         label: {
           show: true,
@@ -815,6 +858,17 @@ export default function PredictiveCongestionChart() {
             >
               {modelInfo?.model ?? "—"}{modelInfo?.accuracy != null && ` · ${(modelInfo.accuracy * 100).toFixed(1)}%`}{modelInfo && !modelInfo.accepted && " · not accepted"}
             </span>
+            {!expired && ageHours != null && ageHours > 2 && (
+              <span
+                title={`The hourly refresh has not published since ${model.baseTs}. Check the Scheduled Task "SmartFlow congestion refresh" and All_Scripts/Predictive_Modeling/refresh_congestion.log.`}
+                style={{
+                  fontSize: "0.7rem", padding: "2px 8px", borderRadius: 999, fontWeight: 700, cursor: "help", whiteSpace: "nowrap",
+                  background: "#fffbeb", border: "1px solid #fde68a", color: "#92400e",
+                }}
+              >
+                {`⚠ refresh overdue · ${Math.round(ageHours)}h old`}
+              </span>
+            )}
             {expired && (
               <span
                 title={`This forecast was generated from data ending ${model.baseTs} and its whole ${model.storedHours}-hour window has now passed. The hourly refresh task should replace it; see All_Scripts/Predictive_Modeling/README_congestion.md.`}
@@ -833,13 +887,11 @@ export default function PredictiveCongestionChart() {
         <p style={{ color: "#64748b", fontSize: "0.82rem", margin: "4px 0 0 0" }}>
           {expired
             ? <>No hours left in this forecast · last covered <b style={{ color: "#334155" }}>{baseLabel(model.baseTs) ?? "the last reading"}</b></>
-            : <>Next <b style={{ color: "#334155" }}>{hourLabels.length} hours</b>
-                {model.relHours[0] != null && (
-                  model.relHours[0] <= 0
-                    ? <>, from this one</>
-                    : <>, from <b style={{ color: "#334155" }}>{(hourLabels[0] ?? "").split("\n")[1] ?? "the next hour"}</b></>
-                )}
-                {skippedHours > 0 && <span style={{ color: "#94a3b8" }}> · {skippedHours} earlier hour{skippedHours === 1 ? "" : "s"} already passed</span>}</>}
+            : <>Forecast made <b style={{ color: "#334155" }}>{baseLabel(model.baseTs) ?? "at the last reading"}</b>, next {frameHours} hours
+                {" "}· renews every hour
+                {frameHours > hourLabels.length && (
+                  <span style={{ color: "#b45309" }}> · {frameHours - hourLabels.length} hour{frameHours - hourLabels.length === 1 ? "" : "s"} not yet forecast</span>
+                )}</>}
           <span style={{ cursor: "help" }} title="Rows are exits ordered north-bound by km-post. Hover any cell for the model's confidence. The base time is the last complete hour of Waze ingestion."> · hover for detail</span>
         </p>
       </div>

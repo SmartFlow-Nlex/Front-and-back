@@ -192,12 +192,42 @@ export default function PredictiveCongestionChart() {
     const byKm = Array.from(new Set(raw.map((d) => d.segment))).sort(
       (a, b) => (KMI.get(a)?.km ?? 9999) - (KMI.get(b)?.km ?? 9999)
     );
-    const maxHour = Math.max(...raw.map((d) => d.hours));
+    const storedHours = Math.max(...raw.map((d) => d.hours));
     const baseTs = raw.find((r) => r.baseTs)?.baseTs ?? null;
-    // Two lines per column: the horizon and the hour it lands on.
+
+    /* The forecast counts from the last COMPLETE hour of Waze ingestion, which
+       is always at least an hour behind the clock: the 11:00 hour is only
+       complete at noon. So by the time anyone reads the card, its first column
+       or two describe hours that have already finished.
+       Those are history, not forecast. Drop every hour whose window has fully
+       passed and start the grid at the hour we are actually in, so "what
+       happens next" is the first thing on screen rather than the third. */
+    const baseMsForTrim = (() => {
+      const m = /^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2})/.exec(baseTs ?? "");
+      if (!m) return null;
+      return new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]), Number(m[4]), Number(m[5])).getTime();
+    })();
+    const skippedHours =
+      baseMsForTrim == null
+        ? 0
+        : Math.min(
+            storedHours,
+            // Column h is LABELLED with the clock hour base + h and covers that
+            // whole hour, so it is only past once base + h + 1 has arrived. The
+            // old elapsed test dropped it an hour early and the grid opened on
+            // the hour after the one you are in.
+            Array.from({ length: storedHours }, (_, i) => i + 1).filter(
+              (h) => baseMsForTrim + (h + 1) * 3.6e6 <= Date.now(),
+            ).length,
+          );
+    const maxHour = storedHours - skippedHours;
+
+    // Labelled by the clock, because that is what an operator acts on. The
+    // first column is the hour in progress, so it is "now" rather than "+1h".
     const hourLabels = Array.from({ length: maxHour }, (_, i) => {
-      const clock = hourClock(baseTs, i + 1);
-      return clock ? `+${i + 1}h\n${clock}` : `+${i + 1}h`;
+      const clock = hourClock(baseTs, skippedHours + i + 1);
+      const rel = i === 0 ? "now" : `+${i}h`;
+      return clock ? `${rel}\n${clock}` : rel;
     });
 
     // ECharts draws a category y-axis bottom-up, so reverse to read north-bound
@@ -210,7 +240,8 @@ export default function PredictiveCongestionChart() {
 
     raw.forEach((d) => {
       const y = segments.indexOf(d.segment);
-      const x = d.hours - 1;
+      // Shift into now-relative columns; anything before column 0 has passed.
+      const x = d.hours - 1 - skippedHours;
       if (y < 0 || x < 0 || x >= maxHour) return;
       const conf = Number(d.probability);
       states[y][x] = d.state;
@@ -341,6 +372,8 @@ export default function PredictiveCongestionChart() {
       flatHours,
       allHours,
       maxHour,
+      storedHours,
+      skippedHours,
       confLo: severeConfs.length ? severeConfs[0] : null,
       confHi: severeConfs.length ? severeConfs[severeConfs.length - 1] : null,
       // Whether the model EVER predicts Heavy. It does not, and a legend entry
@@ -396,9 +429,12 @@ export default function PredictiveCongestionChart() {
                     Number(m[4]), Number(m[5])).getTime();
   })();
   const ageHours = baseMs == null ? null : (Date.now() - baseMs) / 3.6e6;
-  const elapsedHours = baseMs == null ? 0
-    : hourLabels.filter((_, i) => baseMs + (i + 1) * 3.6e6 < Date.now()).length;
-  const stale = ageHours != null && elapsedHours > 0;
+  /* Hours that had already finished are dropped before the grid is built (see
+     skippedHours in the memo), so nothing on screen is in the past. What is
+     left to say is whether anything remains at all: when every stored hour has
+     run out the card has no forecast to show and says so. */
+  const expired = model.maxHour === 0;
+  const skippedHours = model.skippedHours;
   // A state earns a text label only while it is the exception. Free flow is
   // included: when the corridor is mostly severe, the clear cells are the news.
   const stateShare = (["Low", "Med", "High"] as State[]).map((st) => ({
@@ -617,15 +653,7 @@ export default function PredictiveCongestionChart() {
           fontWeight: 700,
         },
         itemStyle: { borderColor: "#fff", borderWidth: 3, borderRadius: 4 },
-        // Wash over the elapsed columns so a stale forecast looks stale.
-        markArea: elapsedHours > 0 ? {
-          silent: true,
-          itemStyle: { color: "rgba(248,250,252,0.62)" },
-          data: [[
-            { xAxis: hourLabels[0] },
-            { xAxis: hourLabels[Math.min(elapsedHours, hourLabels.length) - 1] },
-          ]] as never[],
-        } : undefined,
+        // Nothing on the grid is in the past now, so there is nothing to grey.
         emphasis: { itemStyle: { borderColor: "#0f172a", borderWidth: 2, shadowBlur: 10, shadowColor: "rgba(15,23,42,0.3)" } },
       },
       {
@@ -674,7 +702,12 @@ export default function PredictiveCongestionChart() {
           <b style={{ color: "#0f172a" }}>{a.segment}</b> <span style={{ color: "#94a3b8" }}>km {kmLabel(KMI.get(a.segment))}</span>
         </span>
         <span style={{ color: "#475569", fontVariantNumeric: "tabular-nums", whiteSpace: "nowrap" }}>
-          {a.from === a.to ? `+${a.from}h` : `+${a.from}h → +${a.to}h`} <span style={{ color: "#94a3b8" }}>· {span}h</span>
+          {/* Columns are now-relative: column 1 is the hour in progress, so it
+              is "now" and column n is "+(n-1)h". */}
+          {(() => {
+            const lbl = (col: number) => (col <= 1 ? "now" : `+${col - 1}h`);
+            return a.from === a.to ? lbl(a.from) : `${lbl(a.from)} → ${lbl(a.to)}`;
+          })()} <span style={{ color: "#94a3b8" }}>· {span}h</span>
         </span>
         <span style={{ color: a.conf < LOW_CONF ? "#b45309" : "#94a3b8", fontVariantNumeric: "tabular-nums", whiteSpace: "nowrap" }}>{(a.conf * 100).toFixed(0)}%</span>
       </div>
@@ -754,23 +787,26 @@ export default function PredictiveCongestionChart() {
             >
               {modelInfo?.model ?? "—"}{modelInfo?.accuracy != null && ` · ${(modelInfo.accuracy * 100).toFixed(1)}%`}{modelInfo && !modelInfo.accepted && " · not accepted"}
             </span>
-            {stale && (
+            {expired && (
               <span
-                title={`This forecast was generated from data ending ${model.baseTs}. ${elapsedHours} of ${hourLabels.length} forecast hours have already passed. Re-run train_congestion_horizon.py to refresh it.`}
+                title={`This forecast was generated from data ending ${model.baseTs} and its whole ${model.storedHours}-hour window has now passed. The hourly refresh task should replace it; see All_Scripts/Predictive_Modeling/README_congestion.md.`}
                 style={{
                   fontSize: "0.7rem", padding: "2px 8px", borderRadius: 999, fontWeight: 700, cursor: "help", whiteSpace: "nowrap",
-                  background: elapsedHours === hourLabels.length ? "#fef2f2" : "#fffbeb",
-                  border: `1px solid ${elapsedHours === hourLabels.length ? "#fecaca" : "#fde68a"}`,
-                  color: elapsedHours === hourLabels.length ? "#b91c1c" : "#92400e",
+                  background: "#fef2f2",
+                  border: "1px solid #fecaca",
+                  color: "#b91c1c",
                 }}
               >
-                {elapsedHours === hourLabels.length ? `⚠ expired · ${Math.round(ageHours!)}h old` : `⚠ ${elapsedHours} of ${hourLabels.length} hours elapsed`}
+                {`⚠ expired · ${Math.round(ageHours ?? 0)}h old`}
               </span>
             )}
           </div>
         </div>
         <p style={{ color: "#64748b", fontSize: "0.82rem", margin: "4px 0 0 0" }}>
-          {stale ? "Covered" : "Next"} {hourLabels.length} hours from <b style={{ color: "#334155" }}>{baseLabel(model.baseTs) ?? "the last reading"}</b>
+          {expired
+            ? <>No hours left in this forecast · last covered <b style={{ color: "#334155" }}>{baseLabel(model.baseTs) ?? "the last reading"}</b></>
+            : <>Next <b style={{ color: "#334155" }}>{hourLabels.length} hours</b>, from this one
+                {skippedHours > 0 && <span style={{ color: "#94a3b8" }}> · {skippedHours} earlier hour{skippedHours === 1 ? "" : "s"} already passed</span>}</>}
           <span style={{ cursor: "help" }} title="Rows are exits ordered north-bound by km-post. Hover any cell for the model's confidence. The base time is the last complete hour of Waze ingestion."> · hover for detail</span>
         </p>
       </div>

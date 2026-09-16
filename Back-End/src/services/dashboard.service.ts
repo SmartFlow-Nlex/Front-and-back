@@ -33,6 +33,11 @@ export async function getDashboardOverview(months: "3" | "12" | "all" = "12") {
     getEmissionsAnalyticsFromDb({ months }),
   ]);
 
+  // Any of the three can come back null on a pool timeout or missing db — degrade
+  // to "unavailable" instead of dereferencing into a crash that takes the whole
+  // process down with it.
+  if (!traffic || !incident || !emissions) return null;
+
   const t = traffic as {
     range: { from: string; to: string };
     meta: { plazas: string[]; minDate: string; maxDate: string };
@@ -47,7 +52,11 @@ export async function getDashboardOverview(months: "3" | "12" | "all" = "12") {
   const i = incident as {
     kpis: {
       totalIncidents: number; prevTotalIncidents: number; injuries: number;
-      fatalities: number; avgResponseMin: number | null;
+      fatalities: number;
+      mttc: {
+        overallMin: number | null;
+        coverage: { pctValid: number | null };
+      };
     };
     hotspots: { km_bin: number; total: number }[];
   };
@@ -89,7 +98,13 @@ export async function getDashboardOverview(months: "3" | "12" | "all" = "12") {
       deltaPct: pct(i.kpis.totalIncidents, i.kpis.prevTotalIncidents),
       injuries: i.kpis.injuries,
       fatalities: i.kpis.fatalities,
-      avgResponseMin: i.kpis.avgResponseMin,
+      // Blended across accidents (clearance_min) and breakdowns (derived from
+      // per-dispatch deployments) — see incident.service.ts's getIncidentAnalyticsFromDb.
+      // mttcCoveragePct travels with it so a bare "54.3 min" can't be read as
+      // covering every incident when only ~38% actually have a recorded
+      // clearance time.
+      mttcMin: i.kpis.mttc.overallMin,
+      mttcCoveragePct: i.kpis.mttc.coverage.pctValid,
     },
     emissions: {
       totalCo2T: e.kpis.totalCo2T,

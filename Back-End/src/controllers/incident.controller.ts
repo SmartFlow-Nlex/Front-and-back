@@ -24,7 +24,9 @@ const IncidentAnalyticsQuerySchema = z.object({
   months: z.enum(["3", "12", "all"]).optional().default("12"),
   from: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
   to: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
-  source: z.enum(["all", "road", "moto", "stalled"]).optional().default("all"),
+  // "road"/"moto"/"stalled" retired with the nlex_road_crashes/etc. source
+  // tables — the client tables only distinguish accident vs. breakdown.
+  source: z.enum(["all", "accident", "breakdown"]).optional().default("all"),
   weather: z.enum(["all", "dry", "wet"]).optional().default("all"),
 });
 
@@ -186,13 +188,21 @@ export const getIncidentSeverity = async (_req: Request, res: Response) => {
 };
 
 // GET /api/incident/event-breakdown — descriptive analytics over the
-// accident_data/breakdown_data event tables: EventType counts by month,
-// breakdown cause counts, and per-service/per-cause response-time stats
-// from breakdown_data's deployments records. A live SQL aggregation (like
-// /analytics), not a trained-model snapshot, so the 503 message doesn't
-// mention a pipeline.
-export const getEventBreakdown = async (_req: Request, res: Response) => {
-  const data = await getEventBreakdownFromDb();
+// breakdown_data event table: breakdown cause counts, and per-service/
+// per-cause response-time stats from its deployments records. A live SQL
+// aggregation (like /analytics), not a trained-model snapshot, so the 503
+// message doesn't mention a pipeline.
+// Same filter vocabulary as /analytics (months/from/to), no source/weather —
+// this endpoint's tables don't carry either dimension.
+const EventBreakdownQuerySchema = z.object({
+  months: z.enum(["3", "12", "all"]).optional().default("12"),
+  from: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+  to: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+});
+
+export const getEventBreakdown = async (req: Request, res: Response) => {
+  const query = EventBreakdownQuerySchema.parse(req.query);
+  const data = await getEventBreakdownFromDb(query);
   if (!data) {
     return res.status(503).json({ success: false, message: "Event breakdown analytics unavailable: database not reachable" });
   }

@@ -72,7 +72,16 @@ export async function getCorridorStatus() {
   // controller turns that into an explicit "unavailable" rather than a crash.
   if (!db) return null;
 
-  const { rows } = await db.query<{
+  try {
+    return await getCorridorStatusUnsafe();
+  } catch (error) {
+    console.error("Database query failed for corridor status:", error);
+    return null;
+  }
+}
+
+async function getCorridorStatusUnsafe() {
+  const { rows } = await db!.query<{
     exit_name: string;
     direction: "NB" | "SB";
     worst_level: number | null;
@@ -149,7 +158,7 @@ export async function getCorridorStatus() {
   // How current the feed itself is, separate from the query time. If the
   // ingester stalls, this is what tells the reader the picture is stale rather
   // than the corridor being empty.
-  const { rows: freshRows } = await db.query<{ newest: Date | null }>(
+  const { rows: freshRows } = await db!.query<{ newest: Date | null }>(
     `SELECT MAX(last_seen_at) AS newest FROM silver.fact_waze_jams`,
   );
   const feedNewest = freshRows[0]?.newest ? new Date(freshRows[0].newest) : null;

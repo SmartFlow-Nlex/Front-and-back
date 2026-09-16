@@ -12,6 +12,9 @@ export async function dashboardOverviewController(req: Request, res: Response) {
   // Anything unrecognised falls back to 12 rather than reaching the query.
   const months = raw === "3" || raw === "all" ? raw : "12";
   const data = await getDashboardOverview(months);
+  if (!data) {
+    return res.status(503).json({ success: false, message: "Database is not configured" });
+  }
   res.json({ success: true, data });
 }
 

@@ -3,6 +3,19 @@ import { env } from "./config/env.js";
 import { verifyDbConnection } from "./config/db.js";
 import { setSelfBase } from "./middleware/route-cache.js";
 
+/* Last resort, not a substitute for the try/catch each service should have.
+ *
+ * Several services (dashboard, live map, corridor status) have already been
+ * caught missing one: a pg-pool timeout thrown instead of caught rejects the
+ * request's promise, nothing downstream awaits it, and Node's default for an
+ * unhandled rejection is to crash the whole process -- turning one flaky query
+ * into a total outage for every other request in flight. This keeps a future
+ * missed catch from doing the same.
+ */
+process.on("unhandledRejection", (reason) => {
+  console.error("[unhandled rejection] surviving instead of crashing:", reason);
+});
+
 app.listen(env.PORT, async () => {
   console.log(`smartflow-backend running on http://localhost:${env.PORT}`);
   await verifyDbConnection();
@@ -53,9 +66,14 @@ function startCacheWarmer(): void {
     ["/emissions/forecast", 9 * 60_000],
     ["/dashboard/overview", 9 * 60_000],
   ];
-  for (const [path, every] of jobs) {
-    void warm(path);
+  // Staggered rather than fired all at once: 13 simultaneous self-requests each
+  // running their own multi-query Promise.all easily asks the pool (max 10) for
+  // more connections than it has, so the first real visitor's request queues
+  // behind the warmer instead of being warmed by it.
+  jobs.forEach(([path, every], i) => {
+    const t0 = setTimeout(() => void warm(path), i * 1500);
+    t0.unref();
     const t = setInterval(() => void warm(path), every);
     t.unref(); // never keep the process alive on its own
-  }
+  });
 }

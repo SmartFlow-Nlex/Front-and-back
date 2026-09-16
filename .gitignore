@@ -21,6 +21,7 @@ pnpm-debug.log*
 # Ignored:    anything holding real server-side secrets (DB URLs, API keys with
 #             write access). Those are shared out-of-band, never committed.
 .env*.local
+.env
 Back-End/.env
 Back-End/.env.*
 !Back-End/.env.example

@@ -327,8 +327,17 @@ export async function getFeedFreshness(): Promise<{
 export async function getLiveMapGeoJson() {
   if (!db) return { type: "FeatureCollection" as const, features: [] };
 
+  try {
+    return await getLiveMapGeoJsonUnsafe();
+  } catch (error) {
+    console.error("Database query failed for live map:", error);
+    return { type: "FeatureCollection" as const, features: [] };
+  }
+}
+
+async function getLiveMapGeoJsonUnsafe() {
   const [jams, alerts] = await Promise.all([
-    db.query<{ geojson: string; speed: number | null; level: number | null; street: string | null; city: string | null; delay: number | null; exit_name: string | null }>(
+    db!.query<{ geojson: string; speed: number | null; level: number | null; street: string | null; city: string | null; delay: number | null; exit_name: string | null }>(
       `SELECT ST_AsGeoJSON(j.geom) AS geojson,
               ROUND(j.speed_kmh::numeric, 1)::float AS speed,
               j.level::int                          AS level,
@@ -342,7 +351,7 @@ export async function getLiveMapGeoJson() {
          AND j.last_seen_at > NOW() - interval '${WINDOW_MINUTES} minutes'
          AND j.geom IS NOT NULL`,
     ),
-    db.query<{
+    db!.query<{
       lon: number; lat: number; type: string; street: string | null; city: string | null;
       reliability: number | null; confidence: number | null; exit_name: string;
       uuid: string | null; subtype: string | null; report_rating: number | null;

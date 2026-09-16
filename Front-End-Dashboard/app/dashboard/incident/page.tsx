@@ -6,10 +6,9 @@ import { attachCategoryClick } from "../../../lib/chart-click";
 import { useChartTheme, applyChartTheme, seriesRamp, seriesPair } from "../../../lib/chart-theme";
 import ReactECharts from "echarts-for-react";
 import type { EChartsOption } from "echarts";
-import { AlertTriangle, ArrowDownWideNarrow, ArrowUpNarrowWide, CloudRain, HeartPulse, MapPin, Timer } from "lucide-react";
+import { AlertTriangle, ArrowDownWideNarrow, ArrowUpNarrowWide, CloudRain, HeartPulse, MapPin, Siren, Timer } from "lucide-react";
 import DashboardChart from "../../../components/dashboard/DashboardChart";
 import ChartSkeleton, { KpiSkeleton } from "../../../components/dashboard/ChartSkeleton";
-import CustomSelect from "../../../components/dashboard/CustomSelect";
 import PageHeader from "../../../components/dashboard/PageHeader";
 import PredictiveIncidentChart from "../../../components/dashboard/PredictiveIncidentChart";
 import PredictiveCorridorChart from "../../../components/dashboard/PredictiveCorridorChart";
@@ -33,10 +32,9 @@ const BACKEND = process.env.NEXT_PUBLIC_BACKEND_URL ?? "http://localhost:4000";
 const DOW_LABELS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 const DOW_ORDER = [1, 2, 3, 4, 5, 6, 0];
 
-const SOURCE_LABEL: Record<"road" | "moto" | "stalled", string> = {
-  road: "Road crashes",
-  moto: "Motorcycle crashes",
-  stalled: "Stalled vehicles",
+const SOURCE_LABEL: Record<"accident" | "breakdown", string> = {
+  accident: "Accidents",
+  breakdown: "Breakdowns",
 };
 
 // ---------- Data contract ----------
@@ -48,19 +46,31 @@ type Analytics = {
     prevTotalIncidents: number;
     injuries: number;
     fatalities: number;
-    avgResponseMin: number | null;
     rainyCrashes: number;
     weatherKnown: number;
+    // Breakdown-only: accidents have no per-dispatch record to derive this from.
+    avgTimeToFirstResponder: { min: number | null; n: number; totalBreakdowns: number };
+    mttc: {
+      overallMin: number | null;
+      accidentMin: number | null;
+      breakdownMin: number | null;
+      coverage: {
+        accidents: { total: number; valid: number };
+        breakdowns: { total: number; valid: number };
+        pctValid: number | null;
+      };
+    };
   };
-  dailyTrend: { d: string; road: number; moto: number; stalled: number }[];
-  hotspots: { km_bin: number; total: number; road: number; moto: number; stalled: number; injuries: number; fatalities: number }[];
+  dailyTrend: { d: string; accident: number; breakdown: number }[];
+  hotspots: { km_bin: number; total: number; accident: number; breakdown: number; injuries: number; fatalities: number }[];
   heatmap: { dow: number; hour: number; v: number }[];
-  causes: { label: string; total: number; injuries: number; fatalities: number }[];
+  accidentCauses: { label: string; mainCause: string; total: number; injuries: number; fatalities: number }[];
+  breakdownCauses: { label: string; mainCause: string; total: number }[];
   types: { label: string; total: number; injuries: number; fatalities: number }[];
   weather: {
     wetHours: number;
     dryHours: number;
-    incidents: { wet: Record<"road" | "moto" | "stalled", number>; dry: Record<"road" | "moto" | "stalled", number> };
+    incidents: { wet: Record<"accident" | "breakdown", number>; dry: Record<"accident" | "breakdown", number> };
     jam: { wet: { speed: number; jam_level: number } | null; dry: { speed: number; jam_level: number } | null };
   };
 };
@@ -68,8 +78,6 @@ type Analytics = {
 type Granularity = "daily" | "weekly" | "monthly";
 type RangeMode = "3" | "12" | "all" | "custom";
 type WeatherFilter = "all" | "dry" | "wet";
-/** Matches the source enum the incident endpoint validates against. */
-type SourceFilter = "all" | "road" | "moto" | "stalled";
 type Detail = { title: string; subtitle?: string; rows: [string, string][]; note?: string };
 
 // ---------- Formatting ----------
@@ -105,12 +113,11 @@ export default function IncidentPage() {
   const [customFrom, setCustomFrom] = useState("");
   const [customTo, setCustomTo] = useState("");
   const [weather, setWeather] = useState<WeatherFilter>("all");
-  const [source, setSource] = useState<SourceFilter>("all");
 
   // Chart-local interactivity
   const [hotspotSort, setHotspotSort] = useState<"desc" | "asc">("desc");
   const [causeSort, setCauseSort] = useState<"desc" | "asc">("desc");
-  const [grain, setGrain] = useState<Granularity>("monthly");
+  const [grain, setGrain] = useState<Granularity>("daily");
   const [timeView, setTimeView] = useState<"hour" | "dow">("hour");
   const [causeMode, setCauseMode] = useState<"Causes" | "Types">("Causes");
   const [allHotspotsOpen, setAllHotspotsOpen] = useState(false);
@@ -168,7 +175,6 @@ export default function IncidentPage() {
       qs.set("months", rangeMode);
     }
     if (weather !== "all") qs.set("weather", weather);
-    if (source !== "all") qs.set("source", source);
     // Memoised per query string: switching tabs or returning to this page
     // renders from memory instead of refetching. Five minutes, refreshed
     // quietly in the background once stale. See lib/cached-json.
@@ -183,7 +189,7 @@ export default function IncidentPage() {
     return () => {
       cancelled = true;
     };
-  }, [rangeMode, customFrom, customTo, weather, source]);
+  }, [rangeMode, customFrom, customTo, weather]);
 
   /* How long a window is on screen, and what that allows.
 
@@ -212,31 +218,39 @@ export default function IncidentPage() {
     const hotspotTotal = hotspots.reduce((s, h) => s + h.total, 0);
     const topHotspot = hotspots[0] ?? null;
 
-    // Crash rate per day of each weather, wet vs dry (crashes = road + moto).
+    // Crash rate per day of each weather, wet vs dry. "Crash" = accident here;
+    // breakdowns are a mechanical failure, not a collision, same distinction
+    // the old road+moto (crashes) vs. stalled (not a crash) split drew.
     // Exposure-normalized: wet hours are far rarer than dry, so raw counts can't be compared.
-    const wetCrashes = weather.incidents.wet.road + weather.incidents.wet.moto;
-    const dryCrashes = weather.incidents.dry.road + weather.incidents.dry.moto;
+    const wetCrashes = weather.incidents.wet.accident;
+    const dryCrashes = weather.incidents.dry.accident;
     const wetRate = weather.wetHours > 0 ? (wetCrashes / weather.wetHours) * 24 : 0;
     const dryRate = weather.dryHours > 0 ? (dryCrashes / weather.dryHours) * 24 : 0;
     const rainMultiplier = dryRate > 0 ? wetRate / dryRate : null;
 
-    return { deltaPct, topHotspot, hotspotTotal, wetRate, dryRate, rainMultiplier };
+    // Share of breakdowns that actually have a dispatch record — the "Avg
+    // Time to First Responder" KPI's own coverage, parallel to mttc.coverage
+    // which the backend already computes.
+    const { n, totalBreakdowns } = kpis.avgTimeToFirstResponder;
+    const responderCoveragePct = totalBreakdowns > 0 ? (n / totalBreakdowns) * 100 : null;
+
+    return { deltaPct, topHotspot, hotspotTotal, wetRate, dryRate, rainMultiplier, responderCoveragePct };
   }, [data]);
 
     // ---------- Trend ----------
-  type TrendRow = { label: string; road: number; moto: number; stalled: number; total: number };
+  type TrendRow = { label: string; accident: number; breakdown: number; total: number };
   const trendRows = useMemo<TrendRow[]>(() => {
     if (!data) return [];
     const keyOf = grain === "daily" ? (d: string) => d : grain === "weekly" ? weekStart : (d: string) => d.slice(0, 7);
-    const acc = new Map<string, { road: number; moto: number; stalled: number }>();
+    const acc = new Map<string, { accident: number; breakdown: number }>();
     for (const r of data.dailyTrend) {
       const k = keyOf(r.d);
-      const cur = acc.get(k) ?? { road: 0, moto: 0, stalled: 0 };
-      acc.set(k, { road: cur.road + r.road, moto: cur.moto + r.moto, stalled: cur.stalled + r.stalled });
+      const cur = acc.get(k) ?? { accident: 0, breakdown: 0 };
+      acc.set(k, { accident: cur.accident + r.accident, breakdown: cur.breakdown + r.breakdown });
     }
     return [...acc.entries()]
       .sort(([a], [b]) => (a < b ? -1 : 1))
-      .map(([label, v]) => ({ label, ...v, total: v.road + v.moto + v.stalled }));
+      .map(([label, v]) => ({ label, ...v, total: v.accident + v.breakdown }));
   }, [data, grain]);
 
   const trendOption = useMemo<EChartsOption | null>(() => {
@@ -245,7 +259,7 @@ export default function IncidentPage() {
     const boundaryKey = grain === "monthly" ? (l: string) => l : (l: string) => l.slice(0, 7);
     const labelInterval = (i: number) => i === 0 || boundaryKey(labels[i]) !== boundaryKey(labels[i - 1]);
 
-    const mk = (name: string, key: "road" | "moto" | "stalled", color: string) => ({
+    const mk = (name: string, key: "accident" | "breakdown", color: string) => ({
       name,
       type: "line" as const,
       data: trendRows.map((r) => r[key]),
@@ -255,7 +269,7 @@ export default function IncidentPage() {
       lineStyle: { width: 2.5, color },
     });
 
-    const series = [mk("Road crashes", "road", RAMP[2]), mk("Motorcycle crashes", "moto", RAMP[1]), mk("Stalled vehicles", "stalled", RAMP[0])];
+    const series = [mk("Accidents", "accident", RAMP[2]), mk("Breakdowns", "breakdown", RAMP[0])];
 
     return {
       grid: { left: 52, right: 16, top: 10, bottom: 52 },
@@ -412,9 +426,14 @@ export default function IncidentPage() {
     };
   }, [data, hotspotSort]);
 
-  const causeChart = useMemo<{ option: EChartsOption; rows: Analytics["causes"] } | null>(() => {
+  // Accident causes and breakdown causes are two separate rankings, not one
+  // merged list: the two tables' cause vocabularies don't share a domain
+  // (driver behavior vs. mechanical fault), and a single ranked bar chart
+  // conflated them with no visual signal that they answered different
+  // questions (see the earlier audit of this chart).
+  const accidentCauseChart = useMemo<{ option: EChartsOption; rows: (Analytics["accidentCauses"][number] | Analytics["types"][number])[] } | null>(() => {
     if (!data) return null;
-    const src = causeMode === "Causes" ? data.causes : data.types;
+    const src = causeMode === "Causes" ? data.accidentCauses : data.types;
     if (src.length === 0) return null;
     const top = src.slice(0, 9);
     const display = causeSort === "desc" ? [...top].reverse() : [...top];
@@ -429,16 +448,16 @@ export default function IncidentPage() {
           formatter: (p) => {
             const i = (p as { dataIndex: number }).dataIndex;
             const r = display[i];
-            return `<b>${r.label}</b><br/>${fmtInt(r.total)} incidents · ${fmtInt(r.injuries)} injured · ${fmtInt(r.fatalities)} fatalities`;
+            return `<b>${r.label}</b><br/>${fmtInt(r.total)} accidents · ${fmtInt(r.injuries)} injured · ${fmtInt(r.fatalities)} fatalities`;
           },
         },
-        /* No legend: one series named "Incidents" on a chart titled the same,
+        /* No legend: one series named "Accidents" on a chart titled the same,
            beneath a category axis that names every bar. */
         series: [
           {
-            name: "Incidents",
+            name: "Accidents",
             type: "bar",
-            data: display.map((r) => ({ value: r.total, itemStyle: { color: RAMP[0], borderRadius: [0, 3, 3, 0] } })),
+            data: display.map((r) => ({ value: r.total, itemStyle: { color: RAMP[2], borderRadius: [0, 3, 3, 0] } })),
             barMaxWidth: 12,
             barCategoryGap: "25%",
           },
@@ -447,12 +466,46 @@ export default function IncidentPage() {
     };
   }, [data, causeMode, causeSort]);
 
+  // No injuries/fatalities on this chart: silver.nlex_breakdown_events_clean
+  // has neither column, so the tooltip only reports what actually exists
+  // rather than implying a zero that was never measured.
+  const breakdownCauseChart = useMemo<{ option: EChartsOption; rows: Analytics["breakdownCauses"] } | null>(() => {
+    if (!data || data.breakdownCauses.length === 0) return null;
+    const top = data.breakdownCauses.slice(0, 9);
+    const display = causeSort === "desc" ? [...top].reverse() : [...top];
+    return {
+      rows: display,
+      option: {
+        grid: { left: 150, right: 42, top: 8, bottom: 18 },
+        xAxis: { type: "value", splitNumber: 3, axisLabel: { fontSize: 10 } },
+        yAxis: { type: "category", data: display.map((r) => (r.label.length > 24 ? `${r.label.slice(0, 24)}…` : r.label)), axisLabel: { interval: 0, fontSize: 10 }, axisTick: { show: false } },
+        tooltip: {
+          axisPointer: { type: "shadow" },
+          formatter: (p) => {
+            const i = (p as { dataIndex: number }).dataIndex;
+            const r = display[i];
+            return `<b>${r.label}</b><br/>${fmtInt(r.total)} breakdowns`;
+          },
+        },
+        series: [
+          {
+            name: "Breakdowns",
+            type: "bar",
+            data: display.map((r) => ({ value: r.total, itemStyle: { color: RAMP[0], borderRadius: [0, 3, 3, 0] } })),
+            barMaxWidth: 12,
+            barCategoryGap: "25%",
+          },
+        ],
+      },
+    };
+  }, [data, causeSort]);
+
   const weatherChart = useMemo<EChartsOption | null>(() => {
     if (!data || !derived) return null;
     const w = data.weather;
     if (w.wetHours === 0 && w.dryHours === 0) return null;
-    const cats = ["Road crashes", "Motorcycle crashes", "Stalled vehicles"] as const;
-    const keys = ["road", "moto", "stalled"] as const;
+    const cats = ["Accidents", "Breakdowns"] as const;
+    const keys = ["accident", "breakdown"] as const;
     // Per day of that weather = incidents / hours-of-exposure × 24, so rare wet
     // hours compare fairly against abundant dry hours.
     const rate = (n: number, hours: number) => (hours > 0 ? Number(((n / hours) * 24).toFixed(1)) : 0);
@@ -493,9 +546,8 @@ export default function IncidentPage() {
       subtitle: `Incidents · ${periodWord}ly`,
       rows: [
         ["Total incidents", fmtInt(r.total)],
-        ["Road crashes", fmtInt(r.road)],
-        ["Motorcycle crashes", fmtInt(r.moto)],
-        ["Stalled vehicles", fmtInt(r.stalled)],
+        ["Accidents", fmtInt(r.accident)],
+        ["Breakdowns", fmtInt(r.breakdown)],
         ["vs range average", avg > 0 ? fmtPct(((r.total - avg) / avg) * 100) : "—"],
         ["Rank in range", `#${rank} of ${totals.length} ${periodWord}s`],
       ],
@@ -544,14 +596,13 @@ export default function IncidentPage() {
       subtitle: "Incident hotspot (5-km segment)",
       rows: [
         ["Total incidents", fmtInt(r.total)],
-        ["Road crashes", fmtInt(r.road)],
-        ["Motorcycle crashes", fmtInt(r.moto)],
-        ["Stalled vehicles", fmtInt(r.stalled)],
+        ["Accidents", fmtInt(r.accident)],
+        ["Breakdowns", fmtInt(r.breakdown)],
         ["Injuries", fmtInt(r.injuries)],
         ["Fatalities", fmtInt(r.fatalities)],
         ["Share of located incidents", derived.hotspotTotal > 0 ? `${((r.total / derived.hotspotTotal) * 100).toFixed(1)}%` : "—"],
       ],
-      note: `Km-post parsed from the operations log location field. ${filtersNote}`,
+      note: `Km post read directly from km_value. ${filtersNote}`,
     });
   };
 
@@ -560,17 +611,17 @@ export default function IncidentPage() {
     if (r) showHotspotDetail(r);
   };
 
-  const onCauseClick = (p: { dataIndex: number }) => {
-    if (!causeChart || !data) return;
-    const r = causeChart.rows[p.dataIndex];
+  const onAccidentCauseClick = (p: { dataIndex: number }) => {
+    if (!accidentCauseChart || !data) return;
+    const r = accidentCauseChart.rows[p.dataIndex];
     if (!r) return;
-    const pool = causeMode === "Causes" ? data.causes : data.types;
+    const pool = causeMode === "Causes" ? data.accidentCauses : data.types;
     const total = pool.reduce((s, x) => s + x.total, 0);
     setDetail({
       title: r.label,
-      subtitle: causeMode === "Causes" ? "Reported cause" : "Accident type (crashes only)",
+      subtitle: causeMode === "Causes" ? `Reported cause · ${(r as Analytics["accidentCauses"][number]).mainCause ?? ""}` : "Accident type",
       rows: [
-        ["Incidents", fmtInt(r.total)],
+        ["Accidents", fmtInt(r.total)],
         ["Share", total > 0 ? `${((r.total / total) * 100).toFixed(1)}%` : "—"],
         ["Injuries", fmtInt(r.injuries)],
         ["Fatalities", fmtInt(r.fatalities)],
@@ -579,9 +630,25 @@ export default function IncidentPage() {
     });
   };
 
+  const onBreakdownCauseClick = (p: { dataIndex: number }) => {
+    if (!breakdownCauseChart || !data) return;
+    const r = breakdownCauseChart.rows[p.dataIndex];
+    if (!r) return;
+    const total = data.breakdownCauses.reduce((s, x) => s + x.total, 0);
+    setDetail({
+      title: r.label,
+      subtitle: `Mechanical cause · ${r.mainCause}`,
+      rows: [
+        ["Breakdowns", fmtInt(r.total)],
+        ["Share", total > 0 ? `${((r.total / total) * 100).toFixed(1)}%` : "—"],
+      ],
+      note: `${filtersNote} · silver.nlex_breakdown_events_clean has no injury/fatality columns, so none are shown here.`,
+    });
+  };
+
   const onWeatherClick = (p: { dataIndex: number; seriesName?: string }) => {
     if (!data || !derived) return;
-    const keys = ["road", "moto", "stalled"] as const;
+    const keys = ["accident", "breakdown"] as const;
     const k = keys[p.dataIndex];
     const w = data.weather;
     setDetail({
@@ -816,7 +883,7 @@ export default function IncidentPage() {
           <span className={styles.kpiIcon} aria-hidden="true"><AlertTriangle size={15} /></span>
           <h3>
             Total Incidents
-            {kpiInfo("All logged incidents — road crashes, motorcycle crashes, and stalled vehicles — in the selected Range, compared to the equivalent prior period.")}
+            {kpiInfo("All logged incidents — accidents and mechanical breakdowns — in the selected Range, compared to the equivalent prior period.")}
           </h3>
           <div className={styles.kpiValue}>{kpiValue(data ? fmtInt(data.kpis.totalIncidents) : null)}</div>
           <p className={styles.kpiHint}>
@@ -838,11 +905,24 @@ export default function IncidentPage() {
         <article className={styles.kpiTile}>
           <span className={styles.kpiIcon} aria-hidden="true"><Timer size={15} /></span>
           <h3>
-            Avg Response Time
-            {kpiInfo("Average minutes from an incident being reported to a responder arriving on scene, excluding outliers beyond 2 hours.")}
+            MTTC (Mean Time to Clear)
+            {kpiInfo("Average minutes from an incident starting to the scene being cleared. Accidents use their own logged clearance timestamp; breakdowns are derived from dispatch records. Only incidents with a recorded clearance time count toward the average — see the coverage note below.")}
           </h3>
-          <div className={styles.kpiValue}>{kpiValue(data?.kpis.avgResponseMin != null ? `${data.kpis.avgResponseMin} min` : null)}</div>
-          <p className={styles.kpiHint}>reported → responder on scene</p>
+          <div className={styles.kpiValue}>{kpiValue(data?.kpis.mttc.overallMin != null ? `${data.kpis.mttc.overallMin} min` : null)}</div>
+          <p className={styles.kpiHint}>
+            {data?.kpis.mttc.coverage.pctValid != null ? `${data.kpis.mttc.coverage.pctValid}% of incidents have a recorded clearance time` : "—"}
+          </p>
+        </article>
+        <article className={styles.kpiTile}>
+          <span className={styles.kpiIcon} aria-hidden="true"><Siren size={15} /></span>
+          <h3>
+            Avg Time to First Responder
+            {kpiInfo("Average minutes from a breakdown being reported to the first responder's arrival, taken from the earliest dispatch on record. Breakdown dispatches only — accidents have no equivalent per-responder record in this dataset, so they aren't read as a corridor-wide figure.")}
+          </h3>
+          <div className={styles.kpiValue}>{kpiValue(data?.kpis.avgTimeToFirstResponder.min != null ? `${data.kpis.avgTimeToFirstResponder.min} min` : null)}</div>
+          <p className={styles.kpiHint}>
+            Breakdowns only · {derived?.responderCoveragePct != null ? `${derived.responderCoveragePct.toFixed(1)}%` : "—"} have a dispatch record
+          </p>
         </article>
         <article className={styles.kpiTile}>
           <span className={styles.kpiIcon} aria-hidden="true"><MapPin size={15} /></span>
@@ -861,7 +941,7 @@ export default function IncidentPage() {
           <span className={styles.kpiIcon} aria-hidden="true"><CloudRain size={15} /></span>
           <h3>
             Crash Rate in Rain
-            {kpiInfo("Road and motorcycle crashes per day during rainy hours vs. dry hours, normalized for how often each occurs. Above 1× means rain sees more crashes per hour of exposure.")}
+            {kpiInfo("Accidents per day during rainy hours vs. dry hours, normalized for how often each occurs. Above 1× means rain sees more crashes per hour of exposure. Breakdowns are excluded — a mechanical failure isn't a crash.")}
           </h3>
           <div className={styles.kpiValue}>{kpiValue(derived?.rainMultiplier != null ? `${derived.rainMultiplier.toFixed(2)}×` : null)}</div>
           <p className={styles.kpiHint}>
@@ -876,25 +956,11 @@ export default function IncidentPage() {
           <div className={styles.headText}>
             <h3>
               Incident Trend
-              <InfoTooltip text="Incident counts over the selected Range, by type (road crashes, motorcycle crashes, stalled vehicles). Daily, weekly, or monthly — click a point to see that period's breakdown." />
+              <InfoTooltip text="Incident counts over the selected Range, by type (accidents, breakdowns). Daily, weekly, or monthly — click a point to see that period's breakdown." />
             </h3>
           </div>
         </div>
         <div className={styles.heroFilters}>
-          <div className={styles.heroFilterGroup}>
-            <span className={styles.heroFilterLabel}>Incident type</span>
-            <CustomSelect
-              value={source}
-              onChange={(v) => setSource(v as SourceFilter)}
-              options={[
-                { label: "All types", value: "all" },
-                { label: "Road crashes", value: "road" },
-                { label: "Motorcycle crashes", value: "moto" },
-                { label: "Stalled vehicles", value: "stalled" },
-              ]}
-            />
-          </div>
-          <div className={styles.heroFilterDivider} />
           <div className={styles.heroFilterGroup}>
             <span className={styles.heroFilterLabel}>Granularity</span>
             <div className={styles.segmentedSmall}>
@@ -963,13 +1029,15 @@ export default function IncidentPage() {
         <div className={styles.chartBody}>{chartFrame(hotspotChart?.option ?? null, "No located incidents in range", onHotspotClick)}</div>
       </article>
 
-      {/* Row E — severity + weather stories */}
+      {/* Row E — severity + weather stories. Causes split into two cards,
+          one per source table, rather than one ranked list mixing driver
+          behavior with mechanical faults (see the earlier audit). */}
       <article className={`${styles.chartCard} ${styles.chart4}`}>
         <div className={styles.chartHead}>
           <div className={styles.headText}>
             <h3>
-              {causeMode === "Causes" ? "Top Incident Causes" : "Top Accident Types"}
-              <InfoTooltip text="Top 9 logged causes or collision types by incident count in the Range, with injuries and fatalities on hover. Toggle between Causes and Types on the right." />
+              {causeMode === "Causes" ? "Top Accident Causes" : "Top Accident Types"}
+              <InfoTooltip text="Top 9 logged causes or collision types by accident count in the Range, with injuries and fatalities on hover. Toggle between Causes and Types on the right." />
             </h3>
           </div>
           <button
@@ -990,10 +1058,22 @@ export default function IncidentPage() {
             ))}
           </div>
         </div>
-        <div className={styles.chartBody}>{chartFrame(causeChart?.option ?? null, "No data for the selected filters", onCauseClick)}</div>
+        <div className={styles.chartBody}>{chartFrame(accidentCauseChart?.option ?? null, "No data for the selected filters", onAccidentCauseClick)}</div>
       </article>
 
-      <article className={`${styles.chartCard} ${styles.chart5}`}>
+      <article className={`${styles.chartCard} ${styles.spanHalf}`}>
+        <div className={styles.chartHead}>
+          <div className={styles.headText}>
+            <h3>
+              Top Breakdown Causes
+              <InfoTooltip text="Top 9 logged mechanical causes by breakdown count in the Range. A separate ranking from accident causes: the two tables describe different kinds of events (driver behavior vs. mechanical fault) and don't share a cause vocabulary." />
+            </h3>
+          </div>
+        </div>
+        <div className={styles.chartBody}>{chartFrame(breakdownCauseChart?.option ?? null, "No data for the selected filters", onBreakdownCauseClick)}</div>
+      </article>
+
+      <article className={`${styles.chartCard} ${styles.spanHalf}`}>
         <div className={styles.chartHead}>
           <div className={styles.headText}>
             <h3>
@@ -1005,8 +1085,20 @@ export default function IncidentPage() {
         <div className={styles.chartBody}>{chartFrame(weatherChart, "No weather data in range", onWeatherClick)}</div>
       </article>
 
-      {/* Row F — accident vs. breakdown events, dispatch response times */}
-      <EventBreakdownPanel />
+      {/* Row F — dispatch response times, beside the weather chart above.
+          EventBreakdownPanel renders its own "chart-card wide" article (a
+          plain global class, not this module's spanFull/spanHalf), whose
+          "wide" rule (grid-column: 1/-1) only takes effect on a direct grid
+          child — wrapping it here makes this div the grid item instead, so
+          "wide" no-ops on the article and the panel takes the wrapper's
+          half-width. */}
+      <div className={styles.spanHalf}>
+        <EventBreakdownPanel
+          months={rangeMode === "custom" ? "all" : rangeMode}
+          from={rangeMode === "custom" ? customFrom : undefined}
+          to={rangeMode === "custom" ? customTo : undefined}
+        />
+      </div>
 
       {/* Click-to-inspect detail modal */}
       {detail && (
@@ -1059,7 +1151,7 @@ export default function IncidentPage() {
             <div className={styles.plazaTableWrap}>
               <table className={styles.plazaTable}>
                 <thead>
-                  <tr><th>#</th><th>Segment</th><th>Total</th><th>Road</th><th>Moto</th><th>Stalled</th><th>Injured</th><th>Fatal</th></tr>
+                  <tr><th>#</th><th>Segment</th><th>Total</th><th>Accident</th><th>Breakdown</th><th>Injured</th><th>Fatal</th></tr>
                 </thead>
                 <tbody>
                   {data.hotspots.map((r, i) => (
@@ -1067,9 +1159,8 @@ export default function IncidentPage() {
                       <td className={styles.plazaRank}>{i + 1}</td>
                       <td>{kmLabel(r.km_bin)}</td>
                       <td className={styles.plazaNum}>{fmtInt(r.total)}</td>
-                      <td className={styles.plazaNum}>{fmtInt(r.road)}</td>
-                      <td className={styles.plazaNum}>{fmtInt(r.moto)}</td>
-                      <td className={styles.plazaNum}>{fmtInt(r.stalled)}</td>
+                      <td className={styles.plazaNum}>{fmtInt(r.accident)}</td>
+                      <td className={styles.plazaNum}>{fmtInt(r.breakdown)}</td>
                       <td className={styles.plazaNum}>{fmtInt(r.injuries)}</td>
                       <td className={styles.plazaNum}>{fmtInt(r.fatalities)}</td>
                     </tr>

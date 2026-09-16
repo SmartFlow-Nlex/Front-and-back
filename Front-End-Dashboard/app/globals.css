@@ -5315,7 +5315,7 @@ body {
    so the tiles inherit without every tile knowing which tab it is on.
    --------------------------------------------------------------------------- */
 .viz-traffic   { --kpi-1: #3f7ad9; --kpi-2: #1d3f8f; --kpi-3: #8ab6f5; --kpi-4: var(--color-info);    --kpi-5: var(--color-success); }
-.viz-incident  { --kpi-1: #b8760a; --kpi-2: #7d4606; --kpi-3: #e0b01f; --kpi-4: var(--color-danger);  --kpi-5: var(--color-warning); }
+.viz-incident  { --kpi-1: #b8760a; --kpi-2: #7d4606; --kpi-3: #e0b01f; --kpi-4: var(--color-danger);  --kpi-5: var(--color-warning); --kpi-6: var(--color-info); }
 .viz-emissions { --kpi-1: #118f46; --kpi-2: #08582b; --kpi-3: #4cbd79; --kpi-4: var(--color-success); --kpi-5: var(--color-info); }
 
 @media (prefers-color-scheme: dark) {

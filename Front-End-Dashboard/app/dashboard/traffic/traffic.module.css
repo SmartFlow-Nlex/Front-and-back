@@ -591,6 +591,24 @@
 .kpiRow > .kpiTile:nth-child(4) { --kpi-accent: var(--kpi-4); }
 .kpiRow > .kpiTile:nth-child(5) { --kpi-accent: var(--kpi-5); }
 
+/* Incident's KPI row carries six tiles, not the shared five: MTTC and Avg
+   Time to First Responder replaced the old single Avg Response Time tile.
+   Scoped to this page alone (via the plain, non-module .viz-incident class
+   already on the page's <section>) so Traffic/Emissions' five-tile rows,
+   sharing this same stylesheet, are untouched. Six divides evenly at every
+   breakpoint below (6, then 3+3, then 2+2+2), so none of the five-tile
+   layout's "odd one out" handling is needed here. */
+:global(.viz-incident) .kpiRow { grid-template-columns: repeat(6, minmax(0, 1fr)); }
+:global(.viz-incident) .kpiRow > .kpiTile:nth-child(6) { --kpi-accent: var(--kpi-6); }
+
+@media (max-width: 1320px) {
+  :global(.viz-incident) .kpiRow { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+}
+
+@media (max-width: 980px) {
+  :global(.viz-incident) .kpiRow { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+
 /* The change figure, as a badge rather than two coloured words in a sentence.
    The trend is the second thing a reader wants off a KPI tile after the number
    itself, and as plain inline text it had the same weight as the "vs previous

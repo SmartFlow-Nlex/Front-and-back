@@ -8,11 +8,18 @@ import { buildExitToExitSegments, segmentIndexForKm } from "../lib/exit-segments
 
 // ---------------------------------------------------------------------------
 // Incident analytics for the descriptive dashboard.
-// Sources: nlex_road_crashes, nlex_motorcycle_crashes, nlex_stalled_vehicles
-// (operations logs with Km-post locations), plus hourly_weather for exposure.
+// Sources: silver.nlex_accident_events_clean, silver.nlex_breakdown_events_clean
+// (the client's own operations export, replacing the earlier
+// nlex_road_crashes/nlex_motorcycle_crashes/nlex_stalled_vehicles trio per
+// scripts/medallion/10-bronze-accident-breakdown.sql's own migration note),
+// plus hourly_weather for exposure.
+//
+// The old trio is untouched and still backs getIncidentHourlyFromDb and the
+// predictive endpoint below — this migration covers only the descriptive
+// /analytics query, not those.
 // ---------------------------------------------------------------------------
 
-export type IncidentSource = "all" | "road" | "moto" | "stalled";
+export type IncidentSource = "all" | "accident" | "breakdown";
 
 export type IncidentWeather = "all" | "dry" | "wet";
 
@@ -60,6 +67,37 @@ const RESPONSE_MIN = `
 const HOUR_OF = `EXTRACT(hour FROM rt::time)::int`;
 const KM_OF = `(regexp_match(location, 'Km\\s*(\\d+)'))[1]::int`;
 
+// Client-table event union, scoped to this function only. Deliberately
+// separate from INCIDENTS_CTE above, which getIncidentHourlyFromDb and the
+// predictive endpoint still read — those haven't been migrated in this pass.
+//
+// No cause/type columns here: the causes/types queries below read
+// main_cause/sub_cause/type_of_event straight off each source table instead,
+// because the two tables' cause vocabularies don't share a domain (mechanical
+// fault vs. driver behavior) and the previous single ranked list conflated
+// them (see the earlier audit). km_value is used directly — both tables carry
+// it as a clean numeric column, so the old regexp_match on a free-text
+// location field is gone entirely.
+const EVENTS_CTE = `
+  events AS (
+    SELECT event_start_date::date AS d,
+           EXTRACT(hour FROM event_start_date)::int AS h,
+           km_value, weather_condition,
+           COALESCE(number_of_injured, 0) AS inj,
+           COALESCE(number_of_fatality, 0) AS fat,
+           'accident' AS src
+    FROM silver.nlex_accident_events_clean
+    WHERE event_start_date IS NOT NULL
+    UNION ALL
+    SELECT event_encoded_date::date,
+           EXTRACT(hour FROM event_encoded_date)::int,
+           km_value, NULL,
+           0, 0,
+           'breakdown'
+    FROM silver.nlex_breakdown_events_clean
+    WHERE event_encoded_date IS NOT NULL
+  )`;
+
 export async function getIncidentAnalyticsFromDb(filters: IncidentAnalyticsFilters) {
   if (!db) return null;
 
@@ -68,8 +106,13 @@ export async function getIncidentAnalyticsFromDb(filters: IncidentAnalyticsFilte
   if (cached && Date.now() - cached.at < CACHE_TTL_MS) return cached.data;
 
   try {
+    // Bounds span both tables — their date columns run close but aren't
+    // identical (verified: both currently max out 2026-06-30), so the window
+    // clamps against whichever side is wider.
     const bounds = await db.query(
-      `SELECT min(CASE WHEN date LIKE '%/%' THEN to_date(date, 'MM/DD/YYYY') ELSE date::date END)::text AS lo, max(CASE WHEN date LIKE '%/%' THEN to_date(date, 'MM/DD/YYYY') ELSE date::date END)::text AS hi FROM nlex_road_crashes`
+      `SELECT LEAST(a.lo, b.lo)::text AS lo, GREATEST(a.hi, b.hi)::text AS hi
+       FROM (SELECT min(event_start_date)::date AS lo, max(event_start_date)::date AS hi FROM silver.nlex_accident_events_clean) a,
+            (SELECT min(event_encoded_date)::date AS lo, max(event_encoded_date)::date AS hi FROM silver.nlex_breakdown_events_clean) b`
     );
     const minDate: string = bounds.rows[0].lo;
     const maxDate: string = bounds.rows[0].hi;
@@ -80,22 +123,27 @@ export async function getIncidentAnalyticsFromDb(filters: IncidentAnalyticsFilte
       const [f, t] = filters.from <= filters.to ? [filters.from, filters.to] : [filters.to, filters.from];
       lo = f < minDate ? minDate : f;
       hi = t > maxDate ? maxDate : t;
+    } else if (filters.months === "all") {
+      lo = minDate;
+      hi = maxDate;
     } else {
-      // Month ranges anchor at the default year (2025), clamped to available data:
-      // "12 mo" opens as calendar 2025, "3 mo" as Jan-Apr 2025.
-      const anchor = "2025-01-01";
-      lo = anchor < minDate ? minDate : anchor > maxDate ? minDate : anchor;
-      hi =
-        filters.months === "all"
-          ? maxDate
-          : (
-              await db.query(`SELECT LEAST(($1::date + ($2 || ' months')::interval)::date, $3::date)::text AS hi`, [lo, filters.months, maxDate]))
-              .rows[0].hi;
+      // Trailing window counted back from the last actual day of data, not
+      // from today's wall-clock date: matches the "last ACTUAL day, not
+      // today" windowing emissions.service.ts's forecast query already uses,
+      // and avoids a window whose tail runs past the data into an empty gap.
+      hi = maxDate;
+      lo = (
+        await db.query(`SELECT GREATEST(($1::date - ($2 || ' months')::interval)::date, $3::date)::text AS lo`, [
+          hi,
+          filters.months,
+          minDate,
+        ])
+      ).rows[0].lo;
     }
 
     const src = filters.source && filters.source !== "all" ? filters.source : null;
     const wx = filters.weather && filters.weather !== "all" ? filters.weather : null;
-    // $1=lo $2=hi $3=src (nullable) $4=weather (nullable: 'wet'|'dry')
+    // $1=lo $2=hi $3=src (nullable: 'accident'|'breakdown') $4=weather (nullable: 'wet'|'dry')
     const params = [lo, hi, src, wx];
 
     // Hour-level wet/dry classification (expressway-avg rainfall > 0.3 mm), spanning
@@ -109,8 +157,12 @@ export async function getIncidentAnalyticsFromDb(filters: IncidentAnalyticsFilte
         WHERE (timestamp_utc + interval '8 hours')::date BETWEEN $1::date - ($2::date - $1::date + 1) AND $2
         GROUP BY 1, 2
       )`;
-    const WEATHER_OK = `($4::text IS NULL OR (rt IS NOT NULL AND EXISTS (
-      SELECT 1 FROM wxall w WHERE w.d = incidents.d AND w.h = ${HOUR_OF} AND w.wet = ($4 = 'wet'))))`;
+    // events.d/events.h are always non-null (both source columns are real
+    // timestamps, never a possibly-blank time-of-day string like the old
+    // reported_time), so unlike the legacy WEATHER_OK there's no "rt IS NOT
+    // NULL" guard needed here.
+    const WEATHER_OK = `($4::text IS NULL OR EXISTS (
+      SELECT 1 FROM wxall w WHERE w.d = events.d AND w.h = events.h AND w.wet = ($4 = 'wet')))`;
     const WHERE = `d BETWEEN $1 AND $2 AND ($3::text IS NULL OR src = $3) AND ${WEATHER_OK}`;
 
     // Local time = UTC+8 for weather join
@@ -124,108 +176,232 @@ export async function getIncidentAnalyticsFromDb(filters: IncidentAnalyticsFilte
         GROUP BY 1, 2
       )`;
 
-    const [trend, hotspot, heatmap, causes, types, weatherExposure, weatherIncidents, jamSpeedWx, kpi] =
-      await Promise.all([
-        // Daily counts by source (client rolls up to weekly/monthly)
-        db.query(
-          `WITH ${INCIDENTS_CTE}, ${WXALL_CTE}
-           SELECT d::text, COUNT(*) FILTER (WHERE src = 'road')::int AS road,
-                  COUNT(*) FILTER (WHERE src = 'moto')::int AS moto,
-                  COUNT(*) FILTER (WHERE src = 'stalled')::int AS stalled
-           FROM incidents WHERE ${WHERE} GROUP BY 1 ORDER BY 1`,
-          params
-        ),
-        // Hotspots: 5-km bins from the Km-post in the location field
-        db.query(
-          `WITH ${INCIDENTS_CTE}, ${WXALL_CTE}
-           SELECT (FLOOR(${KM_OF} / 5) * 5)::int AS km_bin, COUNT(*)::int AS total,
-                  COUNT(*) FILTER (WHERE src = 'road')::int AS road,
-                  COUNT(*) FILTER (WHERE src = 'moto')::int AS moto,
-                  COUNT(*) FILTER (WHERE src = 'stalled')::int AS stalled,
-                  SUM(inj)::int AS injuries, SUM(fat)::int AS fatalities
-           FROM incidents
-           WHERE ${WHERE} AND location ~ 'Km\\s*\\d+'
-           GROUP BY 1 ORDER BY 2 DESC`,
-          params
-        ),
-        // Hour x day-of-week frequency
-        db.query(
-          `WITH ${INCIDENTS_CTE}, ${WXALL_CTE}
-           SELECT EXTRACT(dow FROM d)::int AS dow, ${HOUR_OF} AS hour, COUNT(*)::int AS v
-           FROM incidents WHERE ${WHERE} AND rt IS NOT NULL
-           GROUP BY 1, 2 ORDER BY 1, 2`,
-          params
-        ),
-        // Top causes with severity
-        db.query(
-          `WITH ${INCIDENTS_CTE}, ${WXALL_CTE}
-           SELECT cause AS label, COUNT(*)::int AS total, SUM(inj)::int AS injuries, SUM(fat)::int AS fatalities
-           FROM incidents WHERE ${WHERE} AND cause IS NOT NULL
-           GROUP BY 1 ORDER BY 2 DESC LIMIT 12`,
-          params
-        ),
-        // Top accident types with severity (crashes only — stalled vehicles have no type)
-        db.query(
-          `WITH ${INCIDENTS_CTE}, ${WXALL_CTE}
-           SELECT itype AS label, COUNT(*)::int AS total, SUM(inj)::int AS injuries, SUM(fat)::int AS fatalities
-           FROM incidents WHERE ${WHERE} AND itype IS NOT NULL AND src <> 'stalled'
-           GROUP BY 1 ORDER BY 2 DESC LIMIT 12`,
-          params
-        ),
-        // Weather exposure: wet vs dry hours in range (expressway-wide avg rainfall)
-        db.query(
-          `WITH ${WX_CTE}
-           SELECT COUNT(*) FILTER (WHERE rain > 0.3)::int AS wet_hours,
-                  COUNT(*) FILTER (WHERE rain <= 0.3)::int AS dry_hours
-           FROM wx`,
-          [lo, hi]
-        ),
-        // Incidents on wet vs dry hours, by source
-        db.query(
-          `WITH ${INCIDENTS_CTE}, ${WX_CTE}
-           SELECT (w.rain > 0.3) AS wet, i.src, COUNT(*)::int AS n
-           FROM incidents i JOIN wx w ON w.d = i.d AND w.h = EXTRACT(hour FROM i.rt::time)::int
-           WHERE i.d BETWEEN $1 AND $2 AND ($3::text IS NULL OR i.src = $3) AND i.rt IS NOT NULL
-             AND ($4::text IS NULL OR (w.rain > 0.3) = ($4 = 'wet'))
-           GROUP BY 1, 2`,
-          params
-        ),
-        // Traffic impact: avg jam speed on wet vs dry hours
-        db.query(
-          `WITH ${WX_CTE}
-           SELECT (w.rain > 0.3) AS wet,
-                  ROUND(AVG(j.avg_speed_kmh)::numeric, 1)::float AS speed,
-                  ROUND(AVG(j.avg_jam_level)::numeric, 2)::float AS jam_level
-           FROM fact_hourly_jams j JOIN wx w ON w.d = j.date_day AND w.h = j.hour_of_day
-           WHERE j.date_day BETWEEN $1 AND $2
-           GROUP BY 1`,
-          [lo, hi]
-        ),
-        // KPI: current vs previous period + severity + response time + rain share
-        db.query(
-          `WITH ${INCIDENTS_CTE}, ${WXALL_CTE}
-           SELECT
-             COUNT(*) FILTER (WHERE ${WHERE})::int AS cur_total,
-             COUNT(*) FILTER (WHERE d >= $1::date - ($2::date - $1::date + 1) AND d < $1::date AND ($3::text IS NULL OR src = $3) AND ${WEATHER_OK})::int AS prev_total,
-             SUM(inj) FILTER (WHERE ${WHERE})::int AS injuries,
-             SUM(fat) FILTER (WHERE ${WHERE})::int AS fatalities,
-             ROUND(AVG(${RESPONSE_MIN}) FILTER (WHERE ${WHERE} AND ${RESPONSE_MIN} BETWEEN 0 AND 120)::numeric, 1)::float AS avg_response_min,
-             COUNT(*) FILTER (WHERE ${WHERE} AND weather_condition = 'Rainy')::int AS rainy_crashes,
-             COUNT(*) FILTER (WHERE ${WHERE} AND weather_condition IS NOT NULL)::int AS weather_known
-           FROM incidents`,
-          params
-        ),
-      ]);
+    // Per-table weather-match helper for the causes/types queries below,
+    // which read straight off silver.nlex_*_events_clean rather than the
+    // shared `events` CTE.
+    const weatherOkFor = (tsExpr: string, weatherParam: string) => `
+      (${weatherParam}::text IS NULL OR EXISTS (
+        SELECT 1 FROM wxall w WHERE w.d = (${tsExpr})::date
+                                 AND w.h = EXTRACT(hour FROM ${tsExpr})::int
+                                 AND w.wet = (${weatherParam} = 'wet')))`;
 
-    const wxInc = { wet: { road: 0, moto: 0, stalled: 0 }, dry: { road: 0, moto: 0, stalled: 0 } };
+    const [
+      trend,
+      hotspot,
+      heatmap,
+      accidentCauses,
+      breakdownCauses,
+      types,
+      weatherExposure,
+      weatherIncidents,
+      jamSpeedWx,
+      kpi,
+      accidentClearance,
+      breakdownDeploy,
+    ] = await Promise.all([
+      // Daily counts by event type (client rolls up to weekly/monthly)
+      db.query(
+        `WITH ${EVENTS_CTE}, ${WXALL_CTE}
+         SELECT d::text, COUNT(*) FILTER (WHERE src = 'accident')::int AS accident,
+                COUNT(*) FILTER (WHERE src = 'breakdown')::int AS breakdown
+         FROM events WHERE ${WHERE} GROUP BY 1 ORDER BY 1`,
+        params
+      ),
+      // Hotspots: 5-km bins straight from km_value — both tables carry it
+      // natively, so there's no location text to regex-parse anymore.
+      db.query(
+        `WITH ${EVENTS_CTE}, ${WXALL_CTE}
+         SELECT (FLOOR(km_value / 5) * 5)::int AS km_bin, COUNT(*)::int AS total,
+                COUNT(*) FILTER (WHERE src = 'accident')::int AS accident,
+                COUNT(*) FILTER (WHERE src = 'breakdown')::int AS breakdown,
+                SUM(inj)::int AS injuries, SUM(fat)::int AS fatalities
+         FROM events
+         WHERE ${WHERE} AND km_value IS NOT NULL
+         GROUP BY 1 ORDER BY 2 DESC`,
+        params
+      ),
+      // Hour x day-of-week frequency
+      db.query(
+        `WITH ${EVENTS_CTE}, ${WXALL_CTE}
+         SELECT EXTRACT(dow FROM d)::int AS dow, h AS hour, COUNT(*)::int AS v
+         FROM events WHERE ${WHERE}
+         GROUP BY 1, 2 ORDER BY 1, 2`,
+        params
+      ),
+      // Top accident causes. sub_cause is the specific label (e.g. "Driver
+      // Error"); main_cause rides along as the broader bucket (e.g. "Human
+      // Error") rather than being the group itself, since grouping by
+      // main_cause alone would collapse everything into ~4 bars.
+      db.query(
+        `WITH ${WXALL_CTE}
+         SELECT sub_cause AS label, main_cause AS "mainCause", COUNT(*)::int AS total,
+                SUM(COALESCE(number_of_injured,0))::int AS injuries,
+                SUM(COALESCE(number_of_fatality,0))::int AS fatalities
+         FROM silver.nlex_accident_events_clean e
+         WHERE e.event_start_date::date BETWEEN $1 AND $2 AND sub_cause IS NOT NULL
+           AND ${weatherOkFor("e.event_start_date", "$3")}
+         GROUP BY 1, 2 ORDER BY 3 DESC LIMIT 12`,
+        [lo, hi, wx]
+      ),
+      // Top breakdown causes — mechanical faults, a different vocabulary
+      // entirely from accident causes, kept as its own ranking rather than
+      // merged into one list (see the earlier audit of this chart). No
+      // injuries/fatalities column: the breakdown table has neither.
+      db.query(
+        `WITH ${WXALL_CTE}
+         SELECT sub_cause AS label, main_cause AS "mainCause", COUNT(*)::int AS total
+         FROM silver.nlex_breakdown_events_clean e
+         WHERE e.event_encoded_date::date BETWEEN $1 AND $2 AND sub_cause IS NOT NULL
+           AND ${weatherOkFor("e.event_encoded_date", "$3")}
+         GROUP BY 1, 2 ORDER BY 3 DESC LIMIT 12`,
+        [lo, hi, wx]
+      ),
+      // Top accident types (type_of_event) — breakdowns have no discrete
+      // "type" field, so this stays accident-only, same restriction the old
+      // query applied to stalled vehicles.
+      db.query(
+        `WITH ${WXALL_CTE}
+         SELECT type_of_event AS label, COUNT(*)::int AS total,
+                SUM(COALESCE(number_of_injured,0))::int AS injuries,
+                SUM(COALESCE(number_of_fatality,0))::int AS fatalities
+         FROM silver.nlex_accident_events_clean e
+         WHERE e.event_start_date::date BETWEEN $1 AND $2 AND type_of_event IS NOT NULL
+           AND ${weatherOkFor("e.event_start_date", "$3")}
+         GROUP BY 1 ORDER BY 2 DESC LIMIT 12`,
+        [lo, hi, wx]
+      ),
+      // Weather exposure: wet vs dry hours in range (unchanged — reads only
+      // hourly_weather, no incident table involved)
+      db.query(
+        `WITH ${WX_CTE}
+         SELECT COUNT(*) FILTER (WHERE rain > 0.3)::int AS wet_hours,
+                COUNT(*) FILTER (WHERE rain <= 0.3)::int AS dry_hours
+         FROM wx`,
+        [lo, hi]
+      ),
+      // Incidents on wet vs dry hours, by event type
+      db.query(
+        `WITH ${EVENTS_CTE}, ${WX_CTE}
+         SELECT (w.rain > 0.3) AS wet, e.src, COUNT(*)::int AS n
+         FROM events e JOIN wx w ON w.d = e.d AND w.h = e.h
+         WHERE e.d BETWEEN $1 AND $2 AND ($3::text IS NULL OR e.src = $3)
+           AND ($4::text IS NULL OR (w.rain > 0.3) = ($4 = 'wet'))
+         GROUP BY 1, 2`,
+        params
+      ),
+      // Traffic impact: avg jam speed on wet vs dry hours (unchanged)
+      db.query(
+        `WITH ${WX_CTE}
+         SELECT (w.rain > 0.3) AS wet,
+                ROUND(AVG(j.avg_speed_kmh)::numeric, 1)::float AS speed,
+                ROUND(AVG(j.avg_jam_level)::numeric, 2)::float AS jam_level
+         FROM fact_hourly_jams j JOIN wx w ON w.d = j.date_day AND w.h = j.hour_of_day
+         WHERE j.date_day BETWEEN $1 AND $2
+         GROUP BY 1`,
+        [lo, hi]
+      ),
+      // KPI: current vs previous period + severity + rain share. Response
+      // time is deliberately absent here — see accidentClearance/
+      // breakdownDeploy below, which replace the old single avgResponseMin
+      // with two metrics that don't conflate the two event types.
+      db.query(
+        `WITH ${EVENTS_CTE}, ${WXALL_CTE}
+         SELECT
+           COUNT(*) FILTER (WHERE ${WHERE})::int AS cur_total,
+           COUNT(*) FILTER (WHERE d >= $1::date - ($2::date - $1::date + 1) AND d < $1::date AND ($3::text IS NULL OR src = $3) AND ${WEATHER_OK})::int AS prev_total,
+           SUM(inj) FILTER (WHERE ${WHERE})::int AS injuries,
+           SUM(fat) FILTER (WHERE ${WHERE})::int AS fatalities,
+           COUNT(*) FILTER (WHERE ${WHERE} AND weather_condition = 'Rainy')::int AS rainy_crashes,
+           COUNT(*) FILTER (WHERE ${WHERE} AND weather_condition IS NOT NULL)::int AS weather_known
+         FROM events`,
+        params
+      ),
+      // MTTC, accident side: clearance_min is already a computed duration
+      // (event start -> site cleared) on this table — nothing to derive,
+      // just aggregate with a sanity floor at 0 (a negative value here would
+      // be a data-entry error, not a real duration).
+      db.query(
+        `WITH ${WXALL_CTE}
+         SELECT COUNT(*)::int AS total,
+                COUNT(*) FILTER (WHERE clearance_min IS NOT NULL AND clearance_min >= 0)::int AS valid_n,
+                ROUND(AVG(clearance_min) FILTER (WHERE clearance_min IS NOT NULL AND clearance_min >= 0)::numeric, 1)::float AS avg_min
+         FROM silver.nlex_accident_events_clean e
+         WHERE e.event_start_date::date BETWEEN $1 AND $2
+           AND ($3::text IS NULL OR $3 = 'accident')
+           AND ${weatherOkFor("e.event_start_date", "$4")}`,
+        params
+      ),
+      // MTTC + time-to-first-responder, breakdown side. Both are derived from
+      // the deployments JSONB array rather than trusted at face value:
+      // verified 15.7% of multi-dispatch events (314/2000 sampled) have their
+      // deployments NOT in chronological dispatch order, so "first dispatch"
+      // and "last departure" are picked by MIN/MAX(dispatch_time) instead of
+      // array position [0]/[-1] — using array order would silently mislabel
+      // the first responder on roughly 1 in 6 multi-dispatch events.
+      db.query(
+        `WITH ${WXALL_CTE},
+         scoped AS (
+           SELECT b.event_number, b.event_encoded_date, b.deployments
+           FROM silver.nlex_breakdown_events_clean b
+           WHERE b.event_encoded_date::date BETWEEN $1 AND $2
+             AND ($3::text IS NULL OR $3 = 'breakdown')
+             AND ${weatherOkFor("b.event_encoded_date", "$4")}
+         ),
+         per_event AS (
+           SELECT s.event_number, s.event_encoded_date,
+                  MAX(NULLIF(d->>'departure_time', '')::timestamp) AS last_departure,
+                  (SELECT NULLIF(d2->>'response_time_min', '')::numeric
+                     FROM jsonb_array_elements(s.deployments) d2
+                    WHERE d2->>'dispatch_time' IS NOT NULL AND d2->>'dispatch_time' <> ''
+                    ORDER BY (d2->>'dispatch_time')::timestamp ASC LIMIT 1) AS first_response_min
+           FROM scoped s, jsonb_array_elements(s.deployments) d
+           WHERE s.deployments IS NOT NULL
+             AND d->>'departure_time' IS NOT NULL AND d->>'departure_time' <> ''
+           GROUP BY s.event_number, s.event_encoded_date, s.deployments
+         )
+         SELECT
+           (SELECT COUNT(*) FROM scoped)::int AS total,
+           COUNT(*) FILTER (WHERE resp_min IS NOT NULL)::int AS response_valid_n,
+           ROUND(AVG(resp_min) FILTER (WHERE resp_min IS NOT NULL)::numeric, 1)::float AS avg_response_min,
+           COUNT(*) FILTER (WHERE mttc_min IS NOT NULL)::int AS mttc_valid_n,
+           ROUND(AVG(mttc_min) FILTER (WHERE mttc_min IS NOT NULL)::numeric, 1)::float AS avg_mttc_min
+         FROM (
+           SELECT
+             (CASE WHEN first_response_min BETWEEN 0 AND 1440 THEN first_response_min END) AS resp_min,
+             (CASE WHEN EXTRACT(EPOCH FROM (last_departure - event_encoded_date)) / 60 BETWEEN 0 AND 1440
+                   THEN EXTRACT(EPOCH FROM (last_departure - event_encoded_date)) / 60 END) AS mttc_min
+           FROM per_event
+         ) x`,
+        params
+      ),
+    ]);
+
+    const wxInc = { wet: { accident: 0, breakdown: 0 }, dry: { accident: 0, breakdown: 0 } };
     for (const r of weatherIncidents.rows) {
       const bucket = r.wet ? wxInc.wet : wxInc.dry;
-      bucket[r.src as "road" | "moto" | "stalled"] = r.n;
+      bucket[r.src as "accident" | "breakdown"] = r.n;
     }
     const jamWx = { wet: null as { speed: number; jam_level: number } | null, dry: null as { speed: number; jam_level: number } | null };
     for (const r of jamSpeedWx.rows) {
       jamWx[r.wet ? "wet" : "dry"] = { speed: r.speed, jam_level: r.jam_level };
     }
+
+    // MTTC blends both event types into one headline figure, weighted by how
+    // many valid durations each side actually contributed — an event with no
+    // deployments or a null clearance timestamp is excluded from the average
+    // entirely rather than counted as a zero-minute clearance.
+    const ac = accidentClearance.rows[0];
+    const bd = breakdownDeploy.rows[0];
+    const accidentValid = ac.valid_n ?? 0;
+    const accidentTotal = ac.total ?? 0;
+    const breakdownValid = bd.mttc_valid_n ?? 0;
+    const breakdownTotal = bd.total ?? 0;
+    const combinedValid = accidentValid + breakdownValid;
+    const combinedTotal = accidentTotal + breakdownTotal;
+    const overallMttcMin =
+      combinedValid > 0
+        ? Number((((ac.avg_min ?? 0) * accidentValid + (bd.avg_mttc_min ?? 0) * breakdownValid) / combinedValid).toFixed(1))
+        : null;
 
     const data = {
       range: { from: lo, to: hi },
@@ -235,14 +411,32 @@ export async function getIncidentAnalyticsFromDb(filters: IncidentAnalyticsFilte
         prevTotalIncidents: kpi.rows[0].prev_total,
         injuries: kpi.rows[0].injuries ?? 0,
         fatalities: kpi.rows[0].fatalities ?? 0,
-        avgResponseMin: kpi.rows[0].avg_response_min,
         rainyCrashes: kpi.rows[0].rainy_crashes,
         weatherKnown: kpi.rows[0].weather_known,
+        // Breakdown-only: accidents have no per-dispatch record to measure
+        // this from, so they contribute nothing here rather than a fabricated
+        // value.
+        avgTimeToFirstResponder: {
+          min: bd.avg_response_min,
+          n: bd.response_valid_n ?? 0,
+          totalBreakdowns: breakdownTotal,
+        },
+        mttc: {
+          overallMin: overallMttcMin,
+          accidentMin: ac.avg_min,
+          breakdownMin: bd.avg_mttc_min,
+          coverage: {
+            accidents: { total: accidentTotal, valid: accidentValid },
+            breakdowns: { total: breakdownTotal, valid: breakdownValid },
+            pctValid: combinedTotal > 0 ? Number(((combinedValid / combinedTotal) * 100).toFixed(1)) : null,
+          },
+        },
       },
       dailyTrend: trend.rows,
       hotspots: hotspot.rows,
       heatmap: heatmap.rows,
-      causes: causes.rows,
+      accidentCauses: accidentCauses.rows,
+      breakdownCauses: breakdownCauses.rows,
       types: types.rows,
       weather: {
         wetHours: weatherExposure.rows[0].wet_hours,

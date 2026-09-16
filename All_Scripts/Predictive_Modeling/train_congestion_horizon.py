@@ -43,6 +43,13 @@ import warnings
 # served forecast are overwritten.
 DRY_RUN = "--dry-run" in sys.argv
 
+# --fast: skip SARIMAX. It is ~90% of the runtime (280 model fits at rolling
+# origins) and it has never been accepted — it scores near chance because a
+# speed forecast one-hot'd into a class is the wrong shape for this task. A
+# scheduled hourly refresh cannot afford 25 minutes; without SARIMAX the same
+# run takes about two. Leave it on for a full leaderboard, off for a refresh.
+FAST = "--fast" in sys.argv
+
 import numpy as np
 import pandas as pd
 import psycopg2
@@ -65,7 +72,25 @@ PG = (f"host={_env['PG_HOST']} port={_env.get('PG_PORT', 5432)} dbname={_env['PG
       f"user={_env['PG_USER']} password={_env['PG_PASSWORD']} sslmode=require")
 HORIZONS = list(range(1, 13))
 STATES = ["Low", "Med", "High"]
-SEVERE_KMH, HEAVY_KMH = 30.0, 60.0
+
+# Class cuts, in km/h of the exit-hour's length-weighted jam speed.
+#
+# These were 30 and 60: generic expressway free-flow thresholds. Waze only
+# reports a jam on this corridor once traffic is ALREADY slow, so 96% of
+# reported jams ran under 30 km/h and 99.9% under 60. Every reported exit-hour
+# therefore landed in one class: the served map was solid red, Med was never
+# once predicted, and the "three-state" model was really answering the single
+# question "was a jam reported here at all".
+#
+# Re-cut at this corridor's own distribution of exit-hour speeds:
+#     under 10 km/h    15.3% of reported cells   crawling
+#     10 to 20 km/h    51.5%                     heavy
+#     20 km/h and over 33.2%   (joins every hour with no jam reported)
+#
+# Same speeds, same data — cut where this road actually varies rather than
+# where a generic advisory scale says. The UI states the thresholds, so the
+# reader is never left guessing what a colour means.
+SEVERE_KMH, HEAVY_KMH = 10.0, 20.0
 TEST_DAYS = 7
 SEQ_LEN = 24
 SARIMAX_ORIGIN_STEP = 12          # refit cadence across the test window
@@ -284,7 +309,11 @@ except Exception as e:
 
 # ── 6. SARIMAX — refit at rolling origins ───────────────────────────────────
 banner("STEP 7: SARIMAX (rolling origins, horizon-matched)")
+if FAST:
+    print("  SKIPPED: --fast. SARIMAX is ~90% of the runtime and has never been accepted.")
 try:
+    if FAST:
+        raise RuntimeError("skipped by --fast")
     from statsmodels.tsa.statespace.sarimax import SARIMAX
 
     test_ts = np.sort(te.ts.unique())

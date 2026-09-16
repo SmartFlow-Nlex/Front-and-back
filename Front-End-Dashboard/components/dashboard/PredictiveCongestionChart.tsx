@@ -50,9 +50,9 @@ type RawRow = { segment: string; hours: number; state: State; probability: numbe
 // > 60 km/h", a speed the data cannot contain; the blue cell means the model
 // expects no report, which is what it says now.
 const STATE_META: Record<State, { rank: number; color: string; text: string; label: string; short: string; speed: string }> = {
-  Low: { rank: 0, color: "#cfe4f7", text: "#12507e", label: "Clear", short: "CLEAR", speed: "no jam reported" },
-  Med: { rank: 1, color: "#f0a63a", text: "#5c3208", label: "Heavy", short: "HEAVY", speed: "jams at 30–60 km/h" },
-  High: { rank: 2, color: "#dc2626", text: "#ffffff", label: "Severe", short: "SEVERE", speed: "jams under 30 km/h" },
+  Low: { rank: 0, color: "#cfe4f7", text: "#12507e", label: "Moving", short: "MOVING", speed: "no jam, or over 20 km/h" },
+  Med: { rank: 1, color: "#f0a63a", text: "#5c3208", label: "Heavy", short: "HEAVY", speed: "10–20 km/h" },
+  High: { rank: 2, color: "#dc2626", text: "#ffffff", label: "Severe", short: "SEVERE", speed: "under 10 km/h" },
 };
 
 const LOW_CONF = 0.8;
@@ -278,13 +278,17 @@ export default function PredictiveCongestionChart() {
     // neighbouring exits is bad for a long stretch". Congestion propagates
     // between neighbours, so a CONTIGUOUS block is the meaningful shape - and it
     // is far quicker to read as one sentence than as 240 coloured cells.
+    // Measured over every CONGESTED exit, heavy or severe: a window can be busy
+    // end to end without one hour crawling under 10 km/h, and reading the span
+    // off severe alone then printed "no congestion predicted" beside a grid
+    // that was amber from end to end.
     const severeIdx = segments
-      .map((seg, i) => (severeSegments.has(seg) ? i : -1))
+      .map((seg, i) => (atRisk.has(seg) ? i : -1))
       .filter((i) => i >= 0)
       .sort((a, b) => a - b);
     const contiguous =
       severeIdx.length > 1 && severeIdx[severeIdx.length - 1] - severeIdx[0] === severeIdx.length - 1;
-    const severeKms = [...severeSegments]
+    const severeKms = [...atRisk]
       .map((seg) => KMI.get(seg)?.km)
       .filter((k): k is number => k != null)
       .sort((a, b) => a - b);
@@ -296,15 +300,21 @@ export default function PredictiveCongestionChart() {
     const flatHours = perHour.length > 1 && perHour.every((n) => n === perHour[0]);
 
     // How long the worst segments stay bad, and how sure the model is.
-    const severeAlerts = alerts.filter((a) => a.state === "High");
-    const allHours =
-      severeAlerts.length > 0 &&
-      severeAlerts.every((a) => a.from === 1 && a.to === maxHour);
-    const severeConfs = severeAlerts.map((a) => a.conf).sort((x, y) => x - y);
+    //
+    // These used to look at Severe alone, which was the only congested class
+    // the old 30 km/h cut ever produced. With the classes re-cut at this
+    // corridor's own speeds, Heavy is the common state and a window can be
+    // busy for twelve hours without one Severe hour in it — so "congested"
+    // has to mean Heavy or Severe, or the card reports zero on a red day.
+    const allHours = alerts.length > 0 && alerts.every((a) => a.from === 1 && a.to === maxHour);
+    const severeConfs = alerts.map((a) => a.conf).sort((x, y) => x - y);
 
     const peakIdx = perHour.indexOf(Math.max(...perHour));
     const worstIdx = perSegment.indexOf(Math.max(...perSegment));
-    const firstSevere = alerts.find((a) => a.state === "High");
+    // The first congested run of any grade, and separately the first severe
+    // one, so the card can say "heavy from +1h, severe from +4h".
+    const firstAlert = alerts[0] ?? null;
+    const firstSevere = alerts.find((a) => a.state === "High") ?? null;
 
     return {
       segments,
@@ -314,12 +324,14 @@ export default function PredictiveCongestionChart() {
       alerts,
       severeCount: alerts.filter((a) => a.state === "High").length,
       atRisk: atRisk.size,
+      congestedSegments: [...atRisk],
       severeSegments: [...severeSegments],
       severeCells,
       peakHour: perHour[peakIdx] > 0 ? peakIdx + 1 : null,
       peakHourCount: perHour[peakIdx],
       worstSegment: perSegment[worstIdx] > 0 ? segments[worstIdx] : null,
       worstSegmentCount: perSegment[worstIdx],
+      firstAlert,
       firstSevere,
       contiguous,
       baseTs,
@@ -334,6 +346,7 @@ export default function PredictiveCongestionChart() {
       // Whether the model EVER predicts Heavy. It does not, and a legend entry
       // for a state that never appears reads as a gap in the data rather than a
       // property of the model.
+      heavyCount: alerts.filter((a) => a.state === "Med").length,
       everHeavy: cells.some((c) => c.state === "Med"),
       lowConfCount: cells.filter((c) => c.state !== "Low" && c.conf < LOW_CONF).length,
     };
@@ -346,7 +359,7 @@ export default function PredictiveCongestionChart() {
           <>
             <h3 style={{ margin: 0, fontSize: "1.05rem", fontWeight: 700, color: "#0f172a" }}>
               Predictive Congestion State Map
-              <InfoTooltip text="Predicted jam state at each exit for the next 12 hours, from Waze jam reports. Red = jams under 30 km/h expected; blue = no jam reported." />
+              <InfoTooltip text="Predicted jam state at each exit for the next 12 hours, from Waze jam reports. Red = crawling under 10 km/h, amber = heavy at 10-20 km/h, blue = moving freely or no jam reported. The cuts are this corridor's own: a generic 30 km/h threshold put every reported jam in one class." />
             </h3>
             <div style={{ color: "var(--color-danger, #ef4444)", fontSize: "0.88rem" }}>{loadError}</div>
             <div>
@@ -671,30 +684,34 @@ export default function PredictiveCongestionChart() {
   // A one-sentence read of the whole card, for stakeholders who will not
   // decode a 108-cell grid. The shape of the problem - one unbroken stretch of
   // road, bad for the whole window - is the thing to say.
+  const nCongested = model.congestedSegments.length;
   const nSevere = model.severeSegments.length;
   const kmSpan =
     model.kmFrom != null && model.kmTo != null ? Math.round(model.kmTo - model.kmFrom) : null;
 
-  const spH = model.severePerHour as number[];
+  const spH = model.perHour as number[];
   const firstCount = spH[0] ?? 0;
   const peakCount = Math.max(...spH);
   const peakAt = spH.indexOf(peakCount) + 1;
-  const clear = segments.filter((sg) => !model.severeSegments.includes(sg));
+  const clear = segments.filter((sg) => !model.congestedSegments.includes(sg));
 
   const whoText =
-    nSevere === segments.length
+    nCongested === segments.length
       ? `every exit on the corridor`
-      : nSevere > segments.length * 0.6
-      ? `all but ${clear.length} exit${clear.length === 1 ? "" : "s"} (${clear.join(", ")} stay${clear.length === 1 ? "s" : ""} clear)`
+      : nCongested > segments.length * 0.6
+      ? `all but ${clear.length} exit${clear.length === 1 ? "" : "s"} (${clear.join(", ")} keep${clear.length === 1 ? "s" : ""} moving)`
       : model.contiguous && kmSpan != null
-      ? `${nSevere} neighbouring exits over about ${kmSpan} km, km ${model.kmFrom} to ${model.kmTo}`
-      : `${nSevere} of ${segments.length} exits (${model.severeSegments.join(", ")})`;
+      ? `${nCongested} neighbouring exits over about ${kmSpan} km, km ${model.kmFrom} to ${model.kmTo}`
+      : `${nCongested} of ${segments.length} exits (${model.congestedSegments.join(", ")})`;
 
-  const headline = !model.firstSevere
-    ? `No severe congestion forecast in the next ${hourLabels.length} hours.`
+  // The grade to name: severe if any hour crawls, otherwise heavy.
+  const worstWord = nSevere > 0 ? "severe" : "heavy";
+
+  const headline = !model.firstAlert
+    ? `Traffic is forecast to keep moving at every exit for the next ${hourLabels.length} hours.`
     : firstCount < peakCount
-    ? `Congestion builds: ${firstCount} of ${segments.length} exit${firstCount === 1 ? "" : "s"} severe at +1h, rising to ${peakCount} by +${peakAt}h. By the peak it is ${whoText}.`
-    : `${whoText.charAt(0).toUpperCase()}${whoText.slice(1)} — forecast severe from +1h${model.allHours ? ` and holding for the whole ${model.maxHour}-hour window` : ""}.`;
+    ? `Congestion builds: ${firstCount} of ${segments.length} exit${firstCount === 1 ? "" : "s"} congested at +1h, rising to ${peakCount} by +${peakAt}h. By the peak it is ${whoText}${nSevere > 0 ? `, with ${nSevere} crawling under 10 km/h` : ""}.`
+    : `${whoText.charAt(0).toUpperCase()}${whoText.slice(1)} — forecast ${worstWord} from +1h${model.allHours ? ` and holding for the whole ${model.maxHour}-hour window` : ""}.`;
 
   const stat = (value: string, label: string, tone?: string) => (
     <div style={{ display: "flex", flexDirection: "column", gap: 1, minWidth: 0 }}>
@@ -723,7 +740,7 @@ export default function PredictiveCongestionChart() {
         <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
           <h3 style={{ fontSize: "1.05rem", color: "#0f172a", fontWeight: 700, margin: 0, letterSpacing: "-0.01em" }}>
             Predictive Congestion State Map
-            <InfoTooltip text="Predicted jam state at each exit for the next 12 hours, from Waze jam reports. Red = jams under 30 km/h expected; blue = no jam reported." />
+            <InfoTooltip text="Predicted jam state at each exit for the next 12 hours, from Waze jam reports. Red = crawling under 10 km/h, amber = heavy at 10-20 km/h, blue = moving freely or no jam reported. The cuts are this corridor's own: a generic 30 km/h threshold put every reported jam in one class." />
           </h3>
           <div style={{ display: "flex", gap: 6, flexWrap: "wrap", justifyContent: "flex-end" }}>
             <span
@@ -761,16 +778,16 @@ export default function PredictiveCongestionChart() {
       {/* Row 2: the finding. */}
       <div style={{
         padding: "12px 14px", borderRadius: "10px", fontSize: "0.88rem", lineHeight: 1.5,
-        background: model.firstSevere ? "#fef2f2" : "#f0fdf4",
-        border: `1px solid ${model.firstSevere ? "#fecaca" : "#bbf7d0"}`,
-        color: model.firstSevere ? "#991b1b" : "#166534",
+        background: nSevere > 0 ? "#fef2f2" : model.firstAlert ? "#fffbeb" : "#f0fdf4",
+        border: `1px solid ${nSevere > 0 ? "#fecaca" : model.firstAlert ? "#fde68a" : "#bbf7d0"}`,
+        color: nSevere > 0 ? "#991b1b" : model.firstAlert ? "#92400e" : "#166534",
       }}>
         {headline}
       </div>
 
       {/* Row 3: how many, where, how long, how sure — once each, one line. */}
       <div style={{ display: "grid", gridTemplateColumns: "repeat(4, minmax(0, 1fr))", gap: "10px 16px", padding: "10px 14px", background: "#f8fafc", border: "1px solid #e2e8f0", borderRadius: 10 }}>
-        {stat(`${nSevere} of ${segments.length}`, nSevere > 0 ? "exits with a jam expected" : "exits affected · clear", nSevere > 0 ? "#b91c1c" : "#15803d")}
+        {stat(`${nCongested} of ${segments.length}`, nCongested > 0 ? "exits with a jam expected" : "exits affected · all moving", nCongested > 0 ? (nSevere > 0 ? "#b91c1c" : "#b45309") : "#15803d")}
         {stat(kmSpan != null ? `km ${model.kmFrom}–${model.kmTo}` : "—", kmSpan != null ? `${kmSpan} km${model.contiguous ? ", one stretch" : ", not contiguous"}` : "no congestion predicted")}
         {stat(model.allHours ? `all ${model.maxHour}h` : model.worstSegment ? `${model.worstSegmentCount} of ${hourLabels.length}h` : "—", model.flatHours ? "same every hour" : "at the worst exit")}
         {stat(model.confLo != null && model.confHi != null ? `${Math.round(model.confLo * 100)}–${Math.round(model.confHi * 100)}%` : "—",
@@ -785,7 +802,7 @@ export default function PredictiveCongestionChart() {
             {(["Low", "Med", "High"] as State[]).map((st) => {
               const absent = st === "Med" && !model.everHeavy;
               return (
-                <span key={st} title={absent ? "Heavy would need jams averaging 30–60 km/h; reported jams almost never run that fast, so the model has nothing to learn it from" : undefined}
+                <span key={st} title={absent ? "No exit-hour in this forecast falls in the 10-20 km/h band" : undefined}
                       style={{ display: "inline-flex", alignItems: "center", gap: 5, whiteSpace: "nowrap", opacity: absent ? 0.45 : 1 }}>
                   <span style={{ width: 11, height: 11, background: STATE_META[st].color, borderRadius: 3 }} />
                   {STATE_META[st].label} <span style={{ color: "#94a3b8" }}>{STATE_META[st].speed}</span>
@@ -794,7 +811,7 @@ export default function PredictiveCongestionChart() {
               );
             })}
             {model.lowConfCount > 0 && <span style={{ color: "#94a3b8", whiteSpace: "nowrap" }}><b>*</b> confidence under 80%</span>}
-            <span style={{ color: "#94a3b8" }} title="States come from Waze jam reports at each exit, hour by hour. Severe means jams were reported and averaged under 30 km/h; Clear means the model expects no report.">
+            <span style={{ color: "#94a3b8" }} title="States come from Waze jam reports at each exit, hour by hour. Severe means the hour's jams averaged under 10 km/h, Heavy 10-20 km/h, and Moving means either no jam was reported or traffic was still over 20 km/h.">
               · from Waze jam reports ⓘ
             </span>
           </div>
@@ -839,7 +856,11 @@ export default function PredictiveCongestionChart() {
       <div>
         <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 12, marginBottom: 8 }}>
           <h4 style={{ margin: 0, fontSize: "0.88rem", color: "#0f172a", fontWeight: 700 }}>
-            What to act on <span style={{ color: "#94a3b8", fontWeight: 500 }}>· {model.severeCount} severe episode{model.severeCount === 1 ? "" : "s"} across {nSevere} of {segments.length} exits</span>
+            What to act on <span style={{ color: "#94a3b8", fontWeight: 500 }}>
+              · {alerts.length} episode{alerts.length === 1 ? "" : "s"} across {nCongested} of {segments.length} exits
+              {model.severeCount > 0 && <> · {model.severeCount} severe</>}
+              {model.heavyCount > 0 && <> · {model.heavyCount} heavy</>}
+            </span>
           </h4>
           {alerts.length > VISIBLE_ALERTS && (
             <button onClick={() => setAlertsOpen(true)} style={{ display: "inline-flex", alignItems: "center", gap: 6, border: "1px solid #dce2ef", background: "#fff", borderRadius: 999, padding: "4px 12px", fontSize: "0.74rem", fontWeight: 600, color: "#475569", cursor: "pointer" }}>
@@ -935,10 +956,10 @@ export default function PredictiveCongestionChart() {
               </span>
             </div>
             <p style={{ margin: 0, lineHeight: 1.55, color: "#94a3b8" }}>
-              {modelInfo?.model ?? "The model"} classifies each exit-hour as clear or severe from whether Waze jams were reported there and how slow they ran
+              {modelInfo?.model ?? "The model"} classifies each exit-hour by how slow its Waze jams ran: under 10 km/h severe, 10–20 heavy, and moving above that or with no jam reported
               {modelInfo?.baseline?.accuracy != null && <>, at {(modelInfo.accuracy! * 100).toFixed(1)}% against {(modelInfo.baseline.accuracy * 100).toFixed(1)}% for the {modelInfo.baseline.model.toLowerCase()} baseline</>}.
-              {!model.everHeavy && <> It never predicts Heavy: that would need jams averaging 30–60 km/h, and reported jams almost never do.</>}
-              {" "}Because most daytime hours on the corridor carry at least one jam report, the grid runs mostly red; the informative cells are the clear ones and the hour a run begins.
+              {!model.everHeavy && <> It predicts no Heavy hour in this window.</>}
+              {" "}The thresholds are cut at this corridor's own distribution of jam speeds, not at a generic free-flow scale: at 30 km/h every reported jam here landed in one class and the map was solid red.
               {" "}Confidence is the model&apos;s certainty in its classification, not the probability of congestion.
             </p>
           </div>

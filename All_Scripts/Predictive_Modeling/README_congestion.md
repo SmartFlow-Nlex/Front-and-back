@@ -9,17 +9,40 @@ warehouse tables that only change when `train_congestion_horizon.py` is run:
 | `gold.ml_congestion_horizon_accuracy` | accuracy per horizon for every candidate, plus the persistence benchmark |
 | `gold.ml_model_metrics` (`target = 'Congestion'`) | the leaderboard the card's model badge and the accepted/rejected verdicts come from |
 
-The card shows an **expired** badge once `base_ts` is more than a day behind
-the clock, so the script has to run at least daily for the map to mean
-anything.
+The card shows an **expired** badge once the forecast's twelve-hour window has
+run out, so the script has to run regularly for the map to mean anything.
+
+## Staying fresh automatically
+
+`refresh_congestion.bat` runs the `--fast` path and appends to
+`refresh_congestion.log`. It is registered as a Windows Scheduled Task that
+fires every hour:
+
+```
+schtasks /Query  /TN "SmartFlow congestion refresh"   # is it registered?
+schtasks /Run    /TN "SmartFlow congestion refresh"   # run one now
+schtasks /Delete /TN "SmartFlow congestion refresh" /F  # stop refreshing
+```
+
+The task runs as the signed-in user and needs the machine awake; it reads
+`Back-End/.env` for credentials, so that file has to stay where it is. If the
+Waze ingestion itself stalls, `base_ts` stops advancing and the card will still
+say expired — correctly, because there is nothing newer to forecast from.
 
 ## Run it
 
 ```
 cd All_Scripts/Predictive_Modeling
 python train_congestion_horizon.py --dry-run   # train + score, print, write nothing
-python train_congestion_horizon.py             # same, then overwrite the three tables
+python train_congestion_horizon.py --fast      # skip SARIMAX (~2 min), then publish
+python train_congestion_horizon.py             # full leaderboard (~25 min), then publish
 ```
+
+`--fast` drops the SARIMAX candidate. It is about 90% of the runtime (280 model
+fits at rolling origins) and has never been accepted, scoring near chance
+because a speed forecast one-hot'd into a class is the wrong shape for this
+task. Use the full run when you want the complete leaderboard; use `--fast` for
+a routine refresh.
 
 Connection details are read from `Back-End/.env` (`PG_HOST`, `PG_PORT`,
 `PG_DATABASE`, `PG_USER`, `PG_PASSWORD`). Nothing is hard-coded in the script.
@@ -28,17 +51,21 @@ Dependencies: `pandas numpy psycopg2 scikit-learn xgboost statsmodels`.
 `tensorflow` is optional; without it the GRU candidate is skipped and the
 leaderboard is XGBoost, QRF and SARIMAX.
 
-Runtime is a few minutes; SARIMAX (refit at rolling origins for 20 exits) is
-most of it.
+Runtime is about two minutes with `--fast`, about twenty-five without: SARIMAX
+(refit at rolling origins for 20 exits) is nearly all of the difference.
 
 ## What it does
 
 - Builds an exit × hour grid from `silver.fact_waze_jams`, trimming trailing
   hours whose record count is under 25% of the norm for that hour of day, so
   an ingestion gap is not read as an empty corridor.
-- Labels each cell from the length-weighted jam speed: Severe under 30 km/h,
-  Heavy 30–60, Clear when no jam was reported. In practice 96% of reported
-  jams are under 30 km/h, so Heavy is rare.
+- Labels each cell from the length-weighted jam speed: **Severe** under
+  10 km/h, **Heavy** 10–20, **Moving** above that or when no jam was reported.
+  These cuts were 30 and 60 — generic expressway thresholds. Waze only reports
+  a jam here once traffic is already slow, so 96% of reported jams ran under
+  30 km/h: every reported hour landed in one class, Heavy was never predicted,
+  and the map was solid red. Re-cut at this corridor's own distribution, the
+  three classes carry roughly 49% / 38% / 14% of the grid.
 - For each horizon 1–12 h the target is the state *h hours later*; features
   are only what is knowable at the origin hour: hour, weekday, the same hour
   one and two days earlier, and the last 1/2/3/6 hours plus 6 h and 24 h

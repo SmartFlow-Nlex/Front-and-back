@@ -1,4 +1,5 @@
 import { Router } from "express";
+import { asyncHandler } from "../middleware/error.middleware.js";
 import { triggerSimulation, configLanes, getResults } from "../controllers/ai-sandbox.controller.js";
 import { parseSandboxCommand, commandStatus } from "../controllers/sandbox-command.controller.js";
 import { authenticateToken, authorizeRoles } from "../middleware/auth.middleware.js";
@@ -17,15 +18,15 @@ const router = Router();
  * behind authenticateToken along with the rest of the dashboard as soon as the
  * frontend carries a session.
  */
-router.get("/command/status", commandStatus);
-router.post("/command", parseSandboxCommand);
+router.get("/command/status", asyncHandler(commandStatus));
+router.post("/command", asyncHandler(parseSandboxCommand));
 
 // Apply auth middleware to the remaining ai-sandbox endpoints
 router.use(authenticateToken);
 router.use(authorizeRoles(["data-analyst", "tcc-operator"]));
 
-router.post("/simulate", triggerSimulation);
-router.post("/config-lanes", configLanes);
-router.get("/results/:id", getResults);
+router.post("/simulate", asyncHandler(triggerSimulation));
+router.post("/config-lanes", asyncHandler(configLanes));
+router.get("/results/:id", asyncHandler(getResults));
 
 export default router;

@@ -3,6 +3,19 @@ import { env } from "./config/env.js";
 import { verifyDbConnection } from "./config/db.js";
 import { setSelfBase } from "./middleware/route-cache.js";
 
+/* A rejected promise that escapes a handler must not take the API down.
+ *
+ * Every route is wrapped in asyncHandler now, but that is a discipline someone
+ * has to keep: the dashboard routes were the exception, and one RDS connection
+ * timeout inside them killed the process mid-session. Node's default for an
+ * unhandled rejection is to throw and exit, which turns one failed request
+ * into an outage. Log it and stay up -- that request has already failed on its
+ * own. An uncaught synchronous exception is left alone to crash, because the
+ * process state after one is not trustworthy. */
+process.on("unhandledRejection", (reason) => {
+  console.error("Unhandled promise rejection (server kept running):", reason);
+});
+
 app.listen(env.PORT, async () => {
   console.log(`smartflow-backend running on http://localhost:${env.PORT}`);
   await verifyDbConnection();

@@ -207,26 +207,42 @@ export default function PredictiveCongestionChart() {
       if (!m) return null;
       return new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]), Number(m[4]), Number(m[5])).getTime();
     })();
+    /* Everything below is measured against the CLOCK, never against the first
+       column. Column h covers the hour starting at base + h, so:
+         - it is past once that hour has ended, i.e. it starts before this hour
+         - it is "now" only when it IS this hour
+       Anchoring "now" to the first surviving column instead was wrong whenever
+       the data was fully fresh: with base at 2 PM the first column is the 3 PM
+       hour, and the card called 3 PM "now" at 2:26 PM. */
+    const hourMs = 3.6e6;
+    const thisHourStart = (() => {
+      const d = new Date();
+      d.setMinutes(0, 0, 0);
+      return d.getTime();
+    })();
+    const startOf = (h: number) => (baseMsForTrim == null ? null : baseMsForTrim + h * hourMs);
+
     const skippedHours =
       baseMsForTrim == null
         ? 0
         : Math.min(
             storedHours,
-            // Column h is LABELLED with the clock hour base + h and covers that
-            // whole hour, so it is only past once base + h + 1 has arrived. The
-            // old elapsed test dropped it an hour early and the grid opened on
-            // the hour after the one you are in.
             Array.from({ length: storedHours }, (_, i) => i + 1).filter(
-              (h) => baseMsForTrim + (h + 1) * 3.6e6 <= Date.now(),
+              (h) => (startOf(h) as number) < thisHourStart,
             ).length,
           );
     const maxHour = storedHours - skippedHours;
 
-    // Labelled by the clock, because that is what an operator acts on. The
-    // first column is the hour in progress, so it is "now" rather than "+1h".
+    // Hours between this one and the column: 0 is the hour in progress.
+    const relHours = Array.from({ length: maxHour }, (_, i) => {
+      const t = startOf(skippedHours + i + 1);
+      return t == null ? i + 1 : Math.round((t - thisHourStart) / hourMs);
+    });
+    const relLabel = (n: number) => (n <= 0 ? "now" : `+${n}h`);
+
     const hourLabels = Array.from({ length: maxHour }, (_, i) => {
       const clock = hourClock(baseTs, skippedHours + i + 1);
-      const rel = i === 0 ? "now" : `+${i}h`;
+      const rel = relLabel(relHours[i]);
       return clock ? `${rel}\n${clock}` : rel;
     });
 
@@ -374,6 +390,7 @@ export default function PredictiveCongestionChart() {
       maxHour,
       storedHours,
       skippedHours,
+      relHours,
       confLo: severeConfs.length ? severeConfs[0] : null,
       confHi: severeConfs.length ? severeConfs[severeConfs.length - 1] : null,
       // Whether the model EVER predicts Heavy. It does not, and a legend entry
@@ -705,7 +722,11 @@ export default function PredictiveCongestionChart() {
           {/* Columns are now-relative: column 1 is the hour in progress, so it
               is "now" and column n is "+(n-1)h". */}
           {(() => {
-            const lbl = (col: number) => (col <= 1 ? "now" : `+${col - 1}h`);
+            const rel = model.relHours;
+            const lbl = (col: number) => {
+              const n = rel[col - 1];
+              return n == null ? `+${col}h` : n <= 0 ? "now" : `+${n}h`;
+            };
             return a.from === a.to ? lbl(a.from) : `${lbl(a.from)} → ${lbl(a.to)}`;
           })()} <span style={{ color: "#94a3b8" }}>· {span}h</span>
         </span>
@@ -805,7 +826,12 @@ export default function PredictiveCongestionChart() {
         <p style={{ color: "#64748b", fontSize: "0.82rem", margin: "4px 0 0 0" }}>
           {expired
             ? <>No hours left in this forecast · last covered <b style={{ color: "#334155" }}>{baseLabel(model.baseTs) ?? "the last reading"}</b></>
-            : <>Next <b style={{ color: "#334155" }}>{hourLabels.length} hours</b>, from this one
+            : <>Next <b style={{ color: "#334155" }}>{hourLabels.length} hours</b>
+                {model.relHours[0] != null && (
+                  model.relHours[0] <= 0
+                    ? <>, from this one</>
+                    : <>, from <b style={{ color: "#334155" }}>{(hourLabels[0] ?? "").split("\n")[1] ?? "the next hour"}</b></>
+                )}
                 {skippedHours > 0 && <span style={{ color: "#94a3b8" }}> · {skippedHours} earlier hour{skippedHours === 1 ? "" : "s"} already passed</span>}</>}
           <span style={{ cursor: "help" }} title="Rows are exits ordered north-bound by km-post. Hover any cell for the model's confidence. The base time is the last complete hour of Waze ingestion."> · hover for detail</span>
         </p>

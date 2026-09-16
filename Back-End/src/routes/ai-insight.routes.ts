@@ -1,4 +1,5 @@
 import { Router } from "express";
+import { asyncHandler } from "../middleware/error.middleware.js";
 import {
   modelNarrative,
   congestionNarrative,
@@ -16,10 +17,10 @@ const router = Router();
  * and writes nothing — the metrics come from the caller — but it does spend
  * tokens, so it moves behind auth with the rest of the dashboard.
  */
-router.get("/status", insightStatus);
-router.post("/model-narrative", modelNarrative);
-router.post("/congestion-narrative", congestionNarrative);
-router.post("/event-surge-narrative", eventSurgeNarrative);
-router.post("/explain", explainFeature);
+router.get("/status", asyncHandler(insightStatus));
+router.post("/model-narrative", asyncHandler(modelNarrative));
+router.post("/congestion-narrative", asyncHandler(congestionNarrative));
+router.post("/event-surge-narrative", asyncHandler(eventSurgeNarrative));
+router.post("/explain", asyncHandler(explainFeature));
 
 export default router;

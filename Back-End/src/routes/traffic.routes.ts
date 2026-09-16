@@ -8,7 +8,7 @@ router.get("/analytics", asyncHandler(getTrafficAnalytics));
 router.get("/realtime", asyncHandler(getRealtimeTraffic));
 router.get("/incidents", asyncHandler(getIncidents));
 router.get("/forecast", asyncHandler(getForecast));
-router.get("/weather-evidence", getWeatherEvidence);
+router.get("/weather-evidence", asyncHandler(getWeatherEvidence));
 router.get("/forecast/hourly", asyncHandler(getForecastHourly));
 router.get("/volume-adt", asyncHandler(getVolumeAdt));
 

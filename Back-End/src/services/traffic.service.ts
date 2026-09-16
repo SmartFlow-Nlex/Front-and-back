@@ -721,6 +721,10 @@ export async function getMLPredictiveCongestion() {
     const { rows } = await db.query(`
       SELECT c.segment_name AS "segment", c.hours_ahead AS "hours",
              c.congestion_state AS "state", c.probability,
+             -- The whole probability vector, not only the winner's: the card
+             -- shows a chance of congestion (heavy or severe) per cell, the
+             -- way a weather strip shows a chance of rain.
+             c.p_low::float AS "pLow", c.p_med::float AS "pMed", c.p_high::float AS "pHigh",
              -- The clock time each horizon refers to. "+1h" alone is a label
              -- with no referent; the reader cannot tell what it counts from.
              --
@@ -1587,6 +1591,38 @@ export type CongestionHorizonAccuracy = {
  * `persistenceAccuracy` is the "nothing changes" benchmark at the same horizon.
  * It is the honest bar: a forecaster that cannot beat it adds nothing.
  */
+/**
+ * How the congestion model was scored, in enough detail for the card to
+ * explain its percentage: test size, class balance, per-class precision and
+ * recall, Brier score and a calibration table for P(congested). Written by
+ * train_congestion_horizon.py each run as one JSON row.
+ */
+export type CongestionEval = {
+  model: string;
+  test_rows: number;
+  test_days: number;
+  class_share: Record<string, number>;
+  per_class: Record<string, { precision: number; recall: number; support: number }>;
+  brier: number;
+  macro_f1: number;
+  calibration: { lo: number; hi: number; n: number; predicted: number; observed: number }[];
+  thresholds_kmh: { severe_below: number; heavy_below: number };
+  features: string[];
+};
+
+export async function getCongestionEval(): Promise<CongestionEval | null> {
+  if (!db) return null;
+  try {
+    const { rows } = await db.query(`SELECT payload FROM gold.ml_congestion_eval WHERE id = 1`);
+    return (rows[0]?.payload as CongestionEval) ?? null;
+  } catch (error) {
+    // Absent until the first run that writes it; the card simply omits the
+    // section rather than the whole forecast failing.
+    console.error("Database query failed for congestion eval:", error);
+    return null;
+  }
+}
+
 export async function getCongestionHorizonAccuracy(): Promise<CongestionHorizonAccuracy[] | null> {
   if (!db) return null;
   try {

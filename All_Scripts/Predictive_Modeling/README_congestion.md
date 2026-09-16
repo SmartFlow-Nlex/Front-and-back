@@ -76,8 +76,36 @@ Runtime is about two minutes with `--fast`, about twenty-five without: SARIMAX
   are only what is knowable at the origin hour: hour, weekday, the same hour
   one and two days earlier, and the last 1/2/3/6 hours plus 6 h and 24 h
   rolling means (the short lags were added in Sep 2026; the original set knew
-  only lag-24 and lag-48).
+  only lag-24 and lag-48), plus two things the exit's own history cannot say:
+  the lag-1 state and 6 h mean of its **neighbouring exits** (km-post order
+  from `gold.exit_km_post`, since congestion travels along the carriageway)
+  and the exit's **train-only hour-of-day profile** (mean state and severe
+  share by exit × hour × weekend, computed on training hours so the test
+  window never leaks in).
+- Training rows are weighted by inverse class frequency so Severe (14% of
+  hours) is not ignored.
+- **Probabilities are calibrated.** The card shows a *chance of congestion*
+  per cell, so the numbers have to mean what they say. Raw XGBoost ran hot
+  (said 65% → happened 51%; said 75% → 62%). The last 2 days of the training
+  window are held back from the fit and used for an isotonic correction per
+  class (`IsoCal`, one-vs-rest then renormalised). After it: said 55% → 55%,
+  66% → 66%, 75% → 77%. Nothing from the test window touches either step.
+  The trade-off is that calibrated argmax labels Severe rarely (recall ~7%),
+  so the card points readers at the per-cell severe % rather than red cells.
 - Holds out the last 7 days, scores every candidate per horizon against the
   persistence and exit-hour-profile baselines, and accepts only models that
   beat the best baseline.
-- Serves the champion's forecast from the newest complete hour.
+- Serves the champion's forecast from the newest complete hour, writing each
+  cell's winning state and confidence **and** the full vector `p_low`,
+  `p_med`, `p_high` to `gold.ml_predictive_congestion` (columns are added
+  with `ADD COLUMN IF NOT EXISTS` on first run).
+- Writes one JSON row to `gold.ml_congestion_eval` — test size, class shares,
+  per-class precision/recall, Brier score, macro-F1, the calibration table
+  (said vs happened per decile), thresholds and the feature list. The card's
+  Validation evidence is rendered from it; the API returns it as
+  `extras.congestionEval` on `/api/traffic/forecast`.
+
+Log of each scheduled run lands in `refresh_congestion.log` next to the
+script (git-ignored). Current figures (16 Sep 2026): XGBoost 66.0% vs 59.9%
+exit-hour-profile baseline, 48.4% persistence at +1h falling to 41.8% at
++12h; Brier 0.460.

@@ -3,6 +3,7 @@ import { TrafficQuerySchema, IncidentQuerySchema, ForecastQuerySchema, HourlyFor
 import { getTrafficVolumesFromDb, getDirectionalFlowFromDb, getVehicleClassDistributionFromDb, getTrafficAnalyticsFromDb, getMLPredictiveVolume, getMLPredictiveVolumeHourly, getMLPredictiveCongestion, getMLEventSurge, getUpcomingEventSurge, getMLModelMetrics, getWeatherEvidenceFromDb, getSplitSummary, getCongestionModel,
   getHorizonAccuracy,
   getCongestionHorizonAccuracy,
+  getCongestionEval,
   getEventSurgeMetrics
 } from "../services/traffic.service.js";
 import { cached } from "../utils/ttl-cache.js";
@@ -82,7 +83,7 @@ export const getForecast = async (req: Request, res: Response) => {
      the upcoming-events query alone rolls up a 1.1-million-row hourly table
      (~0.8 s). Three cards on the Predictive tab request this within the same
      second; with single-flight coalescing they share one run. */
-  const [volumes, congestion, events, modelMetrics, congestionModel, split, horizonAccuracy, congestionHorizon, eventMetrics, upcomingEvents] =
+  const [volumes, congestion, events, modelMetrics, congestionModel, split, horizonAccuracy, congestionHorizon, eventMetrics, upcomingEvents, congestionEval] =
     await cached(`forecast:${JSON.stringify(query)}`, 10 * 60_000, () => Promise.all([
     getMLPredictiveVolume({ months: query.months, from: query.from, to: query.to, split: query.split }),
     getMLPredictiveCongestion(),
@@ -99,7 +100,9 @@ export const getForecast = async (req: Request, res: Response) => {
     getEventSurgeMetrics(),
     // The next Arena event days with a dated per-exit surge forecast each,
     // so the Prescriptive tab can plan for a real date rather than "an event".
-    getUpcomingEventSurge()
+    getUpcomingEventSurge(),
+    // How the congestion model was scored, so its card can explain itself.
+    getCongestionEval(),
   ]));
 
   if (!volumes && !congestion && !events) {
@@ -126,6 +129,7 @@ export const getForecast = async (req: Request, res: Response) => {
       congestionModel: congestionModel ?? null,
       horizonAccuracy: horizonAccuracy ?? [],
       congestionHorizonAccuracy: congestionHorizon ?? [],
+      congestionEval: congestionEval ?? null,
       eventSurgeMetrics: eventMetrics ?? [],
       modelMetrics: modelMetrics ?? [],
       volumes: volumes || [],

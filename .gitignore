@@ -27,3 +27,6 @@ Back-End/.env.*
 
 # Local backups taken before a merge — not part of the project.
 .merge-backup/
+
+# Hourly congestion refresh output (All_Scripts/Predictive_Modeling)
+All_Scripts/Predictive_Modeling/refresh_congestion.log

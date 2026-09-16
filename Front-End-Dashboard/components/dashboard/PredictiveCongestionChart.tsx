@@ -11,6 +11,8 @@ import { loadForecast } from "./prescriptiveTraffic.shared";
 type State = "Low" | "Med" | "High";
 
 type RawRow = { segment: string; hours: number; state: State; probability: number | string;
+                /** Per-state probabilities, calibrated. pMed + pHigh is the chance of congestion. */
+                pLow?: number | string | null; pMed?: number | string | null; pHigh?: number | string | null;
                 km?: number | null; kmEstimated?: boolean;
                 /** Manila wall-clock "YYYY-MM-DD HH:MM" the horizons count from. */
                 baseTs?: string | null };
@@ -93,11 +95,32 @@ function kmIndex(rows: { segment: string; km?: number | null; kmEstimated?: bool
   }
   return m;
 }
+/** One numbered step of the Validation evidence: a bold question-style title
+ *  over its answer, so a reader can skim the five titles and stop at the one
+ *  they came for. */
+function EvBlock({ n, title, children }: { n: number; title: string; children: React.ReactNode }) {
+  return (
+    <div style={{ display: "grid", gridTemplateColumns: "22px minmax(0,1fr)", gap: 10, alignItems: "start" }}>
+      <span style={{
+        display: "grid", placeItems: "center", width: 22, height: 22, borderRadius: 999, fontSize: "0.7rem", fontWeight: 800,
+        background: "var(--bg-surface-hover)", border: "1px solid var(--border-default)", color: "var(--text-secondary)",
+      }}>{n}</span>
+      <div style={{ minWidth: 0 }}>
+        <div style={{ fontSize: "0.82rem", fontWeight: 800, color: "var(--text-primary)", letterSpacing: "-0.01em", marginBottom: 4 }}>{title}</div>
+        <div style={{ fontSize: "0.76rem" }}>{children}</div>
+      </div>
+    </div>
+  );
+}
+
 const kmLabel = (e?: { km: number | null; est: boolean }) =>
   e?.km == null ? "—" : `${e.km}${e.est ? "*" : ""}`;
 
 type CellItem = {
   value: [number, number, number];
+  /** Chance of congestion (heavy or severe), 0-1, when the row carries it. */
+  pCong?: number | null;
+  pHigh?: number | null;
   /** "Pending" marks an hour inside the frame the stored forecast does not
       reach yet -- drawn blank, filled by the next hourly refresh. */
   state: State | "Pending";
@@ -111,6 +134,20 @@ type Alert = { segment: string; state: State; from: number; to: number; conf: nu
 
 /** Accuracy at each forecast horizon, with the "nothing changes" benchmark. */
 type HzAcc = { horizon: number; accuracy: number | null; persistenceAccuracy: number | null };
+
+/** How the served model was scored; written by the training run, one row. */
+type CongestionEval = {
+  model: string;
+  test_rows: number;
+  test_days: number;
+  class_share: Record<string, number>;
+  per_class: Record<string, { precision: number; recall: number; support: number }>;
+  brier: number;
+  macro_f1: number;
+  calibration: { lo: number; hi: number; n: number; predicted: number; observed: number }[];
+  thresholds_kmh: { severe_below: number; heavy_below: number };
+  features: string[];
+};
 
 export default function PredictiveCongestionChart() {
   const [raw, setRaw] = useState<RawRow[] | null>(null);
@@ -127,6 +164,7 @@ export default function PredictiveCongestionChart() {
   const [extraExits, setExtraExits] = useState<string[]>([]);
   const COLLAPSED_EXITS = 5;
   const [hzAcc, setHzAcc] = useState<HzAcc[]>([]);
+  const [evalInfo, setEvalInfo] = useState<CongestionEval | null>(null);
 
   // One km lookup for the whole component: the heatmap, the alert list and the
   // detail drawer all order by corridor position and must agree on it.
@@ -149,6 +187,7 @@ export default function PredictiveCongestionChart() {
           if (fc.congestion.length > 0) {
             setRaw(fc.congestion as unknown as RawRow[]);
             setModelInfo((fc.extras.congestionModel as ModelInfo | undefined) ?? null);
+            setEvalInfo((fc.extras.congestionEval as CongestionEval | null | undefined) ?? null);
             if (Array.isArray(fc.extras.congestionHorizonAccuracy)) {
               setHzAcc(fc.extras.congestionHorizonAccuracy as HzAcc[]);
             }
@@ -279,7 +318,10 @@ export default function PredictiveCongestionChart() {
       states[y][x] = d.state;
       confs[y][x] = conf;
       const meta = STATE_META[d.state] ?? STATE_META.Low;
-      cells.push({ value: [x, y, meta.rank], state: d.state, conf, label: { color: meta.text } });
+      const pMed = d.pMed == null ? null : Number(d.pMed);
+      const pHigh = d.pHigh == null ? null : Number(d.pHigh);
+      const pCong = pMed != null && pHigh != null ? pMed + pHigh : null;
+      cells.push({ value: [x, y, meta.rank], state: d.state, conf, pCong, pHigh, label: { color: meta.text } });
     });
 
     // Flag the first cell of each run so the label formatter can print the state
@@ -587,7 +629,8 @@ export default function PredictiveCongestionChart() {
               <span style="color:#64748b;">Horizon</span><span style="font-weight:600;">${hourLabels[x]}</span>
               <span style="color:#64748b;">Predicted state</span><span style="color:${d.state === "Low" ? STATE_META.Low.text : d.state === "Med" ? STATE_META.Med.text : STATE_META.High.color}; font-weight:700;">${meta.label}</span>
               <span style="color:#64748b;">Meaning</span><span style="font-weight:500;">${meta.speed}</span>
-              <span style="color:#64748b;">Model confidence</span><span style="font-weight:600; color:${low ? "#b45309" : "#334155"};">${(d.conf * 100).toFixed(1)}%${low ? " · lower" : ""}</span>
+              ${d.pCong != null ? `<span style="color:#64748b;">Chance of congestion</span><span style="font-weight:700; color:${d.pCong >= 0.5 ? "#b91c1c" : "#334155"};">${Math.round(d.pCong * 100)}%${d.pHigh != null ? ` <span style="font-weight:500; color:#64748b;">(severe ${Math.round(d.pHigh * 100)}%)</span>` : ""}</span>` : ""}
+              <span style="color:#64748b;">Most likely state</span><span style="font-weight:600; color:${low ? "#b45309" : "#334155"};">${meta.label} · ${(d.conf * 100).toFixed(0)}%${low ? " · under 80%, indicative" : ""}</span>
             </div>
           </div>`;
       },
@@ -911,9 +954,16 @@ export default function PredictiveCongestionChart() {
         {stat(`${nCongested} of ${segments.length}`, nCongested > 0 ? "exits with a jam expected" : "exits affected · all moving", nCongested > 0 ? (nSevere > 0 ? "#b91c1c" : "#b45309") : "#15803d")}
         {stat(kmSpan != null ? `km ${model.kmFrom}–${model.kmTo}` : "—", kmSpan != null ? `${kmSpan} km${model.contiguous ? ", one stretch" : ", not contiguous"}` : "no congestion predicted")}
         {stat(model.allHours ? `all ${model.maxHour}h` : model.worstSegment ? `${model.worstSegmentCount} of ${hourLabels.length}h` : "—", model.flatHours ? "same every hour" : "at the worst exit")}
-        {stat(model.confLo != null && model.confHi != null ? `${Math.round(model.confLo * 100)}–${Math.round(model.confHi * 100)}%` : "—",
+        {(() => {
+          const pc = cells.filter((c) => c.state !== "Pending" && c.pCong != null).map((c) => c.pCong as number);
+          if (pc.length) {
+            const mean = pc.reduce((a, b) => a + b, 0) / pc.length;
+            return stat(`${Math.round(mean * 100)}%`, "avg chance of congestion across the grid", mean >= 0.5 ? "#b91c1c" : undefined);
+          }
+          return stat(model.confLo != null && model.confHi != null ? `${Math.round(model.confLo * 100)}–${Math.round(model.confHi * 100)}%` : "—",
               model.confLo != null && model.confLo < LOW_CONF ? "confidence · some cells under 80%" : "confidence across congested cells",
-              model.confLo != null && model.confLo < LOW_CONF ? "#b45309" : undefined)}
+              model.confLo != null && model.confLo < LOW_CONF ? "#b45309" : undefined);
+        })()}
       </div>
 
       {/* Row 4: the grid, with its legend and its exit picker attached to it. */}
@@ -1058,27 +1108,139 @@ export default function PredictiveCongestionChart() {
             </span>
           </summary>
 
-          <div style={{ display: "grid", gap: 10, marginTop: 10 }}>
-            <div style={{ display: "flex", alignItems: "flex-end", gap: 4, height: 34 }}>
-              {hzAcc.map((a) => {
-                const beats = a.accuracy != null && a.persistenceAccuracy != null && a.accuracy > a.persistenceAccuracy;
-                return (
-                  <span key={a.horizon} title={`+${a.horizon}h — model ${pct(a.accuracy)}, "nothing changes" ${pct(a.persistenceAccuracy)}`}
-                        style={{ width: 14, borderRadius: 2, background: beats ? "#16a34a" : "#cbd5e1", height: `${Math.max(4, ((a.accuracy ?? 0) - 0.5) * 110)}px` }} />
-                );
-              })}
-              <span style={{ marginLeft: 8, alignSelf: "center" }}>
-                Accuracy by hour ahead, +1h to +{hzLast.horizon}h · green where it beats assuming nothing changes
-                {beatsFrom && beatsFrom.horizon > 1 && <> (from +{beatsFrom.horizon}h)</>}
-                {hzLast.persistenceAccuracy != null && <> · that benchmark falls to {pct(hzLast.persistenceAccuracy)} by +{hzLast.horizon}h</>}
-              </span>
-            </div>
-            <p style={{ margin: 0, lineHeight: 1.55, color: "#94a3b8" }}>
-              {modelInfo?.model ?? "The model"} classifies each exit-hour by how slow its Waze jams ran: under 10 km/h severe, 10–20 heavy, and moving above that or with no jam reported
-              {modelInfo?.baseline?.accuracy != null && <>, at {(modelInfo.accuracy! * 100).toFixed(1)}% against {(modelInfo.baseline.accuracy * 100).toFixed(1)}% for the {modelInfo.baseline.model.toLowerCase()} baseline</>}.
-              {!model.everHeavy && <> It predicts no Heavy hour in this window.</>}
-              {" "}The thresholds are cut at this corridor's own distribution of jam speeds, not at a generic free-flow scale: at 30 km/h every reported jam here landed in one class and the map was solid red.
-              {" "}Confidence is the model&apos;s certainty in its classification, not the probability of congestion.
+          <div style={{ display: "grid", gap: 14, marginTop: 12, color: "#475569", lineHeight: 1.55 }}>
+            {/* 1. How it was tested. One sentence, because everything below
+                   is meaningless without knowing the numbers come from hours
+                   the model never saw. */}
+            <EvBlock n={1} title="How it was tested">
+              {evalInfo ? (
+                <>The model learned from the earlier weeks of Waze data, then had to forecast the <b>last {evalInfo.test_days} days it had never seen</b> —
+                {" "}{evalInfo.test_rows.toLocaleString()} exit-hours. Every number here is scored on those unseen hours only.</>
+              ) : (
+                <>The model learned from the earlier weeks of Waze data and is scored only on the final days it never saw.</>
+              )}
+            </EvBlock>
+
+            {/* 2. What the headline percentage means, against the guesses a
+                   person could make without a model. */}
+            <EvBlock n={2} title={`What ${modelInfo?.accuracy != null ? (modelInfo.accuracy * 100).toFixed(1) + "%" : "the accuracy"} means`}>
+              <p style={{ margin: "0 0 8px" }}>
+                Out of every 100 exit-hours in that unseen window, the model named the right state (Moving, Heavy or Severe) for about
+                {" "}<b>{modelInfo?.accuracy != null ? Math.round(modelInfo.accuracy * 100) : "—"}</b>. That only means something next to what you would score without a model:
+              </p>
+              <div style={{ display: "grid", gap: 5 }}>
+                {[
+                  { label: `${modelInfo?.model ?? "Model"} (this card)`, v: modelInfo?.accuracy ?? null, tone: "#16a34a", bold: true },
+                  { label: `Assume each exit does what it usually does at this hour`, v: modelInfo?.baseline?.accuracy ?? null, tone: "#94a3b8" },
+                  { label: `Assume nothing changes from now (+1h)`, v: hzFirst?.persistenceAccuracy ?? null, tone: "#94a3b8" },
+                  { label: `Assume nothing changes from now (+${hzLast?.horizon ?? 12}h)`, v: hzLast?.persistenceAccuracy ?? null, tone: "#94a3b8" },
+                  { label: `Always say "Moving"`, v: evalInfo ? Math.max(...Object.values(evalInfo.class_share)) : null, tone: "#94a3b8" },
+                ].filter((r) => r.v != null).map((r) => (
+                  <div key={r.label} style={{ display: "grid", gridTemplateColumns: "minmax(0,1fr) 44px", alignItems: "center", gap: 10 }}>
+                    <div style={{ minWidth: 0 }}>
+                      <div style={{ fontSize: "0.72rem", color: r.bold ? "#0f172a" : "#64748b", fontWeight: r.bold ? 700 : 500, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{r.label}</div>
+                      <div style={{ height: 6, borderRadius: 3, background: "#eef2f7", overflow: "hidden", marginTop: 3 }}>
+                        <div style={{ width: `${Math.round((r.v as number) * 100)}%`, height: "100%", background: r.tone, borderRadius: 3 }} />
+                      </div>
+                    </div>
+                    <span style={{ fontWeight: r.bold ? 800 : 600, color: r.bold ? "#0f172a" : "#64748b", fontVariantNumeric: "tabular-nums", textAlign: "right" }}>{pct(r.v as number)}</span>
+                  </div>
+                ))}
+              </div>
+            </EvBlock>
+
+            {/* 3. Per state: how much to trust each colour. */}
+            {evalInfo && (
+              <EvBlock n={3} title="How much to trust each colour">
+                <div style={{ overflowX: "auto" }}>
+                  <table style={{ borderCollapse: "collapse", width: "100%", fontSize: "0.74rem", fontVariantNumeric: "tabular-nums" }}>
+                    <thead>
+                      <tr style={{ color: "#64748b", textAlign: "left" }}>
+                        <th style={{ padding: "4px 6px 6px 0", fontWeight: 600 }}>State</th>
+                        <th style={{ padding: "4px 6px 6px", fontWeight: 600 }}>Share of real hours</th>
+                        <th style={{ padding: "4px 6px 6px", fontWeight: 600 }}>When the card shows it, it is right</th>
+                        <th style={{ padding: "4px 0 6px 6px", fontWeight: 600 }}>Of the real hours, it catches</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {(["Low", "Med", "High"] as State[]).map((st) => {
+                        const meta = STATE_META[st];
+                        const pc = evalInfo.per_class[st];
+                        const share = evalInfo.class_share[st];
+                        if (!pc) return null;
+                        return (
+                          <tr key={st} style={{ borderTop: "1px solid #eef2f7" }}>
+                            <td style={{ padding: "6px 6px 6px 0", whiteSpace: "nowrap" }}>
+                              <span style={{ display: "inline-block", width: 10, height: 10, borderRadius: 3, background: meta.color, marginRight: 6, verticalAlign: -1 }} />
+                              <b style={{ color: "#0f172a" }}>{meta.label}</b>
+                            </td>
+                            <td style={{ padding: "6px" }}>{share != null ? pct(share) : "—"}</td>
+                            <td style={{ padding: "6px", fontWeight: 700, color: pc.precision >= 0.6 ? "#15803d" : pc.precision >= 0.4 ? "#b45309" : "#b91c1c" }}>{pct(pc.precision)}</td>
+                            <td style={{ padding: "6px 0 6px 6px", fontWeight: 700, color: pc.recall >= 0.6 ? "#15803d" : pc.recall >= 0.4 ? "#b45309" : "#b91c1c" }}>{pct(pc.recall)}</td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+                {evalInfo.per_class.High && evalInfo.per_class.High.recall < 0.3 && (
+                  <p style={{ margin: "8px 0 0", fontSize: "0.72rem", color: "#b45309" }}>
+                    Severe hours are rare and the model names them cautiously, so it misses most of them as a label — check the <b>severe %</b> in each cell&apos;s tooltip rather than waiting for a red cell.
+                  </p>
+                )}
+              </EvBlock>
+            )}
+
+            {/* 4. The chance is a real chance. This is the one that makes the
+                   card a forecast rather than a colour. */}
+            {evalInfo && evalInfo.calibration.length > 0 && (
+              <EvBlock n={4} title="Is a 60% chance really 60%?">
+                <p style={{ margin: "0 0 8px" }}>
+                  Yes — the probabilities are calibrated on held-back hours, like a rain forecast. Each chip below is a group of unseen hours where the card would have shown roughly that chance of congestion, next to how often congestion actually happened:
+                </p>
+                <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+                  {evalInfo.calibration.filter((c) => c.n >= 200).map((c) => {
+                    const gap = Math.abs(c.predicted - c.observed);
+                    return (
+                      <span key={c.lo} title={`${c.n.toLocaleString()} unseen exit-hours`} style={{
+                        display: "inline-flex", alignItems: "baseline", gap: 4, padding: "3px 8px", borderRadius: 6,
+                        background: gap <= 0.05 ? "#f0fdf4" : gap <= 0.1 ? "#fffbeb" : "#fef2f2",
+                        border: `1px solid ${gap <= 0.05 ? "#bbf7d0" : gap <= 0.1 ? "#fde68a" : "#fecaca"}`,
+                        fontSize: "0.72rem", fontVariantNumeric: "tabular-nums",
+                      }}>
+                        <span style={{ color: "#64748b" }}>said</span> <b>{Math.round(c.predicted * 100)}%</b>
+                        <span style={{ color: "#94a3b8" }}>→</span>
+                        <span style={{ color: "#64748b" }}>happened</span> <b>{Math.round(c.observed * 100)}%</b>
+                      </span>
+                    );
+                  })}
+                </div>
+                <p style={{ margin: "8px 0 0", fontSize: "0.72rem", color: "#64748b" }}>
+                  Green: within 5 points. Brier score {evalInfo.brier.toFixed(3)} — the average squared error of the probabilities, where 0 is perfect and 0.667 is a coin toss between the three states.
+                </p>
+              </EvBlock>
+            )}
+
+            {/* 5. Accuracy by hour ahead (the original bars). */}
+            <EvBlock n={evalInfo ? 5 : 3} title="Does it hold up 12 hours out?">
+              <div style={{ display: "flex", alignItems: "flex-end", gap: 4, height: 34 }}>
+                {hzAcc.map((a) => {
+                  const beats = a.accuracy != null && a.persistenceAccuracy != null && a.accuracy > a.persistenceAccuracy;
+                  return (
+                    <span key={a.horizon} title={`+${a.horizon}h — model ${pct(a.accuracy)}, "nothing changes" ${pct(a.persistenceAccuracy)}`}
+                          style={{ width: 14, borderRadius: 2, background: beats ? "#16a34a" : "#cbd5e1", height: `${Math.max(4, ((a.accuracy ?? 0) - 0.5) * 110)}px` }} />
+                  );
+                })}
+              </div>
+              <p style={{ margin: "6px 0 0", fontSize: "0.72rem", color: "#64748b" }}>
+                  {pct(hzFirst.accuracy)} at +1h → {pct(hzLast.accuracy)} at +{hzLast.horizon}h · green where it beats assuming nothing changes
+                  {hzLast.persistenceAccuracy != null && <>, which falls to {pct(hzLast.persistenceAccuracy)} by +{hzLast.horizon}h</>}
+              </p>
+            </EvBlock>
+
+            <p style={{ margin: 0, fontSize: "0.72rem", color: "#94a3b8" }}>
+              States are cut from Waze jam speeds at this corridor&apos;s own distribution — Severe under {evalInfo?.thresholds_kmh.severe_below ?? 10} km/h, Heavy {evalInfo?.thresholds_kmh.severe_below ?? 10}–{evalInfo?.thresholds_kmh.heavy_below ?? 20} km/h, Moving above that or no jam reported.
+              {!model.everHeavy && <> The current forecast has no Heavy hour.</>}
             </p>
           </div>
         </details>

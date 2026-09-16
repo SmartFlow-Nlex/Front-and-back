@@ -53,6 +53,7 @@ FAST = "--fast" in sys.argv
 import numpy as np
 import pandas as pd
 import psycopg2
+from sklearn.isotonic import IsotonicRegression
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.metrics import accuracy_score, f1_score, log_loss, precision_recall_fscore_support
 from xgboost import XGBClassifier
@@ -178,10 +179,50 @@ for _k in (1, 2, 3, 6):
 df["roll6_y"] = g.y.transform(lambda s_: s_.shift(1).rolling(6, min_periods=1).mean())
 df["roll6_jams"] = g.n_jams.transform(lambda s_: s_.shift(1).rolling(6, min_periods=1).mean())
 df["roll24_y"] = g.y.transform(lambda s_: s_.shift(1).rolling(24, min_periods=1).mean())
+# Neighbours. Congestion propagates along the carriageway, so the state of
+# the next exit down the road an hour ago is a leading indicator the exit's
+# own history cannot supply. Exits are ordered by km-post from the same table
+# the map uses to order its rows, and each gets its two neighbours' lag-1
+# state and 6-hour mean. The two end exits have one neighbour; the missing
+# side is filled with their own value so the column is never null.
+_km = pd.read_sql_query("SELECT exit_name, km_post::float AS km FROM gold.exit_km_post", conn)
+_km_order = [e for e in _km.sort_values("km").exit_name if e in set(exits)]
+_km_order += [e for e in exits if e not in _km_order]          # any exit without a km-post goes last
+_pos = {e: i for i, e in enumerate(_km_order)}
+_prev = {e: (_km_order[_pos[e] - 1] if _pos[e] > 0 else e) for e in _km_order}
+_next = {e: (_km_order[_pos[e] + 1] if _pos[e] < len(_km_order) - 1 else e) for e in _km_order}
+_piv_y = df.pivot(index="ts", columns="exit_name", values="y").sort_index()
+_piv_r6 = df.pivot(index="ts", columns="exit_name", values="roll6_y").sort_index()
+_lag1_p = _piv_y.shift(1)
+def _nb(col_src, mapping):
+    out = pd.DataFrame(index=col_src.index)
+    for e in _km_order:
+        out[e] = col_src[mapping[e]]
+    return out.stack().rename("v").reset_index().rename(columns={"level_1": "exit_name"})
+for _name, _src, _map in (("nb_prev_lag1", _lag1_p, _prev), ("nb_next_lag1", _lag1_p, _next),
+                          ("nb_prev_roll6", _piv_r6, _prev), ("nb_next_roll6", _piv_r6, _next)):
+    _t = _nb(_src, _map).rename(columns={"v": _name})
+    df = df.merge(_t, on=["ts", "exit_name"], how="left")
+
 df = df.dropna(subset=["lag24", "lag48", "lag6"]).reset_index(drop=True)
 df["exit_code"] = pd.Categorical(df.exit_name, categories=exits).codes
 
 cut = df.ts.max().normalize() - pd.Timedelta(days=TEST_DAYS - 1)
+
+# The exit-hour profile, as a FEATURE. It is the strongest baseline (what this
+# exit usually does at this hour on this kind of day), and a tree model given
+# it as an input can learn when to trust it and when the recent lags override
+# it. Computed on TRAINING hours only: a profile that saw the test window
+# would leak its answers back in.
+_train_mask = df.ts < cut
+_prof = (df[_train_mask]
+         .assign(sev=lambda d: (d.y == 2).astype(float))
+         .groupby(["exit_name", "h", "is_weekend"])
+         .agg(prof_mean=("y", "mean"), prof_sev=("sev", "mean"))
+         .reset_index())
+df = df.merge(_prof, on=["exit_name", "h", "is_weekend"], how="left")
+df["prof_mean"] = df.prof_mean.fillna(df.y[_train_mask].mean())
+df["prof_sev"] = df.prof_sev.fillna((df.y[_train_mask] == 2).mean())
 print(f"  {len(df):,} exit-hours | {len(exits)} exits | {df.ts.min()} .. {df.ts.max()}")
 print(f"  test window starts {cut}")
 
@@ -192,7 +233,9 @@ frames = []
 for hz in HORIZONS:
     f = df[["ts", "exit_name", "exit_code", "h", "dow", "is_weekend",
             "lag24", "lag48", "lag24_jams",
-            "lag1", "lag2", "lag3", "lag6", "roll6_y", "roll6_jams", "roll24_y", "y"]].copy()
+            "lag1", "lag2", "lag3", "lag6", "roll6_y", "roll6_jams", "roll24_y",
+            "nb_prev_lag1", "nb_next_lag1", "nb_prev_roll6", "nb_next_roll6",
+            "prof_mean", "prof_sev", "y"]].copy()
     f["horizon"] = hz
     f["y_target"] = gy.shift(-hz).values      # state hz hours LATER — the fix
     f["target_ts"] = f.ts + pd.Timedelta(hours=hz)
@@ -201,7 +244,9 @@ full = pd.concat(frames, ignore_index=True).dropna(subset=["y_target"])
 full["y_target"] = full.y_target.astype(int)
 
 FEATS = ["exit_code", "h", "dow", "is_weekend", "lag24", "lag48", "lag24_jams",
-         "lag1", "lag2", "lag3", "lag6", "roll6_y", "roll6_jams", "roll24_y", "horizon"]
+         "lag1", "lag2", "lag3", "lag6", "roll6_y", "roll6_jams", "roll24_y",
+         "nb_prev_lag1", "nb_next_lag1", "nb_prev_roll6", "nb_next_roll6",
+         "prof_mean", "prof_sev", "horizon"]
 # A training row whose TARGET lands inside the test window would leak.
 tr = full[full.target_ts < cut]
 te = full[full.ts >= cut]
@@ -260,10 +305,40 @@ _w = {int(c): len(ytr) / (len(_cls) * n) for c, n in zip(_cls, _cnt)}
 w_tr = np.array([_w[int(y)] for y in ytr])
 print("  class weights: " + ", ".join(f"{STATES[int(c)]} {_w[int(c)]:.2f}" for c in _cls))
 
-xgb = XGBClassifier(n_estimators=400, max_depth=6, learning_rate=0.08, subsample=0.9,
-                    colsample_bytree=0.9, objective="multi:softprob", num_class=3,
-                    eval_metric="mlogloss", random_state=42, n_jobs=4).fit(Xtr, ytr, sample_weight=w_tr)
+# Calibrate the probabilities, because the card shows them as a CHANCE.
+#
+# Raw, the model ran hot: in held-out hours where it said "65% chance of
+# congestion" the exit was congested 50% of the time, and at 75% said, 61%
+# happened. A weather strip that says 70% and is right half the time is not a
+# forecast. So the last CALIB_DAYS of the training window are held back from
+# the fit and used to learn an isotonic correction per class (one-vs-rest,
+# then renormalised). Nothing from the test window touches either step.
+CALIB_DAYS = 2
+cal_cut = cut - pd.Timedelta(days=CALIB_DAYS)
+fit_mask = (tr.target_ts < cal_cut).values
+cal_mask = ~fit_mask
+print(f"  fit {fit_mask.sum():,} rows | calibration {cal_mask.sum():,} rows (last {CALIB_DAYS} training days)")
+xgb_raw = XGBClassifier(n_estimators=400, max_depth=6, learning_rate=0.08, subsample=0.9,
+                        colsample_bytree=0.9, objective="multi:softprob", num_class=3,
+                        eval_metric="mlogloss", random_state=42, n_jobs=4
+                        ).fit(Xtr[fit_mask], ytr[fit_mask], sample_weight=w_tr[fit_mask])
+class IsoCal:
+    """One isotonic curve per class on the raw probabilities, rows renormalised.
+    Written out rather than CalibratedClassifierCV because that class dropped
+    cv="prefit" between scikit-learn releases and this has to run unattended."""
+    def __init__(self, base, X, y):
+        self.base = base
+        raw_p = base.predict_proba(X)
+        self.iso = [IsotonicRegression(out_of_bounds="clip").fit(raw_p[:, k], (y == k).astype(float))
+                    for k in range(raw_p.shape[1])]
+    def predict_proba(self, X):
+        raw_p = self.base.predict_proba(X)
+        cal = np.column_stack([self.iso[k].predict(raw_p[:, k]) for k in range(raw_p.shape[1])])
+        cal = np.clip(cal, 1e-6, None)
+        return cal / cal.sum(axis=1, keepdims=True)
+xgb = IsoCal(xgb_raw, Xtr[cal_mask], ytr[cal_mask])
 results["XGBoost"] = xgb.predict_proba(Xte)
+results_raw_xgb = xgb_raw.predict_proba(Xte)          # kept to show what calibration changed
 print("  done.")
 
 banner("STEP 5: Quantile Random Forest")
@@ -392,8 +467,48 @@ for name, proba in results.items():
         # thing an imbalanced fit stops predicting. Printed so that failure
         # cannot hide behind a healthy-looking overall accuracy again.
         "severe_recall": precision_recall_fscore_support(yte, pred, labels=[2], zero_division=0)[1][0],
+        # Per-class precision and recall, so the card can say "when it said
+        # severe it was severe X% of the time" and "of the severe hours it
+        # caught Y%". Brier is the mean squared error of the probabilities:
+        # 0 is perfect, and it is the honest score for a forecast that shows
+        # a chance rather than a verdict.
+        "per_class": {
+            STATES[k]: {
+                "precision": float(precision_recall_fscore_support(yte, pred, labels=[k], zero_division=0)[0][0]),
+                "recall": float(precision_recall_fscore_support(yte, pred, labels=[k], zero_division=0)[1][0]),
+                "support": int((yte == k).sum()),
+            } for k in range(3)
+        },
+        "brier": float(np.mean(np.sum((proba - np.eye(3)[yte]) ** 2, axis=1))),
     })
 res = pd.DataFrame(rows).sort_values("accuracy", ascending=False).reset_index(drop=True)
+
+# Calibration of the champion's "chance of congestion" (heavy or severe): in
+# hours where it said 60-70%, how often was the exit actually congested? A
+# weather forecast lives or dies on this, and so does a card that shows a
+# percentage instead of a colour.
+def calibration_table(proba, y, bins=10):
+    p_cong = proba[:, 1] + proba[:, 2]
+    actual = (y >= 1).astype(float)
+    edges = np.linspace(0, 1, bins + 1)
+    out = []
+    for lo, hi in zip(edges[:-1], edges[1:]):
+        m = (p_cong >= lo) & (p_cong < hi if hi < 1 else p_cong <= hi)
+        if m.sum() == 0:
+            continue
+        out.append({"lo": float(lo), "hi": float(hi), "n": int(m.sum()),
+                    "predicted": float(p_cong[m].mean()), "observed": float(actual[m].mean())})
+    return out
+_champ_name = res.iloc[0].model
+calib = calibration_table(results[_champ_name], yte)
+def _print_cal(title, table):
+    print(f"\n  {title}")
+    print(f"  {'said':>12}{'happened':>10}{'hours':>8}")
+    for c in table:
+        print(f"  {c['predicted']*100:>11.0f}%{c['observed']*100:>9.0f}%{c['n']:>8,}")
+if _champ_name == "XGBoost":
+    _print_cal("P(congested), XGBoost BEFORE calibration:", calibration_table(results_raw_xgb, yte))
+_print_cal(f"P(congested), {_champ_name} as served:", calib)
 res["accepted"] = res.accuracy > best_base
 res["rank"] = res.index + 1
 
@@ -470,7 +585,8 @@ if champ.model == "GRU" and gru is not None:
     for c in range(pr_.shape[0]):
         for k, hz in enumerate(HORIZONS):
             kk = int(pr_[c, k].argmax())
-            out.append((exits[c], hz, STATES[kk], float(pr_[c, k, kk])))
+            out.append((exits[c], hz, STATES[kk], float(pr_[c, k, kk]),
+                        float(pr_[c, k, 0]), float(pr_[c, k, 1]), float(pr_[c, k, 2])))
 else:
     last = df.ts.max()
     latest = df[df.ts == last].copy()
@@ -481,7 +597,8 @@ else:
         pr_ = mdl.predict_proba(q[FEATS])
         for i, r in enumerate(q.itertuples()):
             kk = int(pr_[i].argmax())
-            out.append((r.exit_name, hz, STATES[kk], float(pr_[i][kk])))
+            out.append((r.exit_name, hz, STATES[kk], float(pr_[i][kk]),
+                        float(pr_[i][0]), float(pr_[i][1]), float(pr_[i][2])))
 
 # WHEN the forecast is counted from. Without this "+1h" is a label with no
 # referent - a reader cannot tell whether it means one hour from now, from the
@@ -491,11 +608,36 @@ BASE_TS = df.ts.max()
 cur.execute("ALTER TABLE gold.ml_predictive_congestion ADD COLUMN IF NOT EXISTS base_ts timestamp")
 cur.execute("""COMMENT ON COLUMN gold.ml_predictive_congestion.base_ts IS
   'Last complete hour of Waze ingestion; hours_ahead counts forward from here. Trailing hours with sparse ingestion are trimmed before training, so this is the last hour genuinely observed rather than the last row present.'""")
+# The full probability vector travels with each cell, so the card can show a
+# chance of congestion rather than only the winning label and its confidence.
+for _col in ("p_low", "p_med", "p_high"):
+    cur.execute(f"ALTER TABLE gold.ml_predictive_congestion ADD COLUMN IF NOT EXISTS {_col} numeric(6,4)")
 cur.execute("DELETE FROM gold.ml_predictive_congestion")
-for seg, hz, st, pb in out:
+for seg, hz, st, pb, p0, p1, p2 in out:
     cur.execute("""INSERT INTO gold.ml_predictive_congestion
-                   (segment_name, hours_ahead, congestion_state, probability, base_ts)
-                   VALUES (%s,%s,%s,%s,%s)""", (seg, hz, st, pb, BASE_TS.to_pydatetime()))
+                   (segment_name, hours_ahead, congestion_state, probability, base_ts, p_low, p_med, p_high)
+                   VALUES (%s,%s,%s,%s,%s,%s,%s,%s)""", (seg, hz, st, pb, BASE_TS.to_pydatetime(), p0, p1, p2))
+
+# One row of evaluation detail the card reads to explain itself: class
+# balance, per-class precision/recall, Brier, and the calibration table.
+cur.execute("""CREATE TABLE IF NOT EXISTS gold.ml_congestion_eval (
+    id int PRIMARY KEY DEFAULT 1, payload jsonb NOT NULL, updated_at timestamptz DEFAULT now())""")
+_champ_row = res.iloc[0]
+_eval = {
+    "model": _champ_row.model,
+    "test_rows": int(len(yte)),
+    "test_days": TEST_DAYS,
+    "class_share": {STATES[k]: float(np.mean(yte == k)) for k in range(3)},
+    "per_class": _champ_row.per_class,
+    "brier": float(_champ_row.brier),
+    "macro_f1": float(_champ_row.macro_f1),
+    "calibration": calib,
+    "thresholds_kmh": {"severe_below": SEVERE_KMH, "heavy_below": HEAVY_KMH},
+    "features": FEATS,
+}
+cur.execute("""INSERT INTO gold.ml_congestion_eval (id, payload, updated_at) VALUES (1, %s, now())
+               ON CONFLICT (id) DO UPDATE SET payload = EXCLUDED.payload, updated_at = now()""",
+            (json.dumps(_eval),))
 print(f"  forecast base time: {BASE_TS} (+1h = {BASE_TS + pd.Timedelta(hours=1)})")
 conn.commit()
 

@@ -62,10 +62,10 @@ type RawRow = { segment: string; hours: number; state: State; probability: numbe
 // exit this hour", not a corridor speed. The legend used to promise "Free flow
 // > 60 km/h", a speed the data cannot contain; the blue cell means the model
 // expects no report, which is what it says now.
-const STATE_META: Record<State, { rank: number; color: string; text: string; label: string; short: string; speed: string; brief: string }> = {
-  Low: { rank: 0, color: "#cfe4f7", text: "#12507e", label: "Moving", short: "MOVING", speed: "no jam, or over 20 km/h", brief: "no jam / >20" },
-  Med: { rank: 1, color: "#f0a63a", text: "#5c3208", label: "Heavy", short: "HEAVY", speed: "10–20 km/h", brief: "10–20" },
-  High: { rank: 2, color: "#dc2626", text: "#ffffff", label: "Severe", short: "SEVERE", speed: "under 10 km/h", brief: "<10" },
+const STATE_META: Record<State, { rank: number; color: string; text: string; label: string; speed: string; brief: string }> = {
+  Low: { rank: 0, color: "#cfe4f7", text: "#12507e", label: "Moving", speed: "no jam, or over 20 km/h", brief: "no jam / >20" },
+  Med: { rank: 1, color: "#f0a63a", text: "#5c3208", label: "Heavy", speed: "10–20 km/h", brief: "10–20" },
+  High: { rank: 2, color: "#dc2626", text: "#ffffff", label: "Severe", speed: "under 10 km/h", brief: "<10" },
 };
 
 /* The week grid counts congested hours per day rather than naming a state, so
@@ -263,7 +263,6 @@ type CellItem = {
   state: State | "Pending";
   conf: number;
   /** First cell of a contiguous run of this state — the only one that is labelled. */
-  runStart?: boolean;
   label: { color: string };
 };
 
@@ -494,13 +493,6 @@ export default function PredictiveCongestionChart() {
       cells.push({ value: [x, y, meta.rank], state: d.state, conf, pCong, pLow, pMed, pHigh, label: { color: meta.text } });
     });
 
-    // Flag the first cell of each run so the label formatter can print the state
-    // once per run instead of once per cell.
-    cells.forEach((c) => {
-      const [x, y] = c.value;
-      c.runStart = x === 0 || states[y][x - 1] !== c.state;
-    });
-
     // Blank cells for the hours the stored forecast does not reach.
     for (let y = 0; y < segments.length; y++) {
       for (let x = maxHour; x < frameHours; x++) {
@@ -710,7 +702,6 @@ export default function PredictiveCongestionChart() {
       // property of the model.
       heavyCount: alerts.filter((a) => a.state === "Med").length,
       everHeavy: cells.some((c) => c.state === "Med"),
-      lowConfCount: cells.filter((c) => c.state !== "Low" && c.conf < LOW_CONF).length,
     };
   }, [raw, KMI, hourCap]);
 
@@ -770,10 +761,6 @@ export default function PredictiveCongestionChart() {
   // forecast columns in the denominator made every real state look like a
   // minority, and the grid labelled "SEVERE" on all forty of its red cells.
   const forecastCells = cells.filter((c) => c.state !== "Pending");
-  const stateShare = (["Low", "Med", "High"] as State[]).map((st) => ({
-    st, share: forecastCells.filter((c) => c.state === st).length / Math.max(forecastCells.length, 1),
-  }));
-  const minorityStates = new Set(stateShare.filter((x) => x.share > 0 && x.share < 0.25).map((x) => x.st));
   // 20 segments at 34px was a 680px grid, and with the header, banner, KPI row
   // and the panel below it the card ran well past a screen. The cells carry no
   // text - only colour - so their height buys nothing above the point where the
@@ -1115,29 +1102,14 @@ export default function PredictiveCongestionChart() {
         yAxisIndex: 0,
         data: shownCells,
         // Only states that need action carry text; free-flow cells stay quiet.
-        // A trailing * flags predictions the model is less sure about.
-        label: {
-          show: true,
-          // The word was printed in EVERY cell of a run, so a segment that is
-          // severe for twelve straight hours rendered "SEVERE*" twelve times.
-          // Sixty repetitions of one word is noise, and it buried the thing that
-          // matters - WHERE the bad stretch starts. Now only the first cell of a
-          // run is labelled; the colour already carries the state, and the
-          // tooltip carries the confidence.
-          // Labelling every severe run when severe IS the corridor's state adds
-          // 20 repetitions of the word the colour already carries. The useful
-          // marks are the MINORITY states — the cells that break the pattern.
-          // So a state is labelled only while it stays under a quarter of the
-          // grid, which flips automatically if the forecast flips.
-          formatter: (params: unknown) => {
-            const d = (params as { data: CellItem }).data;
-            if (d.state === "Pending") return "";
-            if (!d.runStart || !minorityStates.has(d.state as State)) return "";
-            return d.conf < LOW_CONF ? `${STATE_META[d.state].short}*` : STATE_META[d.state].short;
-          },
-          fontSize: 9,
-          fontWeight: 700,
-        },
+        /* No text in the cells. "SEVERE*" is about 45px of bold type and a
+           cell here is roughly 19px wide, so the word never fitted: it spilled
+           across its neighbours and read as a rendering fault rather than a
+           label. Nothing is lost by dropping it. The colour carries the state
+           with the legend directly above, the tooltip gives the full
+           distribution for one cell, and the episode list below names every
+           severe and heavy stretch with its exit, window and confidence. */
+        label: { show: false },
         itemStyle: { borderColor: "#fff", borderWidth: 3, borderRadius: 4 },
         // Nothing on the grid is in the past now, so there is nothing to grey.
         emphasis: { itemStyle: { borderColor: "#0f172a", borderWidth: 2, shadowBlur: 10, shadowColor: "rgba(15,23,42,0.3)" } },
@@ -1462,7 +1434,16 @@ export default function PredictiveCongestionChart() {
                 );
               })}
               <span style={{ color: "#94a3b8" }}>km/h</span>
-              {model.lowConfCount > 0 && <span style={{ color: "#94a3b8", whiteSpace: "nowrap" }}><b>*</b> under 80% sure</span>}
+              {/* Two different asterisks used to share this card: one on cells
+                  for low confidence, one on row labels for an estimated
+                  km-post. The cell one is gone with the cell text, so this is
+                  the only one left and it finally gets named. */}
+              {shownSegments.some((sg) => KMI.get(sg)?.est) && (
+                <span style={{ color: "#94a3b8", whiteSpace: "nowrap" }}
+                      title="No surveyed km-post for this exit; the distance is interpolated from its neighbours.">
+                  <b>*</b> km-post estimated
+                </span>
+              )}
             </>
           )}
         </div>

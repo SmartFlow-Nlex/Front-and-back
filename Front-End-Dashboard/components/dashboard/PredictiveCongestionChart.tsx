@@ -253,6 +253,10 @@ type CellItem = {
   value: [number, number, number];
   /** Chance of congestion (heavy or severe), 0-1, when the row carries it. */
   pCong?: number | null;
+  /** The calibrated chance of each state, so the tooltip can show why this
+   *  cell is the colour it is rather than asserting a label twice. */
+  pLow?: number | null;
+  pMed?: number | null;
   pHigh?: number | null;
   /** "Pending" marks an hour inside the frame the stored forecast does not
       reach yet -- drawn blank, filled by the next hourly refresh. */
@@ -486,7 +490,8 @@ export default function PredictiveCongestionChart() {
       const pHigh = d.pHigh == null ? null : Number(d.pHigh);
       const pCong = pMed != null && pHigh != null ? pMed + pHigh : null;
       probs[y][x] = pCong;
-      cells.push({ value: [x, y, meta.rank], state: d.state, conf, pCong, pHigh, label: { color: meta.text } });
+      const pLow = d.pLow == null ? null : Number(d.pLow);
+      cells.push({ value: [x, y, meta.rank], state: d.state, conf, pCong, pLow, pMed, pHigh, label: { color: meta.text } });
     });
 
     // Flag the first cell of each run so the label formatter can print the state
@@ -839,7 +844,11 @@ export default function PredictiveCongestionChart() {
       borderColor: "#e2e8f0",
       borderWidth: 1,
       textStyle: { color: "#334155" },
-      extraCssText: "box-shadow: 0 6px 16px rgba(15,23,42,0.12); border-radius: 8px;",
+      // Kept inside the chart box. Hovering a cell in the first few columns
+      // otherwise threw the panel off the left edge of the card and under the
+      // sidebar, where half of it could not be read.
+      confine: true,
+      extraCssText: "box-shadow: 0 6px 16px rgba(15,23,42,0.12); border-radius: 8px; max-width: 320px;",
       formatter: (params: unknown) => {
         const p = params as { data: DayCell; dataIndex: number };
         const d = p.data;
@@ -923,7 +932,11 @@ export default function PredictiveCongestionChart() {
       borderColor: "#e2e8f0",
       borderWidth: 1,
       textStyle: { color: "#334155" },
-      extraCssText: "box-shadow: 0 6px 16px rgba(15,23,42,0.12); border-radius: 8px;",
+      // Kept inside the chart box. Hovering a cell in the first few columns
+      // otherwise threw the panel off the left edge of the card and under the
+      // sidebar, where half of it could not be read.
+      confine: true,
+      extraCssText: "box-shadow: 0 6px 16px rgba(15,23,42,0.12); border-radius: 8px; max-width: 320px;",
       formatter: (params: unknown) => {
         const p = params as { seriesIndex: number; data: CellItem | number; dataIndex: number };
         if (p.seriesIndex === 1) {
@@ -946,13 +959,36 @@ export default function PredictiveCongestionChart() {
           <div style="padding:2px 4px; min-width:215px;">
             <b style="font-size:1.05em; color:#0f172a;">${shownSegments[y]}</b>
             <span style="color:#94a3b8; font-size:0.85em;"> · km ${kmLabel(KMI.get(shownSegments[y]))}</span>
-            <div style="margin-top:8px; display:grid; grid-template-columns:112px 1fr; gap:5px 8px; font-size:0.9em;">
-              <span style="color:#64748b;">Horizon</span><span style="font-weight:600;">${hourLabels[x]}</span>
-              <span style="color:#64748b;">Predicted state</span><span style="color:${d.state === "Low" ? STATE_META.Low.text : d.state === "Med" ? STATE_META.Med.text : STATE_META.High.color}; font-weight:700;">${meta.label}</span>
-              <span style="color:#64748b;">Meaning</span><span style="font-weight:500;">${meta.speed}</span>
-              ${d.pCong != null ? `<span style="color:#64748b;">Chance of congestion</span><span style="font-weight:700; color:${d.pCong >= 0.5 ? "#b91c1c" : "#334155"};">${Math.round(d.pCong * 100)}%${d.pHigh != null ? ` <span style="font-weight:500; color:#64748b;">(severe ${Math.round(d.pHigh * 100)}%)</span>` : ""}</span>` : ""}
-              <span style="color:#64748b;">Most likely state</span><span style="font-weight:600; color:${low ? "#b45309" : "#334155"};">${meta.label} · ${(d.conf * 100).toFixed(0)}%${low ? " · under 80%, indicative" : ""}</span>
-            </div>
+            <div style="margin-top:2px; color:#64748b; font-size:0.86em;">${(hourLabels[x] ?? "").replace("\n", " · ")}</div>
+            ${d.pCong != null ? `
+              <div style="margin-top:9px; display:flex; align-items:baseline; justify-content:space-between; gap:14px;
+                          padding-bottom:6px; border-bottom:1px solid #eef2f7;">
+                <span style="color:#64748b;">Chance of congestion</span>
+                <b style="font-size:1.2em; color:${d.pCong >= 0.5 ? "#b91c1c" : "#334155"};">${Math.round(d.pCong * 100)}%</b>
+              </div>
+              <div style="margin-top:7px; display:grid; grid-template-columns:auto 1fr auto; gap:5px 10px; font-size:0.88em; align-items:baseline;">
+                ${([["High", d.pHigh], ["Med", d.pMed], ["Low", d.pLow]] as [State, number | null | undefined][])
+                  .filter((e) => e[1] != null)
+                  .sort((a, b) => (b[1] as number) - (a[1] as number))
+                  .map((e) => {
+                    const m = STATE_META[e[0]];
+                    const win = e[0] === d.state;
+                    const w = win ? 700 : 500;
+                    return `<span style="font-weight:${w}; color:#334155; white-space:nowrap;">
+                              <span style="width:9px; height:9px; border-radius:2px; background:${m.color}; display:inline-block; margin-right:6px;"></span>${m.label}
+                            </span>
+                            <span style="color:#94a3b8; white-space:nowrap;">${m.speed}</span>
+                            <span style="font-weight:${w}; color:#334155; text-align:right;">${Math.round((e[1] as number) * 100)}%</span>`;
+                  }).join("")}
+              </div>
+              ${low ? `<div style="margin-top:8px; color:#b45309; font-size:0.82em;">${meta.label} only leads at ${(d.conf * 100).toFixed(0)}%, under the 80% bar — treat this cell as indicative.</div>` : ""}
+            ` : `
+              <div style="margin-top:9px; display:grid; grid-template-columns:auto 1fr; gap:5px 10px; font-size:0.9em;">
+                <span style="color:#64748b;">Predicted state</span><span style="font-weight:700; color:${d.state === "High" ? STATE_META.High.color : meta.text};">${meta.label}</span>
+                <span style="color:#64748b;">Meaning</span><span style="font-weight:500;">${meta.speed}</span>
+                <span style="color:#64748b;">Confidence</span><span style="font-weight:600; color:${low ? "#b45309" : "#334155"};">${(d.conf * 100).toFixed(0)}%${low ? " · indicative" : ""}</span>
+              </div>
+            `}
           </div>`;
       },
     },

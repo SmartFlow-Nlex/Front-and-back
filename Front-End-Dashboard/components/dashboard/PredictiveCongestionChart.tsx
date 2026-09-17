@@ -1,12 +1,13 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import type { EChartsOption } from "echarts";
 import DashboardChart from "./DashboardChart";
 import InfoTooltip from "./InfoTooltip";
 import CongestionNarrative from "./CongestionNarrative";
 import { ShieldCheck, ChevronRight } from "lucide-react";
 import { loadForecast } from "./prescriptiveTraffic.shared";
+import { REPLAY_ACTUAL, REPLAY_FORECAST, useMeasuredWidth } from "./replayViz";
 
 type State = "Low" | "Med" | "High";
 
@@ -95,32 +96,6 @@ function kmIndex(rows: { segment: string; km?: number | null; kmEstimated?: bool
   }
   return m;
 }
-/** Width of an element, tracked live. The replay chart sits inside a
- *  <details>, so it has no width until the panel opens — a one-shot measure
- *  on mount would render it into a zero-width box. */
-function useMeasuredWidth<T extends HTMLElement>() {
-  const ref = useRef<T | null>(null);
-  const [w, setW] = useState(0);
-  useEffect(() => {
-    const el = ref.current;
-    if (!el) return;
-    const ro = new ResizeObserver(([entry]) => setW(entry.contentRect.width));
-    ro.observe(el);
-    setW(el.getBoundingClientRect().width);
-    return () => ro.disconnect();
-  }, []);
-  return [ref, w] as const;
-}
-
-/* Two series, one scale (exits congested out of 20), so they share an axis.
-   Blue and green clear the colour-blind separation checks, keep full contrast
-   against the panel, and stay clear of the Moving/Heavy/Severe ramp used by
-   the grid above, so a line is never mistaken for a state. The dash on the
-   forecast and the label at each line's end carry identity a second and third
-   way, for print and for anyone who cannot separate the hues. (Violet was
-   tried first: it passed the numbers but read as the same blue at 2px.) */
-const REPLAY_ACTUAL = "#2a78d6";
-const REPLAY_FORECAST = "#008300";
 
 /** The held-out week, replayed: the model's expected count of congested exits
  *  against the count that actually happened, hour by hour. */

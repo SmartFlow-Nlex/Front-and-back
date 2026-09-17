@@ -7,6 +7,7 @@ import InfoTooltip from "./InfoTooltip";
 import EventSurgeNarrative from "./EventSurgeNarrative";
 import { ShieldCheck, ChevronRight } from "lucide-react";
 import { loadForecast } from "./prescriptiveTraffic.shared";
+import { REPLAY_ACTUAL, REPLAY_FORECAST, useMeasuredWidth } from "./replayViz";
 
 type RawRow = {
   exit: string;
@@ -57,12 +58,114 @@ const fmtK = (n: number) => (n >= 1000 ? `${(n / 1000).toFixed(0)}k` : String(n)
 const NON_EXIT = /barrier|ramp|spur/i;
 
 
+/** How the event-surge model was scored, plus the held-out replay: one point
+ *  per event day the model never saw. Written by build_event_surge.py. */
+type EventSurgeEval = {
+  model: string;
+  events_total: number; events_train: number; events_test: number;
+  test_from: string; exit_days_scored: number;
+  wmape: number; baseline_wmape: number; median_day_error_pct: number;
+  series: { t: string; p: number; a: number; n: number }[];
+  examples: { kind: string; t: string; predicted: number; actual: number }[];
+  anchor_exit: string; anchor_uplift: number | null;
+  material_exits: number; total_exits: number;
+  holiday_factor?: number; holiday_event_days?: number;
+  method: string;
+};
+
+/** Held-out event days as a dumbbell plot: for each event the model never saw,
+ *  what it predicted the corridor would carry and what actually arrived. Event
+ *  dates are irregular, so the slots are evenly spaced in date ORDER rather
+ *  than on a calendar axis — connecting them as a time series would draw a
+ *  trend through gaps where nothing was measured. */
+function EventReplayChart({ series }: { series: { t: string; p: number; a: number; n: number }[] }) {
+  const [ref, width] = useMeasuredWidth<HTMLDivElement>();
+  const [hover, setHover] = useState<number | null>(null);
+
+  const padL = 42, padR = 10, padT = 10, padB = 20;
+  const H = 156;
+  const w = Math.max(width, 260);
+  const plotW = Math.max(w - padL - padR, 10);
+  const plotH = H - padT - padB;
+  const vals = series.flatMap((d) => [d.p, d.a]);
+  const lo = Math.min(...vals) * 0.96;
+  const hi = Math.max(...vals) * 1.02;
+  const x = (i: number) => padL + ((i + 0.5) / series.length) * plotW;
+  const y = (v: number) => padT + plotH - ((v - lo) / (hi - lo || 1)) * plotH;
+  const k = (v: number) => `${Math.round(v / 1000)}k`;
+
+  const hv = hover != null ? series[hover] : null;
+  const hvLeft = hover != null ? Math.min(Math.max(x(hover), 78), w - 78) : 0;
+  const hvTop = hv && Math.max(hv.a, hv.p) > lo + (hi - lo) * 0.55 ? H - 52 : 4;
+  const fmtDay = (t: string) =>
+    new Date(t + "T00:00").toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
+
+  return (
+    <div ref={ref} style={{ position: "relative", width: "100%", overflowX: "auto" }}>
+      <div style={{ display: "flex", gap: 14, justifyContent: "flex-end", fontSize: "0.7rem", color: "#64748b", marginBottom: 2 }}>
+        {[{ c: REPLAY_ACTUAL, fill: true, label: "Actually arrived" },
+          { c: REPLAY_FORECAST, fill: false, label: "Model predicted" }].map((l) => (
+          <span key={l.label} style={{ display: "inline-flex", alignItems: "center", gap: 5 }}>
+            <svg width={11} height={11} aria-hidden="true">
+              <circle cx={5.5} cy={5.5} r={4} fill={l.fill ? l.c : "#fff"} stroke={l.c} strokeWidth={2} />
+            </svg>
+            {l.label}
+          </span>
+        ))}
+      </div>
+      {width > 0 && (
+        <svg width={w} height={H} role="img"
+             aria-label={`Predicted against actual corridor volume for ${series.length} held-out event days`}
+             onMouseLeave={() => setHover(null)}
+             onMouseMove={(ev) => {
+               const box = ev.currentTarget.getBoundingClientRect();
+               const i = Math.floor(((ev.clientX - box.left - padL) / plotW) * series.length);
+               setHover(Math.min(Math.max(i, 0), series.length - 1));
+             }}>
+          {[0, 0.5, 1].map((f) => (
+            <g key={f}>
+              <line x1={padL} x2={w - padR} y1={y(lo + (hi - lo) * f)} y2={y(lo + (hi - lo) * f)} stroke="#eef2f7" strokeWidth={1} />
+              <text x={padL - 6} y={y(lo + (hi - lo) * f) + 3} textAnchor="end" fontSize={9} fill="#94a3b8">{k(lo + (hi - lo) * f)}</text>
+            </g>
+          ))}
+          {series.map((d, i) => (
+            <g key={d.t} opacity={hover == null || hover === i ? 1 : 0.45}>
+              {/* The gap IS the error, so it gets a mark of its own. */}
+              <line x1={x(i)} x2={x(i)} y1={y(d.p)} y2={y(d.a)} stroke="#94a3b8" strokeWidth={2} strokeLinecap="round" />
+              <circle cx={x(i)} cy={y(d.p)} r={3.6} fill="#fff" stroke={REPLAY_FORECAST} strokeWidth={2} />
+              <circle cx={x(i)} cy={y(d.a)} r={3.6} fill={REPLAY_ACTUAL} stroke="#fff" strokeWidth={1.5} />
+            </g>
+          ))}
+          <text x={padL} y={H - 5} fontSize={9} fill="#94a3b8">{fmtDay(series[0].t)}</text>
+          <text x={padL + plotW / 2} y={H - 5} textAnchor="middle" fontSize={9} fill="#cbd5e1">vertical axis zoomed to these days</text>
+          <text x={w - padR} y={H - 5} textAnchor="end" fontSize={9} fill="#94a3b8">{fmtDay(series[series.length - 1].t)}</text>
+        </svg>
+      )}
+      {hv && (
+        <div style={{
+          position: "absolute", left: hvLeft, top: hvTop, transform: "translateX(-50%)", pointerEvents: "none",
+          background: "#fff", border: "1px solid #e2e8f0", borderRadius: 8, padding: "6px 9px",
+          boxShadow: "0 6px 16px rgba(15,23,42,0.12)", fontSize: "0.72rem", whiteSpace: "nowrap", zIndex: 2,
+        }}>
+          <div style={{ fontWeight: 700, color: "#0f172a", marginBottom: 3 }}>{fmtDay(hv.t)}</div>
+          <div style={{ color: REPLAY_FORECAST, fontWeight: 600 }}>Predicted {hv.p.toLocaleString()}</div>
+          <div style={{ color: REPLAY_ACTUAL, fontWeight: 600 }}>Actually {hv.a.toLocaleString()}</div>
+          <div style={{ color: "#64748b" }}>off by {Math.abs((hv.p - hv.a) / hv.a * 100).toFixed(1)}%</div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function PredictiveEventChart() {
   const [raw, setRaw] = useState<RawRow[] | null>(null);
-  // Out-of-sample result from eval_event_surge.py. The uplift table itself is
-  // descriptive; this is the separate check that it predicts unseen events.
+  // Out-of-sample leaderboard from build_event_surge.py. The uplift table
+  // itself is descriptive; this is the separate check that it predicts unseen
+  // events. (It used to come from eval_event_surge.py, a second script that
+  // could drift from the one that built the table; both are now one file.)
   const [val, setVal] = useState<{ model: string; wmape: number | null; accepted: boolean; diagnosis: string | null }[]>([]);
   const [showAllOthers, setShowAllOthers] = useState(false);
+  const [evalInfo, setEvalInfo] = useState<EventSurgeEval | null>(null);
   // The schedule of upcoming Arena days, and which one is open. null means the
   // card shows what PAST events did (the observed uplift); an index means it
   // shows the forecast for that specific day.
@@ -79,6 +182,7 @@ export default function PredictiveEventChart() {
         if (cancelled || fc.events.length === 0) return;
         setRaw(fc.events as unknown as RawRow[]);
         if (Array.isArray(fc.extras.eventSurgeMetrics)) setVal(fc.extras.eventSurgeMetrics as typeof val);
+        setEvalInfo((fc.extras.eventSurgeEval as EventSurgeEval | null | undefined) ?? null);
         setUpcoming(fc.upcomingEvents as unknown as UpcomingEvent[]);
       })
       .catch((err) => console.error("Failed to fetch ML event surge forecast", err));
@@ -446,6 +550,49 @@ export default function PredictiveEventChart() {
         </summary>
 
         <div style={{ display: "grid", gap: 14, marginTop: 10 }}>
+          {evalInfo?.series && evalInfo.series.length > 1 && (
+            <div>
+              <div style={{ fontSize: "0.82rem", fontWeight: 800, color: "var(--text-primary)", letterSpacing: "-0.01em", marginBottom: 4 }}>
+                Did past predictions match what really happened?
+              </div>
+              <p style={{ margin: "0 0 2px", fontSize: "0.76rem", lineHeight: 1.55, color: "#475569" }}>
+                Each pair below is one of the <b>{evalInfo.events_test} event days the model never saw</b>, in date order.
+                The hollow dot is what it predicted the whole corridor would carry; the filled dot is what actually arrived.
+                The gap between them is the error.
+              </p>
+              <EventReplayChart series={evalInfo.series} />
+              <div style={{
+                display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(118px, 1fr))", gap: 8, marginTop: 8,
+                padding: "8px 10px", borderRadius: 8, background: "var(--bg-surface-hover)", border: "1px solid var(--border-default)",
+              }}>
+                {[[`${evalInfo.median_day_error_pct.toFixed(1)}%`, "off on the typical event day"],
+                  [`${evalInfo.wmape.toFixed(1)}%`, "error across all exit-days"],
+                  [`${evalInfo.baseline_wmape.toFixed(1)}%`, "if you ignored the event"]].map(([v, l]) => (
+                  <div key={l} style={{ display: "flex", flexDirection: "column", gap: 1, minWidth: 0 }}>
+                    <span style={{ fontSize: "0.95rem", fontWeight: 800, color: "#0f172a", fontVariantNumeric: "tabular-nums", lineHeight: 1.1 }}>{v}</span>
+                    <span style={{ fontSize: "0.68rem", color: "#64748b" }}>{l}</span>
+                  </div>
+                ))}
+              </div>
+              {evalInfo.examples?.length > 0 && (
+                <div style={{ display: "grid", gap: 3, marginTop: 7, fontSize: "0.72rem", color: "#64748b" }}>
+                  {evalInfo.examples.map((ex) => (
+                    <div key={ex.kind}>
+                      {ex.kind.charAt(0).toUpperCase() + ex.kind.slice(1)} —{" "}
+                      <b style={{ color: "#0f172a" }}>{new Date(ex.t + "T00:00").toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" })}</b>:
+                      {" "}predicted {ex.predicted.toLocaleString()}, actually {ex.actual.toLocaleString()}.
+                    </div>
+                  ))}
+                </div>
+              )}
+              <p style={{ margin: "7px 0 0", fontSize: "0.72rem", lineHeight: 1.5, color: "#94a3b8" }}>
+                Event days come from the Philippine Arena calendar ({evalInfo.events_total} of them inside the volume record), never inferred from how busy the road was.
+                {evalInfo.holiday_event_days ? <> {evalInfo.holiday_event_days} fall on a public holiday, which is measured separately — a holiday runs about {Math.round((evalInfo.holiday_factor ?? 1) * 100)}% of an ordinary day, so the event effect is read on top of that rather than being credited with it.</> : null}
+                {" "}Attendance is not in the calendar, so a sold-out concert and a small exhibition get the same prediction; that is the largest remaining source of error.
+              </p>
+            </div>
+          )}
+
           {champ?.wmape != null && (
             <div>
               <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "0.74rem" }}>

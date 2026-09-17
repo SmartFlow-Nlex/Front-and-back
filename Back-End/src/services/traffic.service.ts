@@ -1666,6 +1666,37 @@ export async function getCongestionHorizonAccuracy(): Promise<CongestionHorizonA
  * that answers the operational question: using uplift learned from earlier
  * events, how well does it predict LATER events it never saw?
  */
+/**
+ * How the event-surge model was scored, and the replay of the held-out event
+ * days: predicted corridor volume against what actually arrived, one point per
+ * event. Written by All_Scripts/Predictive_Modeling/build_event_surge.py.
+ */
+export type EventSurgeEval = {
+  model: string;
+  events_total: number; events_train: number; events_test: number;
+  test_from: string; exit_days_scored: number;
+  wmape: number; baseline_wmape: number; median_day_error_pct: number;
+  series: { t: string; p: number; a: number; n: number }[];
+  examples: { kind: string; t: string; predicted: number; actual: number }[];
+  anchor_exit: string; anchor_uplift: number | null;
+  material_exits: number; total_exits: number;
+  holiday_factor?: number; holiday_event_days?: number;
+  method: string;
+};
+
+export async function getEventSurgeEval(): Promise<EventSurgeEval | null> {
+  if (!db) return null;
+  try {
+    const { rows } = await db.query(`SELECT payload FROM gold.ml_event_surge_eval WHERE id = 1`);
+    return (rows[0]?.payload as EventSurgeEval) ?? null;
+  } catch (error) {
+    // Absent until build_event_surge.py has run; the card simply omits the
+    // section rather than the whole forecast failing.
+    console.error("Database query failed for event surge eval:", error);
+    return null;
+  }
+}
+
 export async function getEventSurgeMetrics() {
   if (!db) return null;
   try {

@@ -9,6 +9,7 @@ import { aggregateSeries } from "./aggregateSeries";
 import { useThemeTokens, zoneTints } from "./useThemeTokens";
 import WeatherEvidencePanel, { EvidenceHeading } from "./WeatherEvidencePanel";
 import { BarChart3, ShieldCheck, ChevronRight } from "lucide-react";
+import { TOOLTIP_CSS } from "./replayViz";
 
 type ModelType = "LSTM" | "Prophet" | "HoltWinters" | "SARIMAX" | "HoltsLinear";
 
@@ -839,6 +840,8 @@ export default function PredictiveVolumeChart({ months = "all", from, to, weathe
       backgroundColor: T.tooltipBg,
       borderColor: T.border,
       textStyle: { color: T.tooltipText },
+      confine: true,
+      extraCssText: TOOLTIP_CSS,
       formatter: (params: unknown) => {
         const items = params as { name: string; marker: string; seriesName: string; value: number | null }[];
         if (!items || items.length === 0) return "";
@@ -1099,6 +1102,8 @@ export default function PredictiveVolumeChart({ months = "all", from, to, weathe
         grid: { left: 64, right: drawWeather ? 64 : 24, top: 24, bottom: 64 },
         tooltip: {
           trigger: "axis",
+          confine: true,
+          extraCssText: TOOLTIP_CSS,
           formatter: (params: unknown) => {
             const items = params as { name: string; marker: string; seriesName: string; value: number | null; dataIndex: number }[];
             const t = hourTemps[items[0]?.dataIndex ?? -1];

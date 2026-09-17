@@ -7,7 +7,7 @@ import InfoTooltip from "./InfoTooltip";
 import EventSurgeNarrative from "./EventSurgeNarrative";
 import { ShieldCheck, ChevronRight } from "lucide-react";
 import { loadForecast } from "./prescriptiveTraffic.shared";
-import { REPLAY_ACTUAL, REPLAY_FORECAST, useMeasuredWidth } from "./replayViz";
+import { REPLAY_ACTUAL, REPLAY_FORECAST, TOOLTIP_CSS, useMeasuredWidth } from "./replayViz";
 
 type RawRow = {
   exit: string;
@@ -278,17 +278,18 @@ export default function PredictiveEventChart() {
     grid: { left: 152, right: 210, top: 10, bottom: 36 },
     tooltip: {
       trigger: "item",
-      backgroundColor: "rgba(255,255,255,0.97)",
+      backgroundColor: "#ffffff",
       borderColor: "#e2e8f0",
       borderWidth: 1,
       textStyle: { color: "#334155" },
-      extraCssText: "box-shadow: 0 6px 16px rgba(15,23,42,0.12); border-radius: 8px;",
+      confine: true,
+      extraCssText: TOOLTIP_CSS,
       formatter: (params: unknown) => {
         const r = rows[(params as { dataIndex: number }).dataIndex];
         return `
           <div style="padding:2px 4px; min-width:225px;">
             <b style="font-size:1.05em; color:#0f172a;">${r.exit}</b>
-            <div style="margin-top:8px; display:grid; grid-template-columns:120px 1fr; gap:5px 8px; font-size:0.9em;">
+            <div style="margin-top:8px; display:grid; grid-template-columns:auto 1fr; gap:5px 12px; font-size:0.9em;">
               <span style="color:#64748b;">Added by event</span><span style="font-weight:700; color:${SURGE_COLOR};">+${fmtVeh(r.added)} (+${r.pct.toFixed(0)}%)</span>
               <span style="color:#64748b;">Normal day</span><span style="font-weight:600;">${fmtVeh(r.baseline)}</span>
               <span style="color:#64748b;">With event</span><span style="font-weight:600; color:${SURGE_COLOR};">${fmtVeh(r.surge)}</span>

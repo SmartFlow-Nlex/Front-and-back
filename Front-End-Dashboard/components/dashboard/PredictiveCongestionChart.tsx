@@ -7,7 +7,7 @@ import InfoTooltip from "./InfoTooltip";
 import CongestionNarrative from "./CongestionNarrative";
 import { ShieldCheck, ChevronRight } from "lucide-react";
 import { loadForecast } from "./prescriptiveTraffic.shared";
-import { REPLAY_ACTUAL, REPLAY_FORECAST, useMeasuredWidth } from "./replayViz";
+import { REPLAY_ACTUAL, REPLAY_FORECAST, TOOLTIP_CSS, useMeasuredWidth } from "./replayViz";
 
 type State = "Low" | "Med" | "High";
 
@@ -840,20 +840,30 @@ export default function PredictiveCongestionChart() {
       // otherwise threw the panel off the left edge of the card and under the
       // sidebar, where half of it could not be read.
       confine: true,
-      extraCssText: "box-shadow: 0 10px 28px rgba(15,23,42,0.18); border-radius: 10px; max-width: 300px;",
+      extraCssText: TOOLTIP_CSS,
       formatter: (params: unknown) => {
         const p = params as { data: DayCell; dataIndex: number };
         const d = p.data;
         const seg = shownSegments[d.value[1]] ?? "";
         const day = (model.dayLabels[d.value[0]] ?? "").replace("\n", " ");
-        return `<div style="font-weight:700; margin-bottom:4px;">${seg} \u00b7 ${day}</div>
-          <div style="display:grid; grid-template-columns:auto auto; gap:2px 14px; font-size:12px;">
-            <span style="color:#64748b;">Expected congested hours</span><span style="font-weight:700;">${d.estimated ? d.exact.toFixed(1) : d.hours} of ${d.known}</span>
-            ${d.severeHours > 0 ? `<span style="color:#64748b;">Of those, crawling</span><span style="font-weight:700; color:#b91c1c;">${d.severeHours} h</span>` : ""}
-            ${d.firstClock ? `<span style="color:#64748b;">First likely from</span><span style="font-weight:600;">${d.firstClock}</span>` : ""}
-          </div>
-          ${d.estimated ? `<div style="margin-top:6px; color:#94a3b8; font-size:11px;">Each hour's chance of congestion, added up \u2014 not a count of hours.</div>` : ""}
-          ${d.partial ? `<div style="margin-top:6px; color:#94a3b8; font-size:11px;">Part of a day \u2014 only ${d.known} forecast hours fall on it.</div>` : ""}`;
+        const km = kmLabel(KMI.get(seg));
+        return `
+          <div style="padding:2px 4px;">
+            <b style="font-size:1.05em; color:#0f172a;">${seg}</b>
+            <span style="color:#94a3b8; font-size:0.85em;"> · km ${km}</span>
+            <div style="margin-top:2px; color:#64748b; font-size:0.86em;">${day}</div>
+            <div style="margin-top:9px; display:flex; align-items:baseline; justify-content:space-between; gap:14px;
+                        padding-bottom:6px; border-bottom:1px solid #eef2f7;">
+              <span style="color:#64748b;">Expected congested hours</span>
+              <b style="font-size:1.15em; color:${d.hours >= 9 ? "#b91c1c" : "#334155"};">${d.estimated ? d.exact.toFixed(1) : d.hours}<span style="font-weight:500; color:#94a3b8; font-size:0.8em;"> of ${d.known}</span></b>
+            </div>
+            <div style="margin-top:7px; display:grid; grid-template-columns:auto auto; gap:5px 12px; font-size:0.88em; align-items:baseline;">
+              ${d.severeHours > 0 ? `<span style="color:#64748b;">Of those, crawling</span><span style="font-weight:700; color:#b91c1c; text-align:right;">${d.severeHours} h</span>` : ""}
+              ${d.firstClock ? `<span style="color:#64748b;">First likely from</span><span style="font-weight:600; text-align:right;">${d.firstClock}</span>` : ""}
+            </div>
+            ${d.partial ? `<div style="margin-top:8px; color:#b45309; font-size:0.82em; line-height:1.45;">Part of a day — only ${d.known} forecast hours fall on it.</div>` : ""}
+            ${d.estimated ? `<div style="margin-top:8px; color:#94a3b8; font-size:0.82em; line-height:1.45;">Each hour's chance of congestion, added up — not a count of hours.</div>` : ""}
+          </div>`;
       },
     },
     grid: [{ left: 150, right: 24, top: heatTop, height: heatHeight }],
@@ -929,7 +939,7 @@ export default function PredictiveCongestionChart() {
       // otherwise threw the panel off the left edge of the card and under the
       // sidebar, where half of it could not be read.
       confine: true,
-      extraCssText: "box-shadow: 0 10px 28px rgba(15,23,42,0.18); border-radius: 10px; max-width: 300px;",
+      extraCssText: TOOLTIP_CSS,
       formatter: (params: unknown) => {
         const p = params as { seriesIndex: number; data: CellItem | number; dataIndex: number };
         if (p.seriesIndex === 1) {

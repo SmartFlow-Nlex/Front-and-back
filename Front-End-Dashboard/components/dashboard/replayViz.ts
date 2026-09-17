@@ -31,3 +31,13 @@ export function useMeasuredWidth<T extends HTMLElement>() {
   }, []);
   return [ref, w] as const;
 }
+
+/* Shared chrome for every ECharts tooltip on the Predictive tab.
+ *
+ * `white-space: normal` is the load-bearing part: ECharts sets nowrap on the
+ * tooltip container, so a max-width alone never wraps anything - a long note
+ * simply ran out of its own box and across the card beside it. `confine`
+ * keeps the panel inside the chart rather than letting it escape under the
+ * sidebar when a cell near the left edge is hovered. */
+export const TOOLTIP_CSS =
+  "box-shadow: 0 10px 28px rgba(15,23,42,0.18); border-radius: 10px; max-width: 300px; white-space: normal;";

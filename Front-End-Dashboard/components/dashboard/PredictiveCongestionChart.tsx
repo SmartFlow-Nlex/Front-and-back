@@ -62,10 +62,10 @@ type RawRow = { segment: string; hours: number; state: State; probability: numbe
 // exit this hour", not a corridor speed. The legend used to promise "Free flow
 // > 60 km/h", a speed the data cannot contain; the blue cell means the model
 // expects no report, which is what it says now.
-const STATE_META: Record<State, { rank: number; color: string; text: string; label: string; short: string; speed: string }> = {
-  Low: { rank: 0, color: "#cfe4f7", text: "#12507e", label: "Moving", short: "MOVING", speed: "no jam, or over 20 km/h" },
-  Med: { rank: 1, color: "#f0a63a", text: "#5c3208", label: "Heavy", short: "HEAVY", speed: "10–20 km/h" },
-  High: { rank: 2, color: "#dc2626", text: "#ffffff", label: "Severe", short: "SEVERE", speed: "under 10 km/h" },
+const STATE_META: Record<State, { rank: number; color: string; text: string; label: string; short: string; speed: string; brief: string }> = {
+  Low: { rank: 0, color: "#cfe4f7", text: "#12507e", label: "Moving", short: "MOVING", speed: "no jam, or over 20 km/h", brief: "no jam / >20" },
+  Med: { rank: 1, color: "#f0a63a", text: "#5c3208", label: "Heavy", short: "HEAVY", speed: "10–20 km/h", brief: "10–20" },
+  High: { rank: 2, color: "#dc2626", text: "#ffffff", label: "Severe", short: "SEVERE", speed: "under 10 km/h", brief: "<10" },
 };
 
 /* The week grid counts congested hours per day rather than naming a state, so
@@ -74,15 +74,13 @@ const STATE_META: Record<State, { rank: number; color: string; text: string; lab
    red — so "more red" means the same thing in both views. Each cell also
    prints its number, so the colour is a second reading of the value and never
    the only one. */
-const WEEK_BANDS: { min: number; max: number; color: string; text: string; label: string }[] = [
-  { min: 0, max: 0, color: "#cfe4f7", text: "#12507e", label: "none" },
-  { min: 1, max: 2, color: "#fde8c8", text: "#7a4a08", label: "1-2 h" },
-  { min: 3, max: 5, color: "#f9c97f", text: "#5c3208", label: "3-5 h" },
-  { min: 6, max: 8, color: "#f0a63a", text: "#4a2806", label: "6-8 h" },
-  { min: 9, max: 24, color: "#dc2626", text: "#ffffff", label: "9 h+" },
+const WEEK_BANDS: { min: number; max: number; color: string; label: string }[] = [
+  { min: 0, max: 0, color: "#cfe4f7", label: "none" },
+  { min: 1, max: 2, color: "#fde8c8", label: "1-2 h" },
+  { min: 3, max: 5, color: "#f9c97f", label: "3-5 h" },
+  { min: 6, max: 8, color: "#f0a63a", label: "6-8 h" },
+  { min: 9, max: 24, color: "#dc2626", label: "9 h+" },
 ];
-const weekBand = (h: number) => WEEK_BANDS.find((b) => h >= b.min && h <= b.max) ?? WEEK_BANDS[0];
-
 const LOW_CONF = 0.8;
 
 /** "+1h" is meaningless without an anchor, so every hour label carries the
@@ -826,7 +824,7 @@ export default function PredictiveCongestionChart() {
   // The week view has no per-hour strip under it — a count of congested exits
   // per DAY would double-count the same exit across its hours — so it ends at
   // the grid.
-  const weekChartHeight = heatTop + heatHeight + 56;
+  const weekChartHeight = heatTop + heatHeight + 14;
 
   const weekOption: EChartsOption = {
     visualMap: {
@@ -1187,8 +1185,8 @@ export default function PredictiveCongestionChart() {
     ? `Congestion builds: ${firstCount} of ${segments.length} exit${firstCount === 1 ? "" : "s"} congested at +1h, rising to ${peakCount} by +${peakAt}h. By the peak it is ${whoText}${nSevere > 0 ? `, with ${nSevere} crawling under 10 km/h` : ""}.`
     : `${whoText.charAt(0).toUpperCase()}${whoText.slice(1)} — congested from the first hour${model.allHours ? ` and holding for the whole ${model.maxHour}-hour window` : ""}${nSevere > 0 ? `, ${nSevere} of them crawling under 10 km/h at some point` : ", none of it severe"}.`;
 
-  const stat = (value: string, label: string, tone?: string) => (
-    <div style={{ display: "flex", flexDirection: "column", gap: 1, minWidth: 0 }}>
+  const stat = (value: string, label: string, tone?: string, title?: string) => (
+    <div title={title} style={{ display: "flex", flexDirection: "column", gap: 1, minWidth: 0 }}>
       <span style={{ fontSize: "1.02rem", fontWeight: 800, color: tone ?? "#0f172a", letterSpacing: "-0.01em", fontVariantNumeric: "tabular-nums", lineHeight: 1.1, whiteSpace: "nowrap" }}>{value}</span>
       <span style={{ fontSize: "0.68rem", color: "#64748b" }}>{label}</span>
     </div>
@@ -1263,7 +1261,7 @@ export default function PredictiveCongestionChart() {
                 {!isWeek && frameHours > hourLabels.length && (
                   <span style={{ color: "#b45309" }}> · {frameHours - hourLabels.length} hour{frameHours - hourLabels.length === 1 ? "" : "s"} not yet forecast</span>
                 )}</>}
-          <span style={{ cursor: "help" }} title="Rows are exits ordered north-bound by km-post. Hover any cell for the model's confidence. The base time is the last complete hour of Waze ingestion."> · hover for detail</span>
+          <span style={{ cursor: "help" }} title="Rows are exits ordered north-bound by km-post. Hover any cell for the model's confidence. The base time is the last complete hour of Waze ingestion."></span>
         </p>
       </div>
 
@@ -1279,8 +1277,12 @@ export default function PredictiveCongestionChart() {
 
       {/* Row 3: how many, where, how long, how sure — once each, one line. */}
       <div style={{ display: "grid", gridTemplateColumns: "repeat(4, minmax(0, 1fr))", gap: "12px 18px", padding: "12px 16px", background: "var(--bg-surface-hover)", borderRadius: "10px" }}>
-        {stat(`${nCongested} of ${segments.length}`, nCongested > 0 ? "exits with a jam expected" : "exits affected · all moving", nCongested > 0 ? (nSevere > 0 ? "#b91c1c" : "#b45309") : "#15803d")}
-        {stat(kmSpan != null ? `km ${model.kmFrom}–${model.kmTo}` : "—", kmSpan != null ? `${kmSpan} km${model.contiguous ? ", one stretch" : ", not contiguous"}` : "no congestion predicted")}
+        {stat(`${nCongested} of ${segments.length}`, nCongested > 0 ? "exits with a jam" : "all moving",
+              nCongested > 0 ? (nSevere > 0 ? "#b91c1c" : "#b45309") : "#15803d",
+              nCongested > 0 ? `${nCongested} of ${segments.length} exits are expected to carry a jam somewhere in this window` : undefined)}
+        {stat(kmSpan != null ? `km ${model.kmFrom}–${model.kmTo}` : "—",
+              kmSpan != null ? `${kmSpan} km affected` : "none predicted", undefined,
+              kmSpan != null ? (model.contiguous ? "One continuous stretch" : "Not contiguous — clear exits sit between the affected ones") : undefined)}
         {isWeek
           ? (() => {
               // Expected hours per day at the exit with the most of them. The
@@ -1291,15 +1293,17 @@ export default function PredictiveCongestionChart() {
               const worstY = [...perExit.entries()].sort((a, b) => b[1] - a[1])[0];
               const days = Math.max(model.dayCount, 1);
               return stat(worstY ? `${(worstY[1] / days).toFixed(0)} h/day` : "—",
-                          worstY ? `at ${segments[worstY[0]]}, the worst exit` : "at the worst exit",
-                          worstY && worstY[1] / days >= 12 ? "#b91c1c" : undefined);
+                          "at the worst exit",
+                          worstY && worstY[1] / days >= 12 ? "#b91c1c" : undefined,
+                          worstY ? `${segments[worstY[0]]} — the most congested hours per day of any exit` : undefined);
             })()
           : stat(model.allHours ? `all ${model.maxHour}h` : model.worstSegment ? `${model.worstSegmentCount} of ${hourLabels.length}h` : "—", model.flatHours ? "same every hour" : "at the worst exit")}
         {(() => {
           const pc = cells.filter((c) => c.state !== "Pending" && c.pCong != null).map((c) => c.pCong as number);
           if (pc.length) {
             const mean = pc.reduce((a, b) => a + b, 0) / pc.length;
-            return stat(`${Math.round(mean * 100)}%`, "avg chance of congestion across the grid", mean >= 0.5 ? "#b91c1c" : undefined);
+            return stat(`${Math.round(mean * 100)}%`, "average jam chance", mean >= 0.5 ? "#b91c1c" : undefined,
+                        "The mean chance of heavy or severe traffic across every cell on the grid");
           }
           return stat(model.confLo != null && model.confHi != null ? `${Math.round(model.confLo * 100)}–${Math.round(model.confHi * 100)}%` : "—",
               model.confLo != null && model.confLo < LOW_CONF ? "confidence · some cells under 80%" : "confidence across congested cells",
@@ -1311,9 +1315,10 @@ export default function PredictiveCongestionChart() {
       <div>
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, flexWrap: "wrap", marginBottom: 2 }}>
           {/* How far ahead. The model forecasts a week either way; this picks
-              how much of it the grid draws, and at what granularity. */}
+              how much of it the grid draws, and at what granularity. The help
+              text lives on the buttons rather than in the layout: at this card
+              width a sentence here pushed the exit picker onto its own row. */}
           <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-            <span style={{ fontSize: "0.72rem", color: "#64748b", fontWeight: 600 }}>Showing</span>
             <div role="group" aria-label="Forecast range" style={{ display: "inline-flex", background: "#f1f5f9", border: "1px solid #dce2ef", borderRadius: 999, padding: 2, gap: 2 }}>
               {RANGES.map((r) => (
                 <button
@@ -1334,35 +1339,13 @@ export default function PredictiveCongestionChart() {
                 </button>
               ))}
             </div>
-            <span style={{ fontSize: "0.72rem", color: "#94a3b8" }}>{rangeDef.help}</span>
           </div>
 
-          <div style={{ display: "flex", gap: 12, alignItems: "center", fontSize: "0.74rem", color: "#64748b", flexWrap: "wrap" }}>
-            {isWeek && WEEK_BANDS.map((b) => (
-              <span key={b.label} style={{ display: "inline-flex", alignItems: "center", gap: 5, whiteSpace: "nowrap" }}>
-                <span style={{ width: 11, height: 11, background: b.color, borderRadius: 3 }} />
-                {b.label}
-              </span>
-            ))}
-            {isWeek && <span style={{ color: "#94a3b8" }}>congested hours per day (10-20 km/h or slower)</span>}
-            {!isWeek && (["Low", "Med", "High"] as State[]).map((st) => {
-              const absent = st === "Med" && !model.everHeavy;
-              return (
-                <span key={st} title={absent ? "No exit-hour in this forecast falls in the 10-20 km/h band" : undefined}
-                      style={{ display: "inline-flex", alignItems: "center", gap: 5, whiteSpace: "nowrap", opacity: absent ? 0.45 : 1 }}>
-                  <span style={{ width: 11, height: 11, background: STATE_META[st].color, borderRadius: 3 }} />
-                  {STATE_META[st].label} <span style={{ color: "#94a3b8" }}>{STATE_META[st].speed}</span>
-                  {absent && <span style={{ color: "#94a3b8", fontStyle: "italic" }}>· never predicted</span>}
-                </span>
-              );
-            })}
-            {!isWeek && model.lowConfCount > 0 && <span style={{ color: "#94a3b8", whiteSpace: "nowrap" }}><b>*</b> under 80% sure</span>}
-          </div>
 
           {/* Which exits are drawn. A select instead of fifteen chips: the
               reader pulls in the two or three they are responsible for. */}
           <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: "0.72rem", color: "#64748b", flexWrap: "wrap" }}>
-            <span>Showing <b style={{ color: "#475569" }}>{shownSegments.length}</b> of {segments.length} exits</span>
+            <span><b style={{ color: "#475569" }}>{shownSegments.length}</b> of {segments.length} exits</span>
             {hiddenCount > 0 && (
               <select
                 value=""
@@ -1370,7 +1353,7 @@ export default function PredictiveCongestionChart() {
                 title={urgentHidden ? "Some hidden exits turn severe sooner than any shown" : undefined}
                 style={{ font: "inherit", fontWeight: 600, color: urgentHidden ? "#b45309" : "#475569", background: "#fff", border: `1px solid ${urgentHidden ? "#fcd9a4" : "#dce2ef"}`, borderRadius: 8, padding: "3px 8px", cursor: "pointer" }}
               >
-                <option value="">{urgentHidden ? "Add exit… (some hidden turn severe sooner)" : "Add exit…"}</option>
+                <option value="">{urgentHidden ? "⚠ Add exit…" : "Add exit…"}</option>
                 {hiddenSorted.map((sg) => {
                   const f = firstSevere(sg);
                   return <option key={sg} value={sg}>{sg}{f != null ? ` — severe at +${f}h` : " — stays clear"}</option>;
@@ -1390,6 +1373,45 @@ export default function PredictiveCongestionChart() {
           </div>
         </div>
 
+        {/* The legend belongs to the grid, not to the controls: sitting in the
+            control row it wrapped onto a line of its own and read as a third
+            bank of settings. Speeds are abbreviated here and spelled out on
+            hover, so the whole key fits one line at this card width. */}
+        <div style={{
+          display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap",
+          fontSize: "0.71rem", color: "#64748b",
+          padding: "6px 2px", borderTop: "1px solid #f1f5f9", marginTop: 8,
+        }}>
+          {isWeek ? (
+            <>
+              {WEEK_BANDS.map((b) => (
+                <span key={b.label} style={{ display: "inline-flex", alignItems: "center", gap: 4, whiteSpace: "nowrap" }}>
+                  <span style={{ width: 10, height: 10, background: b.color, borderRadius: 3 }} />
+                  {b.label}
+                </span>
+              ))}
+              <span style={{ color: "#94a3b8" }}>expected congested hours per day</span>
+            </>
+          ) : (
+            <>
+              {(["Low", "Med", "High"] as State[]).map((st) => {
+                const absent = st === "Med" && !model.everHeavy;
+                return (
+                  <span key={st}
+                        title={absent ? "No exit-hour in this forecast falls in the 10-20 km/h band" : STATE_META[st].speed}
+                        style={{ display: "inline-flex", alignItems: "center", gap: 4, whiteSpace: "nowrap", opacity: absent ? 0.45 : 1 }}>
+                    <span style={{ width: 10, height: 10, background: STATE_META[st].color, borderRadius: 3 }} />
+                    <b style={{ fontWeight: 600, color: "#475569" }}>{STATE_META[st].label}</b>
+                    <span style={{ color: "#94a3b8" }}>{STATE_META[st].brief}</span>
+                  </span>
+                );
+              })}
+              <span style={{ color: "#94a3b8" }}>km/h</span>
+              {model.lowConfCount > 0 && <span style={{ color: "#94a3b8", whiteSpace: "nowrap" }}><b>*</b> under 80% sure</span>}
+            </>
+          )}
+        </div>
+
         <div style={{ width: "100%", height: `${isWeek ? weekChartHeight : chartHeight}px` }}>
           <DashboardChart key={range} option={isWeek ? weekOption : option} height={isWeek ? weekChartHeight : chartHeight} />
         </div>
@@ -1400,9 +1422,12 @@ export default function PredictiveCongestionChart() {
         <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 12, marginBottom: 8 }}>
           <h4 style={{ margin: 0, fontSize: "0.88rem", color: "#0f172a", fontWeight: 700 }}>
             What to act on <span style={{ color: "#94a3b8", fontWeight: 500 }}>
-              · {alerts.length} episode{alerts.length === 1 ? "" : "s"} across {nCongested} of {segments.length} exits
-              {model.severeCount > 0 && <> · {model.severeCount} severe</>}
-              {model.heavyCount > 0 && <> · {model.heavyCount} heavy</>}
+              · {alerts.length} episode{alerts.length === 1 ? "" : "s"}
+              {(model.severeCount > 0 || model.heavyCount > 0) && <>
+                {" · "}
+                {[model.severeCount > 0 ? `${model.severeCount} severe` : null,
+                  model.heavyCount > 0 ? `${model.heavyCount} heavy` : null].filter(Boolean).join(", ")}
+              </>}
             </span>
           </h4>
           {alerts.length > VISIBLE_ALERTS && (

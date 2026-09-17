@@ -71,7 +71,29 @@ for _line in (Path(__file__).resolve().parents[2] / "Back-End" / ".env").read_te
         _env[_k.strip()] = _v.strip().strip('"')
 PG = (f"host={_env['PG_HOST']} port={_env.get('PG_PORT', 5432)} dbname={_env['PG_DATABASE']} "
       f"user={_env['PG_USER']} password={_env['PG_PASSWORD']} sslmode=require")
-HORIZONS = list(range(1, 13))
+def _argval(flag, default):
+    """--flag N, for experiments that must not require editing the file."""
+    return int(sys.argv[sys.argv.index(flag) + 1]) if flag in sys.argv else default
+
+
+# How far ahead the map forecasts. The card's day view needs 24 and its week
+# view needs 168, all served from this one model, which carries `horizon` as a
+# feature — so the only cost of extending is training rows.
+#
+# Training every hour out to 168 means 2.2M rows and nearly eight minutes, too
+# heavy for an hourly job. Beyond the first day the frame is thinned to every
+# STRIDE-th hour: accuracy is almost flat in horizon (65.9% at +1h, 64.8% at
+# +168h — the recurring weekday-and-hour pattern carries the signal, not the
+# recent lags), so the model has nothing to learn from 30h that it did not
+# learn from 28h. Every hour is still PREDICTED; only the fitting frame is
+# thinned.
+MAX_HORIZON = _argval("--max-horizon", 168)
+HORIZON_STRIDE = _argval("--horizon-stride", 6)
+DENSE_TO = 24                     # every hour out to here, then stride
+HORIZONS = sorted(set(range(1, min(MAX_HORIZON, DENSE_TO) + 1)) |
+                  set(range(DENSE_TO, MAX_HORIZON + 1, HORIZON_STRIDE)))
+# Every hour the card can ask for, whether or not it was a fitting horizon.
+SERVE_HORIZONS = list(range(1, MAX_HORIZON + 1))
 STATES = ["Low", "Med", "High"]
 
 # Class cuts, in km/h of the exit-hour's length-weighted jam speed.
@@ -92,7 +114,12 @@ STATES = ["Low", "Med", "High"]
 # where a generic advisory scale says. The UI states the thresholds, so the
 # reader is never left guessing what a colour means.
 SEVERE_KMH, HEAVY_KMH = 10.0, 20.0
-TEST_DAYS = 7
+# Twelve, not seven. A seven-day-ahead forecast cannot be scored against a
+# seven-day test window: at horizon h only origins in [cut, end - h] have a
+# known answer, so h=168 would have exactly zero test rows. Twelve days leaves
+# 2,400 scored rows at the far end while still giving the fit four fifths of
+# the record.
+TEST_DAYS = _argval("--test-days", 12)
 SEQ_LEN = 24
 SARIMAX_ORIGIN_STEP = 12          # refit cadence across the test window
 
@@ -605,7 +632,7 @@ for r in res.itertuples():
         (model_name,target,r2,mae,rank,accepted,rejected_reason,uses_weather,diagnosis,updated_at)
         VALUES (%s,'Congestion',%s,%s,%s,%s,%s,false,%s,now())""",
         (r.model, float(r.accuracy), float(r.log_loss), int(r.rank), bool(r.accepted), reason,
-         "accuracy is averaged over horizons 1-12h; see gold.ml_congestion_horizon_accuracy"))
+         "accuracy is averaged over horizons 1-168h; see gold.ml_congestion_horizon_accuracy"))
 for k, v in baselines.items():
     cur.execute("""INSERT INTO gold.ml_model_metrics
         (model_name,target,r2,rank,accepted,rejected_reason,uses_weather,updated_at)
@@ -618,7 +645,7 @@ cur.execute("""
     accuracy numeric(8,5), n int, persistence_accuracy numeric(8,5),
     updated_at timestamptz DEFAULT now())""")
 cur.execute("""COMMENT ON TABLE gold.ml_congestion_horizon_accuracy IS
-  'Congestion classification accuracy per forecast horizon (1-12h). The previous run could not produce this: its target was never shifted by the horizon, so all twelve horizons were the same prediction. A single averaged accuracy hides the decay, which is the whole point of a horizon.'""")
+  'Congestion classification accuracy per forecast horizon (1-168h; fitted hourly to 24h then every 6h). The previous run could not produce this: its target was never shifted by the horizon, so all twelve horizons were the same prediction. A single averaged accuracy hides the decay, which is the whole point of a horizon.'""")
 cur.execute("DELETE FROM gold.ml_congestion_horizon_accuracy")
 for row in per_h:
     for name in res.model:
@@ -641,7 +668,9 @@ if champ.model == "GRU" and gru is not None:
 else:
     last = df.ts.max()
     latest = df[df.ts == last].copy()
-    for hz in HORIZONS:
+    # Every hour the card can ask for, including the ones thinned out of the
+    # fitting frame: `horizon` is an input, so the model answers for any value.
+    for hz in SERVE_HORIZONS:
         q = latest.copy()
         q["horizon"] = hz
         mdl = xgb if champ.model == "XGBoost" else qrf

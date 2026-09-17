@@ -72,7 +72,25 @@ Runtime is about two minutes with `--fast`, about twenty-five without: SARIMAX
   30 km/h: every reported hour landed in one class, Heavy was never predicted,
   and the map was solid red. Re-cut at this corridor's own distribution, the
   three classes carry roughly 49% / 38% / 14% of the grid.
-- For each horizon 1–12 h the target is the state *h hours later*; features
+- Forecasts **168 hours** (7 days), not 12. The card's day view needs 24 and
+  its week view needs a full week, and all three ranges come from this one
+  model because `horizon` is one of its features. Accuracy is close to flat
+  across that span — 65.9% at +1h, 64.4% at +24h, 64.1% at +168h — because
+  the recurring weekday-and-hour pattern carries most of the signal and the
+  recent lags only help in the first few hours. A week ahead is therefore
+  about as trustworthy as twelve hours ahead, which is not obvious and is the
+  reason the week view is offered at all.
+- Every hour out to 24 is a fitting horizon; beyond that the frame is thinned
+  to every 6th hour (`--horizon-stride`). Fitting all 168 meant 2.2M rows and
+  7m46s, too heavy for an hourly job; thinning gives 2m16s and, because the
+  model has nothing to learn from +30h that it did not learn from +28h,
+  slightly *better* held-out accuracy (64.1% against 63.3%). Every hour is
+  still predicted and served — only the fitting frame is thinned.
+- **The test window is 12 days, not 7.** A seven-day-ahead forecast cannot be
+  scored against a seven-day test window: at horizon *h* only origins in
+  `[cut, end - h]` have a known answer, so h=168 would have zero test rows.
+  Twelve days leaves 2,400 scored rows at the far end.
+- For each horizon 1–168 h the target is the state *h hours later*; features
   are only what is knowable at the origin hour: hour, weekday, the same hour
   one and two days earlier, and the last 1/2/3/6 hours plus 6 h and 24 h
   rolling means (the short lags were added in Sep 2026; the original set knew
@@ -95,6 +113,14 @@ Runtime is about two minutes with `--fast`, about twenty-five without: SARIMAX
 - Holds out the last 7 days, scores every candidate per horizon against the
   persistence and exit-hour-profile baselines, and accepts only models that
   beat the best baseline.
+- **The week view adds chances; it does not count labels.** "Hours congested
+  on Tuesday" is the sum of that day's calibrated hourly chances, not a count
+  of hours whose most-likely label is congested. Taking the winner in every
+  cell saturates: it collapses each exit toward whichever class it usually is,
+  so Marilao (congested 80% of hours in the record) predicts 100% and
+  Balintawak (54%) predicts 4%. Scored against each exit's real base rate,
+  counting labels is off by 22.9 points on average and adding chances by 8.0.
+  The chances can be added because they are calibrated.
 - Serves the champion's forecast from the newest complete hour, writing each
   cell's winning state and confidence **and** the full vector `p_low`,
   `p_med`, `p_high` to `gold.ml_predictive_congestion` (columns are added
@@ -123,6 +149,7 @@ freshness, not correctness, and the card badges the forecast as overdue once it
 is more than two hours old.
 
 Log of each scheduled run lands in `refresh_congestion.log` next to the
-script (git-ignored). Current figures (16 Sep 2026): XGBoost 66.0% vs 59.9%
-exit-hour-profile baseline, 48.4% persistence at +1h falling to 41.8% at
-+12h; Brier 0.460.
+script (git-ignored). Current figures (18 Sep 2026, 168-hour model): XGBoost
+64.1% against a 57.9% exit-hour-profile baseline, with persistence at 62.1%
+for +1h and 42.5% by +12h. Per horizon: 65.9% at +1h, 65.5% at +12h, 64.4% at
++24h, 64.1% at +168h.

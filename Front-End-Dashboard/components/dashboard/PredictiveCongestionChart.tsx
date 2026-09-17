@@ -11,6 +11,16 @@ import { REPLAY_ACTUAL, REPLAY_FORECAST, useMeasuredWidth } from "./replayViz";
 
 type State = "Low" | "Med" | "High";
 
+/** How far ahead the grid is showing. The model forecasts 168 hours; a reader
+ *  wants either the next few hours in detail or the shape of the week, never
+ *  168 hourly columns. */
+type RangeKey = "12h" | "24h" | "week";
+const RANGES: { key: RangeKey; label: string; hours: number; help: string }[] = [
+  { key: "12h", label: "Next 12 h", hours: 12, help: "Hour by hour, the rest of this shift." },
+  { key: "24h", label: "Next 24 h", hours: 24, help: "Hour by hour, a full day ahead." },
+  { key: "week", label: "Next 7 days", hours: 168, help: "One column per day: how many hours each exit is expected to spend congested." },
+];
+
 type RawRow = { segment: string; hours: number; state: State; probability: number | string;
                 /** Per-state probabilities, calibrated. pMed + pHigh is the chance of congestion. */
                 pLow?: number | string | null; pMed?: number | string | null; pHigh?: number | string | null;
@@ -57,6 +67,21 @@ const STATE_META: Record<State, { rank: number; color: string; text: string; lab
   Med: { rank: 1, color: "#f0a63a", text: "#5c3208", label: "Heavy", short: "HEAVY", speed: "10–20 km/h" },
   High: { rank: 2, color: "#dc2626", text: "#ffffff", label: "Severe", short: "SEVERE", speed: "under 10 km/h" },
 };
+
+/* The week grid counts congested hours per day rather than naming a state, so
+   it needs a scale rather than three labels. It is quantised from the SAME
+   colours the hourly grid uses — free-flow blue through heavy amber to severe
+   red — so "more red" means the same thing in both views. Each cell also
+   prints its number, so the colour is a second reading of the value and never
+   the only one. */
+const WEEK_BANDS: { min: number; max: number; color: string; text: string; label: string }[] = [
+  { min: 0, max: 0, color: "#cfe4f7", text: "#12507e", label: "none" },
+  { min: 1, max: 2, color: "#fde8c8", text: "#7a4a08", label: "1-2 h" },
+  { min: 3, max: 5, color: "#f9c97f", text: "#5c3208", label: "3-5 h" },
+  { min: 6, max: 8, color: "#f0a63a", text: "#4a2806", label: "6-8 h" },
+  { min: 9, max: 24, color: "#dc2626", text: "#ffffff", label: "9 h+" },
+];
+const weekBand = (h: number) => WEEK_BANDS.find((b) => h >= b.min && h <= b.max) ?? WEEK_BANDS[0];
 
 const LOW_CONF = 0.8;
 
@@ -243,6 +268,22 @@ type CellItem = {
 type Alert = { segment: string; state: State; from: number; to: number; conf: number };
 
 /** Accuracy at each forecast horizon, with the "nothing changes" benchmark. */
+/** One exit-day in the week view: how many of that day's forecast hours are
+ *  congested, and when the first of them starts. */
+type DayCell = {
+  value: [number, number, number];
+  /** Expected congested hours, rounded for display. */
+  hours: number;
+  /** The unrounded sum of hourly chances. */
+  exact: number;
+  /** False only for a stored forecast written before per-state chances existed. */
+  estimated: boolean;
+  severeHours: number;
+  known: number;
+  partial: boolean;
+  firstClock: string | null;
+};
+
 type HzAcc = { horizon: number; accuracy: number | null; persistenceAccuracy: number | null };
 
 /** How the served model was scored; written by the training run, one row. */
@@ -281,6 +322,7 @@ export default function PredictiveCongestionChart() {
   const [extraExits, setExtraExits] = useState<string[]>([]);
   const COLLAPSED_EXITS = 5;
   const [hzAcc, setHzAcc] = useState<HzAcc[]>([]);
+  const [range, setRange] = useState<RangeKey>("12h");
   const [evalInfo, setEvalInfo] = useState<CongestionEval | null>(null);
 
   // One km lookup for the whole component: the heatmap, the alert list and the
@@ -344,13 +386,17 @@ export default function PredictiveCongestionChart() {
     };
   }, [alertsOpen]);
 
+  const rangeDef = RANGES.find((r) => r.key === range) ?? RANGES[0];
+  const hourCap = rangeDef.hours;
+
   const model = useMemo(() => {
     if (!raw || raw.length === 0) return null;
 
     const byKm = Array.from(new Set(raw.map((d) => d.segment))).sort(
       (a, b) => (KMI.get(a)?.km ?? 9999) - (KMI.get(b)?.km ?? 9999)
     );
-    const storedHours = Math.max(...raw.map((d) => d.hours));
+    // Never more than the selected range, and never more than was stored.
+    const storedHours = Math.min(Math.max(...raw.map((d) => d.hours)), hourCap);
     const baseTs = raw.find((r) => r.baseTs)?.baseTs ?? null;
 
     /* The forecast counts from the last COMPLETE hour of Waze ingestion, which
@@ -424,6 +470,9 @@ export default function PredictiveCongestionChart() {
 
     const states: (State | null)[][] = segments.map(() => Array(maxHour).fill(null));
     const confs: number[][] = segments.map(() => Array(maxHour).fill(0));
+    // The calibrated chance of congestion per cell, kept beside the label
+    // because the week view has to add chances rather than count labels.
+    const probs: (number | null)[][] = segments.map(() => Array(maxHour).fill(null));
     const cells: CellItem[] = [];
 
     raw.forEach((d) => {
@@ -438,6 +487,7 @@ export default function PredictiveCongestionChart() {
       const pMed = d.pMed == null ? null : Number(d.pMed);
       const pHigh = d.pHigh == null ? null : Number(d.pHigh);
       const pCong = pMed != null && pHigh != null ? pMed + pHigh : null;
+      probs[y][x] = pCong;
       cells.push({ value: [x, y, meta.rank], state: d.state, conf, pCong, pHigh, label: { color: meta.text } });
     });
 
@@ -454,6 +504,70 @@ export default function PredictiveCongestionChart() {
         cells.push({ value: [x, y, 3], state: "Pending", conf: 0, label: { color: "#94a3b8" } });
       }
     }
+
+    /* Week view. 168 hourly columns cannot be read, so the week is shown a day
+       at a time: each cell is how many hours that exit is expected to spend
+       congested on that day. That keeps the thing a planner actually asks —
+       "how bad is Thursday at Marilao?" — as a single number, and it varies
+       across the grid in a way a worst-state-of-the-day summary would not
+       (every day has a rush hour, so worst-state would paint the whole week
+       red and say nothing). */
+    const dayBuckets: { key: string; label: string; sub: string; cols: number[] }[] = [];
+    for (let x = 0; x < maxHour; x++) {
+      const t = startOf(skippedHours + x + 1);
+      if (t == null) continue;
+      const dt = new Date(t);
+      const key = `${dt.getFullYear()}-${dt.getMonth()}-${dt.getDate()}`;
+      let b = dayBuckets.find((z) => z.key === key);
+      if (!b) {
+        b = {
+          key,
+          label: dt.toLocaleDateString(undefined, { weekday: "short" }),
+          sub: dt.toLocaleDateString(undefined, { month: "short", day: "numeric" }),
+          cols: [],
+        };
+        dayBuckets.push(b);
+      }
+      b.cols.push(x);
+    }
+    const dayLabels = dayBuckets.map((b) => `${b.label}\n${b.sub}`);
+    const dayCells: DayCell[] = [];
+    let dayMax = 0;
+    segments.forEach((_seg, y) => {
+      dayBuckets.forEach((b, i) => {
+        const known = b.cols.filter((x) => states[y][x] != null);
+        /* Expected congested hours = the sum of each hour's calibrated chance,
+           NOT a count of hours whose most-likely label is congested.
+           Counting labels saturates: taking the winner in every cell collapses
+           an exit toward whichever class it usually is, so Marilao (congested
+           80% of hours in the record) predicts 100% and Balintawak (54%)
+           predicts 4%. Measured against each exit's real base rate, counting
+           labels is off by 22.9 points on average and adding chances by 8.0.
+           The chances are calibrated — in held-out hours where the model said
+           55%, congestion happened 55% of the time — so they can be added. */
+        const haveProbs = known.some((x) => probs[y][x] != null);
+        const expected = haveProbs
+          ? known.reduce((t, x) => t + (probs[y][x] ?? 0), 0)
+          : known.filter((x) => states[y][x] === "Med" || states[y][x] === "High").length;
+        const severe = known.filter((x) => states[y][x] === "High");
+        // The first hour more likely congested than not is the one to plan around.
+        const firstCol = known.find((x) =>
+          haveProbs ? (probs[y][x] ?? 0) >= 0.5 : states[y][x] === "Med" || states[y][x] === "High");
+        const rounded = Math.round(expected);
+        dayMax = Math.max(dayMax, rounded);
+        dayCells.push({
+          value: [i, y, rounded],
+          hours: rounded,
+          exact: expected,
+          estimated: haveProbs,
+          severeHours: severe.length,
+          known: known.length,
+          // A partial first or last day is a real thing to say, not a gap to hide.
+          partial: known.length < 24,
+          firstClock: firstCol == null ? null : hourClock(baseTs, skippedHours + firstCol + 1),
+        });
+      });
+    });
 
     // ---- Operational summary ----
     const atRisk = new Set<string>();
@@ -579,6 +693,10 @@ export default function PredictiveCongestionChart() {
       maxHour,
       storedHours,
       skippedHours,
+      dayLabels,
+      dayCells,
+      dayMax,
+      dayCount: dayBuckets.length,
       relHours,
       frameHours,
       frameLabels,
@@ -591,7 +709,7 @@ export default function PredictiveCongestionChart() {
       everHeavy: cells.some((c) => c.state === "Med"),
       lowConfCount: cells.filter((c) => c.state !== "Low" && c.conf < LOW_CONF).length,
     };
-  }, [raw, KMI]);
+  }, [raw, KMI, hourCap]);
 
   if (!model) {
     return (
@@ -674,6 +792,10 @@ export default function PredictiveCongestionChart() {
     .filter((c) => yMap.has(c.value[1]))
     .map((c) => ({ ...c, value: [c.value[0], yMap.get(c.value[1])!, c.value[2]] as [number, number, number] }));
 
+  const shownDayCells = model.dayCells
+    .filter((c) => yMap.has(c.value[1]))
+    .map((c) => ({ ...c, value: [c.value[0], yMap.get(c.value[1])!, c.value[2]] as [number, number, number] }));
+
   // When does each hidden exit first turn severe? Drives the chip ordering and
   // the warning, so the reader can see which are worth pulling in.
   const firstSevere = (sg: string) => {
@@ -698,6 +820,90 @@ export default function PredictiveCongestionChart() {
   const stripTop = heatTop + heatHeight + 34;
   const stripHeight = 52;
   const chartHeight = stripTop + stripHeight + 50;
+
+  const isWeek = range === "week";
+
+  // The week view has no per-hour strip under it — a count of congested exits
+  // per DAY would double-count the same exit across its hours — so it ends at
+  // the grid.
+  const weekChartHeight = heatTop + heatHeight + 56;
+
+  const weekOption: EChartsOption = {
+    visualMap: {
+      show: false,
+      type: "piecewise",
+      dimension: 2,
+      seriesIndex: 0,
+      pieces: WEEK_BANDS.map((b) => ({ min: b.min, max: b.max, color: b.color })),
+    },
+    tooltip: {
+      backgroundColor: "rgba(255,255,255,0.97)",
+      borderColor: "#e2e8f0",
+      borderWidth: 1,
+      textStyle: { color: "#334155" },
+      extraCssText: "box-shadow: 0 6px 16px rgba(15,23,42,0.12); border-radius: 8px;",
+      formatter: (params: unknown) => {
+        const p = params as { data: DayCell; dataIndex: number };
+        const d = p.data;
+        const seg = shownSegments[d.value[1]] ?? "";
+        const day = (model.dayLabels[d.value[0]] ?? "").replace("\n", " ");
+        return `<div style="font-weight:700; margin-bottom:4px;">${seg} \u00b7 ${day}</div>
+          <div style="display:grid; grid-template-columns:auto auto; gap:2px 14px; font-size:12px;">
+            <span style="color:#64748b;">Expected congested hours</span><span style="font-weight:700;">${d.estimated ? d.exact.toFixed(1) : d.hours} of ${d.known}</span>
+            ${d.severeHours > 0 ? `<span style="color:#64748b;">Of those, crawling</span><span style="font-weight:700; color:#b91c1c;">${d.severeHours} h</span>` : ""}
+            ${d.firstClock ? `<span style="color:#64748b;">First likely from</span><span style="font-weight:600;">${d.firstClock}</span>` : ""}
+          </div>
+          ${d.estimated ? `<div style="margin-top:6px; color:#94a3b8; font-size:11px;">Each hour's chance of congestion, added up \u2014 not a count of hours.</div>` : ""}
+          ${d.partial ? `<div style="margin-top:6px; color:#94a3b8; font-size:11px;">Part of a day \u2014 only ${d.known} forecast hours fall on it.</div>` : ""}`;
+      },
+    },
+    grid: [{ left: 150, right: 24, top: heatTop, height: heatHeight }],
+    xAxis: [{
+      gridIndex: 0,
+      type: "category",
+      data: model.dayLabels,
+      position: "top",
+      axisTick: { show: false },
+      axisLine: { show: false },
+      axisLabel: {
+        interval: 0,
+        color: "#64748b", fontWeight: 600, fontSize: 11, lineHeight: 13,
+        rich: { a: { fontSize: 10, color: "#94a3b8", fontWeight: 500 } },
+        formatter: (v: string) => {
+          const [dow, date] = v.split("\n");
+          return date ? `${dow}\n{a|${date}}` : dow;
+        },
+      },
+    }],
+    yAxis: [{
+      gridIndex: 0,
+      type: "category",
+      data: shownSegments.map((sg) => `${sg}  \u00b7  km ${kmLabel(KMI.get(sg))}`),
+      axisTick: { show: false },
+      axisLine: { show: false },
+      axisLabel: { color: "#334155", fontWeight: 600, fontSize: 11 },
+    }],
+    series: [{
+      name: "Congested hours per day",
+      type: "heatmap",
+      xAxisIndex: 0,
+      yAxisIndex: 0,
+      data: shownDayCells,
+      // The number is the value; the colour repeats it. Neither alone.
+      label: {
+        show: true,
+        formatter: (params: unknown) => {
+          const d = (params as { data: DayCell }).data;
+          return d.hours > 0 ? String(d.hours) : "";
+        },
+        color: "inherit",
+        fontSize: 11,
+        fontWeight: 700,
+      },
+      itemStyle: { borderColor: "#fff", borderWidth: 3, borderRadius: 4 },
+      emphasis: { itemStyle: { borderColor: "#0f172a", borderWidth: 2, shadowBlur: 10, shadowColor: "rgba(15,23,42,0.3)" } },
+    }],
+  };
 
   const option: EChartsOption = {
     // A cartesian heatmap throws "Heatmap must use with visualMap" without
@@ -765,7 +971,11 @@ export default function PredictiveCongestionChart() {
         axisTick: { show: false },
         axisLine: { show: false },
         axisLabel: {
-          interval: 0,          // never drop an hour; a cell with no header is unreadable
+          /* Every hour gets a header while they fit. Past about fourteen
+             columns the two-line "+12h / 4PM" labels collide into a smear, so
+             the day view labels every other column; the cells are still one
+             per hour and the tooltip names each one. */
+          interval: frameHours > 20 ? 2 : frameHours > 14 ? 1 : 0,
           color: "#64748b", fontWeight: 600, fontSize: 10, lineHeight: 12,
           // Second line is the clock time, deliberately quieter than the horizon.
           // An elapsed column printed "10AM" in the same weight as a future
@@ -1047,9 +1257,10 @@ export default function PredictiveCongestionChart() {
         <p style={{ color: "#64748b", fontSize: "0.82rem", margin: "4px 0 0 0" }}>
           {expired
             ? <>No hours left in this forecast · last covered <b style={{ color: "#334155" }}>{baseLabel(model.baseTs) ?? "the last reading"}</b></>
-            : <>Forecast made <b style={{ color: "#334155" }}>{baseLabel(model.baseTs) ?? "at the last reading"}</b>, next {frameHours} hours
+            : <>Forecast made <b style={{ color: "#334155" }}>{baseLabel(model.baseTs) ?? "at the last reading"}</b>,
+                {isWeek ? <> next {model.dayCount} days</> : <> next {frameHours} hours</>}
                 {" "}· renews every hour
-                {frameHours > hourLabels.length && (
+                {!isWeek && frameHours > hourLabels.length && (
                   <span style={{ color: "#b45309" }}> · {frameHours - hourLabels.length} hour{frameHours - hourLabels.length === 1 ? "" : "s"} not yet forecast</span>
                 )}</>}
           <span style={{ cursor: "help" }} title="Rows are exits ordered north-bound by km-post. Hover any cell for the model's confidence. The base time is the last complete hour of Waze ingestion."> · hover for detail</span>
@@ -1070,7 +1281,20 @@ export default function PredictiveCongestionChart() {
       <div style={{ display: "grid", gridTemplateColumns: "repeat(4, minmax(0, 1fr))", gap: "12px 18px", padding: "12px 16px", background: "var(--bg-surface-hover)", borderRadius: "10px" }}>
         {stat(`${nCongested} of ${segments.length}`, nCongested > 0 ? "exits with a jam expected" : "exits affected · all moving", nCongested > 0 ? (nSevere > 0 ? "#b91c1c" : "#b45309") : "#15803d")}
         {stat(kmSpan != null ? `km ${model.kmFrom}–${model.kmTo}` : "—", kmSpan != null ? `${kmSpan} km${model.contiguous ? ", one stretch" : ", not contiguous"}` : "no congestion predicted")}
-        {stat(model.allHours ? `all ${model.maxHour}h` : model.worstSegment ? `${model.worstSegmentCount} of ${hourLabels.length}h` : "—", model.flatHours ? "same every hour" : "at the worst exit")}
+        {isWeek
+          ? (() => {
+              // Expected hours per day at the exit with the most of them. The
+              // label count saturates over a week ("168 of 168h"); the summed
+              // chances do not.
+              const perExit = new Map<number, number>();
+              model.dayCells.forEach((c) => perExit.set(c.value[1], (perExit.get(c.value[1]) ?? 0) + c.exact));
+              const worstY = [...perExit.entries()].sort((a, b) => b[1] - a[1])[0];
+              const days = Math.max(model.dayCount, 1);
+              return stat(worstY ? `${(worstY[1] / days).toFixed(0)} h/day` : "—",
+                          worstY ? `at ${segments[worstY[0]]}, the worst exit` : "at the worst exit",
+                          worstY && worstY[1] / days >= 12 ? "#b91c1c" : undefined);
+            })()
+          : stat(model.allHours ? `all ${model.maxHour}h` : model.worstSegment ? `${model.worstSegmentCount} of ${hourLabels.length}h` : "—", model.flatHours ? "same every hour" : "at the worst exit")}
         {(() => {
           const pc = cells.filter((c) => c.state !== "Pending" && c.pCong != null).map((c) => c.pCong as number);
           if (pc.length) {
@@ -1086,8 +1310,42 @@ export default function PredictiveCongestionChart() {
       {/* Row 4: the grid, with its legend and its exit picker attached to it. */}
       <div>
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, flexWrap: "wrap", marginBottom: 2 }}>
+          {/* How far ahead. The model forecasts a week either way; this picks
+              how much of it the grid draws, and at what granularity. */}
+          <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+            <span style={{ fontSize: "0.72rem", color: "#64748b", fontWeight: 600 }}>Showing</span>
+            <div role="group" aria-label="Forecast range" style={{ display: "inline-flex", background: "#f1f5f9", border: "1px solid #dce2ef", borderRadius: 999, padding: 2, gap: 2 }}>
+              {RANGES.map((r) => (
+                <button
+                  key={r.key}
+                  onClick={() => setRange(r.key)}
+                  title={r.help}
+                  aria-pressed={range === r.key}
+                  style={{
+                    font: "inherit", fontSize: "0.72rem", fontWeight: 700, cursor: "pointer",
+                    padding: "3px 11px", borderRadius: 999, border: "1px solid transparent", whiteSpace: "nowrap",
+                    background: range === r.key ? "#fff" : "transparent",
+                    borderColor: range === r.key ? "#c7d2fe" : "transparent",
+                    color: range === r.key ? "#1d4ed8" : "#64748b",
+                    boxShadow: range === r.key ? "0 1px 2px rgba(15,23,42,0.08)" : "none",
+                  }}
+                >
+                  {r.label}
+                </button>
+              ))}
+            </div>
+            <span style={{ fontSize: "0.72rem", color: "#94a3b8" }}>{rangeDef.help}</span>
+          </div>
+
           <div style={{ display: "flex", gap: 12, alignItems: "center", fontSize: "0.74rem", color: "#64748b", flexWrap: "wrap" }}>
-            {(["Low", "Med", "High"] as State[]).map((st) => {
+            {isWeek && WEEK_BANDS.map((b) => (
+              <span key={b.label} style={{ display: "inline-flex", alignItems: "center", gap: 5, whiteSpace: "nowrap" }}>
+                <span style={{ width: 11, height: 11, background: b.color, borderRadius: 3 }} />
+                {b.label}
+              </span>
+            ))}
+            {isWeek && <span style={{ color: "#94a3b8" }}>congested hours per day (10-20 km/h or slower)</span>}
+            {!isWeek && (["Low", "Med", "High"] as State[]).map((st) => {
               const absent = st === "Med" && !model.everHeavy;
               return (
                 <span key={st} title={absent ? "No exit-hour in this forecast falls in the 10-20 km/h band" : undefined}
@@ -1098,7 +1356,7 @@ export default function PredictiveCongestionChart() {
                 </span>
               );
             })}
-            {model.lowConfCount > 0 && <span style={{ color: "#94a3b8", whiteSpace: "nowrap" }}><b>*</b> under 80% sure</span>}
+            {!isWeek && model.lowConfCount > 0 && <span style={{ color: "#94a3b8", whiteSpace: "nowrap" }}><b>*</b> under 80% sure</span>}
           </div>
 
           {/* Which exits are drawn. A select instead of fifteen chips: the
@@ -1132,8 +1390,8 @@ export default function PredictiveCongestionChart() {
           </div>
         </div>
 
-        <div style={{ width: "100%", height: `${chartHeight}px` }}>
-          <DashboardChart option={option} height={chartHeight} />
+        <div style={{ width: "100%", height: `${isWeek ? weekChartHeight : chartHeight}px` }}>
+          <DashboardChart key={range} option={isWeek ? weekOption : option} height={isWeek ? weekChartHeight : chartHeight} />
         </div>
       </div>
 

@@ -1606,6 +1606,13 @@ export type CongestionEval = {
   brier: number;
   macro_f1: number;
   calibration: { lo: number; hi: number; n: number; predicted: number; observed: number }[];
+  /** The held-out window replayed hour by hour, so the card can show the
+   *  forecast next to what actually happened rather than only summary stats. */
+  replay?: {
+    horizon: number; exits: number; match_rate: number; mae_exits: number; corr: number;
+    series: { t: string; e: number; a: number; n: number }[];
+    examples: { kind: string; t: string; expected: number; actual: number; exits: number }[];
+  } | null;
   thresholds_kmh: { severe_below: number; heavy_below: number };
   features: string[];
 };

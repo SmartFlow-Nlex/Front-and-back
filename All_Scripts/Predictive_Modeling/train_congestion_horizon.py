@@ -509,6 +509,57 @@ def _print_cal(title, table):
 if _champ_name == "XGBoost":
     _print_cal("P(congested), XGBoost BEFORE calibration:", calibration_table(results_raw_xgb, yte))
 _print_cal(f"P(congested), {_champ_name} as served:", calib)
+
+# ---------------------------------------------------------------------------
+# The REPLAY: what the model said, next to what actually happened.
+#
+# Accuracy and Brier are summary statistics; neither lets anyone SEE that the
+# forecast tracked reality. This rebuilds the held-out week hour by hour as it
+# would have been forecast REPLAY_HZ hours in advance, and records the corridor
+# total both ways: the model's expected number of congested exits (the sum of
+# each exit's calibrated chance, which is the right way to total a probability)
+# against the number that actually were. Plotted, the two lines are the answer
+# to "why should we believe this forecast".
+REPLAY_HZ = 3
+_rm = (te.horizon == REPLAY_HZ).values
+_rp = results[_champ_name][_rm]
+_replay_df = pd.DataFrame({
+    "ts": te.target_ts.values[_rm],
+    "chance": _rp[:, 1] + _rp[:, 2],            # P(heavy or severe)
+    "pred_cong": (_rp.argmax(1) >= 1).astype(int),
+    "act_cong": (te.y_target.values[_rm] >= 1).astype(int),
+    "hit": (_rp.argmax(1) == te.y_target.values[_rm]).astype(int),
+})
+_g = (_replay_df.groupby("ts")
+      .agg(expected=("chance", "sum"), actual=("act_cong", "sum"),
+           predicted=("pred_cong", "sum"), exits=("act_cong", "size"), hit=("hit", "mean"))
+      .reset_index().sort_values("ts"))
+_gap = (_g.expected - _g.actual).abs()
+_replay = {
+    "horizon": REPLAY_HZ,
+    "exits": int(_g.exits.max()),
+    "match_rate": float(_replay_df.hit.mean()),
+    "mae_exits": float(_gap.mean()),
+    "corr": float(_g.expected.corr(_g.actual)),
+    "series": [{"t": t.strftime("%Y-%m-%d %H:00"), "e": round(float(e), 2), "a": int(a), "n": int(n)}
+               for t, e, a, n in zip(_g.ts, _g.expected, _g.actual, _g.exits)],
+}
+# One hour the model called well and one it called badly, so a presenter has a
+# concrete example to point at instead of only an average.
+_busy = _g[_g.actual >= _g.actual.quantile(0.9)]
+_best = _busy.loc[(_busy.expected - _busy.actual).abs().idxmin()] if len(_busy) else None
+_worst = _g.loc[_gap.idxmax()]
+_replay["examples"] = [
+    {"kind": k, "t": r.ts.strftime("%Y-%m-%d %H:00"), "expected": round(float(r.expected), 1),
+     "actual": int(r.actual), "exits": int(r.exits)}
+    for k, r in (("closest on a busy hour", _best), ("widest miss", _worst)) if r is not None
+]
+print("")
+print(f"  replay at +{REPLAY_HZ}h over the held-out window:")
+print(f"    {len(_g)} hours | exit-hour label match {_replay['match_rate']*100:.1f}%")
+print(f"    corridor congested-exit count: off by {_replay['mae_exits']:.2f} exits on average, correlation {_replay['corr']:.3f}")
+for e in _replay["examples"]:
+    print(f"    {e['kind']}: {e['t']} — expected {e['expected']} of {e['exits']}, actually {e['actual']}")
 res["accepted"] = res.accuracy > best_base
 res["rank"] = res.index + 1
 
@@ -632,6 +683,7 @@ _eval = {
     "brier": float(_champ_row.brier),
     "macro_f1": float(_champ_row.macro_f1),
     "calibration": calib,
+    "replay": _replay,
     "thresholds_kmh": {"severe_below": SEVERE_KMH, "heavy_below": HEAVY_KMH},
     "features": FEATS,
 }

@@ -101,9 +101,26 @@ Runtime is about two minutes with `--fast`, about twenty-five without: SARIMAX
   with `ADD COLUMN IF NOT EXISTS` on first run).
 - Writes one JSON row to `gold.ml_congestion_eval` — test size, class shares,
   per-class precision/recall, Brier score, macro-F1, the calibration table
-  (said vs happened per decile), thresholds and the feature list. The card's
-  Validation evidence is rendered from it; the API returns it as
-  `extras.congestionEval` on `/api/traffic/forecast`.
+  (said vs happened per decile), thresholds, the feature list, and the
+  **replay** (below). The card's Validation evidence is rendered from it; the
+  API returns it as `extras.congestionEval` on `/api/traffic/forecast`.
+- **The replay** is the evidence a reader can actually see. Accuracy and Brier
+  are summary statistics; neither shows that the forecast tracked reality.
+  So the held-out window is rebuilt hour by hour as it would have been
+  forecast `REPLAY_HZ` (3) hours in advance, recording for each hour the
+  model's *expected* number of congested exits — the sum of the 20 calibrated
+  chances, which is how a probability is totalled — against how many actually
+  were. The card plots the two as one chart. Current run: 164 hours,
+  correlation 0.82, the two lines 1.85 exits apart on average out of 20, and
+  65.9% of individual exit-hours given the exact right state. The payload also
+  carries the closest call on a busy hour and the widest miss, so a presenter
+  has a concrete example rather than only an average.
+
+Each run is transactional: the served forecast is deleted and rewritten in one
+transaction, so a run that is interrupted rolls back and the previous forecast
+stays in place rather than leaving the map empty. A missed hour therefore costs
+freshness, not correctness, and the card badges the forecast as overdue once it
+is more than two hours old.
 
 Log of each scheduled run lands in `refresh_congestion.log` next to the
 script (git-ignored). Current figures (16 Sep 2026): XGBoost 66.0% vs 59.9%

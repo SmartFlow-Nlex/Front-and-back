@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { EChartsOption } from "echarts";
 import DashboardChart from "./DashboardChart";
 import InfoTooltip from "./InfoTooltip";
@@ -95,6 +95,141 @@ function kmIndex(rows: { segment: string; km?: number | null; kmEstimated?: bool
   }
   return m;
 }
+/** Width of an element, tracked live. The replay chart sits inside a
+ *  <details>, so it has no width until the panel opens — a one-shot measure
+ *  on mount would render it into a zero-width box. */
+function useMeasuredWidth<T extends HTMLElement>() {
+  const ref = useRef<T | null>(null);
+  const [w, setW] = useState(0);
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const ro = new ResizeObserver(([entry]) => setW(entry.contentRect.width));
+    ro.observe(el);
+    setW(el.getBoundingClientRect().width);
+    return () => ro.disconnect();
+  }, []);
+  return [ref, w] as const;
+}
+
+/* Two series, one scale (exits congested out of 20), so they share an axis.
+   Blue and green clear the colour-blind separation checks, keep full contrast
+   against the panel, and stay clear of the Moving/Heavy/Severe ramp used by
+   the grid above, so a line is never mistaken for a state. The dash on the
+   forecast and the label at each line's end carry identity a second and third
+   way, for print and for anyone who cannot separate the hues. (Violet was
+   tried first: it passed the numbers but read as the same blue at 2px.) */
+const REPLAY_ACTUAL = "#2a78d6";
+const REPLAY_FORECAST = "#008300";
+
+/** The held-out week, replayed: the model's expected count of congested exits
+ *  against the count that actually happened, hour by hour. */
+function ReplayChart({ series, exits }: { series: { t: string; e: number; a: number; n: number }[]; exits: number }) {
+  const [ref, width] = useMeasuredWidth<HTMLDivElement>();
+  const [hover, setHover] = useState<number | null>(null);
+
+  const padL = 26, padR = 62, padT = 10, padB = 18;
+  const H = 150;
+  const w = Math.max(width, 240);
+  const plotW = Math.max(w - padL - padR, 10);
+  const plotH = H - padT - padB;
+  const top = Math.max(exits, ...series.map((d) => Math.max(d.a, d.e)), 1);
+  const x = (i: number) => padL + (series.length < 2 ? plotW / 2 : (i / (series.length - 1)) * plotW);
+  const y = (v: number) => padT + plotH - (v / top) * plotH;
+  const path = (pick: (d: { e: number; a: number }) => number) =>
+    series.map((d, i) => `${i ? "L" : "M"}${x(i).toFixed(1)},${y(pick(d)).toFixed(1)}`).join(" ");
+
+  // Midnight boundaries, for the day ticks.
+  const dayStarts = series.map((d, i) => ({ i, d })).filter(({ d }) => d.t.slice(11, 13) === "00");
+  // Each line is named at its own end, in the gutter: on 164 crossing points
+  // a label placed among the marks always lands on data. If the two ends are
+  // too close to read, they part just enough to clear each other.
+  const last = series[series.length - 1];
+  const ends = (() => {
+    let a = y(last.a), e = y(last.e);
+    if (Math.abs(a - e) < 11) { const mid = (a + e) / 2; a = mid - 6; e = mid + 6; }
+    const clamp = (v: number) => Math.min(Math.max(v, padT + 4), padT + plotH);
+    return { a: clamp(a), e: clamp(e) };
+  })();
+
+  const hv = hover != null ? series[hover] : null;
+  const hvLeft = hover != null ? Math.min(Math.max(x(hover), 70), w - 70) : 0;
+  const hvTop = hv && Math.max(hv.a, hv.e) > top * 0.55 ? H - 48 : 4;
+
+  return (
+    // A 164-hour line needs a floor width to stay legible; below that the
+    // chart scrolls inside its own box rather than widening the page.
+    <div ref={ref} style={{ position: "relative", width: "100%", overflowX: "auto" }}>
+      <div style={{ display: "flex", gap: 14, justifyContent: "flex-end", fontSize: "0.7rem", color: "#64748b", marginBottom: 2 }}>
+        {[{ c: REPLAY_ACTUAL, dash: false, label: "Actually congested" },
+          { c: REPLAY_FORECAST, dash: true, label: "Model expected" }].map((l) => (
+          <span key={l.label} style={{ display: "inline-flex", alignItems: "center", gap: 5 }}>
+            <svg width={16} height={8} aria-hidden="true">
+              <line x1={0} y1={4} x2={16} y2={4} stroke={l.c} strokeWidth={2} strokeDasharray={l.dash ? "5 3" : undefined} />
+            </svg>
+            {l.label}
+          </span>
+        ))}
+      </div>
+      {width > 0 && (
+        <svg width={w} height={H} role="img"
+             aria-label={`Model's expected congested exits against the actual count, ${series.length} hours of held-out data`}
+             onMouseLeave={() => setHover(null)}
+             onMouseMove={(ev) => {
+               const box = ev.currentTarget.getBoundingClientRect();
+               const i = Math.round(((ev.clientX - box.left - padL) / plotW) * (series.length - 1));
+               setHover(Math.min(Math.max(i, 0), series.length - 1));
+             }}>
+          {/* Recessive frame: a few gridlines, day ticks, no chart junk. */}
+          {[0, 0.5, 1].map((f) => (
+            <g key={f}>
+              <line x1={padL} x2={w - padR} y1={y(top * f)} y2={y(top * f)} stroke="#eef2f7" strokeWidth={1} />
+              <text x={padL - 6} y={y(top * f) + 3} textAnchor="end" fontSize={9} fill="#94a3b8">{Math.round(top * f)}</text>
+            </g>
+          ))}
+          {dayStarts.map(({ i, d }) => (
+            <g key={i}>
+              <line x1={x(i)} x2={x(i)} y1={padT} y2={padT + plotH} stroke="#f1f5f9" strokeWidth={1} />
+              <text x={x(i)} y={H - 5} textAnchor="middle" fontSize={9} fill="#94a3b8">
+                {new Date(d.t.replace(" ", "T")).toLocaleDateString(undefined, { month: "short", day: "numeric" })}
+              </text>
+            </g>
+          ))}
+
+          {/* Actual is the ground truth, so it carries the fill. */}
+          <path d={`${path((d) => d.a)} L${x(series.length - 1)},${y(0)} L${x(0)},${y(0)} Z`} fill={REPLAY_ACTUAL} opacity={0.09} />
+          <path d={path((d) => d.a)} fill="none" stroke={REPLAY_ACTUAL} strokeWidth={2} strokeLinejoin="round" vectorEffect="non-scaling-stroke" />
+          <path d={path((d) => d.e)} fill="none" stroke={REPLAY_FORECAST} strokeWidth={2} strokeDasharray="5 3" strokeLinejoin="round" vectorEffect="non-scaling-stroke" />
+
+          <text x={padL + plotW + 6} y={ends.a + 3} fontSize={10} fontWeight={700} fill={REPLAY_ACTUAL}>Actual</text>
+          <text x={padL + plotW + 6} y={ends.e + 3} fontSize={10} fontWeight={700} fill={REPLAY_FORECAST}>Expected</text>
+
+          {hv && (
+            <g pointerEvents="none">
+              <line x1={x(hover!)} x2={x(hover!)} y1={padT} y2={padT + plotH} stroke="#94a3b8" strokeWidth={1} />
+              <circle cx={x(hover!)} cy={y(hv.a)} r={4} fill={REPLAY_ACTUAL} stroke="#fff" strokeWidth={2} />
+              <circle cx={x(hover!)} cy={y(hv.e)} r={4} fill={REPLAY_FORECAST} stroke="#fff" strokeWidth={2} />
+            </g>
+          )}
+        </svg>
+      )}
+      {hv && (
+        <div style={{
+          position: "absolute", left: hvLeft, top: hvTop, transform: "translateX(-50%)", pointerEvents: "none",
+          background: "#fff", border: "1px solid #e2e8f0", borderRadius: 8, padding: "6px 9px",
+          boxShadow: "0 6px 16px rgba(15,23,42,0.12)", fontSize: "0.72rem", whiteSpace: "nowrap", zIndex: 2,
+        }}>
+          <div style={{ fontWeight: 700, color: "#0f172a", marginBottom: 3 }}>
+            {new Date(hv.t.replace(" ", "T")).toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", hour12: true })}
+          </div>
+          <div style={{ color: REPLAY_FORECAST, fontWeight: 600 }}>Model expected {hv.e.toFixed(1)} of {hv.n}</div>
+          <div style={{ color: REPLAY_ACTUAL, fontWeight: 600 }}>Actually congested {hv.a} of {hv.n}</div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 /** One numbered step of the Validation evidence: a bold question-style title
  *  over its answer, so a reader can skim the five titles and stop at the one
  *  they came for. */
@@ -145,6 +280,13 @@ type CongestionEval = {
   brier: number;
   macro_f1: number;
   calibration: { lo: number; hi: number; n: number; predicted: number; observed: number }[];
+  /** The held-out week replayed hour by hour: what the model expected against
+   *  what actually happened. Absent on forecasts written before Sep 2026. */
+  replay?: {
+    horizon: number; exits: number; match_rate: number; mae_exits: number; corr: number;
+    series: { t: string; e: number; a: number; n: number }[];
+    examples: { kind: string; t: string; expected: number; actual: number; exits: number }[];
+  } | null;
   thresholds_kmh: { severe_below: number; heavy_below: number };
   features: string[];
 };
@@ -1121,9 +1263,45 @@ export default function PredictiveCongestionChart() {
               )}
             </EvBlock>
 
-            {/* 2. What the headline percentage means, against the guesses a
+            {/* 2. The proof a stakeholder can see: the same week, replayed. */}
+            {evalInfo?.replay && evalInfo.replay.series.length > 1 && (
+              <EvBlock n={2} title="Did past predictions match what really happened?">
+                <p style={{ margin: "0 0 4px" }}>
+                  Below is that unseen week, hour by hour, as the model would have forecast it
+                  {" "}<b>{evalInfo.replay.horizon} hours in advance</b>. The dashed line is how many of the {evalInfo.replay.exits} exits it
+                  expected to be congested (adding up each exit&apos;s chance); the solid line is how many actually were.
+                </p>
+                <ReplayChart series={evalInfo.replay.series} exits={evalInfo.replay.exits} />
+                <div style={{
+                  display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(110px, 1fr))", gap: 8, marginTop: 8,
+                  padding: "8px 10px", borderRadius: 8, background: "var(--bg-surface-hover)", border: "1px solid var(--border-default)",
+                }}>
+                  {[[`${evalInfo.replay.mae_exits.toFixed(1)} exits`, "average gap between the lines"],
+                    [evalInfo.replay.corr.toFixed(2), "correlation \u00b7 1.00 traces perfectly"],
+                    [pct(evalInfo.replay.match_rate), "exit-hours with the exact state right"]].map(([v, l]) => (
+                    <div key={l} style={{ display: "flex", flexDirection: "column", gap: 1, minWidth: 0 }}>
+                      <span style={{ fontSize: "0.95rem", fontWeight: 800, color: "#0f172a", fontVariantNumeric: "tabular-nums", lineHeight: 1.1 }}>{v}</span>
+                      <span style={{ fontSize: "0.68rem", color: "#64748b" }}>{l}</span>
+                    </div>
+                  ))}
+                </div>
+                {evalInfo.replay.examples.length > 0 && (
+                  <div style={{ display: "grid", gap: 3, marginTop: 7, fontSize: "0.72rem", color: "#64748b" }}>
+                    {evalInfo.replay.examples.map((ex) => (
+                      <div key={ex.kind}>
+                        <span>{ex.kind.charAt(0).toUpperCase() + ex.kind.slice(1)}</span> —
+                        {" "}<b style={{ color: "#0f172a" }}>{new Date(ex.t.replace(" ", "T")).toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", hour12: true })}</b>:
+                        {" "}expected {ex.expected} of {ex.exits} congested, actually {ex.actual}.
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </EvBlock>
+            )}
+
+            {/* 3. What the headline percentage means, against the guesses a
                    person could make without a model. */}
-            <EvBlock n={2} title={`What ${modelInfo?.accuracy != null ? (modelInfo.accuracy * 100).toFixed(1) + "%" : "the accuracy"} means`}>
+            <EvBlock n={evalInfo?.replay ? 3 : 2} title={`What ${modelInfo?.accuracy != null ? (modelInfo.accuracy * 100).toFixed(1) + "%" : "the accuracy"} means`}>
               <p style={{ margin: "0 0 8px" }}>
                 Out of every 100 exit-hours in that unseen window, the model named the right state (Moving, Heavy or Severe) for about
                 {" "}<b>{modelInfo?.accuracy != null ? Math.round(modelInfo.accuracy * 100) : "—"}</b>. That only means something next to what you would score without a model:
@@ -1151,7 +1329,7 @@ export default function PredictiveCongestionChart() {
 
             {/* 3. Per state: how much to trust each colour. */}
             {evalInfo && (
-              <EvBlock n={3} title="How much to trust each colour">
+              <EvBlock n={evalInfo.replay ? 4 : 3} title="How much to trust each colour">
                 <div style={{ overflowX: "auto" }}>
                   <table style={{ borderCollapse: "collapse", width: "100%", fontSize: "0.74rem", fontVariantNumeric: "tabular-nums" }}>
                     <thead>
@@ -1194,7 +1372,7 @@ export default function PredictiveCongestionChart() {
             {/* 4. The chance is a real chance. This is the one that makes the
                    card a forecast rather than a colour. */}
             {evalInfo && evalInfo.calibration.length > 0 && (
-              <EvBlock n={4} title="Is a 60% chance really 60%?">
+              <EvBlock n={evalInfo.replay ? 5 : 4} title="Is a 60% chance really 60%?">
                 <p style={{ margin: "0 0 8px" }}>
                   Yes — the probabilities are calibrated on held-back hours, like a rain forecast. Each chip below is a group of unseen hours where the card would have shown roughly that chance of congestion, next to how often congestion actually happened:
                 </p>
@@ -1222,7 +1400,7 @@ export default function PredictiveCongestionChart() {
             )}
 
             {/* 5. Accuracy by hour ahead (the original bars). */}
-            <EvBlock n={evalInfo ? 5 : 3} title="Does it hold up 12 hours out?">
+            <EvBlock n={evalInfo ? (evalInfo.replay ? 6 : 5) : 3} title="Does it hold up 12 hours out?">
               <div style={{ display: "flex", alignItems: "flex-end", gap: 4, height: 34 }}>
                 {hzAcc.map((a) => {
                   const beats = a.accuracy != null && a.persistenceAccuracy != null && a.accuracy > a.persistenceAccuracy;

@@ -840,7 +840,8 @@ export default function PredictiveCongestionChart() {
       pieces: WEEK_BANDS.map((b) => ({ min: b.min, max: b.max, color: b.color })),
     },
     tooltip: {
-      backgroundColor: "rgba(255,255,255,0.97)",
+      // Fully opaque: translucency let the cells underneath show through.
+      backgroundColor: "#ffffff",
       borderColor: "#e2e8f0",
       borderWidth: 1,
       textStyle: { color: "#334155" },
@@ -848,7 +849,7 @@ export default function PredictiveCongestionChart() {
       // otherwise threw the panel off the left edge of the card and under the
       // sidebar, where half of it could not be read.
       confine: true,
-      extraCssText: "box-shadow: 0 6px 16px rgba(15,23,42,0.12); border-radius: 8px; max-width: 320px;",
+      extraCssText: "box-shadow: 0 10px 28px rgba(15,23,42,0.18); border-radius: 10px; max-width: 300px;",
       formatter: (params: unknown) => {
         const p = params as { data: DayCell; dataIndex: number };
         const d = p.data;
@@ -928,7 +929,8 @@ export default function PredictiveCongestionChart() {
       ],
     },
     tooltip: {
-      backgroundColor: "rgba(255,255,255,0.97)",
+      // Fully opaque: translucency let the cells underneath show through.
+      backgroundColor: "#ffffff",
       borderColor: "#e2e8f0",
       borderWidth: 1,
       textStyle: { color: "#334155" },
@@ -936,7 +938,7 @@ export default function PredictiveCongestionChart() {
       // otherwise threw the panel off the left edge of the card and under the
       // sidebar, where half of it could not be read.
       confine: true,
-      extraCssText: "box-shadow: 0 6px 16px rgba(15,23,42,0.12); border-radius: 8px; max-width: 320px;",
+      extraCssText: "box-shadow: 0 10px 28px rgba(15,23,42,0.18); border-radius: 10px; max-width: 300px;",
       formatter: (params: unknown) => {
         const p = params as { seriesIndex: number; data: CellItem | number; dataIndex: number };
         if (p.seriesIndex === 1) {
@@ -969,19 +971,36 @@ export default function PredictiveCongestionChart() {
               <div style="margin-top:7px; display:grid; grid-template-columns:auto 1fr auto; gap:5px 10px; font-size:0.88em; align-items:baseline;">
                 ${([["High", d.pHigh], ["Med", d.pMed], ["Low", d.pLow]] as [State, number | null | undefined][])
                   .filter((e) => e[1] != null)
-                  .sort((a, b) => (b[1] as number) - (a[1] as number))
-                  .map((e) => {
+                  .map((e, i) => {
                     const m = STATE_META[e[0]];
                     const win = e[0] === d.state;
                     const w = win ? 700 : 500;
-                    return `<span style="font-weight:${w}; color:#334155; white-space:nowrap;">
+                    // A rule above Moving: everything over it is the headline.
+                    const sep = i === 2 ? "border-top:1px solid #eef2f7; padding-top:6px;" : "";
+                    return `<span style="${sep} font-weight:${w}; color:#334155; white-space:nowrap;">
                               <span style="width:9px; height:9px; border-radius:2px; background:${m.color}; display:inline-block; margin-right:6px;"></span>${m.label}
                             </span>
-                            <span style="color:#94a3b8; white-space:nowrap;">${m.speed}</span>
-                            <span style="font-weight:${w}; color:#334155; text-align:right;">${Math.round((e[1] as number) * 100)}%</span>`;
+                            <span style="${sep} color:#94a3b8; white-space:nowrap;">${m.speed}</span>
+                            <span style="${sep} font-weight:${w}; color:#334155; text-align:right;">${Math.round((e[1] as number) * 100)}%</span>`;
                   }).join("")}
               </div>
-              ${low ? `<div style="margin-top:8px; color:#b45309; font-size:0.82em;">${meta.label} only leads at ${(d.conf * 100).toFixed(0)}%, under the 80% bar — treat this cell as indicative.</div>` : ""}
+              ${(() => {
+                /* Two different things were being conflated. A 73% leader is a
+                   perfectly ordinary call, and flagging it amber put a warning
+                   on nearly every cell. What actually deserves attention is a
+                   near-tie, where the colour could as easily have been the
+                   other state. So: amber only for that, and a quiet grey line
+                   otherwise to explain the asterisk the legend mentions. */
+                const ranked = [d.pHigh, d.pMed, d.pLow].filter((v) => v != null).sort((a, b) => (b as number) - (a as number));
+                const tie = ranked.length > 1 && (ranked[0] as number) - (ranked[1] as number) < 0.12;
+                if (tie) {
+                  const names = ([["High", d.pHigh], ["Med", d.pMed], ["Low", d.pLow]] as [State, number | null | undefined][])
+                    .filter((e) => e[1] === ranked[0] || e[1] === ranked[1])
+                    .map((e) => STATE_META[e[0]].label);
+                  return `<div style="margin-top:8px; color:#b45309; font-size:0.82em;">Close call — ${names[0]} and ${names[1]} are near even here.</div>`;
+                }
+                return low ? `<div style="margin-top:8px; color:#94a3b8; font-size:0.82em;">* the leading state is under 80% sure</div>` : "";
+              })()}
             ` : `
               <div style="margin-top:9px; display:grid; grid-template-columns:auto 1fr; gap:5px 10px; font-size:0.9em;">
                 <span style="color:#64748b;">Predicted state</span><span style="font-weight:700; color:${d.state === "High" ? STATE_META.High.color : meta.text};">${meta.label}</span>

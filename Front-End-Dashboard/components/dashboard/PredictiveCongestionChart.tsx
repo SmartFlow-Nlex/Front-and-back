@@ -396,8 +396,9 @@ export default function PredictiveCongestionChart() {
     const byKm = Array.from(new Set(raw.map((d) => d.segment))).sort(
       (a, b) => (KMI.get(a)?.km ?? 9999) - (KMI.get(b)?.km ?? 9999)
     );
-    // Never more than the selected range, and never more than was stored.
-    const storedHours = Math.min(Math.max(...raw.map((d) => d.hours)), hourCap);
+    // How far the stored run actually reaches, independent of what is shown.
+    const availableHours = Math.max(...raw.map((d) => d.hours));
+    const storedHours = Math.min(availableHours, hourCap);
     const baseTs = raw.find((r) => r.baseTs)?.baseTs ?? null;
 
     /* The forecast counts from the last COMPLETE hour of Waze ingestion, which
@@ -431,12 +432,15 @@ export default function PredictiveCongestionChart() {
       baseMsForTrim == null
         ? 0
         : Math.min(
-            storedHours,
-            Array.from({ length: storedHours }, (_, i) => i + 1).filter(
+            availableHours,
+            Array.from({ length: availableHours }, (_, i) => i + 1).filter(
               (h) => (startOf(h) as number) < thisHourStart,
             ).length,
           );
-    const maxHour = storedHours - skippedHours;
+    /* The frame is the range the reader picked; the columns in it are filled
+       from whatever the run still reaches past the elapsed hours. Only when
+       the run genuinely runs out is the tail left blank. */
+    const maxHour = Math.max(Math.min(storedHours, availableHours - skippedHours), 0);
 
     // Hours between this one and the column: 0 is the hour in progress.
     const relHours = Array.from({ length: maxHour }, (_, i) => {
@@ -936,9 +940,10 @@ export default function PredictiveCongestionChart() {
         const d = p.data as CellItem;
         if (d.state === "Pending") {
           return `
-          <div style="padding:2px 4px; min-width:215px;">
+          <div style="padding:2px 4px; max-width:250px; white-space:normal;">
             <b style="font-size:1.05em; color:#0f172a;">${shownSegments[d.value[1]]}</b>
-            <div style="margin-top:6px; color:#64748b;">${frameLabels[d.value[0]]?.replace("\n", " · ")}: not yet forecast. The stored run does not reach this hour; the hourly refresh will fill it.</div>
+            <div style="margin-top:2px; color:#64748b; font-size:0.86em;">${(frameLabels[d.value[0]] ?? "").replace("\n", " · ")}</div>
+            <div style="margin-top:8px; color:#94a3b8; line-height:1.45;">Not yet forecast — the stored run stops short of this hour. The next hourly refresh fills it.</div>
           </div>`;
         }
         const [x, y] = d.value;
@@ -978,13 +983,14 @@ export default function PredictiveCongestionChart() {
                    near-tie, where the colour could as easily have been the
                    other state. So: amber only for that, and a quiet grey line
                    otherwise to explain the asterisk the legend mentions. */
-                const ranked = [d.pHigh, d.pMed, d.pLow].filter((v) => v != null).sort((a, b) => (b as number) - (a as number));
-                const tie = ranked.length > 1 && (ranked[0] as number) - (ranked[1] as number) < 0.12;
-                if (tie) {
-                  const names = ([["High", d.pHigh], ["Med", d.pMed], ["Low", d.pLow]] as [State, number | null | undefined][])
-                    .filter((e) => e[1] === ranked[0] || e[1] === ranked[1])
-                    .map((e) => STATE_META[e[0]].label);
-                  return `<div style="margin-top:8px; color:#b45309; font-size:0.82em;">Close call — ${names[0]} and ${names[1]} are near even here.</div>`;
+                const ranked = ([["High", d.pHigh], ["Med", d.pMed], ["Low", d.pLow]] as [State, number | null | undefined][])
+                  .filter((e) => e[1] != null)
+                  .sort((x, y) => (y[1] as number) - (x[1] as number));
+                if (ranked.length > 1) {
+                  const gap = (ranked[0][1] as number) - (ranked[1][1] as number);
+                  if (gap < 0.12) {
+                    return `<div style="margin-top:8px; color:#b45309; font-size:0.82em; line-height:1.45;">Close call — ${STATE_META[ranked[0][0]].label} and ${STATE_META[ranked[1][0]].label} are within ${Math.round(gap * 100)} points.</div>`;
+                  }
                 }
                 return low ? `<div style="margin-top:8px; color:#94a3b8; font-size:0.82em;">* the leading state is under 80% sure</div>` : "";
               })()}

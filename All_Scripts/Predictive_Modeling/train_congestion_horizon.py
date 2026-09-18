@@ -53,6 +53,7 @@ FAST = "--fast" in sys.argv
 import numpy as np
 import pandas as pd
 import psycopg2
+from psycopg2.extras import execute_values
 from sklearn.isotonic import IsotonicRegression
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.metrics import accuracy_score, f1_score, log_loss, precision_recall_fscore_support
@@ -685,6 +686,21 @@ else:
 # last data drop, or from midnight. It is the last COMPLETE hour of Waze
 # ingestion, which is also the last hour the model actually saw.
 BASE_TS = df.ts.max()
+# ---------------------------------------------------------------------------
+# Schema first, on its own transaction.
+#
+# ADD COLUMN IF NOT EXISTS takes an ACCESS EXCLUSIVE lock even when the column
+# is already there and the statement does nothing, and holds it until COMMIT.
+# These sat in the same transaction as the write below, so for as long as that
+# took - 3,360 single-row inserts across the Atlantic, minutes - every reader
+# of this table was blocked. The dashboard's forecast map, its horizon picker
+# and its model card all read it, so all three died together once an hour and
+# came back on their own, which is a hard fault to catch in the act.
+#
+# Committing the DDL separately leaves the data write holding only ROW
+# EXCLUSIVE, which readers do not queue behind: they keep seeing the previous
+# forecast until the new one lands.
+# ---------------------------------------------------------------------------
 cur.execute("ALTER TABLE gold.ml_predictive_congestion ADD COLUMN IF NOT EXISTS base_ts timestamp")
 cur.execute("""COMMENT ON COLUMN gold.ml_predictive_congestion.base_ts IS
   'Last complete hour of Waze ingestion; hours_ahead counts forward from here. Trailing hours with sparse ingestion are trimmed before training, so this is the last hour genuinely observed rather than the last row present.'""")
@@ -692,11 +708,21 @@ cur.execute("""COMMENT ON COLUMN gold.ml_predictive_congestion.base_ts IS
 # chance of congestion rather than only the winning label and its confidence.
 for _col in ("p_low", "p_med", "p_high"):
     cur.execute(f"ALTER TABLE gold.ml_predictive_congestion ADD COLUMN IF NOT EXISTS {_col} numeric(6,4)")
+conn.commit()
+
+# One round trip instead of 3,360. At 168 horizons the row-at-a-time loop was
+# the reason the write took long enough to be noticed at all; batched, the
+# table is swapped in about a second.
 cur.execute("DELETE FROM gold.ml_predictive_congestion")
-for seg, hz, st, pb, p0, p1, p2 in out:
-    cur.execute("""INSERT INTO gold.ml_predictive_congestion
-                   (segment_name, hours_ahead, congestion_state, probability, base_ts, p_low, p_med, p_high)
-                   VALUES (%s,%s,%s,%s,%s,%s,%s,%s)""", (seg, hz, st, pb, BASE_TS.to_pydatetime(), p0, p1, p2))
+execute_values(
+    cur,
+    """INSERT INTO gold.ml_predictive_congestion
+       (segment_name, hours_ahead, congestion_state, probability, base_ts, p_low, p_med, p_high)
+       VALUES %s""",
+    [(seg, hz, st, pb, BASE_TS.to_pydatetime(), p0, p1, p2)
+     for seg, hz, st, pb, p0, p1, p2 in out],
+    page_size=500,
+)
 
 # One row of evaluation detail the card reads to explain itself: class
 # balance, per-class precision/recall, Brier, and the calibration table.

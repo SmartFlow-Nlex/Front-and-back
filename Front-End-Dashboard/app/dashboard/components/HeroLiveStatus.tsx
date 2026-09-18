@@ -3,27 +3,23 @@
 import { useEffect, useRef, useState } from "react";
 import { Activity, Gauge, TriangleAlert } from "lucide-react";
 import { cachedJson } from "../../../lib/cached-json";
+import {
+  corridorStatusFromFeed,
+  slowestReading,
+  tallyExitStatuses,
+  type CorridorTally,
+} from "../../../lib/corridor-status";
+import { useNlexExits } from "../../../lib/nlex-exits";
 
 const BACKEND = process.env.NEXT_PUBLIC_BACKEND_URL ?? "http://localhost:4000";
 
-/* The shape this panel needs out of /api/dashboard/corridor-status/full.
-   Everything is optional because the hero must never be the reason the home
-   page fails: if the feed is down the strip hides itself and the banner
-   underneath is still a banner. */
-type Dir = { status?: string | null; speedKmh?: number | null; jamCount?: number | null };
-type Payload = {
-  counts?: { congested?: number; slow?: number; clear?: number };
-  feed?: { ageMinutes?: number | null; stale?: boolean };
-  exits?: { display_name?: string; exit_name?: string; directions?: Record<string, Dir | null> }[];
-};
+type Feed = { newestAt?: string | null; ageMinutes?: number | null; stale?: boolean };
+type RealtimeFC = { features?: unknown[]; feed?: Feed };
 
-type Status = {
-  congested: number;
-  slow: number;
-  clear: number;
+type Status = CorridorTally & {
   ageMinutes: number | null;
   stale: boolean;
-  slowest: { name: string; speed: number } | null;
+  slowest: { exit: string; speedKmh: number } | null;
 };
 
 /** Counts up to `value` once, then tracks it directly.
@@ -65,44 +61,35 @@ function useCountUp(value: number | null, duration = 900) {
  * The home page opened on a static picture. It is a good picture, but it says
  * the same thing at 3 AM on a clear Sunday as it does mid-rush with four exits
  * crawling — so the first screen of a live traffic system carried no live
- * traffic. This puts the corridor's current state on it: how many points are
- * congested right now, where the worst one is, and how old the reading is.
+ * traffic.
  *
- * It reads the same endpoint the corridor panel below already polls, through
- * the same 25 s memo, so it costs no extra round trip.
+ * IT MUST AGREE WITH THE PANEL BELOW IT. The first cut of this read
+ * /api/dashboard/corridor-status/full, which aggregates in SQL — the very
+ * endpoint lib/corridor-status.ts exists to replace, because it applies a
+ * looser test than the map draws with. The two tallies sat six inches apart on
+ * one screen and disagreed: 4/3/33 here against 4/2/34 there. This now reads
+ * the same feed through the same derivation and the same tally rule, so they
+ * cannot differ in principle rather than merely agreeing today.
  */
 export default function HeroLiveStatus() {
+  const { exits } = useNlexExits();
   const [s, setS] = useState<Status | null>(null);
 
   useEffect(() => {
+    if (!exits.length) return;
     let cancelled = false;
     const load = async () => {
       try {
-        /* The API answers {success, data}. cachedJson hands back the parsed
-           body untouched, so unwrap here rather than assuming either shape. */
-        const body = await cachedJson<Payload | { data?: Payload }>(
-          `${BACKEND}/api/dashboard/corridor-status/full`, 25_000);
-        const d = ((body as { data?: Payload })?.data ?? body) as Payload;
-        if (cancelled || !d?.counts) return;
-
-        // The slowest moving point on the corridor, in either direction.
-        let slowest: { name: string; speed: number } | null = null;
-        for (const e of d.exits ?? []) {
-          for (const dir of Object.values(e.directions ?? {})) {
-            const v = dir?.speedKmh;
-            if (typeof v !== "number") continue;
-            if (!slowest || v < slowest.speed) {
-              slowest = { name: e.display_name || e.exit_name || "—", speed: v };
-            }
-          }
-        }
+        // Same URL and same 25 s memo the corridor panel uses, so the two
+        // share one response rather than making two round trips.
+        const fc = await cachedJson<RealtimeFC>(`${BACKEND}/api/map-comparison/real-time`, 25_000);
+        if (cancelled || !fc?.features) return;
+        const statuses = corridorStatusFromFeed(fc as Parameters<typeof corridorStatusFromFeed>[0], exits);
         setS({
-          congested: d.counts.congested ?? 0,
-          slow: d.counts.slow ?? 0,
-          clear: d.counts.clear ?? 0,
-          ageMinutes: d.feed?.ageMinutes ?? null,
-          stale: Boolean(d.feed?.stale),
-          slowest,
+          ...tallyExitStatuses(exits, statuses),
+          ageMinutes: fc.feed?.ageMinutes ?? null,
+          stale: Boolean(fc.feed?.stale),
+          slowest: slowestReading(statuses),
         });
       } catch {
         /* Silent: the banner stands on its own. */
@@ -114,7 +101,7 @@ export default function HeroLiveStatus() {
       cancelled = true;
       clearInterval(t);
     };
-  }, []);
+  }, [exits]);
 
   const congested = useCountUp(s?.congested ?? null);
   const slow = useCountUp(s?.slow ?? null);
@@ -140,21 +127,21 @@ export default function HeroLiveStatus() {
       </div>
 
       <div className="ds-hero-live-stats">
-        <span className="ds-hero-stat is-congested" title="Direction-segments crawling">
+        <span className="ds-hero-stat is-congested" title="Exit-directions crawling">
           <TriangleAlert size={14} aria-hidden="true" />
           <b>{congested}</b> congested
         </span>
-        <span className="ds-hero-stat is-slow" title="Direction-segments running below normal">
+        <span className="ds-hero-stat is-slow" title="Exit-directions running below normal">
           <Activity size={14} aria-hidden="true" />
           <b>{slow}</b> slow
         </span>
-        <span className="ds-hero-stat is-clear" title="Direction-segments with no reported jam">
+        <span className="ds-hero-stat is-clear" title="Exit-directions with no reported jam">
           <Gauge size={14} aria-hidden="true" />
           <b>{clear}</b> clear
         </span>
         {s.slowest && (
           <span className="ds-hero-stat is-worst" title="The slowest reading anywhere on the corridor right now">
-            slowest <b>{s.slowest.name}</b> {s.slowest.speed.toFixed(0)} km/h
+            slowest <b>{s.slowest.exit}</b> {s.slowest.speedKmh.toFixed(0)} km/h
           </span>
         )}
       </div>

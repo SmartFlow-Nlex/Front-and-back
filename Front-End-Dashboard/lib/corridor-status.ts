@@ -1,7 +1,7 @@
 "use client";
 
 import { corridorGuard, sliceCorridor, type LngLat } from "./corridor-shape";
-import { FALLBACK_EXITS, type NlexExit } from "./nlex-exits";
+import { FALLBACK_EXITS, accessLabel, type NlexExit } from "./nlex-exits";
 import nlexGeometry from "../components/maps/nlex-geometry.json";
 
 /**
@@ -191,4 +191,48 @@ export function corridorSegmentLevels(
     }
   }
   return levels;
+}
+
+/* ---------------------------------------------------------------------------
+   The corridor tally, in one place.
+
+   The home panel counted its own chips from the rows it had already built, and
+   the hero strip counted the server's /api/dashboard/corridor-status/full -
+   the very endpoint the note at the top of this file says was replaced because
+   it disagreed with the map. Two tallies of the same road, six inches apart on
+   the same screen, and they did differ: 4/3/33 against 4/2/34.
+
+   Both now call this. It counts exit-directions, not segments, and it skips a
+   direction an exit has no ramp for: those draw as bare tarmac, and counting
+   them clear would make the total disagree with the drawing.
+   ------------------------------------------------------------------------- */
+export type CorridorTally = { congested: number; slow: number; clear: number };
+
+export function tallyExitStatuses(exits: NlexExit[], statuses: ExitStatus[]): CorridorTally {
+  /* Case-folded and trimmed, because the two sides are not always the same
+     list: a caller may hand in the live exits while the statuses were derived
+     against FALLBACK_EXITS, whose names differ in case and spacing. Keying
+     raw silently missed every lookup and counted the whole corridor clear. */
+  const key = (name: string, dir: string) => `${name.toLowerCase().trim()}|${dir}`;
+  const by = new Map<string, SegmentStatus>();
+  for (const s of statuses) by.set(key(s.exit, s.direction), s.status);
+
+  const t: CorridorTally = { congested: 0, slow: 0, clear: 0 };
+  for (const x of exits) {
+    for (const dir of ["NB", "SB"] as const) {
+      if (accessLabel(x, dir) === "No Access") continue;
+      t[by.get(key(x.exit_name, dir)) ?? "clear"] += 1;
+    }
+  }
+  return t;
+}
+
+/** The slowest reading anywhere on the corridor, for a headline. */
+export function slowestReading(statuses: ExitStatus[]): { exit: string; speedKmh: number } | null {
+  let best: { exit: string; speedKmh: number } | null = null;
+  for (const s of statuses) {
+    if (s.speedKmh == null) continue;
+    if (!best || s.speedKmh < best.speedKmh) best = { exit: s.exit, speedKmh: s.speedKmh };
+  }
+  return best;
 }

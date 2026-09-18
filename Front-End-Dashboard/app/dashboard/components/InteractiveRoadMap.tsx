@@ -35,7 +35,7 @@ import { useNlexExits, accessLabel, displayExitName, type NlexExit } from "../..
 const BACKEND = process.env.NEXT_PUBLIC_BACKEND_URL ?? "http://localhost:4000";
 
 /* Shared with the live map: same shapes, same derivation. */
-import { corridorSegmentLevels, corridorStatusFromFeed, type ExitStatus, type SegmentStatus } from "../../../lib/corridor-status";
+import { corridorSegmentLevels, corridorStatusFromFeed, tallyExitStatuses, type ExitStatus, type SegmentStatus } from "../../../lib/corridor-status";
 import { mapPalette } from "../../../lib/map-palette";
 import { useChartTheme } from "../../../lib/chart-theme";
 
@@ -246,21 +246,15 @@ export default function InteractiveRoadMap() {
     [exits, statusByExit],
   );
 
-  /** Counts across both carriageways. Exits with no ramp in a direction are
-      skipped rather than counted clear — they draw as bare tarmac, and a tally
-      that disagreed with the drawing would be worse than none. */
-  const tally = useMemo(() => {
-    const t = { congested: 0, slow: 0, clear: 0 };
-    for (const r of rows) {
-      for (const [access, d] of [[r.nbAccess, r.nb], [r.sbAccess, r.sb]] as const) {
-        if (access === "No Access") continue;
-        if (d.colorClass === "seg-red") t.congested++;
-        else if (d.colorClass === "seg-orange") t.slow++;
-        else t.clear++;
-      }
-    }
-    return t;
-  }, [rows]);
+  /* Counts across both carriageways, from the shared rule in
+     lib/corridor-status so the hero strip on the same page cannot reach a
+     different total. Exits with no ramp in a direction are skipped rather than
+     counted clear — they draw as bare tarmac, and a tally that disagreed with
+     the drawing would be worse than none. */
+  const tally = useMemo(
+    () => tallyExitStatuses(exits, corridor?.segments ?? []),
+    [exits, corridor],
+  );
 
   /* The hovered exit fills a reserved rail above the road rather than a floating
      tooltip, which had to be positioned somewhere and covered the row it was

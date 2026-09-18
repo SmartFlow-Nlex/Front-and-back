@@ -32,6 +32,7 @@ VALUES (
   1,
   '{
     "features": {
+      "_comment": "DERIVED from sections by the API - a tab is shown when anything inside it is. Never edit by hand.",
       "dashboard": true,
       "map": true,
       "community": true,
@@ -48,7 +49,7 @@ VALUES (
       },
       "map": { "liveStatus": true, "forecastView": true },
       "community": { "shareUpdate": true, "reportIncident": true, "filters": true },
-      "assistant": { "quickQuestions": true },
+      "assistant": { "quickQuestions": true, "capabilities": true },
       "alerts": { "traffic": true, "maintenance": true }
     },
     "advisory": {
@@ -73,8 +74,15 @@ SET config = config || jsonb_build_object(
           'eventForecasts', true, 'mlHotspots', true),
         'map', jsonb_build_object('liveStatus', true, 'forecastView', true),
         'community', jsonb_build_object('shareUpdate', true, 'reportIncident', true, 'filters', true),
-        'assistant', jsonb_build_object('quickQuestions', true),
+        'assistant', jsonb_build_object('quickQuestions', true, 'capabilities', true),
         'alerts', jsonb_build_object('traffic', true, 'maintenance', true)
       )
     )
 WHERE id = 1 AND NOT (config ? 'sections');
+
+-- Back-fill the Assistant capabilities section for a row written before it
+-- existed. Same guard as above: only touches the key when it is absent.
+UPDATE nlex_mobile_config
+SET config = jsonb_set(
+      config, '{sections,assistant,capabilities}', 'true'::jsonb, true)
+WHERE id = 1 AND NOT (config -> 'sections' -> 'assistant' ? 'capabilities');

@@ -61,10 +61,11 @@ export const writeMobileConfig = async (req: Request, res: Response) => {
 
   // Record which switches actually moved, not the whole document — an audit
   // trail of identical blobs is unreadable when you need to find who turned
-  // Community off.
+  // Community off. Tabs are derived rather than set, so a tab appearing here
+  // is the CONSEQUENCE of the section changes listed beside it.
   const changed = Object.entries(parsed.data.features)
     .filter(([k, v]) => before.config.features[k as keyof typeof before.config.features] !== v)
-    .map(([k, v]) => `${k}=${v ? "on" : "off"}`);
+    .map(([k, v]) => `${k}=${v ? "shown" : "hidden"}`);
 
   // Sections are qualified by their tab, because half a dozen of them share
   // short names and "traffic=off" alone would not say which screen it meant.
@@ -82,7 +83,7 @@ export const writeMobileConfig = async (req: Request, res: Response) => {
     before.config.advisory.tone !== parsed.data.advisory.tone;
 
   audit(req, "mobile_config.updated", {
-    features: changed.length ? changed : "unchanged",
+    tabs: changed.length ? changed : "unchanged",
     sections: sectionsChanged.length ? sectionsChanged : "unchanged",
     advisory: advisoryChanged
       ? { active: parsed.data.advisory.active, tone: parsed.data.advisory.tone }

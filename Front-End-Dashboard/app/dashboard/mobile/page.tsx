@@ -2,17 +2,35 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
+  Activity,
   AlertTriangle,
+  BatteryFull,
   Bell,
   Bot,
+  CalendarClock,
+  CalendarRange,
   ChevronDown,
+  EyeOff,
+  Filter,
+  Flame,
   Info,
   LayoutDashboard,
+  ListChecks,
   Map as MapIcon,
+  MessageSquarePlus,
+  Radio,
   RotateCcw,
+  Route,
   Save,
+  Signal,
+  Siren,
   Smartphone,
+  Sparkles,
+  TrendingUp,
+  TriangleAlert,
   Users,
+  Wifi,
+  Wrench,
 } from "lucide-react";
 import PageHeader from "../../../components/dashboard/PageHeader";
 
@@ -21,20 +39,21 @@ const BACKEND = process.env.NEXT_PUBLIC_BACKEND_URL ?? "http://localhost:4000";
 /* Mirrors Back-End/src/validators/mobile-config.validator.ts. The keys are the
    Expo route names in the mobile app's (tabs) group, which is what lets the app
    look a flag up by the route it is about to render. */
-type FeatureKey = "dashboard" | "map" | "community" | "assistant" | "alerts";
+type TabKey = "dashboard" | "map" | "community" | "assistant" | "alerts";
 type AdvisoryTone = "info" | "warning" | "critical";
 
-type Sections = Record<FeatureKey, Record<string, boolean>>;
+type Sections = Record<TabKey, Record<string, boolean>>;
 
 type MobileConfig = {
-  features: Record<FeatureKey, boolean>;
+  features: Record<TabKey, boolean>;
   sections: Sections;
   advisory: { active: boolean; tone: AdvisoryTone; message: string };
 };
 
 type Meta = { source: "db" | "defaults"; updatedAt: string | null; updatedBy: string | null };
 
-type SectionMeta = { key: string; label: string; blurb: string };
+type Icon = typeof MapIcon;
+type SectionMeta = { key: string; label: string; blurb: string; icon: Icon };
 
 /* One entry per tab in frontend/app/(tabs)/_layout.tsx, and under each, the
    parts of that screen the app can render independently.
@@ -43,27 +62,18 @@ type SectionMeta = { key: string; label: string; blurb: string };
    trusted as a picture of the app rather than an approximation of it. Nothing
    is listed here that the screen does not genuinely gate — see the note in the
    validator about why that rule matters. */
-const FEATURES: {
-  key: FeatureKey;
-  label: string;
-  icon: typeof MapIcon;
-  blurb: string;
-  /** False when an empty tab is still a usable tab, so it needs no floor. */
-  needsOne: boolean;
-  sections: SectionMeta[];
-}[] = [
+const TABS: { key: TabKey; label: string; icon: Icon; blurb: string; sections: SectionMeta[] }[] = [
   {
     key: "dashboard",
     label: "Dashboard",
     icon: LayoutDashboard,
     blurb: "The screen the app opens on.",
-    needsOne: true,
     sections: [
-      { key: "statusSummary", label: "Network status", blurb: "The live corridor summary at the top of the screen." },
-      { key: "segmentForecast", label: "Traffic forecast", blurb: "Pick a route and hour, get a predicted state." },
-      { key: "corridorOutlook", label: "Corridor outlook", blurb: "The Today / This Week strip." },
-      { key: "eventForecasts", label: "Event forecasts", blurb: "Upcoming events and the surge each is expected to bring." },
-      { key: "mlHotspots", label: "ML hotspots", blurb: "Model-ranked risk locations." },
+      { key: "statusSummary", label: "Network status", icon: Activity, blurb: "The live corridor summary at the top of the screen." },
+      { key: "segmentForecast", label: "Traffic forecast", icon: Route, blurb: "Pick a route and hour, get a predicted state." },
+      { key: "corridorOutlook", label: "Corridor outlook", icon: CalendarRange, blurb: "The Today / This Week strip." },
+      { key: "eventForecasts", label: "Event forecasts", icon: CalendarClock, blurb: "Upcoming events and the surge each is expected to bring." },
+      { key: "mlHotspots", label: "ML hotspots", icon: Flame, blurb: "Model-ranked risk locations." },
     ],
   },
   {
@@ -71,10 +81,9 @@ const FEATURES: {
     label: "Corridor",
     icon: MapIcon,
     blurb: "The live map. Reads the same real-time feed as the Live Map page here.",
-    needsOne: true,
     sections: [
-      { key: "liveStatus", label: "Live view", blurb: "Current readings, straight from the feed." },
-      { key: "forecastView", label: "Forecast view", blurb: "Modelled state ahead of now." },
+      { key: "liveStatus", label: "Live view", icon: Radio, blurb: "Current readings, straight from the feed." },
+      { key: "forecastView", label: "Forecast view", icon: TrendingUp, blurb: "Modelled state ahead of now." },
     ],
   },
   {
@@ -82,11 +91,10 @@ const FEATURES: {
     label: "Community",
     icon: Users,
     blurb: "Traveller-submitted reports.",
-    needsOne: false,
     sections: [
-      { key: "shareUpdate", label: "Share an update", blurb: "Lets a traveller post a general update." },
-      { key: "reportIncident", label: "Report an incident", blurb: "The incident-reporting form." },
-      { key: "filters", label: "Feed filters", blurb: "The tabs that narrow the feed by type." },
+      { key: "shareUpdate", label: "Share an update", icon: MessageSquarePlus, blurb: "Lets a traveller post a general update." },
+      { key: "reportIncident", label: "Report an incident", icon: TriangleAlert, blurb: "The incident-reporting form." },
+      { key: "filters", label: "Feed filters", icon: Filter, blurb: "The tabs that narrow the feed by type." },
     ],
   },
   {
@@ -94,9 +102,9 @@ const FEATURES: {
     label: "Assistant",
     icon: Bot,
     blurb: "Conversational lookup of corridor conditions.",
-    needsOne: false,
     sections: [
-      { key: "quickQuestions", label: "Quick questions", blurb: "Suggested prompts above the input. The chat box stays either way." },
+      { key: "quickQuestions", label: "Quick questions", icon: Sparkles, blurb: "Suggested prompts above the input." },
+      { key: "capabilities", label: "What it can answer", icon: ListChecks, blurb: "The list shown before the first question." },
     ],
   },
   {
@@ -104,10 +112,9 @@ const FEATURES: {
     label: "Alerts",
     icon: Bell,
     blurb: "Notices, plus any advisory published below.",
-    needsOne: true,
     sections: [
-      { key: "traffic", label: "Traffic alerts", blurb: "Congestion, events and incidents." },
-      { key: "maintenance", label: "Maintenance notices", blurb: "Scheduled roadworks and closures." },
+      { key: "traffic", label: "Traffic alerts", icon: Siren, blurb: "Congestion, events and incidents." },
+      { key: "maintenance", label: "Maintenance notices", icon: Wrench, blurb: "Scheduled roadworks and closures." },
     ],
   },
 ];
@@ -121,10 +128,17 @@ const TONES: { key: AdvisoryTone; label: string; hint: string }[] = [
 const MAX_MESSAGE = 280;
 
 function allOn(): Sections {
-  return FEATURES.reduce((acc, f) => {
-    acc[f.key] = f.sections.reduce<Record<string, boolean>>((g, s) => ({ ...g, [s.key]: true }), {});
+  return TABS.reduce((acc, t) => {
+    acc[t.key] = t.sections.reduce<Record<string, boolean>>((g, s) => ({ ...g, [s.key]: true }), {});
     return acc;
   }, {} as Sections);
+}
+
+/** The app shows a tab when anything inside it is on. Mirrors deriveFeatures()
+ *  on the server, which is what actually gets written — this is only so the
+ *  preview and the tab bar can move before a save. */
+function tabShown(sections: Sections, key: TabKey): boolean {
+  return Object.values(sections[key] ?? {}).some(Boolean);
 }
 
 const FALLBACK: MobileConfig = {
@@ -152,6 +166,11 @@ function relativeTime(iso: string | null): string {
  * do nothing is worse than no panel at all, because an operator watches the
  * switch move and believes the tab is gone. Before a control is added here it is
  * wired in the app first — see the note in the validator.
+ *
+ * There is one level of switch, not two. A tab has no on/off of its own: it is
+ * shown when anything inside it is, so emptying a tab is how you retire it.
+ * Two levels would allow a tab switched on with nothing inside it, which opens
+ * to a blank screen and reads as a broken app.
  */
 export default function MobileControlPage() {
   const [saved, setSaved] = useState<MobileConfig | null>(null);
@@ -161,8 +180,8 @@ export default function MobileControlPage() {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [flash, setFlash] = useState<string | null>(null);
-  const [open, setOpen] = useState<FeatureKey | null>("dashboard");
-  const [previewTab, setPreviewTab] = useState<FeatureKey>("dashboard");
+  const [open, setOpen] = useState<TabKey | null>("dashboard");
+  const [previewTab, setPreviewTab] = useState<TabKey>("dashboard");
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -186,9 +205,15 @@ export default function MobileControlPage() {
   }, [load]);
 
   const dirty = useMemo(
-    () => (saved ? JSON.stringify(saved) !== JSON.stringify(draft) : false),
+    () =>
+      saved
+        ? JSON.stringify(saved.sections) !== JSON.stringify(draft.sections) ||
+          JSON.stringify(saved.advisory) !== JSON.stringify(draft.advisory)
+        : false,
     [saved, draft]
   );
+
+  const anythingOn = useMemo(() => TABS.some((t) => tabShown(draft.sections, t.key)), [draft]);
 
   // The API refuses these, so the button that would trigger the refusal is
   // disabled and says why, rather than letting the operator find out from a red
@@ -197,18 +222,9 @@ export default function MobileControlPage() {
     if (draft.advisory.active && draft.advisory.message.trim().length < 8) {
       return "A published advisory needs at least 8 characters.";
     }
-    if (!Object.values(draft.features).some(Boolean)) {
-      return "At least one tab must stay on, or the app opens to nothing.";
-    }
-    for (const f of FEATURES) {
-      if (!f.needsOne || !draft.features[f.key]) continue;
-      const group = draft.sections[f.key] ?? {};
-      if (!f.sections.some((s) => group[s.key])) {
-        return `${f.label} has every section switched off. Switch the whole tab off instead.`;
-      }
-    }
+    if (!anythingOn) return "Everything is switched off — the app would open to nothing.";
     return null;
-  }, [draft]);
+  }, [draft, anythingOn]);
 
   const save = async () => {
     if (blockedReason) return;
@@ -218,7 +234,8 @@ export default function MobileControlPage() {
       const res = await fetch(`${BACKEND}/api/mobile-config`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(draft),
+        // `features` is derived from `sections` by the API, so it is not sent.
+        body: JSON.stringify({ sections: draft.sections, advisory: draft.advisory }),
       });
       const body = await res.json();
       if (!res.ok || !body?.success) throw new Error(body?.message ?? `Save failed (${res.status})`);
@@ -234,18 +251,24 @@ export default function MobileControlPage() {
     }
   };
 
-  const setFeature = (key: FeatureKey, on: boolean) =>
-    setDraft((d) => ({ ...d, features: { ...d.features, [key]: on } }));
-
-  const setSection = (tab: FeatureKey, key: string, on: boolean) =>
+  const setSection = (tab: TabKey, key: string, on: boolean) =>
     setDraft((d) => ({
       ...d,
       sections: { ...d.sections, [tab]: { ...(d.sections[tab] ?? {}), [key]: on } },
     }));
 
-  const onCount = Object.values(draft.features).filter(Boolean).length;
-  const previewMeta = FEATURES.find((f) => f.key === previewTab) ?? FEATURES[0];
-  const previewSections = previewMeta.sections.filter((s) => draft.sections[previewMeta.key]?.[s.key]);
+  const setWholeTab = (tab: TabKey, on: boolean) =>
+    setDraft((d) => {
+      const meta = TABS.find((t) => t.key === tab);
+      if (!meta) return d;
+      const next = meta.sections.reduce<Record<string, boolean>>((g, s) => ({ ...g, [s.key]: on }), {});
+      return { ...d, sections: { ...d.sections, [tab]: next } };
+    });
+
+  const shownCount = TABS.filter((t) => tabShown(draft.sections, t.key)).length;
+  const previewMeta = TABS.find((t) => t.key === previewTab) ?? TABS[0];
+  const previewOn = previewMeta.sections.filter((s) => draft.sections[previewMeta.key]?.[s.key]);
+  const previewHidden = previewOn.length === 0;
 
   return (
     <section className="ds-content ds-long">
@@ -293,25 +316,25 @@ export default function MobileControlPage() {
           <article className="panel ds-mc-panel">
             <header className="ds-mc-panel-head">
               <div>
-                <h2>Tabs &amp; what is inside them</h2>
+                <h2>What travellers get</h2>
                 <p>
-                  The switch on a tab decides whether it exists at all. Open a tab to choose which
-                  parts of that screen travellers get. {onCount} of {FEATURES.length} tabs on.
+                  Switch the parts of each screen on or off. A tab appears in the app whenever
+                  anything inside it is on, so emptying a tab is how you retire it —{" "}
+                  {shownCount} of {TABS.length} tabs currently visible.
                 </p>
               </div>
             </header>
 
             <ul className="ds-mc-features">
-              {FEATURES.map((f) => {
-                const { key, label, icon: Icon, blurb } = f;
-                const on = draft.features[key];
+              {TABS.map((t) => {
+                const { key, label, icon: Icon, blurb } = t;
                 const group = draft.sections[key] ?? {};
-                const sectionsOn = f.sections.filter((s) => group[s.key]).length;
+                const onCount = t.sections.filter((s) => group[s.key]).length;
+                const shown = onCount > 0;
                 const expanded = open === key;
-                const emptied = f.needsOne && on && sectionsOn === 0;
 
                 return (
-                  <li key={key} className={`${on ? "is-on" : "is-off"}${expanded ? " is-open" : ""}`}>
+                  <li key={key} className={`${shown ? "is-on" : "is-off"}${expanded ? " is-open" : ""}`}>
                     <div className="ds-mc-feature-row">
                       <button
                         type="button"
@@ -330,61 +353,68 @@ export default function MobileControlPage() {
                           <b>{label}</b>
                           <span>{blurb}</span>
                         </span>
-                        <span className={`ds-mc-count${emptied ? " is-bad" : ""}`}>
-                          {sectionsOn}/{f.sections.length}
+                        <span className="ds-mc-state">
+                          {/* The tab's visibility is a readout, not a control:
+                              it follows the switches below rather than being
+                              a sixth switch that could contradict them. */}
+                          {shown ? (
+                            <span className="ds-mc-pill is-shown">
+                              {onCount}/{t.sections.length} on
+                            </span>
+                          ) : (
+                            <span className="ds-mc-pill is-hidden">
+                              <EyeOff size={12} aria-hidden="true" /> Hidden
+                            </span>
+                          )}
                           <ChevronDown size={15} aria-hidden="true" />
                         </span>
                       </button>
-
-                      <label className="ds-switch">
-                        <input
-                          type="checkbox"
-                          checked={on}
-                          disabled={loading}
-                          onChange={(e) => setFeature(key, e.target.checked)}
-                        />
-                        <span className="ds-switch-track" aria-hidden="true">
-                          <span className="ds-switch-thumb" />
-                        </span>
-                        <span className="sr-only">{`${label} tab`}</span>
-                      </label>
                     </div>
 
                     {expanded && (
                       <div className="ds-mc-sections" id={`sections-${key}`}>
-                        {!on && (
-                          <p className="ds-mc-sections-note">
-                            This tab is switched off, so none of these are reachable. They are kept
-                            as they are and take effect again if the tab comes back.
-                          </p>
-                        )}
-                        {emptied && (
-                          <p className="ds-mc-sections-note is-bad">
-                            Every section is off while the tab is on, which would open an empty
-                            screen. Turn one back on, or switch the whole tab off.
-                          </p>
-                        )}
+                        <div className="ds-mc-sections-bulk">
+                          <span>
+                            {shown
+                              ? `${label} is visible in the app.`
+                              : `${label} is hidden — nothing inside it is on.`}
+                          </span>
+                          <button
+                            type="button"
+                            className="ds-mc-linkbtn"
+                            disabled={loading}
+                            onClick={() => setWholeTab(key, !shown)}
+                          >
+                            {shown ? "Turn all off" : "Turn all on"}
+                          </button>
+                        </div>
                         <ul>
-                          {f.sections.map((s) => (
-                            <li key={s.key}>
-                              <span className="ds-mc-section-text">
-                                <b>{s.label}</b>
-                                <span>{s.blurb}</span>
-                              </span>
-                              <label className="ds-switch is-small">
-                                <input
-                                  type="checkbox"
-                                  checked={Boolean(group[s.key])}
-                                  disabled={loading || !on}
-                                  onChange={(e) => setSection(key, s.key, e.target.checked)}
-                                />
-                                <span className="ds-switch-track" aria-hidden="true">
-                                  <span className="ds-switch-thumb" />
+                          {t.sections.map((s) => {
+                            const SIcon = s.icon;
+                            return (
+                              <li key={s.key}>
+                                <span className="ds-mc-section-icon" aria-hidden="true">
+                                  <SIcon size={15} />
                                 </span>
-                                <span className="sr-only">{`${label}: ${s.label}`}</span>
-                              </label>
-                            </li>
-                          ))}
+                                <span className="ds-mc-section-text">
+                                  <b>{s.label}</b>
+                                  <span>{s.blurb}</span>
+                                </span>
+                                <label className="ds-switch is-small">
+                                  <input
+                                    type="checkbox"
+                                    checked={Boolean(group[s.key])}
+                                    disabled={loading}
+                                    onChange={(e) => setSection(key, s.key, e.target.checked)}
+                                  />
+                                  <span className="ds-switch-track" aria-hidden="true">
+                                    <span className="ds-switch-thumb" />
+                                  </span>
+                                  <span className="sr-only">{`${label}: ${s.label}`}</span>
+                                </label>
+                              </li>
+                            );
+                          })}
                         </ul>
                       </div>
                     )}
@@ -399,8 +429,8 @@ export default function MobileControlPage() {
               <div>
                 <h2>Published advisory</h2>
                 <p>
-                  One message, broadcast to the Alerts tab of every phone. It appears above the
-                  app&apos;s own traffic and maintenance notices.
+                  One message, broadcast to the Alerts tab of every phone. It is pinned above the
+                  app&apos;s own notices and shows whichever category a traveller is looking at.
                 </p>
               </div>
               <label className="ds-switch">
@@ -420,16 +450,18 @@ export default function MobileControlPage() {
             </header>
 
             <div className="ds-mc-tones" role="group" aria-label="Advisory tone">
-              {TONES.map((t) => (
+              {TONES.map((tone) => (
                 <button
-                  key={t.key}
+                  key={tone.key}
                   type="button"
-                  className={`ds-mc-tone is-${t.key}${draft.advisory.tone === t.key ? " is-active" : ""}`}
-                  aria-pressed={draft.advisory.tone === t.key}
-                  onClick={() => setDraft((d) => ({ ...d, advisory: { ...d.advisory, tone: t.key } }))}
+                  className={`ds-mc-tone is-${tone.key}${draft.advisory.tone === tone.key ? " is-active" : ""}`}
+                  aria-pressed={draft.advisory.tone === tone.key}
+                  onClick={() =>
+                    setDraft((d) => ({ ...d, advisory: { ...d.advisory, tone: tone.key } }))
+                  }
                 >
-                  <b>{t.label}</b>
-                  <span>{t.hint}</span>
+                  <b>{tone.label}</b>
+                  <span>{tone.hint}</span>
                 </button>
               ))}
             </div>
@@ -461,80 +493,120 @@ export default function MobileControlPage() {
             <header className="ds-mc-panel-head">
               <div>
                 <h2>Preview</h2>
-                <p>
-                  {previewMeta.label} as these settings would leave it. Unsaved changes included.
-                </p>
+                <p>Tap a tab below to see inside it. Unsaved changes included.</p>
               </div>
             </header>
 
             <div className="ds-phone" aria-label="Mobile app preview">
-              <div className="ds-phone-screen">
-                <div className="ds-phone-status">
-                  <span>{previewMeta.label}</span>
-                  <span className="ds-phone-dot" aria-hidden="true" />
+              <div className="ds-phone-frame">
+                <div className="ds-phone-notch" aria-hidden="true" />
+                <div className="ds-phone-screen">
+                  <div className="ds-phone-status" aria-hidden="true">
+                    <span className="ds-phone-clock">9:41</span>
+                    <span className="ds-phone-icons">
+                      <Signal size={11} />
+                      <Wifi size={11} />
+                      <BatteryFull size={13} />
+                    </span>
+                  </div>
+
+                  <div className="ds-phone-appbar">
+                    <span>{previewMeta.label}</span>
+                    <span className="ds-phone-dot" aria-hidden="true" />
+                  </div>
+
+                  <div className="ds-phone-body">
+                    {previewHidden ? (
+                      <div className="ds-phone-blank">
+                        <EyeOff size={20} aria-hidden="true" />
+                        <b>{previewMeta.label} is hidden</b>
+                        <span>Nothing inside it is switched on, so the tab is not in the app.</span>
+                      </div>
+                    ) : (
+                      <>
+                        {/* The advisory rides on the Alerts screen, so it only
+                            appears when that is the screen being previewed. */}
+                        {previewTab === "alerts" &&
+                          draft.advisory.active &&
+                          draft.advisory.message.trim().length > 0 && (
+                            <div className={`ds-phone-advisory is-${draft.advisory.tone}`}>
+                              <b>
+                                {draft.advisory.tone === "critical"
+                                  ? "Critical"
+                                  : draft.advisory.tone === "warning"
+                                    ? "Advisory"
+                                    : "Notice"}
+                              </b>
+                              <span>{draft.advisory.message}</span>
+                            </div>
+                          )}
+
+                        {previewOn.map((s) => {
+                          const SIcon = s.icon;
+                          return (
+                            <div key={s.key} className="ds-phone-card">
+                              <span className="ds-phone-card-icon" aria-hidden="true">
+                                <SIcon size={13} />
+                              </span>
+                              <span className="ds-phone-card-text">
+                                <b>{s.label}</b>
+                                {/* Bars, not invented figures: the preview is
+                                    about layout, and plausible-looking numbers
+                                    here would be a lie told for a nicer picture. */}
+                                <span className="ds-phone-bar w80" />
+                                <span className="ds-phone-bar w55" />
+                              </span>
+                            </div>
+                          );
+                        })}
+                      </>
+                    )}
+                  </div>
+
+                  <nav className="ds-phone-tabs" aria-label="Preview a tab">
+                    {TABS.map(({ key, label, icon: Icon }) => (
+                      <button
+                        key={key}
+                        type="button"
+                        className={`ds-phone-tab${tabShown(draft.sections, key) ? "" : " is-gone"}${
+                          previewTab === key ? " is-current" : ""
+                        }`}
+                        title={`Preview ${label}`}
+                        onClick={() => {
+                          setPreviewTab(key);
+                          setOpen(key);
+                        }}
+                      >
+                        <Icon size={15} aria-hidden="true" />
+                        <small>{label}</small>
+                      </button>
+                    ))}
+                  </nav>
                 </div>
-
-                {/* The advisory rides on the Alerts screen, so it only appears
-                    in the preview when that is the screen being previewed. */}
-                {previewTab === "alerts" &&
-                  (draft.advisory.active && draft.advisory.message.trim().length > 0 ? (
-                    <div className={`ds-phone-advisory is-${draft.advisory.tone}`}>
-                      <b>
-                        {draft.advisory.tone === "critical"
-                          ? "Critical"
-                          : draft.advisory.tone === "warning"
-                            ? "Advisory"
-                            : "Notice"}
-                      </b>
-                      <span>{draft.advisory.message}</span>
-                    </div>
-                  ) : (
-                    <div className="ds-phone-empty">No advisory published</div>
-                  ))}
-
-                <div className="ds-phone-body">
-                  {!draft.features[previewTab] ? (
-                    <div className="ds-phone-empty">
-                      Tab switched off — travellers never reach this screen.
-                    </div>
-                  ) : previewSections.length === 0 ? (
-                    <div className="ds-phone-empty is-bad">
-                      Nothing left to show on this screen.
-                    </div>
-                  ) : (
-                    previewSections.map((s) => (
-                      <span key={s.key} className="ds-phone-section">
-                        {s.label}
-                      </span>
-                    ))
-                  )}
-                </div>
-
-                <nav className="ds-phone-tabs">
-                  {FEATURES.map(({ key, label, icon: Icon }) => (
-                    <button
-                      key={key}
-                      type="button"
-                      className={`ds-phone-tab${draft.features[key] ? "" : " is-hidden"}${
-                        previewTab === key ? " is-current" : ""
-                      }`}
-                      title={`Preview ${label}`}
-                      onClick={() => {
-                        setPreviewTab(key);
-                        setOpen(key);
-                      }}
-                    >
-                      <Icon size={15} aria-hidden="true" />
-                      <small>{label}</small>
-                    </button>
-                  ))}
-                </nav>
               </div>
             </div>
 
+            {/* A hidden tab has no button left in the bar, so it needs another
+                way back — otherwise emptying a tab makes it unreachable here. */}
+            <div className="ds-phone-jump">
+              {TABS.filter((t) => !tabShown(draft.sections, t.key)).map((t) => (
+                <button
+                  key={t.key}
+                  type="button"
+                  className="ds-mc-pill is-hidden is-clickable"
+                  onClick={() => {
+                    setPreviewTab(t.key);
+                    setOpen(t.key);
+                  }}
+                >
+                  <EyeOff size={12} aria-hidden="true" /> {t.label}
+                </button>
+              ))}
+            </div>
+
             <p className="ds-mc-note">
-              Tap a tab to preview it. Tabs switched off are dropped from the bar entirely rather
-              than greyed out, so the remaining ones spread to fill it.
+              Hidden tabs are dropped from the bar entirely rather than greyed out, so the remaining
+              ones spread to fill it — exactly as the app does it.
             </p>
           </article>
         </aside>

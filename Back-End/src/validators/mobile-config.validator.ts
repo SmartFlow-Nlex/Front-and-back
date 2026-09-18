@@ -8,10 +8,9 @@ import { z } from "zod";
  * because an operator turns Community off, sees the switch move, and believes
  * the tab is gone. Before adding a field, wire it in the app first.
  *
- * Two levels:
- *   features.*  — whether a TAB exists at all. Honoured in (tabs)/_layout.tsx,
- *                 which sets href: null so the route stops resolving too.
- *   sections.*  — what is inside each tab. Honoured by the screen itself.
+ *   sections.*  — what is inside each tab. The only thing an operator sets.
+ *   features.*  — whether each TAB exists. DERIVED, never chosen: a tab is
+ *                 shown when at least one of its sections is. See below.
  *   advisory.*  — a broadcast notice, posted into the Alerts list.
  */
 
@@ -23,22 +22,13 @@ export type MobileFeature = (typeof MOBILE_FEATURES)[number];
 export const ADVISORY_TONES = ["info", "warning", "critical"] as const;
 export type AdvisoryTone = (typeof ADVISORY_TONES)[number];
 
-const FeaturesSchema = z.object({
-  dashboard: z.boolean(),
-  map: z.boolean(),
-  community: z.boolean(),
-  assistant: z.boolean(),
-  alerts: z.boolean(),
-});
-
 /* ── Sections ──────────────────────────────────────────────────────────────
  *
  * Every field defaults to true, and every group defaults to {}. That is what
  * lets a row written before sections existed still parse: an old document
  * simply has no `sections` key, and zod fills the whole tree in as "on"
- * rather than failing validation and dropping the operator's feature flags
- * back to defaults. The same property means a dashboard that gains a section
- * does not invalidate rows saved by the build before it.
+ * rather than failing validation. The same property means a dashboard that
+ * gains a section does not invalidate rows saved by the build before it.
  */
 
 const DashboardSectionsSchema = z
@@ -69,6 +59,7 @@ const CommunitySectionsSchema = z
 const AssistantSectionsSchema = z
   .object({
     quickQuestions: z.boolean().default(true),
+    capabilities: z.boolean().default(true),
   })
   .default({});
 
@@ -89,6 +80,8 @@ const SectionsSchema = z
   })
   .default({});
 
+export type MobileSections = z.infer<typeof SectionsSchema>;
+
 const AdvisorySchema = z
   .object({
     active: z.boolean(),
@@ -104,46 +97,56 @@ const AdvisorySchema = z
   });
 
 /**
- * Tabs that would render an empty screen if every section inside them were
- * switched off.
+ * A tab is shown when anything inside it is.
  *
- * Turning a whole tab off is a legitimate thing to do and has its own switch.
- * Leaving the tab ON while emptying it is not: the user taps it and finds a
- * blank page, which reads as a broken app rather than as a decision. These are
- * refused at the API so it cannot happen by a stray click in the UI either.
- *
- * Assistant is absent deliberately — with quickQuestions off it still has a
- * working chat box, so an empty-section assistant is not an empty screen.
+ * There is no separate switch for the tab itself, and deliberately so. Two
+ * levels of on/off let an operator produce a combination that means nothing —
+ * a tab switched on with every section inside it off, which opens to a blank
+ * screen and reads as a broken app. Deriving it removes that state from the
+ * system rather than validating against it: emptying a tab IS how you retire
+ * it, and the two can never drift apart because there is only one of them.
  */
-const NON_EMPTY: { feature: MobileFeature; label: string; keys: string[] }[] = [
-  {
-    feature: "dashboard",
-    label: "Dashboard",
-    keys: ["statusSummary", "segmentForecast", "corridorOutlook", "eventForecasts", "mlHotspots"],
-  },
-  { feature: "map", label: "Corridor", keys: ["liveStatus", "forecastView"] },
-  { feature: "alerts", label: "Alerts", keys: ["traffic", "maintenance"] },
-];
+export function deriveFeatures(sections: MobileSections): Record<MobileFeature, boolean> {
+  const anyOn = (group: Record<string, boolean>) => Object.values(group).some(Boolean);
+  return {
+    dashboard: anyOn(sections.dashboard),
+    map: anyOn(sections.map),
+    community: anyOn(sections.community),
+    assistant: anyOn(sections.assistant),
+    alerts: anyOn(sections.alerts),
+  };
+}
 
+/**
+ * Parses a whole configuration document, from the API or from the stored row,
+ * and recomputes `features` from `sections` on the way through.
+ *
+ * Any `features` in the input is ignored rather than trusted. It is written to
+ * the row only so the app can read it directly, and a stored copy that
+ * disagreed with its own sections would be a bug nobody would notice until a
+ * tab went missing.
+ */
 export const MobileConfigSchema = z
   .object({
-    features: FeaturesSchema,
+    // Accepted and discarded, so the dashboard can PUT back exactly what it GET.
+    features: z.record(z.string(), z.boolean()).optional(),
     sections: SectionsSchema,
     advisory: AdvisorySchema,
   })
   .superRefine((cfg, ctx) => {
-    for (const { feature, label, keys } of NON_EMPTY) {
-      // A tab that is switched off may hold whatever it likes; nobody sees it.
-      if (!cfg.features[feature]) continue;
-      const group = cfg.sections[feature] as Record<string, boolean>;
-      if (keys.some((k) => group[k])) continue;
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        path: ["sections", feature],
-        message: `${label} needs at least one section switched on, or the tab opens to an empty screen. Switch the whole tab off instead.`,
-      });
-    }
-  });
+    // Every tab empty means an app with no tabs at all.
+    if (Object.values(deriveFeatures(cfg.sections)).some(Boolean)) return;
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["sections"],
+      message: "At least one section somewhere must stay on, or the app opens to nothing.",
+    });
+  })
+  .transform((cfg) => ({
+    features: deriveFeatures(cfg.sections),
+    sections: cfg.sections,
+    advisory: cfg.advisory,
+  }));
 
 export type MobileConfig = z.infer<typeof MobileConfigSchema>;
 
@@ -151,26 +154,28 @@ export type MobileConfig = z.infer<typeof MobileConfigSchema>;
  * Served when the table has not been created yet, or when the database cannot
  * be reached on a read.
  *
- * Deliberately fails OPEN — every feature on, no advisory. A feature-flag
- * service that fails closed takes the whole app down with it the moment RDS
- * hiccups, which is a far worse outcome than briefly ignoring an operator's
- * switch. Reads say which of the two they are returning via `source`, so
- * "everything is on" is never silently mistaken for "an operator chose this".
+ * Deliberately fails OPEN — everything on, no advisory. A feature-flag service
+ * that fails closed takes the whole app down with it the moment RDS hiccups,
+ * which is a far worse outcome than briefly ignoring an operator's switch.
+ * Reads say which of the two they are returning via `source`, so "everything is
+ * on" is never silently mistaken for "an operator chose this".
  */
-export const DEFAULT_MOBILE_CONFIG: MobileConfig = {
-  features: { dashboard: true, map: true, community: true, assistant: true, alerts: true },
-  sections: {
-    dashboard: {
-      statusSummary: true,
-      segmentForecast: true,
-      corridorOutlook: true,
-      eventForecasts: true,
-      mlHotspots: true,
-    },
-    map: { liveStatus: true, forecastView: true },
-    community: { shareUpdate: true, reportIncident: true, filters: true },
-    assistant: { quickQuestions: true },
-    alerts: { traffic: true, maintenance: true },
+const DEFAULT_SECTIONS: MobileSections = {
+  dashboard: {
+    statusSummary: true,
+    segmentForecast: true,
+    corridorOutlook: true,
+    eventForecasts: true,
+    mlHotspots: true,
   },
+  map: { liveStatus: true, forecastView: true },
+  community: { shareUpdate: true, reportIncident: true, filters: true },
+  assistant: { quickQuestions: true, capabilities: true },
+  alerts: { traffic: true, maintenance: true },
+};
+
+export const DEFAULT_MOBILE_CONFIG: MobileConfig = {
+  features: deriveFeatures(DEFAULT_SECTIONS),
+  sections: DEFAULT_SECTIONS,
   advisory: { active: false, tone: "info", message: "" },
 };

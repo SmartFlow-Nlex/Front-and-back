@@ -16,6 +16,7 @@ import PredictiveEmissionChart from "../../../components/dashboard/PredictiveEmi
 import DateRangePicker from "../traffic/components/DateRangePicker";
 import { rangeDays, grainBlockedReason, bestGrainFor, axisLabelFor, bucketLabelFor } from "../../../lib/granularity";
 import styles from "../traffic/traffic.module.css";
+import CountUpValue from "../../../components/dashboard/CountUpValue";
 
 const BACKEND = process.env.NEXT_PUBLIC_BACKEND_URL ?? "http://localhost:4000";
 
@@ -679,7 +680,7 @@ export default function SustainabilityPage() {
   // A skeleton rather than an ellipsis: the tile keeps its height, so the KPI
   // row does not resize under the cursor as the numbers arrive.
   const kpiValue = (v: string | null) =>
-    loading && !data ? <KpiSkeleton /> : (v ?? "—");
+    loading && !data ? <KpiSkeleton /> : <CountUpValue text={v ?? "—"} />;
   const aqiWord = (a: number) => (a < 1.5 ? "Good" : a < 2.5 ? "Fair" : a < 3.5 ? "Moderate" : a < 4.5 ? "Poor" : "Very poor");
 
   // ---------- Predictive / Prescriptive share the same shell ----------

@@ -19,6 +19,7 @@ import PredictiveEventChart from "../../../components/dashboard/PredictiveEventC
 import styles from "./traffic.module.css";
 import DateRangePicker from "./components/DateRangePicker";
 import { rangeDays, grainBlockedReason, bestGrainFor, axisLabelFor, bucketLabelFor } from "../../../lib/granularity";
+import CountUpValue from "../../../components/dashboard/CountUpValue";
 
 const BACKEND = process.env.NEXT_PUBLIC_BACKEND_URL ?? "http://localhost:4000";
 
@@ -768,7 +769,7 @@ export default function TrafficPage() {
   }, [data]);
 
   const kpiValue = (v: string | null) =>
-    loading && !data ? <KpiSkeleton /> : (v ?? "—");
+    loading && !data ? <KpiSkeleton /> : <CountUpValue text={v ?? "—"} />;
 
   // ---------- Predictive / Prescriptive share the same shell ----------
   if (activeTab !== "Descriptive") {

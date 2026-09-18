@@ -26,6 +26,7 @@ import type { CorridorForecastPoint, KmSegmentForecastPoint } from "../../../com
 import DateRangePicker from "../traffic/components/DateRangePicker";
 import { rangeDays, grainBlockedReason, bestGrainFor, axisLabelFor, bucketLabelFor } from "../../../lib/granularity";
 import styles from "../traffic/traffic.module.css";
+import CountUpValue from "../../../components/dashboard/CountUpValue";
 
 const BACKEND = process.env.NEXT_PUBLIC_BACKEND_URL ?? "http://localhost:4000";
 
@@ -660,7 +661,7 @@ export default function IncidentPage() {
   // A skeleton rather than an ellipsis: the tile keeps its height, so the KPI
   // row does not resize under the cursor as the numbers arrive.
   const kpiValue = (v: string | null) =>
-    loading && !data ? <KpiSkeleton /> : (v ?? "—");
+    loading && !data ? <KpiSkeleton /> : <CountUpValue text={v ?? "—"} />;
 
   // One-glance explanation of what a KPI tile actually measures — same
   // portal-based popup used on every Predictive-tab card title.

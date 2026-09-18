@@ -457,8 +457,17 @@
   min-height: 0;
 }
 
+/* The row is built for the five tiles the analytics pages carry. Maintenance
+   has four, and they were laid into five tracks - so the row stopped short and
+   left a whole empty column, about 240px of nothing, on the right of the page.
+   The track count follows the number of tiles actually present. */
+.kpiRow:has(> :nth-child(4):last-child) { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+.kpiRow:has(> :nth-child(3):last-child) { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+
 @media (max-width: 1320px) {
   .kpiRow { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  /* Below this the override above would force four across a narrow page. */
+  .kpiRow:has(> :nth-child(4):last-child) { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 
 /* KPI tiles.

@@ -4,7 +4,24 @@ import Image from "next/image";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { AlertTriangle, Brain, Calendar, Car, ChevronDown, ClipboardList, Home, Leaf, LogOut, Map, Menu, TrendingUp, User, Wrench, X } from "lucide-react";
+import {
+  AlertTriangle,
+  Brain,
+  Calendar,
+  Car,
+  ChevronDown,
+  ClipboardList,
+  Home,
+  Leaf,
+  LogOut,
+  Map,
+  Menu,
+  Smartphone,
+  TrendingUp,
+  User,
+  Wrench,
+  X,
+} from "lucide-react";
 import { supabase } from "../../lib/supabase";
 import ThemeToggle from "../../components/dashboard/ThemeToggle";
 
@@ -19,6 +36,7 @@ const tabs = [
 
   { label: "Live Map", href: "/dashboard/map-comparison", icon: Map, group: "Operations" },
   { label: "Maintenance", href: "/dashboard/maintenance", icon: Wrench, group: "Operations" },
+  { label: "Mobile App", href: "/dashboard/mobile", icon: Smartphone, group: "Operations" },
 
   { label: "Scenario Sandbox", href: "/dashboard/ai-sandbox", icon: Car, group: "Planning" },
 

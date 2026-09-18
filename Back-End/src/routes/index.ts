@@ -10,6 +10,7 @@ import aiInsightRoutes from "./ai-insight.routes.js";
 import maintenanceRoutes from "./maintenance.routes.js";
 import auditLogRoutes from "./audit-log.routes.js";
 import uploadRoutes from "./upload.routes.js";
+import mobileConfigRoutes from "./mobile-config.routes.js";
 
 const router = Router();
 
@@ -24,5 +25,8 @@ router.use("/ai-insight", aiInsightRoutes);
 router.use("/maintenance", maintenanceRoutes);
 router.use("/audit-log", auditLogRoutes);
 router.use("/upload", uploadRoutes);
+// Read by the SmartFlow mobile app on launch; written by the dashboard's
+// Mobile Control Centre at /dashboard/mobile.
+router.use("/mobile-config", mobileConfigRoutes);
 
 export default router;

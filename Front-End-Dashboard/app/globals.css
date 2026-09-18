@@ -8986,3 +8986,101 @@ details[open] > .evidence-summary .evidence-close-label { display: inline; }
 .ds-modal-foot:has(.btn-primary:not(:disabled)) .ds-modal-foot-note {
   color: var(--page-accent, var(--brand-primary));
 }
+
+/* ══════════════════════════════════════════════════════════════════════════
+   FORECAST HORIZON PICKER  (Live Map — Forecasted Traffic)
+   Matches the model card it sits above: same card shell, same purple.
+   ══════════════════════════════════════════════════════════════════════════ */
+.mc-horizon {
+  display: grid;
+  gap: 8px;
+  padding: 11px 13px;
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--bg-surface) 94%, transparent);
+  border: 1px solid var(--border-default);
+  box-shadow: 0 6px 18px rgba(15, 23, 42, 0.12);
+  backdrop-filter: blur(6px);
+  min-width: 232px;
+}
+
+.mc-horizon-head {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.66rem;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-secondary);
+}
+
+.mc-horizon-ranges {
+  display: flex;
+  gap: 3px;
+  padding: 3px;
+  border-radius: 9px;
+  background: color-mix(in srgb, var(--text-secondary) 10%, transparent);
+}
+
+.mc-horizon-range {
+  flex: 1;
+  padding: 5px 4px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  font: inherit;
+  font-size: 0.68rem;
+  font-weight: 700;
+  color: var(--text-secondary);
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background var(--transition-fast), color var(--transition-fast);
+}
+
+.mc-horizon-range.is-active {
+  background: var(--bg-surface);
+  color: #7c3aed;
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.14);
+}
+
+/* A range the warehouse cannot answer is shown, not hidden: the reader should
+   be able to see that a week ahead exists as a concept and learn why it is
+   unavailable, rather than wonder whether the feature is missing. */
+.mc-horizon-range:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+  text-decoration: line-through;
+  text-decoration-thickness: 1px;
+}
+
+.mc-horizon-range:not(:disabled):not(.is-active):hover {
+  background: color-mix(in srgb, var(--bg-surface) 70%, transparent);
+  color: var(--text-primary);
+}
+
+.mc-horizon-pick select {
+  width: 100%;
+  appearance: none;
+  padding: 7px 28px 7px 11px;
+  border-radius: 9px;
+  border: 1px solid var(--border-default);
+  background-color: var(--bg-surface);
+  background-image: url("data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%237c3aed' stroke-width='3' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 10px center;
+  color: var(--text-primary);
+  font: inherit;
+  font-size: 0.78rem;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.mc-horizon-pick select:focus-visible {
+  outline: none;
+  border-color: #7c3aed;
+  box-shadow: 0 0 0 3px color-mix(in srgb, #7c3aed 25%, transparent);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .mc-horizon-range { transition: none; }
+}

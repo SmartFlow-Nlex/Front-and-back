@@ -113,13 +113,15 @@ export async function searchExitsInDb(query: string) {
  * why. Naming it, and its score, is the difference between "the map says" and
  * "a model with this accuracy, trained on this date, says".
  *
- * The horizon check is the more important one. gold.ml_predictive_congestion
- * holds twelve rows per segment, one per hour ahead, but every row for a given
- * segment currently carries the same state and the same probability: the +1h
- * outlook is byte-identical to the +12h one. So the table has a horizon column
- * that the model does not actually use, and any control offering to change the
- * horizon would move nothing on screen. The flag lets the panel say so instead
- * of implying a forecast that varies over time.
+ * The horizon check is the more important one. It once found every row for a
+ * segment carrying the same state and probability - the +1h outlook was
+ * byte-identical to the +12h one - so the panel said so rather than offering a
+ * control that would move nothing. The retrained model does vary, and the
+ * panel offers the control again on the strength of this flag.
+ *
+ * `maxHorizon` is what the table actually reaches, which is not the same as
+ * what the model can serve: the pipeline writes as many hours ahead as it was
+ * asked for, and the UI must not offer a range the warehouse cannot answer.
  */
 export async function getForecastModelInfo(): Promise<{
   name: string | null;
@@ -128,6 +130,8 @@ export async function getForecastModelInfo(): Promise<{
   rejectedCount: number;
   horizonVaries: boolean;
   horizons: number;
+  minHorizon: number | null;
+  maxHorizon: number | null;
 } | null> {
   if (!db) return null;
   try {
@@ -143,11 +147,15 @@ export async function getForecastModelInfo(): Promise<{
       ),
       db.query(
         `SELECT COUNT(*) FILTER (WHERE variants > 1)::int AS varying,
-                MAX(horizons)::int                        AS horizons
+                MAX(horizons)::int                        AS horizons,
+                MIN(lo)::int                              AS min_h,
+                MAX(hi)::int                              AS max_h
            FROM (
              SELECT segment_name,
                     COUNT(DISTINCT congestion_state || ':' || probability::text) AS variants,
-                    COUNT(DISTINCT hours_ahead)                                  AS horizons
+                    COUNT(DISTINCT hours_ahead)                                  AS horizons,
+                    MIN(hours_ahead)                                             AS lo,
+                    MAX(hours_ahead)                                             AS hi
                FROM gold.ml_predictive_congestion
               GROUP BY segment_name
            ) per_segment`,
@@ -163,6 +171,8 @@ export async function getForecastModelInfo(): Promise<{
       rejectedCount: Number(m?.rejected ?? 0),
       horizonVaries: Number(v?.varying ?? 0) > 0,
       horizons: Number(v?.horizons ?? 0),
+      minHorizon: v?.min_h == null ? null : Number(v.min_h),
+      maxHorizon: v?.max_h == null ? null : Number(v.max_h),
     };
   } catch (error) {
     console.error("Database query failed for forecast model info:", error);

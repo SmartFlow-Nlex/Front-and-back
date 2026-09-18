@@ -1,7 +1,7 @@
 "use client";
 
 import { ChangeEvent, useState } from "react";
-import { Brain } from "lucide-react";
+import { Brain, UploadCloud } from "lucide-react";
 import PageHeader from "../../../components/dashboard/PageHeader";
 
 type PipelineGateLog = {
@@ -95,7 +95,9 @@ export default function DataManagementPage() {
       />
 
       <article className="upload-zone">
-        <div className="upload-icon">?</div>
+        {/* Was a literal "?" - a placeholder glyph that shipped. The drop
+            target's only picture said "I do not know what this is". */}
+        <div className="upload-icon"><UploadCloud size={30} strokeWidth={2} aria-hidden="true" /></div>
         <h2>Upload Batch Dataset</h2>
         <p>Choose a CSV or JSON file. The system will automatically classify and process it if it matches the current workflow.</p>
         <label className="btn-primary" style={{ display: "inline-block", cursor: "pointer", opacity: loading ? 0.7 : 1 }}>

@@ -3070,32 +3070,50 @@ body {
   font-size: 0.92rem;
 }
 
+/* The drop target. It held four short lines in 260px and then left the rest
+   of the page blank, which is the shape the brief calls out: a large container
+   holding a small amount of content. Shorter, and centred on its own measure
+   so the copy reads as a column rather than a full-bleed line. */
 .upload-zone {
   margin-top: 14px;
-  background: var(--bg-surface);
-  border: 2px dashed #cfd7e5;
-  border-radius: var(--radius-lg);
-  padding: 40px 20px;
-  min-height: 260px;
+  background:
+    radial-gradient(90% 120% at 50% 0%, color-mix(in srgb, var(--brand-primary) 5%, transparent) 0%, transparent 70%),
+    var(--bg-surface);
+  border: 2px dashed color-mix(in srgb, var(--brand-primary) 26%, var(--border-default));
+  border-radius: 18px;
+  padding: 30px 20px;
+  min-height: 190px;
   display: grid;
   place-items: center;
   text-align: center;
-  transition: border-color var(--transition-fast);
+  transition: border-color var(--transition-fast), background-color var(--transition-fast), box-shadow var(--transition-fast);
 }
 
+/* A drop target should say so on approach. */
 .upload-zone:hover {
   border-color: var(--brand-primary);
+  box-shadow: 0 10px 30px color-mix(in srgb, var(--brand-primary) 14%, transparent);
 }
 
+.upload-zone > * { max-width: 48ch; }
+
 .upload-icon {
-  width: 72px;
-  height: 72px;
+  width: 60px;
+  height: 60px;
   border-radius: var(--radius-full);
-  background: #dce8ff;
+  background: linear-gradient(135deg, var(--brand-primary), color-mix(in srgb, var(--brand-primary) 58%, #7c5cff));
   display: grid;
   place-items: center;
-  font-size: 2.2rem;
-  color: var(--brand-primary);
+  color: #fff;
+  box-shadow: 0 8px 20px color-mix(in srgb, var(--brand-primary) 30%, transparent);
+}
+
+/* The icon lifts with the zone, so the whole panel reads as one target. */
+.upload-zone .upload-icon { transition: transform var(--transition-fast); }
+.upload-zone:hover .upload-icon { transform: translateY(-2px) scale(1.04); }
+
+@media (prefers-reduced-motion: reduce) {
+  .upload-zone:hover .upload-icon { transform: none; }
 }
 
 .upload-zone h2 {

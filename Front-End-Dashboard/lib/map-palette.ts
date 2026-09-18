@@ -79,27 +79,3 @@ export function mapPalette(isDark: boolean) {
 }
 
 export type MapPalette = ReturnType<typeof mapPalette>;
-
-/**
- * Waze's own jam scale, as Waze publishes it.
- *
- * This is the SOURCE's vocabulary, not the dashboard's. The corridor is drawn
- * in three states because that is what every view of it counts — and because
- * the forecast model only has three to give — but the live feed underneath
- * carries six levels, and a reader who wants to know what "slow" is made of
- * deserves to be able to look. The Live Corridor Status map has offered this
- * as a reference for a while; it lives here now so the map legends can offer
- * exactly the same one rather than a second copy that drifts.
- */
-export const JAM_SCALE: { level: 0 | 1 | 2 | 3 | 4 | 5; band: string; label: string }[] = [
-  { level: 0, band: "100–80% of free-flow speed", label: "free flow" },
-  { level: 1, band: "80–61%", label: "light" },
-  { level: 2, band: "60–41%", label: "moderate" },
-  { level: 3, band: "40–21%", label: "heavy" },
-  { level: 4, band: "20–1%", label: "severe" },
-  { level: 5, band: "blocked road", label: "blocked" },
-];
-
-/** Which of the three states a Waze level counts as. Mirrors classify(). */
-export const STATUS_OF_LEVEL = (level: number): "clear" | "slow" | "congested" =>
-  level <= 0 ? "clear" : level >= 3 ? "congested" : "slow";

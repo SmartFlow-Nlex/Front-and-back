@@ -226,6 +226,25 @@ export function seriesRamp(tab: VizTab, t: ChartTheme): [string, string, string]
  * The two steps to use for a pair of nominal series. Deliberately the outer two
  * rather than adjacent ones — that is what carries the ΔE margin.
  */
+/**
+ * The ramp for a heat grid.
+ *
+ * seriesRamp gives three steps, which is right for three lines and wrong for a
+ * hundred and sixty-eight cells: interpolated across a grid it put most of the
+ * data into a couple of mid blues that have to be stared at to be told apart.
+ * Seven steps spanning nearly the full lightness range give adjacent cells
+ * something to differ by, and the hue drifts toward indigo at the top so the
+ * busiest cells separate on more than lightness alone.
+ *
+ * Light mode runs pale to deep. Dark mode runs the other way - near-black for
+ * the quiet hours so they recede into the surface rather than glowing on it.
+ */
+export function heatRamp(t: ChartTheme): string[] {
+  return t.isDark
+    ? ["#0f1729", "#15294a", "#1b4272", "#2463a0", "#3d8bcb", "#77b6e6", "#b9dbf7"]
+    : ["#f2f7fd", "#d3e5f8", "#a8caef", "#74a9e0", "#3f7fca", "#22589e", "#14356b"];
+}
+
 export function seriesPair(tab: VizTab, t: ChartTheme): [string, string] {
   const r = seriesRamp(tab, t);
   return [r[2], r[0]];

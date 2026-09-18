@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { cachedJson } from "../../../lib/cached-json";
 import { attachCategoryClick } from "../../../lib/chart-click";
-import { useChartTheme, applyChartTheme, seriesRamp, seriesPair } from "../../../lib/chart-theme";
+import { useChartTheme, applyChartTheme, heatRamp, seriesRamp, seriesPair } from "../../../lib/chart-theme";
 import ReactECharts from "echarts-for-react";
 import type { EChartsOption } from "echarts";
 import { Activity, ArrowDownWideNarrow, ArrowUpNarrowWide, Building2, CalendarClock, Clock, Gauge, TrendingUp } from "lucide-react";
@@ -311,7 +311,14 @@ export default function TrafficPage() {
   const heatmapOption = useMemo<EChartsOption | null>(() => {
     if (!data || data.hourDow.length === 0) return null;
     const heatData: [number, number, number][] = data.hourDow.map((r) => [r.hour, DOW_ORDER.indexOf(r.dow), r.v]);
-    const heatMax = Math.max(...data.hourDow.map((r) => r.v));
+    const heatValues = data.hourDow.map((r) => r.v);
+    const heatMax = Math.max(...heatValues);
+    /* The quietest hour on this corridor still carries about a quarter of the
+       busiest one's traffic, so a scale anchored at zero spent its first
+       quarter on values that never occur and squeezed every real cell into
+       what was left. Anchoring at the observed minimum gives the whole ramp to
+       the range that exists. */
+    const heatMin = Math.min(...heatValues);
     return {
       // Legend lives in a slim strip below the plot, never on it
       grid: { left: 40, right: 10, top: 6, bottom: 26 },
@@ -327,12 +334,11 @@ export default function TrafficPage() {
       visualMap: {
         show: false,
         type: "continuous",
-        min: 0,
+        min: heatMin,
         max: heatMax,
         calculable: false,
-        // The lightest step is the theme's 'empty' tone: near-white on light,
-        // near-black on dark, so low values recede in both instead of glowing.
-        inRange: { color: [chartTheme.seqLightest, ...SEQ.slice(1)] },
+        // Seven steps rather than the three a line chart needs: see heatRamp.
+        inRange: { color: heatRamp(chartTheme) },
         // The same neutral the speed chart uses when scrubbed. Keeping the ramp
         // at low opacity left every cell a slightly different washed-out blue,
         // which on the dark surface turned the grid into grey-blue mud and made
@@ -763,6 +769,10 @@ export default function TrafficPage() {
     () => (data ? Math.max(0, ...data.hourDow.map((r) => r.v)) : 0),
     [data],
   );
+  const heatMinValue = useMemo(
+    () => (data && data.hourDow.length > 0 ? Math.min(...data.hourDow.map((r) => r.v)) : 0),
+    [data],
+  );
   const speedRange = useMemo<[number, number]>(() => {
     const sp = (data?.speedByHour ?? []).map((r) => r.speed).filter((v) => v > 0);
     return sp.length ? [Math.min(...sp), Math.max(...sp)] : [0, 0];
@@ -1056,13 +1066,13 @@ export default function TrafficPage() {
         </div>
         <div className={styles.chartBody}>{chartFrame(heatmapOption, "No data for the selected filters", onHeatmapClick, false, (c) => { heatChart.current = c; })}</div>
         <RampKey
-          colors={SEQ}
-          min={0}
+          colors={heatRamp(chartTheme)}
+          min={heatMinValue}
           max={heatMaxValue}
           format={(v) => `${fmtCompact(v)} vehicles`}
           lowLabel="Quieter"
           highLabel="Busier"
-          onScrub={scrub(heatChart, 0, heatMaxValue)}
+          onScrub={scrub(heatChart, heatMinValue, heatMaxValue)}
         />
       </article>
 

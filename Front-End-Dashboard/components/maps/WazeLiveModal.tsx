@@ -347,29 +347,6 @@ export default function WazeLiveModal({ open, onClose }: { open: boolean; onClos
           </aside>
         </div>
 
-        {data && data.timeline.length > 1 && (
-          <footer className="wz-timeline">
-            <span className="wz-timeline-label">Speed in jams, last 3 hours</span>
-            <div className="wz-spark">
-              {data.timeline.map((t) => {
-                const h = Math.max(4, Math.min(100, (t.avgSpeedKmh / 50) * 100));
-                return (
-                  <span
-                    key={t.at}
-                    className={`wz-spark-bar ${band(t.avgSpeedKmh).key}`}
-                    style={{ height: `${h}%` }}
-                    title={`${new Date(t.at).toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit" })} · ${t.avgSpeedKmh} km/h · ${t.jams} jams`}
-                  />
-                );
-              })}
-            </div>
-            <span className="wz-timeline-label">
-              {new Date(data.timeline[0].at).toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit" })}
-              {" → "}
-              {new Date(data.timeline[data.timeline.length - 1].at).toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit" })}
-            </span>
-          </footer>
-        )}
       </div>
     </div>
   );

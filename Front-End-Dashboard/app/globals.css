@@ -5669,23 +5669,6 @@ body {
 
 .wz-updated { margin: 14px 0 0; font-size: 0.68rem; color: var(--text-muted); }
 
-/* --- timeline ------------------------------------------------------------- */
-.wz-timeline {
-  display: flex;
-  align-items: center;
-  gap: 14px;
-  padding: 10px 18px;
-  border-top: 1px solid var(--border-default);
-  background: var(--bg-surface-hover);
-}
-.wz-timeline-label { flex: none; font-size: 0.68rem; font-weight: 600; color: var(--text-muted); }
-.wz-spark { flex: 1; display: flex; align-items: flex-end; gap: 3px; height: 40px; }
-.wz-spark-bar { flex: 1; border-radius: 2px 2px 0 0; min-height: 4px; }
-.wz-spark-bar.light { background: #22c55e; }
-.wz-spark-bar.moderate { background: #eab308; }
-.wz-spark-bar.heavy { background: #f97316; }
-.wz-spark-bar.severe { background: #ef4444; }
-
 /* --- the trigger on the panel --------------------------------------------- */
 .mc-maximise {
   display: inline-flex;
@@ -9329,66 +9312,3 @@ details[open] > .evidence-summary .evidence-close-label { display: inline; }
   line-height: 1.45;
   color: var(--text-secondary);
 }
-
-/* ── Waze scale, folded into the live legend ──────────────────────────────
-   Collapsed by default: the legend's job is to answer "what am I looking at"
-   in three lines, and this is the reference behind them. */
-.wz-scale { margin-top: 9px; border-top: 1px solid var(--border-default); padding-top: 8px; }
-
-.wz-scale > summary {
-  cursor: pointer;
-  list-style: none;
-  font-size: 0.68rem;
-  font-weight: 700;
-  color: var(--text-secondary);
-}
-
-.wz-scale > summary::-webkit-details-marker { display: none; }
-.wz-scale > summary::before { content: "▸ "; }
-.wz-scale[open] > summary::before { content: "▾ "; }
-
-.wz-scale > p {
-  margin: 7px 0 6px;
-  font-size: 0.64rem;
-  line-height: 1.45;
-  color: var(--text-secondary);
-}
-
-.wz-scale ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 3px; }
-
-.wz-scale li {
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto;
-  align-items: center;
-  gap: 6px;
-  font-size: 0.63rem;
-  color: var(--text-secondary);
-}
-
-.wz-scale-chip {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 15px;
-  height: 15px;
-  border-radius: 4px;
-  color: #fff;
-  font-size: 0.58rem;
-  font-weight: 800;
-}
-
-.wz-scale-band { color: var(--text-primary); }
-.wz-scale-word { display: none; }
-
-/* The column that answers the question this reference exists for: which of the
-   three the level counts as. */
-.wz-scale-status {
-  font-size: 0.56rem;
-  font-weight: 800;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-}
-
-.wz-scale-status.is-clear { color: #1a7d45; }
-.wz-scale-status.is-slow { color: #b06a15; }
-.wz-scale-status.is-congested { color: #b3261e; }

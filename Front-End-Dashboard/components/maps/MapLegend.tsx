@@ -1,7 +1,7 @@
 "use client";
 
 import { useChartTheme } from "../../lib/chart-theme";
-import { JAM_SCALE, mapPalette, STATUS_OF_LEVEL } from "../../lib/map-palette";
+import { mapPalette } from "../../lib/map-palette";
 import { lookOf } from "../../lib/waze-report-look";
 import { WAZE_REPORT_TYPES } from "../../lib/waze-reports";
 
@@ -68,32 +68,6 @@ export default function MapLegend({ variant = "live" }: { variant?: "live" | "fo
           <span className="wz-line" style={{ background: palette.status[k] }} /> {STATUS_LABEL[k]}
         </div>
       ))}
-
-      {/* The three states are what the road is drawn in and what the panel
-          counts. Waze's own six levels are what they are made of — offered
-          here rather than spread across the key, so the legend still answers
-          "what am I looking at" in three lines. */}
-      <details className="wz-scale">
-        <summary>Waze levels 0–5</summary>
-        <p>
-          A level is how far traffic has fallen below free-flow speed on that stretch — not a
-          count of vehicles.
-        </p>
-        <ul>
-          {JAM_SCALE.map((r) => (
-            <li key={r.level}>
-              <span className="wz-scale-chip" style={{ background: palette.level[r.level] }}>
-                {r.level}
-              </span>
-              <span className="wz-scale-band">{r.band}</span>
-              <span className="wz-scale-word">{r.label}</span>
-              <span className={`wz-scale-status is-${STATUS_OF_LEVEL(r.level)}`}>
-                {STATUS_OF_LEVEL(r.level)}
-              </span>
-            </li>
-          ))}
-        </ul>
-      </details>
 
       {/* Only where it can appear. On the live map an unreported stretch is
           drawn as free flow, so grey never shows; on the forecast, which covers

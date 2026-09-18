@@ -6572,3 +6572,147 @@ details[open] > .evidence-summary .evidence-close-label { display: inline; }
     radial-gradient(70% 45% at 95% 4%, color-mix(in srgb, #7c5cff 8%, transparent) 0%, transparent 55%);
   background-attachment: fixed;
 }
+
+/* ===========================================================================
+   SECONDARY PAGES — same design system as the analytics tabs
+   ---------------------------------------------------------------------------
+   Audit Log, Scenario Sandbox, Maintenance and Data Management were built
+   before the analytics pages settled their card language, and they still
+   looked it: flat white stat boxes with no accent, and raw browser <select>
+   controls sitting next to the app's own styled inputs. On one screen with
+   the redesigned analytics tabs they read as a different product.
+
+   Nothing here changes a control's behaviour - a native select stays a native
+   select, which keeps its keyboard handling and its mobile picker. It just
+   stops looking like it was never designed.
+   =========================================================================== */
+
+/* --- Native selects ------------------------------------------------------ */
+
+/* Scoped to the dashboard shell so nothing outside it is caught. The native
+   arrow is replaced with one drawn in the app's own ink; appearance:none is
+   what removes the OS control, and the padding-right reserves the space the
+   background chevron sits in. */
+.ds-main select,
+.ds-content select,
+.table-toolbar select,
+.tab-toolbar select {
+  appearance: none;
+  -webkit-appearance: none;
+  padding: 8px 34px 8px 12px;
+  border: 1px solid var(--border-default);
+  border-radius: 10px;
+  background-color: var(--bg-surface);
+  color: var(--text-primary);
+  font: inherit;
+  font-size: 0.82rem;
+  font-weight: 600;
+  line-height: 1.2;
+  cursor: pointer;
+  transition: border-color var(--transition-fast), box-shadow var(--transition-fast);
+  /* A chevron, in currentColor, so it follows the theme rather than staying
+     the OS grey it was. */
+  background-image: url("data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 16 16' fill='none'%3E%3Cpath d='M4 6.5L8 10.5L12 6.5' stroke='%2364748b' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 11px center;
+}
+
+.ds-main select:hover,
+.ds-content select:hover { border-color: var(--border-strong); }
+
+/* A visible focus ring, because removing the OS control also removes the OS
+   focus treatment, and these are keyboard-reachable filters. */
+.ds-main select:focus-visible,
+.ds-content select:focus-visible {
+  outline: none;
+  border-color: var(--page-accent, var(--brand-primary));
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--page-accent, var(--brand-primary)) 22%, transparent);
+}
+
+/* --- Stat cards ---------------------------------------------------------- */
+
+/* The same treatment the analytics KPI tiles carry: a leading accent that
+   fades down the card, a wash thrown from the icon's corner, and a lift that
+   is warmed by the accent rather than a generic grey. */
+.tab-stat-card,
+.sandbox-metric {
+  position: relative;
+  overflow: hidden;
+  border-radius: 16px;
+  border-color: color-mix(in srgb, var(--border-default) 70%, transparent);
+  box-shadow: 0 1px 2px rgba(15, 28, 58, 0.04), 0 8px 24px rgba(15, 28, 58, 0.05);
+  background-image: radial-gradient(
+    120% 100% at 100% 0%,
+    color-mix(in srgb, var(--page-accent, var(--brand-primary)) 10%, transparent) 0%,
+    transparent 68%
+  );
+}
+
+.tab-stat-card::before,
+.sandbox-metric::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 4px;
+  background: linear-gradient(
+    180deg,
+    var(--page-accent, var(--brand-primary)) 0%,
+    color-mix(in srgb, var(--page-accent, var(--brand-primary)) 35%, transparent) 100%
+  );
+}
+
+.tab-stat-card:hover,
+.sandbox-metric:hover {
+  transform: translateY(-3px);
+  box-shadow:
+    0 14px 30px color-mix(in srgb, var(--page-accent, var(--brand-primary)) 16%, transparent),
+    0 2px 6px rgba(15, 28, 58, 0.06);
+}
+
+.sandbox-metric { transition: box-shadow var(--transition-fast), transform var(--transition-fast); }
+
+/* The leading bar needs room, and these cards were padded for no bar. */
+.tab-stat-card { padding-left: 20px; }
+
+/* --- Buttons ------------------------------------------------------------- */
+
+/* The toolbar actions were flat fills. Same gradient and throw the rest of the
+   app uses for a primary action, so "Export JSON" reads as the same class of
+   control as every other button in the product. */
+.table-toolbar .btn-primary,
+.table-toolbar .btn-danger,
+.tab-toolbar .btn-primary,
+.tab-toolbar .btn-danger {
+  border: 1px solid transparent;
+  border-radius: 10px;
+  font-weight: 700;
+  transition: transform var(--transition-fast), box-shadow var(--transition-fast), filter var(--transition-fast);
+}
+
+.table-toolbar .btn-primary,
+.tab-toolbar .btn-primary {
+  background: linear-gradient(135deg, var(--brand-primary), color-mix(in srgb, var(--brand-primary) 62%, #7c5cff));
+  box-shadow: 0 4px 14px color-mix(in srgb, var(--brand-primary) 30%, transparent);
+}
+
+.table-toolbar .btn-danger,
+.tab-toolbar .btn-danger {
+  background: linear-gradient(135deg, var(--color-danger), color-mix(in srgb, var(--color-danger) 70%, #7a1020));
+  box-shadow: 0 4px 14px color-mix(in srgb, var(--color-danger) 26%, transparent);
+}
+
+.table-toolbar .btn-primary:hover,
+.table-toolbar .btn-danger:hover,
+.tab-toolbar .btn-primary:hover,
+.tab-toolbar .btn-danger:hover { transform: translateY(-1px); filter: brightness(1.04); }
+
+@media (prefers-reduced-motion: reduce) {
+  .tab-stat-card:hover,
+  .sandbox-metric:hover,
+  .table-toolbar .btn-primary:hover,
+  .table-toolbar .btn-danger:hover,
+  .tab-toolbar .btn-primary:hover,
+  .tab-toolbar .btn-danger:hover { transform: none; }
+}

@@ -315,7 +315,6 @@ export default function InteractiveRoadMap() {
       road split down the middle rather than two unrelated strips. */
   const { isDark } = useChartTheme();
   const palette = mapPalette(isDark);
-  const segmentLevels = corridor?.segmentLevels ?? new Map<string, number>();
 
   const carriageway = (
     dir: "NB" | "SB",
@@ -324,21 +323,53 @@ export default function InteractiveRoadMap() {
     <div className={`ds-rd-way dir-${dir.toLowerCase()}`}>
       <div className="ds-rd-segs">
         {rows.map((r) => {
-          const { access } = pick(r);
-          /* Coloured by the segment the block draws, which is the same value
-             the Live Map paints that stretch of road with. The exit's own
-             status still drives the hover card and the tally; this is only
-             about what the road looks like. */
-          const key = dir === "NB" ? r.nbSegment : r.sbSegment;
-          const level = key ? segmentLevels.get(key) ?? 0 : 0;
+          const { data, access } = pick(r);
+          /* Coloured from THIS EXIT's status - the same value the hover rail
+             and the tally read.
+
+             It used to colour by the segment the block sits over, which is
+             what the Live Map paints that stretch with, and the two answer
+             different questions:
+
+               - Attribution. A block in Angeles' column is the road between
+                 Angeles and Dau, so a jam belonging to Dau turned Angeles
+                 orange while the rail said Angeles was CLEAR.
+               - Scale. The segment used Waze's raw 0-5 level, the rail used
+                 classify(). Level 1 is "slow" to classify() and green on the
+                 level palette, so Paso de Blas read SLOW over a green road.
+
+             One source now, so the block, the words beside it and the chips
+             above it cannot disagree. Gradation survives: the level still
+             picks the shade, but only within the band its own status allows,
+             so a level-4 jam is deeper than a level-3 and nothing classed
+             slow can ever render green. */
+          /* Bands chosen against the palette, not against Waze's numbering.
+             mapPalette gives level 1 the SAME green as level 0, while
+             classify() already calls level 1 "slow" - which is why Paso de
+             Blas read SLOW over a green road. Slow therefore takes the two
+             amber steps and congested the two reds, so the hue can never
+             contradict the word beside it, and the level still picks which of
+             the two steps within its own band. */
+          const lvl = data.level ?? 0;
+          const shade =
+            data.colorClass === "seg-red"
+              ? (lvl >= 4 ? 5 : 4)
+              : data.colorClass === "seg-orange"
+                ? (lvl >= 2 ? 3 : 2)
+                : 0;
           const noRamp = access === "No Access";
           return (
             <span
               key={`${dir}-${r.exit.exit_name}`}
+              /* The status this block is painted from, on the element itself:
+                 the block, the rail and the chips are meant to be one answer,
+                 and a mismatch is otherwise only findable by eye. */
+              data-status={noRamp ? "no-ramp" : data.colorClass}
+              data-exit={r.exit.exit_name}
               className={`ds-rd-seg ${noRamp ? "no-ramp" : ""} ${
                 activeStation === r.exit.exit_name ? "is-active" : ""
               }`}
-              style={noRamp ? undefined : { background: levelColour(palette, level) }}
+              style={noRamp ? undefined : { background: levelColour(palette, shade) }}
             />
           );
         })}

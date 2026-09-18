@@ -399,9 +399,6 @@ export default function MapComparisonPage() {
                 <div className="mc-density-row">
                   <span className="mc-legend-pin" aria-hidden="true" /> NLEX exit
                 </div>
-                <p className="mc-legend-note">
-                  Colours are the model&apos;s call for {`+${horizon} h`}, not a live reading.
-                </p>
               </div>
             </details>
 

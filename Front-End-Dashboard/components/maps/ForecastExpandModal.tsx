@@ -17,9 +17,11 @@ type Segment = {
 
 const STATE_ORDER: Record<string, number> = { High: 0, Med: 1, Low: 2 };
 
+/* The same three words the two legends use, so a segment described here as
+   congested is the colour the map draws for congested. */
 const STATE_LABEL: Record<string, string> = {
-  High: "Heavy",
-  Med: "Building",
+  High: "Congested",
+  Med: "Slow",
   Low: "Clear",
 };
 
@@ -194,10 +196,6 @@ export default function ForecastExpandModal({
                   ))}
                 </ul>
 
-                <p className="fc-note">
-                  The percentage is the model&apos;s confidence in that state for that hour, not a
-                  share of traffic.
-                </p>
               </>
             )}
           </aside>

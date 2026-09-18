@@ -22,50 +22,27 @@ import { WAZE_REPORT_TYPES } from "../../lib/waze-reports";
  */
 
 /**
- * The road's colours, grouped by the status each one counts as.
+ * The three states the corridor is ever in, and the shades each is drawn with.
  *
- * Two true things were being shown one at a time. The map draws Waze's own
- * five-level scale and all five turn up on this corridor, so a three-row key
- * would have described a map that is not the one beside it. But every other
- * view of the same feed — the corridor panel, the hero strip, the tallies —
- * speaks in three states, and nothing said which colour was which. A reader
- * counting four reds on the map against "4 congested" in the panel had no way
- * to check the two agreed.
+ * The map paints six palette values, but they are three bands: one green, two
+ * ambers, three reds. The shading carries severity WITHIN a state; the state is
+ * what the rest of the dashboard counts, and classify() in lib/corridor-status
+ * draws the same lines - 0 clear, 1-2 slow, 3 and above congested.
  *
- * The grouping is classify() in lib/corridor-status.ts, not a guess: level 0 is
- * clear, 1-2 slow, 3 and above congested. Level 0 is in the list because the
- * live map draws unreported stretches at it.
+ * So the key names three things and shows each one's range, rather than listing
+ * six shades and leaving the reader to work out that four of them mean the same
+ * thing as the number in the panel beside it.
  */
-const DENSITY_GROUPS = [
-  { status: "Clear", levels: [{ level: 0 as const, label: "Free flow" }] },
-  {
-    status: "Slow",
-    levels: [
-      { level: 1 as const, label: "Light" },
-      { level: 2 as const, label: "Moderate" },
-    ],
-  },
-  {
-    status: "Congested",
-    levels: [
-      { level: 3 as const, label: "Heavy" },
-      { level: 4 as const, label: "Severe" },
-      { level: 5 as const, label: "Standstill" },
-    ],
-  },
+const STATUS_KEY = [
+  { status: "Clear", levels: [0] as const },
+  { status: "Slow", levels: [1, 2] as const },
+  { status: "Congested", levels: [3, 4, 5] as const },
 ];
 
-/**
- * What the forecast map draws, in the order a reader scans it.
- *
- * The levels are indices into the shared map palette — the same numbers
- * TrafficMapPanel maps these states to — so the key and the road cannot drift
- * apart. Exported because the panel's own legend draws from it too.
- */
 export const FORECAST_KEY = [
   { state: "Low", label: "Clear", level: 0 as const },
-  { state: "Med", label: "Building", level: 2 as const },
-  { state: "High", label: "Heavy", level: 4 as const },
+  { state: "Med", label: "Slow", level: 2 as const },
+  { state: "High", label: "Congested", level: 4 as const },
 ];
 
 export default function MapLegend({ variant = "live" }: { variant?: "live" | "forecast" }) {
@@ -94,21 +71,24 @@ export default function MapLegend({ variant = "live" }: { variant?: "live" | "fo
 
   return (
     <div className="map-legend">
-      <h4>Traffic density</h4>
-      {DENSITY_GROUPS.map((g) => (
-        <div key={g.status} className="wz-legend-group">
-          <span className="wz-legend-status">{g.status}</span>
-          {g.levels.map((d) => (
-            <div key={d.level} className="wz-legend-row">
-              <span className="wz-line" style={{ background: palette.level[d.level] }} /> {d.label}
-            </div>
-          ))}
+      <h4>Traffic</h4>
+      {STATUS_KEY.map((g) => (
+        <div key={g.status} className="wz-legend-row">
+          {/* One swatch per state, carrying that state's shades: a reader can
+              see the darker reds belong to congested rather than hunting for
+              them in a list of six. */}
+          <span
+            className="wz-line"
+            style={{
+              background:
+                g.levels.length === 1
+                  ? palette.level[g.levels[0]]
+                  : `linear-gradient(90deg, ${g.levels.map((l) => palette.level[l]).join(", ")})`,
+            }}
+          />{" "}
+          {g.status}
         </div>
       ))}
-      <p className="wz-legend-note">
-        Counted as three states across the dashboard: the corridor panel&apos;s clear, slow and
-        congested are these colours grouped.
-      </p>
 
       {/* Only where it can appear. On the live map an unreported stretch is
           drawn as free flow, so grey never shows; on the forecast, which covers

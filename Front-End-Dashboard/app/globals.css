@@ -7971,11 +7971,7 @@ details[open] > .evidence-summary .evidence-close-label { display: inline; }
    below it. The grid reserves the same amount of empty space at its foot, so
    what it sits over is that reserved space and not a row of switches.
 */
-.ds-mc-savebar.is-open { margin-bottom: -86px; }
-/* 52px, not 86: the negative margin above does not claw back the bar's full
-   height on a sticky element, so the reserve is tuned to what is actually left
-   over. Measured both ways - resting and with unsaved changes - at 1080. */
-.ds-mc-grid { padding-bottom: 52px; }
+
 
 /* A section row stacked its label over its description, which is two lines of
    type for one switch and made a five-section tab taller than the screen. On
@@ -8009,3 +8005,139 @@ details[open] > .evidence-summary .evidence-close-label { display: inline; }
 }
 
 .ds-mc-section-icon { width: 24px; height: 24px; border-radius: 7px; }
+
+/* ── Fitting ANY window, not one particular height ─────────────────────────
+   The first attempt trimmed the page until it happened to fit a 1080px
+   viewport, which is not a fix: a shorter window scrolls again, and every
+   later addition eats the margin. The page now sizes itself to the scroll
+   container instead. .ds-main is already a fixed-height flex column, so this
+   fills it exactly and gives the one genuinely unbounded thing - the list of
+   tabs - its own scroll. At normal heights nothing scrolls at all; at small
+   ones only that list does, and the phone, the advisory and the save bar stay
+   put where they can be seen. */
+.ds-mc-page {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  padding-bottom: 20px;
+}
+
+.ds-mc-page .ds-mc-grid {
+  flex: 1;
+  min-height: 0;
+  align-items: stretch;
+}
+
+.ds-mc-page .ds-mc-col {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+/* The left column stretches so its panel can own the leftover height; the
+   preview keeps its natural size and stays at the top. */
+.ds-mc-page aside.ds-mc-col { align-self: start; }
+
+.ds-mc-page .ds-mc-col > .panel {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.ds-mc-page aside.ds-mc-col > .panel { flex: 0 0 auto; }
+
+.ds-mc-page .ds-mc-features {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: color-mix(in srgb, var(--text-secondary) 30%, transparent) transparent;
+  /* Room for the scrollbar so a switch never sits underneath it. */
+  padding-right: 4px;
+}
+
+.ds-mc-features::-webkit-scrollbar { width: 6px; }
+.ds-mc-features::-webkit-scrollbar-track { background: transparent; }
+.ds-mc-features::-webkit-scrollbar-thumb {
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--text-secondary) 28%, transparent);
+}
+
+/* ── Phone: smaller again, and no longer crowding its own bezel ──────────── */
+.ds-phone-frame { width: 202px; padding: 7px; border-radius: 28px; }
+.ds-phone-notch { top: 11px; width: 58px; height: 13px; }
+.ds-phone-screen { border-radius: 22px; min-height: 340px; }
+
+/* The cards were sitting about 9px from the screen edge, which at this size
+   reads as text pressed against the bezel. Wider gutters cost a little card
+   width and buy back the sense that this is a screen with margins. */
+.ds-phone-body { gap: 6px; padding: 12px 13px 14px; }
+.ds-phone-status { padding: 6px 14px 4px; font-size: 0.55rem; }
+.ds-phone-appbar { padding: 7px 14px 9px; font-size: 0.74rem; }
+.ds-phone-advisory { padding: 8px 10px; border-radius: 9px; }
+.ds-phone-card { padding: 7px 9px; gap: 7px; }
+.ds-phone-card-icon { width: 19px; height: 19px; border-radius: 6px; }
+.ds-phone-card-text { gap: 4px; }
+.ds-phone-card-text b { font-size: 0.6rem; }
+.ds-phone-bar { height: 3.5px; }
+.ds-phone-tab { padding: 6px 0 7px; }
+.ds-phone-tab small { font-size: 0.43rem; }
+
+/* The left column can give height back by scrolling its list; the preview
+   cannot, so on a short window it is the column that decides whether the page
+   scrolls. Below this height the phone comes down another step rather than
+   pushing the page past the fold. */
+@media (max-height: 820px) {
+  .ds-mc-panel { padding: 14px 16px; }
+  .ds-phone { padding: 2px 0 0; }
+  .ds-mc-note { margin-top: 9px; font-size: 0.72rem; }
+  .ds-mc-advisory-strip { padding: 9px 12px; }
+}
+
+/* The preview column has no list to scroll, so on a short window it was the
+   thing pushing the page past the fold. Bounding the screen and letting its
+   body scroll fixes that, and is what the device does anyway: a phone has a
+   fixed screen and scrolls its content. The upper bound keeps it from growing
+   into a comically tall slab on a big monitor. */
+.ds-phone-screen {
+  min-height: 268px;
+  max-height: min(430px, calc(100vh - 400px));
+}
+
+.ds-phone-body {
+  overflow-y: auto;
+  min-height: 0;
+  scrollbar-width: thin;
+  scrollbar-color: color-mix(in srgb, var(--text-secondary) 26%, transparent) transparent;
+}
+
+.ds-phone-body::-webkit-scrollbar { width: 4px; }
+.ds-phone-body::-webkit-scrollbar-track { background: transparent; }
+.ds-phone-body::-webkit-scrollbar-thumb {
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--text-secondary) 24%, transparent);
+}
+
+
+/* A cut that lands mid-row reads as broken rather than as "there is more".
+   Same affordance used on the hotspot list. */
+.ds-mc-features {
+  -webkit-mask-image: linear-gradient(to bottom, #000 calc(100% - 18px), transparent 100%);
+  mask-image: linear-gradient(to bottom, #000 calc(100% - 18px), transparent 100%);
+}
+
+
+/* The list was a grid, which was fine while the page grew to fit its content.
+   Once the panel started filling a fixed-height column the grid had a definite
+   height to distribute, and it compressed its rows to fit: the expanded tab was
+   squashed, its sections clipped by the row's own overflow: hidden, and forcing
+   a minimum back only made the rows overlap instead. A flex column has no such
+   behaviour - items keep their height, and the container scrolls. */
+.ds-mc-features {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.ds-mc-features > li { flex: 0 0 auto; }

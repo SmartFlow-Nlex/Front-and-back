@@ -286,7 +286,7 @@ export default function MobileControlPage() {
   const previewHidden = previewOn.length === 0;
 
   return (
-    <section className="ds-content ds-long">
+    <section className="ds-content ds-mc-page">
       <PageHeader
         icon={Smartphone}
         title="Mobile Control Centre"

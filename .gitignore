@@ -30,3 +30,9 @@ Back-End/.env.*
 
 # Hourly congestion refresh output (All_Scripts/Predictive_Modeling)
 All_Scripts/Predictive_Modeling/refresh_congestion.log
+
+# Throwaway DB probes. They live beside package.json only so that `import pg`
+# resolves against Back-End/node_modules, and they read Back-End/.env at run
+# time to connect. One was committed by accident once (__c.mjs, removed in a
+# follow-up); the prefix keeps that from happening again.
+__*.mjs

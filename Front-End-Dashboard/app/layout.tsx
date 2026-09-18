@@ -13,8 +13,13 @@ export default function RootLayout({
 }: Readonly<{
   children: React.ReactNode;
 }>) {
+  // data-scroll-behavior declares the smooth scrolling that globals.css sets on
+  // <html>. Next.js suspends it during route changes so a navigation does not
+  // animate the scroll position, and warns that a future version will stop
+  // doing that unless the attribute is present. Declaring it keeps today's
+  // behaviour and clears the warning.
   return (
-    <html lang="en" suppressHydrationWarning>
+    <html lang="en" suppressHydrationWarning data-scroll-behavior="smooth">
       <head>
         {/* Stamps the stored theme before first paint so a dark-theme reload
             never flashes the light palette. Must stay ahead of the stylesheet. */}

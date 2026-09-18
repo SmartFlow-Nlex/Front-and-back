@@ -779,6 +779,19 @@ function render(ctx: CanvasRenderingContext2D, canvas: HTMLCanvasElement, sim: T
   const dpr = window.devicePixelRatio || 1;
   const cssW = canvas.clientWidth;
   const cssH = canvas.clientHeight;
+  // A detached or hidden canvas measures 0x0, and every dimension below is
+  // derived from those two numbers: laneH becomes (0 - pad * 2) / lanes, which
+  // is negative, so roadH is negative and the asphalt's roundRect is handed a
+  // radius of -8. arcTo throws IndexSizeError on a negative radius.
+  //
+  // Navigating away from the sandbox does exactly this. The outgoing page
+  // loses its layout box before the effect cleanup cancels the pending frame,
+  // so one last loop() ran against a zero-sized canvas and threw - which is
+  // why the dev overlay counted an issue after every visit here, while a cold
+  // load of the page was clean.
+  //
+  // There is nothing to draw on a canvas with no area, so wait for one.
+  if (cssW <= 0 || cssH <= 0) return;
   if (canvas.width !== cssW * dpr || canvas.height !== cssH * dpr) {
     canvas.width = cssW * dpr;
     canvas.height = cssH * dpr;
@@ -991,7 +1004,10 @@ function dot(ctx: CanvasRenderingContext2D, x: number, y: number, r: number) {
 }
 
 function roundRect(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, r: number) {
-  const rr = Math.min(r, w / 2, h / 2);
+  // Clamped at zero: arcTo throws on a negative radius rather than treating
+  // it as square corners, and every caller derives r from geometry that can go
+  // negative when it is measured against an unsized canvas.
+  const rr = Math.max(0, Math.min(r, w / 2, h / 2));
   ctx.beginPath();
   ctx.moveTo(x + rr, y);
   ctx.arcTo(x + w, y, x + w, y + h, rr);

@@ -7213,7 +7213,6 @@ details[open] > .evidence-summary .evidence-close-label { display: inline; }
 }
 
 .ds-mc-savebar-text { font-size: 0.84rem; font-weight: 600; }
-.ds-mc-savebar-text small { display: block; font-weight: 400; color: var(--text-secondary); font-size: 0.75rem; }
 .ds-mc-savebar-text .is-blocked { display: inline-flex; align-items: center; gap: 6px; color: var(--color-warning, #b45309); }
 .ds-mc-savebar-actions { display: flex; gap: 10px; flex-shrink: 0; }
 
@@ -8100,10 +8099,12 @@ details[open] > .evidence-summary .evidence-close-label { display: inline; }
    body scroll fixes that, and is what the device does anyway: a phone has a
    fixed screen and scrolls its content. The upper bound keeps it from growing
    into a comically tall slab on a big monitor. */
-.ds-phone-screen {
-  min-height: 268px;
-  max-height: min(430px, calc(100vh - 400px));
-}
+/* A definite height, not a range. Between a min and a max the screen sized
+   itself to its content, so a tab with two sections drew a visibly shorter
+   phone than one with five - the device appeared to change size depending on
+   what was switched on. It now scales with the window only, and the body
+   scrolls when the content is taller. */
+.ds-phone-screen { height: clamp(268px, calc(100vh - 400px), 430px); }
 
 .ds-phone-body {
   overflow-y: auto;
@@ -8162,14 +8163,19 @@ details[open] > .evidence-summary .evidence-close-label { display: inline; }
 .ds-mc-page .ds-mc-col { height: 100%; }
 .ds-mc-page aside.ds-mc-col { height: auto; }
 
-/* Fading only the foot made a row cut off at the TOP of the scroll look like a
-   rendering fault rather than like scrolled-past content. Both ends now. */
+/* Each end fades only when something is actually scrolled past it. An
+   always-on fade dissolved the first row's own outline, so the top card looked
+   like it had no border at all. The flags come from measureEdges(). */
 .ds-mc-features {
-  --fade: 16px;
-  -webkit-mask-image: linear-gradient(to bottom, transparent 0, #000 var(--fade), #000 calc(100% - var(--fade)), transparent 100%);
-  mask-image: linear-gradient(to bottom, transparent 0, #000 var(--fade), #000 calc(100% - var(--fade)), transparent 100%);
-  scroll-padding-block: 4px;
+  --fade-top: 0px;
+  --fade-bottom: 0px;
+  -webkit-mask-image: linear-gradient(to bottom, transparent 0, #000 var(--fade-top), #000 calc(100% - var(--fade-bottom)), transparent 100%);
+  mask-image: linear-gradient(to bottom, transparent 0, #000 var(--fade-top), #000 calc(100% - var(--fade-bottom)), transparent 100%);
+  scroll-padding-block: 6px;
 }
+
+.ds-mc-features[data-fade-top="true"] { --fade-top: 18px; }
+.ds-mc-features[data-fade-bottom="true"] { --fade-bottom: 18px; }
 
 /* ── Phone tab bar ───────────────────────────────────────────────────────── */
 /*
@@ -8220,3 +8226,60 @@ details[open] > .evidence-summary .evidence-close-label { display: inline; }
 .ds-mc-page > .ds-mc-advisory-strip { margin-bottom: 0; }
 .ds-mc-page .ds-mc-grid { margin-top: 14px; }
 .ds-mc-page .ds-mc-col > .panel { margin-top: 0; }
+
+/* ── The tab list, gone over properly ─────────────────────────────────────
+   The rows all carried the same weight whether open or shut, the drawer was
+   joined to its header by a dashed rule that read as a tear-off line, and the
+   scrollbar ran hard against the cards. */
+
+/* Room for the scrollbar so it never sits on a card's edge. */
+.ds-mc-features { padding-right: 10px; }
+
+/* A closed row is a plain card; an open one is the one being worked on and
+   says so with the accent and a little lift. */
+.ds-mc-features li {
+  border-color: var(--border-default);
+  transition: border-color var(--transition-fast), box-shadow var(--transition-fast);
+}
+
+.ds-mc-features li.is-open {
+  border-color: color-mix(in srgb, var(--page-accent, var(--brand-primary)) 45%, transparent);
+  box-shadow: 0 1px 3px color-mix(in srgb, var(--page-accent, var(--brand-primary)) 14%, transparent);
+}
+
+/* A hidden tab is a resting state, not an error, so it only loses the accent
+   on its icon rather than being greyed into illegibility. */
+.ds-mc-features li.is-off .ds-mc-feature-icon {
+  color: var(--text-secondary);
+  background: color-mix(in srgb, var(--text-secondary) 10%, transparent);
+  opacity: 1;
+}
+
+.ds-mc-features li.is-off .ds-mc-feature-text { opacity: 1; }
+.ds-mc-features li.is-off .ds-mc-feature-text b { color: var(--text-secondary); }
+
+/* The drawer belongs to the row above it. A tinted panel says that; a dashed
+   rule said "cut here". */
+.ds-mc-sections {
+  border-top: 1px solid color-mix(in srgb, var(--border-default) 80%, transparent);
+  background: color-mix(in srgb, var(--page-accent, var(--brand-primary)) 4%, transparent);
+  padding: 10px 14px 12px 20px;
+}
+
+.ds-mc-sections ul li + li {
+  border-top: 1px solid color-mix(in srgb, var(--border-default) 55%, transparent);
+}
+
+/* Separated from the switches by the gap rather than by a second rule. */
+.ds-mc-sections-bulk {
+  margin: 0 0 6px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid color-mix(in srgb, var(--border-default) 55%, transparent);
+}
+
+/* One line of text now, so the bar can be shorter. No negative margin: that
+   was for a page that grew with its content. This one is a flex column of a
+   fixed height, so the grid above simply gets less room when the bar appears
+   and the list absorbs it. A negative margin here only confused the scroll
+   height it was meant to protect. */
+.ds-mc-savebar.is-open { max-height: 72px; padding: 12px 18px; }

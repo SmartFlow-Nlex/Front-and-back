@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Activity,
   AlertTriangle,
@@ -128,6 +128,8 @@ const TONES: { key: AdvisoryTone; label: string; hint: string }[] = [
 ];
 
 const MAX_MESSAGE = 280;
+/** Below this an advisory cannot be published; see setAdvisory. */
+const MIN_MESSAGE = 8;
 
 function allOn(): Sections {
   return TABS.reduce((acc, t) => {
@@ -148,17 +150,6 @@ const FALLBACK: MobileConfig = {
   sections: allOn(),
   advisory: { active: false, tone: "info", message: "" },
 };
-
-function relativeTime(iso: string | null): string {
-  if (!iso) return "never";
-  const mins = Math.round((Date.now() - new Date(iso).getTime()) / 60000);
-  if (!Number.isFinite(mins)) return "never";
-  if (mins < 1) return "just now";
-  if (mins < 60) return `${mins} min ago`;
-  const hrs = Math.round(mins / 60);
-  if (hrs < 24) return `${hrs} hr ago`;
-  return `${Math.round(hrs / 24)} d ago`;
-}
 
 /**
  * Mobile Control Centre.
@@ -184,6 +175,24 @@ export default function MobileControlPage() {
   const [flash, setFlash] = useState<string | null>(null);
   const [open, setOpen] = useState<TabKey | null>("dashboard");
   const [previewTab, setPreviewTab] = useState<TabKey>("dashboard");
+
+  /* Which ends of the tab list have content beyond them.
+   *
+   * The list fades at its edges so a row cut mid-height reads as "there is
+   * more" rather than as clipping — but a fade that is always on eats the
+   * first row's outline even when nothing is scrolled past, which is exactly
+   * how it looked: the top card appeared to have no border. So each edge is
+   * faded only when there is actually something behind it. */
+  const listRef = useRef<HTMLUListElement>(null);
+  const [edges, setEdges] = useState({ top: false, bottom: false });
+
+  const measureEdges = useCallback(() => {
+    const el = listRef.current;
+    if (!el) return;
+    const top = el.scrollTop > 1;
+    const bottom = Math.ceil(el.scrollTop + el.clientHeight) < el.scrollHeight - 1;
+    setEdges((prev) => (prev.top === top && prev.bottom === bottom ? prev : { top, bottom }));
+  }, []);
   const [advisoryOpen, setAdvisoryOpen] = useState(false);
 
   const load = useCallback(async () => {
@@ -207,6 +216,18 @@ export default function MobileControlPage() {
     void load();
   }, [load]);
 
+  // Re-measure whenever the list's own size changes: expanding a tab, the
+  // window resizing, or the save bar appearing all move where the edges are.
+  useEffect(() => {
+    const el = listRef.current;
+    if (!el) return;
+    measureEdges();
+    const ro = new ResizeObserver(measureEdges);
+    ro.observe(el);
+    for (const child of Array.from(el.children)) ro.observe(child);
+    return () => ro.disconnect();
+  }, [measureEdges, open, loading]);
+
   // Escape closes the advisory dialog. Bound on the document rather than the
   // panel because focus may be inside the textarea, and a dialog that traps a
   // reader with no keyboard way out is worse than no dialog.
@@ -228,13 +249,27 @@ export default function MobileControlPage() {
     [saved, draft]
   );
 
+  /** The message is what makes an advisory publishable, so the two are kept in
+   *  step here rather than validated after the fact. Below the minimum the
+   *  broadcast is simply off: otherwise the strip reads "Nothing published"
+   *  while the save bar refuses to save, which is the page disagreeing with
+   *  itself and leaving no obvious way out. */
+  const setAdvisory = (patch: Partial<MobileConfig["advisory"]>) =>
+    setDraft((d) => {
+      const next = { ...d.advisory, ...patch };
+      if (next.message.trim().length < MIN_MESSAGE) next.active = false;
+      return { ...d, advisory: next };
+    });
+
+  const canPublish = draft.advisory.message.trim().length >= MIN_MESSAGE;
+
   const anythingOn = useMemo(() => TABS.some((t) => tabShown(draft.sections, t.key)), [draft]);
 
   // The API refuses these, so the button that would trigger the refusal is
   // disabled and says why, rather than letting the operator find out from a red
   // banner after pressing Save.
   const blockedReason = useMemo(() => {
-    if (draft.advisory.active && draft.advisory.message.trim().length < 8) {
+    if (draft.advisory.active && !canPublish) {
       return "A published advisory needs at least 8 characters.";
     }
     if (!anythingOn) return "Everything is switched off — the app would open to nothing.";
@@ -280,7 +315,6 @@ export default function MobileControlPage() {
       return { ...d, sections: { ...d.sections, [tab]: next } };
     });
 
-  const shownCount = TABS.filter((t) => tabShown(draft.sections, t.key)).length;
   const previewMeta = TABS.find((t) => t.key === previewTab) ?? TABS[0];
   const previewOn = previewMeta.sections.filter((s) => draft.sections[previewMeta.key]?.[s.key]);
   const previewHidden = previewOn.length === 0;
@@ -361,14 +395,16 @@ export default function MobileControlPage() {
             <header className="ds-mc-panel-head">
               <div>
                 <h2>What travellers get</h2>
-                <p>
-                  A tab appears whenever anything inside it is on, so emptying one retires it.{" "}
-                  <b>{shownCount} of {TABS.length}</b> tabs visible.
-                </p>
               </div>
             </header>
 
-            <ul className="ds-mc-features">
+            <ul
+              className="ds-mc-features"
+              ref={listRef}
+              onScroll={measureEdges}
+              data-fade-top={edges.top ? "true" : undefined}
+              data-fade-bottom={edges.bottom ? "true" : undefined}
+            >
               {TABS.map((t) => {
                 const { key, label, icon: Icon, blurb } = t;
                 const group = draft.sections[key] ?? {};
@@ -644,18 +680,18 @@ export default function MobileControlPage() {
               <label className="ds-mc-publish-row">
                 <span>
                   <b>Publish to every phone</b>
-                  <span>Off keeps the draft here without sending it.</span>
+                  <span>
+                    {canPublish
+                      ? "Off keeps the draft here without sending it."
+                      : `Write at least ${MIN_MESSAGE} characters below to enable this.`}
+                  </span>
                 </span>
                 <span className="ds-switch">
                   <input
                     type="checkbox"
                     checked={draft.advisory.active}
-                    onChange={(e) =>
-                      setDraft((d) => ({
-                        ...d,
-                        advisory: { ...d.advisory, active: e.target.checked },
-                      }))
-                    }
+                    disabled={!canPublish}
+                    onChange={(e) => setAdvisory({ active: e.target.checked })}
                   />
                   <span className="ds-switch-track" aria-hidden="true">
                     <span className="ds-switch-thumb" />
@@ -670,9 +706,7 @@ export default function MobileControlPage() {
                     type="button"
                     className={`ds-mc-tone is-${tone.key}${draft.advisory.tone === tone.key ? " is-active" : ""}`}
                     aria-pressed={draft.advisory.tone === tone.key}
-                    onClick={() =>
-                      setDraft((d) => ({ ...d, advisory: { ...d.advisory, tone: tone.key } }))
-                    }
+                    onClick={() => setAdvisory({ tone: tone.key })}
                   >
                     <b>{tone.label}</b>
                     <span>{tone.hint}</span>
@@ -688,9 +722,7 @@ export default function MobileControlPage() {
                   maxLength={MAX_MESSAGE}
                   value={draft.advisory.message}
                   placeholder="e.g. Lane closure at Km 15.2 southbound until 06:00. Expect delays."
-                  onChange={(e) =>
-                    setDraft((d) => ({ ...d, advisory: { ...d.advisory, message: e.target.value } }))
-                  }
+                  onChange={(e) => setAdvisory({ message: e.target.value })}
                 />
                 <small className={draft.advisory.message.length > MAX_MESSAGE - 30 ? "is-near" : ""}>
                   {draft.advisory.message.length} / {MAX_MESSAGE}
@@ -701,9 +733,8 @@ export default function MobileControlPage() {
                   the same draft as everything else, so nothing reaches a phone
                   until Save & publish. */}
               <p className="ds-modal-note">
-                {draft.advisory.active && draft.advisory.message.trim().length < 8
-                  ? "A published advisory needs at least 8 characters."
-                  : "Closing keeps your changes here. Nothing reaches a phone until you press Save & publish."}
+                Closing keeps your changes here. Nothing reaches a phone until you press{" "}
+                <b>Save &amp; publish</b>.
               </p>
             </div>
 
@@ -737,13 +768,7 @@ export default function MobileControlPage() {
               <AlertTriangle size={14} aria-hidden="true" /> {blockedReason}
             </span>
           ) : (
-            <span>
-              Unsaved changes.{" "}
-              <small>
-                Last saved {relativeTime(meta?.updatedAt ?? null)}
-                {meta?.updatedBy ? ` by ${meta.updatedBy}` : ""}.
-              </small>
-            </span>
+            <span>Unsaved changes.</span>
           )}
         </div>
         <div className="ds-mc-savebar-actions">

@@ -140,25 +140,59 @@ export default function AiModelInsight(props: Props) {
     return () => { attempt.current++; };
   }, [key, run]);
 
+  /** Plain language for the failures that actually happen, with the provider's
+   *  own wording kept on the title attribute for whoever has to debug it. */
+  const explain = (raw: string): { text: string; retryable: boolean } => {
+    const r = raw.toLowerCase();
+    if (r.includes("rate limit") || r.includes("429") || r.includes("quota")) {
+      return {
+        text: "The explanation service is busy — it allows only so many requests a minute. Wait a moment and try again.",
+        retryable: true,
+      };
+    }
+    if (r.includes("too long") || r.includes("timeout") || r.includes("abort")) {
+      return {
+        text: "The model did not answer in time. The free tier queues under load, so a second attempt usually gets through.",
+        retryable: true,
+      };
+    }
+    if (r.includes("could not reach") || r.includes("network") || r.includes("failed to fetch")) {
+      return {
+        text: "Could not reach the explanation service. The rest of this page is unaffected — the figures above come from the warehouse, not from it.",
+        retryable: true,
+      };
+    }
+    return { text: raw, retryable: true };
+  };
+
   if (busy && !insight) {
     return (
-      <p style={{ margin: 0, fontSize: "0.82rem", color: "var(--text-muted)", fontStyle: "italic" }}>
-        Asking the model to read the metrics{elapsed >= 8 ? ` (${elapsed}s -- the free tier can take up to a minute)` : "…"}
-      </p>
+      <div className="ds-narrative-loading" role="status">
+        <span className="ds-narrative-spinner" aria-hidden="true" />
+        <span>
+          Reading the metrics
+          {elapsed >= 8 && (
+            <em> — {elapsed}s so far; the free tier can take up to a minute</em>
+          )}
+        </span>
+      </div>
     );
   }
 
   if (error && !insight) {
+    const { text, retryable } = explain(error);
     return (
-      <p style={{ margin: 0, fontSize: "0.82rem", lineHeight: 1.55, color: "#b54708", background: "#fffaeb", borderLeft: "3px solid #f79009", borderRadius: 8, padding: "9px 11px", display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap" }}>
-        <span style={{ flex: "1 1 240px" }}>{error}</span>
-        <button
-          onClick={run}
-          style={{ padding: "5px 13px", borderRadius: 999, cursor: "pointer", fontSize: "0.74rem", fontWeight: 600, border: "1px solid #f79009", background: "transparent", color: "#b54708" }}
-        >
-          Try again
-        </button>
-      </p>
+      // A div, not a p: this is a row with a control in it, and a paragraph
+      // that lays its own children out in a flex row is a paragraph in name
+      // only.
+      <div className="ds-narrative-error" role="alert" title={error}>
+        <span>{text}</span>
+        {retryable && (
+          <button type="button" onClick={run}>
+            Try again
+          </button>
+        )}
+      </div>
     );
   }
 

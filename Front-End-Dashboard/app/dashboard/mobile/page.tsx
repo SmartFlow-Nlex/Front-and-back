@@ -296,7 +296,7 @@ export default function MobileControlPage() {
     (a) => a.active && a.message.trim().length >= MIN_MESSAGE
   );
 
-  /** What is actually on phones right now, as opposed to what the draft says.
+  /** What is actually published right now, as opposed to what the draft says.
    *  The switch records intent; only a save changes what travellers see. */
   const savedAdvisories = useMemo(
     () => new Map((saved?.advisories ?? []).map((a) => [a.id, a])),
@@ -741,10 +741,13 @@ export default function MobileControlPage() {
           >
             <header className="ds-modal-head">
               <div className="ds-adv-title">
+                <span className="ds-adv-title-icon" aria-hidden="true">
+                  <Megaphone size={17} />
+                </span>
                 <h2 id="advisory-title">Advisories</h2>
                 {draft.advisories.length > 0 && (
                   <span className="ds-mc-advisory-counts">
-                    {livePublished.length} on phones
+                    {livePublished.length} published
                     {draft.advisories.length - livePublished.length > 0 &&
                       ` \u00b7 ${draft.advisories.length - livePublished.length} draft`}
                   </span>
@@ -777,12 +780,15 @@ export default function MobileControlPage() {
                     const short = MIN_MESSAGE - a.message.trim().length;
                     const { live, change } = pendingFor(a);
                     return (
-                      <li key={a.id} className={live ? "is-live" : ""}>
+                      <li key={a.id} className={`tone-${a.tone}${live ? " is-live" : ""}`}>
                         {/* Top: where this stands, and what a save would change. */}
                         <div className="ds-adv-head">
                           <span className={`ds-adv-state${live ? " is-live" : ""}`}>
-                            <span className={`ds-mc-dot is-${a.tone}`} aria-hidden="true" />
-                            {live ? "On phones" : "Not sent"}
+                            <span
+                              className={`ds-mc-dot ${live ? `is-${a.tone}` : "is-idle"}`}
+                              aria-hidden="true"
+                            />
+                            {live ? "Published" : "Draft"}
                           </span>
                           {change && <span className="ds-adv-pending">{change}</span>}
                           <button
@@ -796,13 +802,20 @@ export default function MobileControlPage() {
                         </div>
 
                         {/* Middle: what it says. */}
-                        <textarea
-                          rows={2}
-                          maxLength={MAX_MESSAGE}
-                          value={a.message}
-                          placeholder="e.g. Lane closure at Km 15.2 southbound until 06:00."
-                          onChange={(e) => patchAdvisory(a.id, { message: e.target.value })}
-                        />
+                        <div className="ds-adv-field">
+                          <textarea
+                            rows={2}
+                            maxLength={MAX_MESSAGE}
+                            value={a.message}
+                            placeholder="e.g. Lane closure at Km 15.2 southbound until 06:00."
+                            onChange={(e) => patchAdvisory(a.id, { message: e.target.value })}
+                          />
+                          <span
+                            className={`ds-adv-counter${a.message.length > MAX_MESSAGE - 30 ? " is-near" : ""}`}
+                          >
+                            {a.message.length}/{MAX_MESSAGE}
+                          </span>
+                        </div>
 
                         {/* Bottom: how it goes out. */}
                         <div className="ds-adv-foot">
@@ -820,16 +833,9 @@ export default function MobileControlPage() {
                             ))}
                           </div>
 
-                          <span className="ds-adv-count">
-                            <span className="ds-adv-hint">
-                              {!ready && a.message.length > 0
-                                ? `${short} more to publish`
-                                : ""}
-                            </span>
-                            <span className={a.message.length > MAX_MESSAGE - 30 ? "is-near" : ""}>
-                              {a.message.length} / {MAX_MESSAGE}
-                            </span>
-                          </span>
+                          {!ready && a.message.length > 0 && (
+                            <span className="ds-adv-hint">{short} more to publish</span>
+                          )}
 
                           <label
                             className="ds-adv-publish"

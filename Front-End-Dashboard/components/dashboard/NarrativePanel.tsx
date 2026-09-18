@@ -142,27 +142,15 @@ export function NarrativeChip({ tone = "neutral", children }: { tone?: "good" | 
  */
 export function GenerateReportButton({ onClick }: { onClick: () => void }) {
   return (
-    <button
-      type="button"
-      onClick={onClick}
-      style={{
-        display: "inline-flex",
-        alignItems: "center",
-        gap: 7,
-        padding: "8px 16px",
-        borderRadius: 999,
-        cursor: "pointer",
-        fontSize: "0.78rem",
-        fontWeight: 600,
-        border: "1px solid transparent",
-        background:
-          "linear-gradient(135deg, color-mix(in srgb, var(--page-accent, #4f46e5) 82%, white), var(--page-accent, #4f46e5))",
-        color: "#fff",
-        boxShadow: "0 1px 6px color-mix(in srgb, var(--page-accent, #4f46e5) 35%, transparent)",
-      }}
-    >
-      <Sparkles size={14} strokeWidth={2.4} />
-      Generate report
-    </button>
+    // The wrapper is what makes the three cards agree. Returned bare, the
+    // button inherited whatever alignment its parent happened to have -- a
+    // flex row here, a grid cell there -- so the same control sat at a
+    // different size and offset on each Predictive tab.
+    <div className="ds-narrative-cta">
+      <button type="button" className="ds-narrative-btn" onClick={onClick}>
+        <Sparkles size={15} strokeWidth={2.4} aria-hidden="true" />
+        Generate report
+      </button>
+    </div>
   );
 }

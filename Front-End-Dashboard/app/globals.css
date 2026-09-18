@@ -8397,11 +8397,15 @@ details[open] > .evidence-summary .evidence-close-label { display: inline; }
 
 /* Three words on one row here rather than three described cards: inside a list
    item the hint under each label only repeats what the word already says. */
+/* No auto margin here. It was right when the tone picker shared one row with
+   everything else and had to sit at the far end; in the three-band row it is
+   the first thing on the line. Left behind, it fought the counter's own auto
+   margin - two of them in one flex row split the free space between them, so
+   the picker ended up adrift in the middle of the card. */
 .ds-mc-tones.is-inline {
   display: flex;
   gap: 4px;
   margin: 0;
-  margin-left: auto;
 }
 
 .ds-mc-tones.is-inline .ds-mc-tone { padding: 4px 9px; }
@@ -8648,3 +8652,337 @@ details[open] > .evidence-summary .evidence-close-label { display: inline; }
 
 .ds-adv-list li { gap: 10px; padding: 13px 14px; }
 .ds-adv-list small { display: none; }
+
+/* ══════════════════════════════════════════════════════════════════════════
+   ADVISORY DIALOG — design pass
+   ══════════════════════════════════════════════════════════════════════════ */
+
+/* ── Tone: one control, not three loose pills ────────────────────────────── */
+/* Three separately bordered buttons read as three things you could press
+   rather than one choice with three settings. Joined into a segmented control
+   they say "pick one" without a label having to. */
+.ds-mc-tones.is-inline {
+  gap: 0;
+  padding: 2px;
+  border-radius: 9px;
+  background: color-mix(in srgb, var(--text-secondary) 9%, transparent);
+  border: 1px solid color-mix(in srgb, var(--border-default) 70%, transparent);
+}
+
+.ds-mc-tones.is-inline .ds-mc-tone {
+  border: 1px solid transparent;
+  background: transparent;
+  border-radius: 7px;
+  padding: 4px 11px;
+  color: var(--text-secondary);
+  transition: background var(--transition-fast), color var(--transition-fast);
+}
+
+.ds-mc-tones.is-inline .ds-mc-tone b { font-weight: 600; }
+
+/* The selected segment lifts out of the track. Its colour is the tone's, so
+   the control shows what it means rather than only which option is ticked. */
+.ds-mc-tones.is-inline .ds-mc-tone.is-active {
+  background: var(--bg-surface);
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.12);
+}
+
+.ds-mc-tones.is-inline .ds-mc-tone.is-active b { font-weight: 800; }
+.ds-mc-tones.is-inline .ds-mc-tone.is-info.is-active { color: #1d4ed8; border-color: color-mix(in srgb, #2a78d6 45%, transparent); }
+.ds-mc-tones.is-inline .ds-mc-tone.is-warning.is-active { color: #b45309; border-color: color-mix(in srgb, #b45309 45%, transparent); }
+.ds-mc-tones.is-inline .ds-mc-tone.is-critical.is-active { color: #b91c1c; border-color: color-mix(in srgb, #dc2626 45%, transparent); }
+
+.ds-mc-tones.is-inline .ds-mc-tone:not(.is-active):hover {
+  background: color-mix(in srgb, var(--bg-surface) 70%, transparent);
+  color: var(--text-primary);
+}
+
+/* ── The message box owns its own counter ────────────────────────────────── */
+.ds-adv-field { position: relative; }
+
+.ds-adv-list .ds-adv-field textarea {
+  /* Room for the counter so a long line never runs under it. */
+  padding-bottom: 22px;
+}
+
+.ds-adv-counter {
+  position: absolute;
+  right: 10px;
+  bottom: 7px;
+  font-size: 0.68rem;
+  color: var(--text-tertiary, var(--text-secondary));
+  font-variant-numeric: tabular-nums;
+  pointer-events: none;
+  opacity: 0.75;
+}
+
+.ds-adv-counter.is-near { color: var(--color-warning, #b45309); font-weight: 700; opacity: 1; }
+
+/* ── State ───────────────────────────────────────────────────────────────── */
+/* Grey while it is only a draft: tone means nothing until the thing is out,
+   and a red dot on a notice nobody has seen reads as an alarm. */
+.ds-mc-dot.is-idle { background: color-mix(in srgb, var(--text-secondary) 45%, transparent); }
+
+/* ── Rows ────────────────────────────────────────────────────────────────── */
+.ds-adv-list { gap: 9px; }
+.ds-adv-list li { gap: 9px; padding: 12px 13px; }
+
+/* The bin is destructive and permanent, so it stays quiet until the pointer is
+   on the row it belongs to, rather than advertising itself on every card. */
+.ds-adv-delete {
+  border-color: transparent;
+  background: transparent;
+  opacity: 0.55;
+  transition: opacity var(--transition-fast), color var(--transition-fast),
+    background var(--transition-fast), border-color var(--transition-fast);
+}
+
+.ds-adv-list li:hover .ds-adv-delete,
+.ds-adv-delete:focus-visible { opacity: 1; }
+
+.ds-adv-foot { gap: 10px; }
+.ds-adv-hint { margin-left: auto; font-size: 0.72rem; }
+
+/* Publish is the consequential control on the row, so it is the one thing
+   here with a filled state. */
+.ds-adv-publish { margin-left: auto; }
+.ds-adv-foot .ds-adv-hint + .ds-adv-publish { margin-left: 0; }
+
+.ds-adv-publish:has(input:checked) {
+  background: color-mix(in srgb, var(--page-accent, var(--brand-primary)) 10%, transparent);
+  font-weight: 800;
+}
+
+/* ── Dialog chrome ───────────────────────────────────────────────────────── */
+.ds-modal.is-wide { width: min(620px, 100%); }
+.ds-modal-body { padding: 14px 20px 16px; gap: 12px; }
+
+.ds-adv-add {
+  border-color: color-mix(in srgb, var(--border-default) 85%, transparent);
+  color: var(--text-secondary);
+  font-weight: 700;
+  padding: 10px 14px;
+  gap: 6px;
+}
+
+.ds-adv-add:not(:disabled):hover {
+  border-color: var(--page-accent, var(--brand-primary));
+  color: var(--page-accent, var(--brand-primary));
+  background: color-mix(in srgb, var(--page-accent, var(--brand-primary)) 7%, transparent);
+}
+
+/* The footer note is the answer to "what will pressing this do?", so it sits
+   with the button rather than at the far end of the bar. */
+.ds-modal-foot { gap: 12px; align-items: center; }
+.ds-modal-foot-note { font-weight: 600; }
+
+/* ══════════════════════════════════════════════════════════════════════════
+   NARRATIVE EXPLANATION — one button, one size, one place
+   ══════════════════════════════════════════════════════════════════════════ */
+
+/* The wrapper is the consistency. The button used to be returned bare into
+   whatever container each card had, so it stretched in one, centred in
+   another, and sat at a different offset on each Predictive tab. */
+.ds-narrative-cta {
+  display: flex;
+  justify-content: flex-start;
+  margin: 4px 0;
+}
+
+.ds-narrative-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  /* Fixed height and a floor on the width, so it is the same object on every
+     page rather than one that resizes with its container. */
+  height: 36px;
+  min-width: 178px;
+  padding: 0 18px;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  font: inherit;
+  font-size: 0.8rem;
+  font-weight: 700;
+  letter-spacing: 0.01em;
+  color: #fff;
+  cursor: pointer;
+  background: linear-gradient(
+    135deg,
+    color-mix(in srgb, var(--page-accent, var(--brand-primary)) 82%, white),
+    var(--page-accent, var(--brand-primary))
+  );
+  box-shadow: 0 1px 6px color-mix(in srgb, var(--page-accent, var(--brand-primary)) 35%, transparent);
+  transition: transform var(--transition-fast), box-shadow var(--transition-fast);
+}
+
+.ds-narrative-btn:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 4px 14px color-mix(in srgb, var(--page-accent, var(--brand-primary)) 40%, transparent);
+}
+
+.ds-narrative-btn:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--page-accent, var(--brand-primary)) 32%, transparent);
+}
+
+/* ── Waiting ─────────────────────────────────────────────────────────────── */
+/* The old state was one line of italic text, which on a slow answer looked
+   like a sentence that had stopped rather than a request still running. */
+.ds-narrative-loading {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 0.83rem;
+  color: var(--text-secondary);
+}
+
+.ds-narrative-loading em { font-style: normal; opacity: 0.8; }
+
+.ds-narrative-spinner {
+  width: 15px;
+  height: 15px;
+  flex: none;
+  border-radius: 50%;
+  border: 2px solid color-mix(in srgb, var(--page-accent, var(--brand-primary)) 25%, transparent);
+  border-top-color: var(--page-accent, var(--brand-primary));
+  animation: ds-spin 720ms linear infinite;
+}
+
+@keyframes ds-spin { to { transform: rotate(360deg); } }
+
+/* ── Failed ──────────────────────────────────────────────────────────────── */
+.ds-narrative-error {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex-wrap: wrap;
+  padding: 11px 13px;
+  border-radius: 10px;
+  border: 1px solid color-mix(in srgb, var(--color-warning, #b45309) 32%, transparent);
+  border-left-width: 3px;
+  background: color-mix(in srgb, var(--color-warning, #b45309) 8%, var(--bg-surface));
+  color: #8a4b08;
+  font-size: 0.82rem;
+  line-height: 1.55;
+}
+
+.ds-narrative-error > span { flex: 1 1 260px; }
+
+.ds-narrative-error button {
+  flex: none;
+  height: 30px;
+  padding: 0 14px;
+  border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--color-warning, #b45309) 55%, transparent);
+  background: var(--bg-surface);
+  color: #8a4b08;
+  font: inherit;
+  font-size: 0.75rem;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.ds-narrative-error button:hover {
+  background: color-mix(in srgb, var(--color-warning, #b45309) 14%, transparent);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ds-narrative-spinner { animation-duration: 2.4s; }
+  .ds-narrative-btn { transition: none; }
+  .ds-narrative-btn:hover { transform: none; }
+}
+
+/* ══════════════════════════════════════════════════════════════════════════
+   ADVISORY DIALOG — giving it some character
+   The bones were right and the surface was flat: a white box of white boxes,
+   with the only colour on the one published row. Tone is the thing that
+   distinguishes these from each other, so tone now shows on every row.
+   ══════════════════════════════════════════════════════════════════════════ */
+
+/* ── Header ──────────────────────────────────────────────────────────────── */
+.ds-modal.is-wide .ds-modal-head {
+  background: linear-gradient(
+    135deg,
+    color-mix(in srgb, var(--page-accent, var(--brand-primary)) 9%, var(--bg-surface)),
+    var(--bg-surface) 70%
+  );
+}
+
+.ds-adv-title-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border-radius: 10px;
+  color: #fff;
+  background: linear-gradient(
+    135deg,
+    color-mix(in srgb, var(--page-accent, var(--brand-primary)) 78%, white),
+    var(--page-accent, var(--brand-primary))
+  );
+  box-shadow: 0 2px 8px color-mix(in srgb, var(--page-accent, var(--brand-primary)) 32%, transparent);
+}
+
+.ds-adv-title { gap: 11px; align-items: center; }
+
+/* ── Rows carry their tone on the edge ───────────────────────────────────── */
+/* A draft written at Critical used to look exactly like one written at Info,
+   which made the tone picker feel like a setting with no effect. The edge is
+   muted while it is a draft and full strength once it is out. */
+.ds-adv-list li {
+  position: relative;
+  padding-left: 16px;
+  overflow: hidden;
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
+  transition: box-shadow var(--transition-fast), border-color var(--transition-fast);
+}
+
+.ds-adv-list li::before {
+  content: "";
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 4px;
+  background: var(--tone, var(--text-secondary));
+  opacity: 0.35;
+}
+
+.ds-adv-list li.tone-info { --tone: #2a78d6; }
+.ds-adv-list li.tone-warning { --tone: #d97706; }
+.ds-adv-list li.tone-critical { --tone: #dc2626; }
+
+.ds-adv-list li.is-live::before { opacity: 1; }
+
+.ds-adv-list li:hover { box-shadow: 0 2px 8px rgba(15, 23, 42, 0.08); }
+
+/* A published row is tinted by its own tone rather than always amber, so the
+   list reads as three levels of thing rather than "live" and "not live". */
+.ds-adv-list li.is-live {
+  border-color: color-mix(in srgb, var(--tone) 38%, transparent);
+  background: color-mix(in srgb, var(--tone) 6%, var(--bg-surface));
+}
+
+.ds-adv-state.is-live { color: color-mix(in srgb, var(--tone) 78%, #0b1020); }
+.ds-adv-list li.is-live .ds-mc-dot { background: var(--tone); }
+
+/* ── The message box ─────────────────────────────────────────────────────── */
+.ds-adv-list textarea {
+  background: color-mix(in srgb, var(--text-secondary) 3%, var(--bg-surface));
+}
+
+.ds-adv-list li.is-live textarea { background: var(--bg-surface); }
+
+/* Clear of the resize grip, which the counter was sitting on top of. */
+.ds-adv-counter { right: 24px; bottom: 6px; }
+
+/* ── Footer ──────────────────────────────────────────────────────────────── */
+.ds-modal.is-wide .ds-modal-foot {
+  background: color-mix(in srgb, var(--text-secondary) 5%, var(--bg-surface));
+}
+
+/* Something to send is worth saying in the accent; nothing to send is not. */
+.ds-modal-foot-note { color: var(--text-secondary); }
+.ds-modal-foot:has(.btn-primary:not(:disabled)) .ds-modal-foot-note {
+  color: var(--page-accent, var(--brand-primary));
+}

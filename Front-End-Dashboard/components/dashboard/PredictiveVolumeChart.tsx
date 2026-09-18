@@ -895,7 +895,7 @@ export default function PredictiveVolumeChart({ months = "all", from, to, weathe
     dataZoom: [
       { type: "slider", start: 0, end: 100, height: 18, bottom: 44,
         borderColor: T.border, fillerColor: T.isDark ? "rgba(56,118,245,0.18)" : "rgba(37,99,235,0.08)",
-        handleStyle: { color: "#3876f5" }, textStyle: { color: T.textMuted, fontSize: 10 },
+        handleStyle: { color: "#2a78d6" }, textStyle: { color: T.textMuted, fontSize: 10 },
         backgroundColor: T.isDark ? "rgba(255,255,255,0.03)" : "transparent",
         dataBackground: { lineStyle: { color: T.chartAxis }, areaStyle: { color: T.chartSplit } } },
     ],
@@ -1425,7 +1425,7 @@ export default function PredictiveVolumeChart({ months = "all", from, to, weathe
                     if (g === "Monthly" && futureDays < 28) setFutureDays(28);
                   }}
                   title={g === "Daily" ? "One point per day — the resolution the models actually forecast" : `Averaged per ${g.replace("ly", "").toLowerCase()} — a viewing aid, not a separate forecast`}
-                  style={{ padding: "3px 10px", borderRadius: 999, border: "none", background: granularity === g ? "#3876f5" : "transparent", color: granularity === g ? "#fff" : "var(--text-secondary)", fontWeight: 600, fontSize: "0.72rem", cursor: "pointer" }}>
+                  style={{ padding: "3px 10px", borderRadius: 999, border: "none", background: granularity === g ? "var(--page-accent, #3876f5)" : "transparent", color: granularity === g ? "#fff" : "var(--text-secondary)", fontWeight: 600, fontSize: "0.72rem", cursor: "pointer" }}>
                   {g}
                 </button>
               ))}

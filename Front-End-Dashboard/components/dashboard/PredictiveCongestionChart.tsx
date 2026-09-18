@@ -724,7 +724,7 @@ export default function PredictiveCongestionChart() {
                 onClick={() => { setLoadError(null); setAttempt((a) => a + 1); }}
                 style={{
                   padding: "6px 16px", borderRadius: 999, cursor: "pointer", border: "1px solid transparent",
-                  background: "linear-gradient(135deg, #6366f1, #4f46e5)", color: "#fff",
+                  background: "linear-gradient(135deg, color-mix(in srgb, var(--page-accent, #4f46e5) 82%, white), var(--page-accent, #4f46e5))", color: "#fff",
                   fontSize: "0.78rem", fontWeight: 600,
                 }}
               >
@@ -1373,7 +1373,7 @@ export default function PredictiveCongestionChart() {
                     font: "inherit", fontSize: "0.72rem", fontWeight: 700, cursor: "pointer",
                     padding: "3px 11px", borderRadius: 999, border: "1px solid transparent", whiteSpace: "nowrap",
                     background: range === r.key ? "#fff" : "transparent",
-                    borderColor: range === r.key ? "#c7d2fe" : "transparent",
+                    borderColor: range === r.key ? "color-mix(in srgb, var(--page-accent, #4f46e5) 34%, transparent)" : "transparent",
                     color: range === r.key ? "#1d4ed8" : "#64748b",
                     boxShadow: range === r.key ? "0 1px 2px rgba(15,23,42,0.08)" : "none",
                   }}

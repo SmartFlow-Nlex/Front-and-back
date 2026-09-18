@@ -310,8 +310,14 @@ export function CongestionResponsePanel() {
               <span style={{ fontSize: "0.7rem", fontWeight: 800, color: tone(r.label), textTransform: "uppercase", letterSpacing: "0.06em" }}>{r.label}</span>
             </div>
             <div style={{ display: "flex", gap: 14, fontSize: "0.76rem", color: "var(--text-secondary)" }}>
-              <span>First High <b style={{ color: "var(--text-primary)" }}>{r.first != null ? `+${r.first}h` : "—"}</b></span>
-              <span>Peak <b style={{ color: "var(--text-primary)" }}>{r.peak > 0 ? `${Math.round(r.peak * 100)}%` : "—"}</b>{r.peak > 0 && <> at +{r.peakHour}h</>}</span>
+              {r.first != null ? (
+                <>
+                  <span>First High <b style={{ color: "var(--text-primary)" }}>+{r.first}h</b></span>
+                  <span>Peak <b style={{ color: "var(--text-primary)" }}>{Math.round(r.peak * 100)}%</b> at +{r.peakHour}h</span>
+                </>
+              ) : (
+                <span style={{ fontStyle: "italic" }}>Never reaches High inside the horizon</span>
+              )}
             </div>
             <div style={{ fontSize: "0.76rem", lineHeight: 1.4 }}>{ACTION[r.label]}</div>
           </div>

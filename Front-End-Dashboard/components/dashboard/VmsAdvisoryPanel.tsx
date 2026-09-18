@@ -22,6 +22,10 @@ type PredictiveSlice = {
 
 type Tier = "HIGH" | "MODERATE" | "ADVISORY";
 const TIER_WORD: Record<Tier, string> = { HIGH: "CAUTION", MODERATE: "ADVISORY", ADVISORY: "NOTICE" };
+// A severity ladder, so these stay put while the rest of the Incident page
+// moves to --page-accent: that accent IS amber, and an amber ADVISORY would
+// collide with the amber MODERATE directly above it -- the two tiers a reader
+// most needs to tell apart would become the same colour.
 const TIER_COLOR: Record<Tier, string> = { HIGH: "#dc2626", MODERATE: "#f59e0b", ADVISORY: "#4f46e5" };
 
 function tierFor(share: number): Tier {

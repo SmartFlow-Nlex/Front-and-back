@@ -221,7 +221,7 @@ export default function SecondaryIncidentRiskPanel() {
           style={{
             justifySelf: "end", padding: "3px 10px", borderRadius: "8px",
             background: "#fff", border: "1.5px solid #e2e8f0",
-            fontSize: "0.78rem", fontWeight: 700, color: "#1e1b4b",
+            fontSize: "0.78rem", fontWeight: 700, color: "color-mix(in srgb, var(--page-accent, #4f46e5) 62%, #0b1020)",
           }}
         >
           {(row.avgRisk * 100).toFixed(1)}%
@@ -248,7 +248,7 @@ export default function SecondaryIncidentRiskPanel() {
               title={v === "km" ? "Grouped by quantile km segments instead of nearest exit — equal incident count per segment, unequal width" : "Grouped by exit — the specific interchange to dispatch resources to"}
               style={{
                 padding: "4px 12px", borderRadius: "999px", border: "none", cursor: "pointer",
-                background: view === v ? "#4f46e5" : "transparent",
+                background: view === v ? "var(--page-accent, #4f46e5)" : "transparent",
                 color: view === v ? "#fff" : "#4b5e7d",
                 fontWeight: 600, fontSize: "0.72rem", whiteSpace: "nowrap",
                 opacity: v === "km" && data.secondaryRiskByKmSegment.length === 0 ? 0.4 : 1,
@@ -278,14 +278,14 @@ export default function SecondaryIncidentRiskPanel() {
         <div style={{ borderTop: "1px solid #e2e8f0", paddingTop: "12px" }}>
           <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: "10px", flexWrap: "wrap", marginBottom: "6px" }}>
             <div>
-              <div style={{ fontSize: "0.68rem", fontWeight: 800, color: "#4f46e5", letterSpacing: "0.04em", textTransform: "uppercase" }}>
+              <div style={{ fontSize: "0.68rem", fontWeight: 800, color: "var(--page-accent, #4f46e5)", letterSpacing: "0.04em", textTransform: "uppercase" }}>
                 Top {view === "km" ? "segments" : "corridors"} by evidence
               </div>
               <div style={{ fontSize: "0.75rem", color: "#64748b" }}>Avg. predicted secondary-incident risk</div>
             </div>
             <div style={{ display: "flex", alignItems: "center", gap: "12px", fontSize: "0.7rem", color: "#94a3b8" }}>
               <span style={{ display: "inline-flex", alignItems: "center", gap: "4px" }}>
-                <span style={{ width: 10, height: 10, borderRadius: "999px", background: "linear-gradient(90deg, #818cf8, #3730a3)", display: "inline-block" }} />
+                <span style={{ width: 10, height: 10, borderRadius: "999px", background: "linear-gradient(90deg, color-mix(in srgb, var(--page-accent, #4f46e5) 50%, white), var(--page-accent, #4f46e5))", display: "inline-block" }} />
                 darker = higher risk
               </span>
               <span>Hover a row to inspect its numbers</span>

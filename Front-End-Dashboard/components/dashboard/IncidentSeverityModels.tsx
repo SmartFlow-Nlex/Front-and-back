@@ -229,7 +229,7 @@ export default function IncidentSeverityModels() {
         type: "bar",
         data: kmMedians.map((x) => x.median),
         barMaxWidth: 60,
-        itemStyle: { color: "#4f46e5", borderRadius: [4, 4, 0, 0] },
+        itemStyle: { color: "#b8760a", borderRadius: [4, 4, 0, 0] },
         label: { show: true, position: "top", color: "#334155", fontSize: 11, fontWeight: 600, formatter: (p: unknown) => `${(p as { value: number }).value}m` },
       },
     ],
@@ -379,7 +379,7 @@ export default function IncidentSeverityModels() {
               onClick={() => setView(v)}
               style={{
                 padding: "4px 12px", borderRadius: "999px", border: "none", cursor: "pointer",
-                background: view === v ? "#4f46e5" : "transparent",
+                background: view === v ? "var(--page-accent, #4f46e5)" : "transparent",
                 color: view === v ? "#fff" : "#4b5e7d",
                 fontWeight: 600, fontSize: "0.72rem", whiteSpace: "nowrap",
               }}
@@ -403,8 +403,8 @@ export default function IncidentSeverityModels() {
         )}
       </p>
       {view !== "both" && fastest && slowest && fastest.group !== slowest.group && (
-        <div style={{ padding: "10px 14px", borderRadius: "10px", background: "#eef2ff", border: "1px solid #c7d2fe" }}>
-          <p style={{ margin: 0, fontSize: "0.85rem", color: "#312e81" }}>
+        <div style={{ padding: "10px 14px", borderRadius: "10px", background: "color-mix(in srgb, var(--page-accent, #4f46e5) 9%, transparent)", border: "1px solid color-mix(in srgb, var(--page-accent, #4f46e5) 28%, transparent)" }}>
+          <p style={{ margin: 0, fontSize: "0.85rem", color: "color-mix(in srgb, var(--page-accent, #4f46e5) 72%, #0b1020)" }}>
             <strong>{fastest.group}</strong> incidents clear fastest — a median of <strong>{fastest.median} min</strong>{" "}
             to response — versus <strong>{slowest.group}</strong> at <strong>{slowest.median} min</strong> (
             {slowest.median - fastest.median} min slower).{" "}
@@ -424,8 +424,8 @@ export default function IncidentSeverityModels() {
         </div>
       )}
       {view === "both" && oppositeTrends && (
-        <div style={{ padding: "10px 14px", borderRadius: "10px", background: "#eef2ff", border: "1px solid #c7d2fe" }}>
-          <p style={{ margin: 0, fontSize: "0.85rem", color: "#312e81" }}>
+        <div style={{ padding: "10px 14px", borderRadius: "10px", background: "color-mix(in srgb, var(--page-accent, #4f46e5) 9%, transparent)", border: "1px solid color-mix(in srgb, var(--page-accent, #4f46e5) 28%, transparent)" }}>
+          <p style={{ margin: 0, fontSize: "0.85rem", color: "color-mix(in srgb, var(--page-accent, #4f46e5) 72%, #0b1020)" }}>
             Severity pulls clearance time in <strong>opposite directions</strong> depending on source: within{" "}
             <strong>Road Crashes</strong>, a Fatal incident takes {medianOf("Road Crash — Fatal")}min versus{" "}
             {medianOf("Road Crash — Property Damage Only")}min for Property Damage Only —{" "}
@@ -439,8 +439,8 @@ export default function IncidentSeverityModels() {
         </div>
       )}
       {view === "km" && kmFirst && kmLast && (
-        <div style={{ padding: "10px 14px", borderRadius: "10px", background: "#eef2ff", border: "1px solid #c7d2fe" }}>
-          <p style={{ margin: 0, fontSize: "0.85rem", color: "#312e81" }}>
+        <div style={{ padding: "10px 14px", borderRadius: "10px", background: "color-mix(in srgb, var(--page-accent, #4f46e5) 9%, transparent)", border: "1px solid color-mix(in srgb, var(--page-accent, #4f46e5) 28%, transparent)" }}>
+          <p style={{ margin: 0, fontSize: "0.85rem", color: "color-mix(in srgb, var(--page-accent, #4f46e5) 72%, #0b1020)" }}>
             {kmMonotonicIncreasing || kmMonotonicDecreasing ? (
               <>
                 Clearance time moves <strong>steadily {kmMonotonicIncreasing ? "up" : "down"}</strong> along the

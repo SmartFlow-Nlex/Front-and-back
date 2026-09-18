@@ -450,6 +450,7 @@ export default function AiSandboxPage() {
           <canvas
             ref={canvasRef}
             className={`sandbox-canvas ${placingIncident ? "placing" : ""}`}
+            style={{ "--sandbox-lanes": laneCount } as React.CSSProperties}
             onClick={placeIncidentAt}
           />
 

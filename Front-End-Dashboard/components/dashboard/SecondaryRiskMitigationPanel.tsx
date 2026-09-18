@@ -205,7 +205,7 @@ export default function SecondaryRiskMitigationPanel() {
               disabled={v === "km" && data.secondaryRiskByKmSegment.length === 0}
               style={{
                 padding: "4px 12px", borderRadius: "999px", border: "none", cursor: "pointer",
-                background: view === v ? "#4f46e5" : "transparent",
+                background: view === v ? "var(--page-accent, #4f46e5)" : "transparent",
                 color: view === v ? "#fff" : "#4b5e7d",
                 fontWeight: 600, fontSize: "0.72rem", whiteSpace: "nowrap",
               }}
@@ -278,7 +278,7 @@ export default function SecondaryRiskMitigationPanel() {
                   <td style={{ padding: "4px 0", textAlign: "right", color: "#dc2626", fontWeight: 700 }}>{(r.risk * 100).toFixed(2)}%</td>
                   <td style={{ padding: "4px 0", textAlign: "right", color: "#334155" }}>{r.clearanceMin.toFixed(1)} min</td>
                   <td style={{ padding: "4px 0", textAlign: "right", color: "#94a3b8" }}>{fmtInt(r.n)}</td>
-                  <td style={{ padding: "4px 0", textAlign: "right", color: "#4f46e5", fontWeight: 600, fontSize: "0.72rem" }}>
+                  <td style={{ padding: "4px 0", textAlign: "right", color: "var(--page-accent, #4f46e5)", fontWeight: 600, fontSize: "0.72rem" }}>
                     {interventionFor(r, medianRisk, medianClearance)}
                   </td>
                 </tr>

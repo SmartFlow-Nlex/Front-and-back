@@ -154,7 +154,7 @@ export default function EventBreakdownPanel() {
                 onClick={() => setResponseView(v)}
                 style={{
                   padding: "4px 12px", borderRadius: "999px", border: "none", cursor: "pointer",
-                  background: responseView === v ? "#4f46e5" : "transparent",
+                  background: responseView === v ? "var(--page-accent, #4f46e5)" : "transparent",
                   color: responseView === v ? "#fff" : "#4b5e7d",
                   fontWeight: 600, fontSize: "0.72rem",
                 }}

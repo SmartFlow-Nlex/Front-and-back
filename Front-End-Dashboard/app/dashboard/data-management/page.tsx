@@ -1,7 +1,7 @@
 "use client";
 
 import { ChangeEvent, useState } from "react";
-import { Brain, UploadCloud } from "lucide-react";
+import { Brain, CheckCircle2, Database, ScanSearch, UploadCloud } from "lucide-react";
 import PageHeader from "../../../components/dashboard/PageHeader";
 
 type PipelineGateLog = {
@@ -111,8 +111,28 @@ export default function DataManagementPage() {
           />
         </label>
         <small>{fileName || "No file selected yet"}</small>
-        {loading && <small style={{ color: "#3b82f6", display: "block", marginTop: "10px" }}>Running ETL Pipeline... this may take a moment for large files.</small>}
+        {loading && <small style={{ color: "var(--page-accent, #3b82f6)", display: "block", marginTop: "10px" }}>Running ETL Pipeline... this may take a moment for large files.</small>}
       </article>
+
+      {!result && !error && (
+        <ol className="ds-steps" aria-label="What happens after you upload">
+          <li>
+            <span className="ds-step-icon"><ScanSearch size={18} aria-hidden="true" /></span>
+            <b>Classify</b>
+            <span>The file is matched against the known dataset shapes and reported with a confidence score. An unrecognised file is rejected here rather than half-loaded.</span>
+          </li>
+          <li>
+            <span className="ds-step-icon"><CheckCircle2 size={18} aria-hidden="true" /></span>
+            <b>Validate</b>
+            <span>Each quality gate runs in turn and every one is listed with its result, so a rejection names the gate that stopped it.</span>
+          </li>
+          <li>
+            <span className="ds-step-icon"><Database size={18} aria-hidden="true" /></span>
+            <b>Load</b>
+            <span>Rows that clear every gate are written to the warehouse, and the counts accepted and skipped are shown back to you.</span>
+          </li>
+        </ol>
+      )}
 
       {error && (
         <section className="panel" style={{ marginTop: 16 }}>

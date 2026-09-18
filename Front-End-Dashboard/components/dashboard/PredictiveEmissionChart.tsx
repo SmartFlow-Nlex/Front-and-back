@@ -533,9 +533,9 @@ export default function PredictiveEmissionChart() {
             }}
             style={{
               padding: "6px 16px", borderRadius: 999, cursor: "pointer",
-              border: "1px solid transparent", background: "linear-gradient(135deg, #6366f1, #4f46e5)",
+              border: "1px solid transparent", background: "linear-gradient(135deg, color-mix(in srgb, var(--page-accent, #4f46e5) 82%, white), var(--page-accent, #4f46e5))",
               color: "#fff", fontSize: "0.78rem", fontWeight: 600,
-              boxShadow: "0 1px 6px rgba(79,70,229,0.35)",
+              boxShadow: "0 1px 6px color-mix(in srgb, var(--page-accent, #4f46e5) 35%, transparent)",
             }}
           >
             Try again
@@ -820,7 +820,7 @@ export default function PredictiveEmissionChart() {
 
           {/* GRANULARITY control pill */}
           <span style={{ display: "inline-flex", alignItems: "center", gap: "8px" }}>
-            <b style={{ color: "#3b82f6", letterSpacing: "0.04em", fontSize: "0.75rem", textTransform: "uppercase" }}>
+            <b style={{ color: "var(--page-accent, #3b82f6)", letterSpacing: "0.04em", fontSize: "0.75rem", textTransform: "uppercase" }}>
               GRANULARITY
             </b>
             <div
@@ -857,7 +857,7 @@ export default function PredictiveEmissionChart() {
                   style={{
                     padding: "3px 10px", borderRadius: "999px", cursor: "pointer", border: "none",
                     background: "transparent",
-                    color: granularity === g ? "#3876f5" : "var(--text-secondary)",
+                    color: granularity === g ? "var(--page-accent, #3876f5)" : "var(--text-secondary)",
                     fontWeight: granularity === g ? 700 : 600, fontSize: "0.72rem",
                   }}
                 >
@@ -871,7 +871,7 @@ export default function PredictiveEmissionChart() {
               history, so without this it is a sliver at the right edge no
               matter which granularity is chosen. */}
           <span style={{ display: "inline-flex", alignItems: "center", gap: "8px" }}>
-            <b style={{ color: "#3b82f6", letterSpacing: "0.04em", fontSize: "0.75rem", textTransform: "uppercase" }}>
+            <b style={{ color: "var(--page-accent, #3b82f6)", letterSpacing: "0.04em", fontSize: "0.75rem", textTransform: "uppercase" }}>
               HISTORY
             </b>
             <div
@@ -892,7 +892,7 @@ export default function PredictiveEmissionChart() {
                   style={{
                     padding: "3px 10px", borderRadius: "999px", cursor: "pointer", border: "none",
                     background: "transparent",
-                    color: pastDays === wd.days ? "#3876f5" : "var(--text-secondary)",
+                    color: pastDays === wd.days ? "var(--page-accent, #3876f5)" : "var(--text-secondary)",
                     fontWeight: pastDays === wd.days ? 700 : 600, fontSize: "0.72rem",
                   }}
                 >

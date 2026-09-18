@@ -253,9 +253,9 @@ export default function IncidentNarrative({
   return (
     <section
       style={{
-        border: "1px solid color-mix(in srgb, #4f46e5 28%, transparent)",
+        border: "1px solid color-mix(in srgb, var(--page-accent, #4f46e5) 28%, transparent)",
         borderRadius: 12,
-        background: "linear-gradient(135deg, color-mix(in srgb, #6366f1 11%, var(--bg-surface)), color-mix(in srgb, #4f46e5 4%, var(--bg-surface)))",
+        background: "linear-gradient(135deg, color-mix(in srgb, var(--page-accent, #4f46e5) 11%, var(--bg-surface)), color-mix(in srgb, var(--page-accent, #4f46e5) 4%, var(--bg-surface)))",
         boxShadow: "inset 0 1px 0 rgba(255,255,255,0.5)",
         padding: open ? "18px 20px" : "12px 18px",
         display: "flex",
@@ -266,7 +266,7 @@ export default function IncidentNarrative({
       <div style={{ display: "flex", alignItems: "center", gap: 16, flexWrap: "wrap" }}>
         <div style={{ minWidth: 190, display: "flex", alignItems: "center", gap: 10 }}>
           <span style={{ display: "grid", placeItems: "center", width: 30, height: 30, borderRadius: 9, flex: "none",
-            background: "linear-gradient(135deg, #6366f1, #4f46e5)", color: "#fff", boxShadow: "0 1px 6px rgba(79,70,229,0.35)" }}>
+            background: "linear-gradient(135deg, color-mix(in srgb, var(--page-accent, #4f46e5) 82%, white), var(--page-accent, #4f46e5))", color: "#fff", boxShadow: "0 1px 6px color-mix(in srgb, var(--page-accent, #4f46e5) 35%, transparent)" }}>
             <Sparkles size={15} strokeWidth={2.4} />
           </span>
           <div>
@@ -326,9 +326,9 @@ export default function IncidentNarrative({
             marginLeft: open ? "auto" : 0, flexShrink: 0,
             borderRadius: 999, cursor: "pointer", fontSize: "0.76rem", fontWeight: 600,
             border: open ? "1px solid #cbd5e1" : "1px solid transparent",
-            background: open ? "#fff" : "linear-gradient(135deg, #6366f1, #4f46e5)",
+            background: open ? "#fff" : "linear-gradient(135deg, color-mix(in srgb, var(--page-accent, #4f46e5) 82%, white), var(--page-accent, #4f46e5))",
             color: open ? "#475569" : "#fff",
-            boxShadow: open ? "none" : "0 1px 6px rgba(79,70,229,0.35)",
+            boxShadow: open ? "none" : "0 1px 6px color-mix(in srgb, var(--page-accent, #4f46e5) 35%, transparent)",
           }}
         >
           {open ? "Hide report" : "Generate report"}

@@ -191,13 +191,18 @@ function HourlyIncidentContent() {
   if (!validDate) {
     return (
       <section className={styles.page}>
-        <PageHeader icon={AlertTriangle} title="Hourly Breakdown" subtitle="No day selected" actions={backLink} />
+        <PageHeader accent="incident" icon={AlertTriangle} title="Hourly Breakdown" subtitle="No day selected" actions={backLink} />
         <div className={styles.spanFull}>
           <article className={styles.chartCard}>
-            <div className={styles.placeholder}>
-              {date
-                ? `“${date}” is not a valid date — expected YYYY-MM-DD.`
-                : "Open this page by clicking a day on the incident forecast chart."}
+            <div className={`${styles.placeholder} ds-empty-state`}>
+              <AlertTriangle size={28} aria-hidden="true" />
+              <h4>{date ? "That date could not be read" : "Pick a day to break down"}</h4>
+              <p>
+                {date
+                  ? `“${date}” is not a valid date — this page expects YYYY-MM-DD.`
+                  : "This view drills into a single day of the incident forecast. Choose a day on the forecast chart and it will open here."}
+              </p>
+              {backLink}
             </div>
           </article>
         </div>
@@ -366,6 +371,7 @@ function HourlyIncidentContent() {
   return (
     <section className={styles.page}>
       <PageHeader
+        accent="incident"
         icon={AlertTriangle}
         title={`Hourly Breakdown — ${fmtShortDate(date)}`}
         subtitle={
@@ -618,7 +624,7 @@ export default function HourlyIncidentPage() {
     <Suspense
       fallback={
         <section className={styles.page}>
-          <PageHeader icon={AlertTriangle} title="Hourly Breakdown" />
+          <PageHeader accent="incident" icon={AlertTriangle} title="Hourly Breakdown" />
           <div className={styles.spanFull}>
             <article className={styles.chartCard}>
               <div className={styles.placeholder}>Loading…</div>

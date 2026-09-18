@@ -1361,7 +1361,7 @@
   width: 30px;
   height: 2.5px;
   border-radius: 2px;
-  background: linear-gradient(90deg, var(--brand-primary), transparent);
+  background: linear-gradient(90deg, var(--page-accent, var(--brand-primary)), transparent);
 }
 
 @media (prefers-reduced-motion: reduce) {

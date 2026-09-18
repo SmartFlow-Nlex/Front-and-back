@@ -54,6 +54,12 @@ function survivalAt(pts: SurvivalCurvePoint[], group: string, atMin: number): nu
 }
 
 const CHECKPOINTS = [30, 60, 90];
+// Scenario A vs Scenario B is a categorical pair, not page chrome, so it
+// keeps indigo-vs-red rather than following --page-accent like the rest of
+// this panel. Incident's accent is amber, and amber against B's red is a weak
+// pair for the ~8% of readers with a red-green deficiency; indigo against red
+// separates cleanly for all of them. The two lines also differ in style, but
+// the colour should not be the part doing the least work.
 const COLOR_A = "#4f46e5";
 const COLOR_B = "#dc2626";
 
@@ -196,8 +202,8 @@ export default function ClearanceSimulatorPanel() {
       </div>
 
       {medianA != null && medianB != null && diff != null && (
-        <div style={{ padding: "10px 14px", borderRadius: "10px", background: "#eef2ff", border: "1px solid #c7d2fe" }}>
-          <p style={{ margin: 0, fontSize: "0.85rem", color: "#312e81" }}>
+        <div style={{ padding: "10px 14px", borderRadius: "10px", background: "color-mix(in srgb, var(--page-accent, #4f46e5) 9%, transparent)", border: "1px solid color-mix(in srgb, var(--page-accent, #4f46e5) 28%, transparent)" }}>
+          <p style={{ margin: 0, fontSize: "0.85rem", color: "color-mix(in srgb, var(--page-accent, #4f46e5) 72%, #0b1020)" }}>
             <strong>{a}</strong> clears in a median of <strong>{medianA} min</strong> (n={fmtInt(nA)}) vs{" "}
             <strong>{b}</strong> at <strong>{medianB} min</strong> (n={fmtInt(nB)}) — a difference of{" "}
             <strong>{Math.abs(diff)} min</strong> ({diff >= 0 ? "B slower" : "A slower"}).

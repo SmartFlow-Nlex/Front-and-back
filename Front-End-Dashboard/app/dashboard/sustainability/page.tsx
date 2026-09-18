@@ -73,7 +73,14 @@ function weekStart(dateStr: string): string {
   return dt.toISOString().slice(0, 10);
 }
 
-// ---------- Prescriptive mock (unchanged tab) ----------
+// ---------- Prescriptive: PLACEHOLDER, not a model output ----------
+// These three bars are literals. "Strategy X/Y/Z" are not interventions that
+// exist anywhere in the warehouse, and 8/14/22 are not computed from anything.
+// The card says so on its face (see the Illustrative chip and the tooltip
+// below) because the tooltip here used to claim the figures were "derived from
+// the fleet mix and volume in the Range", which was not true of a hardcoded
+// array -- and this tab sits one click away from real, validated forecasts.
+// Replace with a real series before this is presented as analysis.
 const prescriptiveEmissionReduction: EChartsOption = {
   grid: { left: 46, right: 20, top: 20, bottom: 36 },
   xAxis: { type: "category", data: ["Strategy X", "Strategy Y", "Strategy Z"] },
@@ -706,7 +713,11 @@ export default function SustainabilityPage() {
           <article className={`${styles.chartCard} ${styles.chart1}`}>
             <div className={styles.chartHead}>
               <div className={styles.headText}>
-                <h3>Projected % Emission Reduction by Strategy<InfoTooltip text="Estimated CO₂ reduction each intervention would deliver, derived from the fleet mix and volume in the Range." /></h3>
+                <h3>Projected % Emission Reduction by Strategy<InfoTooltip text="Illustrative only. The three bars are fixed example values held in the page source — they are not computed from the fleet mix, the volume in the Range, or any warehouse table." /></h3>
+                <p>
+                  <span className="ds-placeholder-chip">Illustrative</span>
+                  Fixed example values, not a model output — unlike every other card in Emissions, nothing here reads from the warehouse.
+                </p>
               </div>
             </div>
             <div className={styles.chartBody}>

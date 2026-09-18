@@ -213,7 +213,7 @@ export default function PrescriptiveDeploymentPanel({ months = "12", from, to }:
         <span>{label}</span>
         <span style={{ fontWeight: 700, color: "#334155" }}>{value}{suffix}</span>
       </div>
-      <input type="range" min={min} max={max} step={step} value={value} onChange={(e) => onChange(Number(e.target.value))} style={{ width: "100%", accentColor: "#4f46e5" }} />
+      <input type="range" min={min} max={max} step={step} value={value} onChange={(e) => onChange(Number(e.target.value))} style={{ width: "100%", accentColor: "var(--page-accent, #4f46e5)" }} />
     </div>
   );
 
@@ -241,7 +241,7 @@ export default function PrescriptiveDeploymentPanel({ months = "12", from, to }:
                 disabled={v === "km" && (predictive.kmSegmentForecast == null || predictive.kmSegmentForecast.length === 0)}
                 style={{
                   padding: "4px 12px", borderRadius: "999px", border: "none", cursor: "pointer",
-                  background: view === v ? "#4f46e5" : "transparent",
+                  background: view === v ? "var(--page-accent, #4f46e5)" : "transparent",
                   color: view === v ? "#fff" : "#4b5e7d",
                   fontWeight: 600, fontSize: "0.72rem", whiteSpace: "nowrap",
                 }}
@@ -257,8 +257,8 @@ export default function PrescriptiveDeploymentPanel({ months = "12", from, to }:
         </div>
       </div>
 
-      <div style={{ padding: "10px 14px", borderRadius: "10px", background: "#eef2ff", border: "1px solid #c7d2fe" }}>
-        <p style={{ margin: 0, fontSize: "0.85rem", color: "#312e81" }}>
+      <div style={{ padding: "10px 14px", borderRadius: "10px", background: "color-mix(in srgb, var(--page-accent, #4f46e5) 9%, transparent)", border: "1px solid color-mix(in srgb, var(--page-accent, #4f46e5) 28%, transparent)" }}>
+        <p style={{ margin: 0, fontSize: "0.85rem", color: "color-mix(in srgb, var(--page-accent, #4f46e5) 72%, #0b1020)" }}>
           <strong>Recommended staging: {chosen.map((j) => rows[j].label).join(", ")}.</strong> Pre-position patrol
           and tow-truck units at these {staffedCount} {useKmView ? "segments" : "exits"} — a {radiusKm}km radius from
           each covers <strong>{(coverageShare * 100).toFixed(0)}%</strong> of the ranking&apos;s{" "}
@@ -274,20 +274,20 @@ export default function PrescriptiveDeploymentPanel({ months = "12", from, to }:
         <div>
           <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: "10px", flexWrap: "wrap", marginBottom: "6px" }}>
             <div>
-              <div style={{ fontSize: "0.68rem", fontWeight: 800, color: "#4f46e5", letterSpacing: "0.04em", textTransform: "uppercase" }}>
+              <div style={{ fontSize: "0.68rem", fontWeight: 800, color: "var(--page-accent, #4f46e5)", letterSpacing: "0.04em", textTransform: "uppercase" }}>
                 LP deployment map
               </div>
               <div style={{ fontSize: "0.75rem", color: "#64748b" }}>Corridor order (Km 0 first)</div>
             </div>
             <div style={{ display: "flex", alignItems: "center", gap: "14px", fontSize: "0.7rem", color: "#64748b", flexWrap: "wrap" }}>
               <span style={{ display: "inline-flex", alignItems: "center", gap: "4px" }}>
-                <span style={{ color: "#4f46e5" }}>●</span> staffed
+                <span style={{ color: "var(--page-accent, #4f46e5)" }}>●</span> staffed
               </span>
               <span style={{ display: "inline-flex", alignItems: "center", gap: "4px" }}>
                 <span style={{ color: "#cbd5e1" }}>○</span> not staffed
               </span>
               <span style={{ display: "inline-flex", alignItems: "center", gap: "4px" }}>
-                <span style={{ width: 10, height: 10, borderRadius: "999px", background: "linear-gradient(90deg, #818cf8, #3730a3)", display: "inline-block" }} />
+                <span style={{ width: 10, height: 10, borderRadius: "999px", background: "linear-gradient(90deg, color-mix(in srgb, var(--page-accent, #4f46e5) 50%, white), var(--page-accent, #4f46e5))", display: "inline-block" }} />
                 darker = higher incidents/km
               </span>
               <span style={{ color: "#94a3b8" }}>· Hover a row for details</span>
@@ -309,9 +309,9 @@ export default function PrescriptiveDeploymentPanel({ months = "12", from, to }:
                     background: staffed ? "rgba(79,70,229,0.08)" : hoveredKey === r.key ? "rgba(79,70,229,0.05)" : "transparent",
                   }}
                 >
-                  <span style={{ fontSize: "0.72rem", color: staffed ? "#4f46e5" : "#cbd5e1" }}>{staffed ? "●" : "○"}</span>
+                  <span style={{ fontSize: "0.72rem", color: staffed ? "var(--page-accent, #4f46e5)" : "#cbd5e1" }}>{staffed ? "●" : "○"}</span>
                   <span
-                    style={{ fontSize: "0.78rem", fontWeight: staffed ? 700 : 500, color: staffed ? "#312e81" : "#334155", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
+                    style={{ fontSize: "0.78rem", fontWeight: staffed ? 700 : 500, color: staffed ? "color-mix(in srgb, var(--page-accent, #4f46e5) 72%, #0b1020)" : "#334155", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
                     title={useKmView ? r.label : `${r.label} (Km ${r.km})`}
                   >
                     {r.label}
@@ -363,7 +363,7 @@ export default function PrescriptiveDeploymentPanel({ months = "12", from, to }:
               <span>{useKmView ? "Segment" : "Exit"}</span>
               <span>Predicted incidents</span>
             </div>
-            <div style={{ display: "flex", flexDirection: "column", gap: "4px", maxHeight: "220px", overflowY: "auto" }}>
+            <div className="ds-scroll-fade" style={{ display: "flex", flexDirection: "column", gap: "4px", maxHeight: "220px", overflowY: "auto" }}>
               {alertRows.map((r) => (
                 <div key={r.key} style={{ display: "flex", justifyContent: "space-between", fontSize: "0.78rem", padding: "3px 0", borderTop: "1px solid #f1f5f9" }}>
                   <span style={{ color: "#334155" }}>{r.label}</span>

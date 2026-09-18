@@ -532,10 +532,10 @@ export default function PredictiveIncidentChart({
         bottom: 30,
         height: 16,
         borderColor: "transparent",
-        backgroundColor: "#eef2ff",
-        fillerColor: "rgba(79,70,229,0.25)",
-        handleStyle: { color: "#4f46e5", borderColor: "#4f46e5" },
-        moveHandleStyle: { color: "#4f46e5" },
+        backgroundColor: "#fbf3e3",
+        fillerColor: "rgba(184,118,10,0.25)",
+        handleStyle: { color: "#b8760a", borderColor: "#b8760a" },
+        moveHandleStyle: { color: "#b8760a" },
         textStyle: { color: "#64748b", fontSize: 10 },
         showDetail: false,
       },
@@ -1013,7 +1013,7 @@ export default function PredictiveIncidentChart({
         <div style={{
           display: "inline-flex", alignItems: "center", gap: "6px", alignSelf: "flex-start",
           padding: "5px 12px", borderRadius: "999px",
-          background: "linear-gradient(135deg, #4f46e5, #4338ca)", color: "#fff",
+          background: "linear-gradient(135deg, var(--page-accent, #4f46e5), color-mix(in srgb, var(--page-accent, #4f46e5) 88%, #0b1020))", color: "#fff",
           fontSize: "0.74rem", fontWeight: 600,
         }}>
           <svg width="13" height="13" viewBox="0 0 24 24" fill="none">
@@ -1034,7 +1034,7 @@ export default function PredictiveIncidentChart({
           display: "inline-flex", alignItems: "center", gap: "8px", padding: "10px 14px",
           borderRadius: "10px", background: "#f8fafc", border: "1px solid #e2e8f0", fontSize: "0.76rem",
         }}>
-          <b style={{ color: "#3b82f6", letterSpacing: "0.04em", fontSize: "0.75rem", textTransform: "uppercase" }}>
+          <b style={{ color: "var(--page-accent, #3b82f6)", letterSpacing: "0.04em", fontSize: "0.75rem", textTransform: "uppercase" }}>
             GRANULARITY
           </b>
           <div style={{

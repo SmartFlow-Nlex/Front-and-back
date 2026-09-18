@@ -5,20 +5,28 @@ import InfoTooltip from "./InfoTooltip";
 import type { CorridorForecastPoint, KmSegmentForecastPoint } from "./incidentPredictive.shared";
 import { fmtInt } from "./incidentPredictive.shared";
 
-// Sequential ramp (indigo, light -> dark) for a magnitude job: each bar's
+// Sequential ramp (amber, light -> dark) for a magnitude job: each bar's
 // shade tracks its own rank so the highest-risk exits read heavier at a
 // glance, without a legend — the axis labels already name every category, and
 // a single-series bar chart needs no legend box (see the dataviz skill: a
 // legend is for telling series apart, and there is only one here).
-// indigo-400 rather than a paler step: validated against the card surface
-// (scripts/validate_palette.js in the dataviz skill), the paler indigo-200
-// this started as fell to a 1.45:1 contrast ratio — nearly invisible as a bar
-// shape, label or not. indigo-400 still WARNs at 2.91:1, which the skill
-// treats as acceptable only with visible labels (shipped below) or a table
-// view; a flat floor here (see shadeFor) keeps every bar, even the smallest,
-// at least this dark rather than fading toward the surface.
-const RAMP_LIGHT = { r: 129, g: 140, b: 248 }; // indigo-400
-const RAMP_DARK = { r: 55, g: 48, b: 163 }; // indigo-800
+//
+// Amber because this ramp is Incident's, and only Incident's: its three
+// consumers (the corridor ranking, SecondaryIncidentRiskPanel and
+// PrescriptiveDeploymentPanel) all render on /dashboard/incident. It used to
+// be indigo, which made every bar on the page the same colour as every other
+// domain's — the page identity (Traffic blue / Incident amber / Emissions
+// green) stopped at the tab strip and never reached the data.
+//
+// amber-600 rather than a paler step, for the reason the indigo version had a
+// floor: validated against the card surface, the light end has to stay dark
+// enough to read as a bar at all. amber-600 lands at 3.19:1 on white — better
+// than the indigo-400 it replaces, which sat at 2.91:1 and was accepted only
+// because the bars carry visible labels (they still do). The flat floor in
+// shadeFor keeps even the smallest bar at least this dark rather than fading
+// toward the surface.
+const RAMP_LIGHT = { r: 217, g: 119, b: 6 }; // amber-600
+const RAMP_DARK = { r: 120, g: 53, b: 15 }; // amber-900
 
 // Exported so SecondaryIncidentRiskPanel's per-exit ranked bars can shade
 // themselves the same way, rather than a second hand-tuned ramp that could
@@ -222,8 +230,8 @@ export default function PredictiveCorridorChart({
         <span
           style={{
             justifySelf: "end", padding: isTop ? "4px 12px" : "2px 9px", borderRadius: "8px",
-            background: "#fff", border: `1.5px solid ${isTop ? "#c7d2fe" : "#e2e8f0"}`,
-            fontSize: isTop ? "0.85rem" : "0.74rem", fontWeight: isTop ? 800 : 700, color: "#1e1b4b",
+            background: "#fff", border: `1.5px solid ${isTop ? "color-mix(in srgb, var(--page-accent, #4f46e5) 34%, transparent)" : "#e2e8f0"}`,
+            fontSize: isTop ? "0.85rem" : "0.74rem", fontWeight: isTop ? 800 : 700, color: "color-mix(in srgb, var(--page-accent, #4f46e5) 62%, #0b1020)",
           }}
         >
           {fmtInt(row.predictedIncidents)}
@@ -240,11 +248,11 @@ export default function PredictiveCorridorChart({
         display: "inline-flex", alignItems: "center", gap: "4px", padding: "2px 9px",
         borderRadius: "999px", fontSize: "0.7rem", fontWeight: 600,
         background: on ? "rgba(79,70,229,0.1)" : "var(--bg-surface-hover, #f1f5f9)",
-        color: on ? "#4338ca" : "#94a3b8",
+        color: on ? "color-mix(in srgb, var(--page-accent, #4f46e5) 88%, #0b1020)" : "#94a3b8",
         border: `1px solid ${on ? "rgba(79,70,229,0.25)" : "#e2e8f0"}`,
       }}
     >
-      <span style={{ width: 6, height: 6, borderRadius: "50%", background: on ? "#4f46e5" : "#cbd5e1" }} />
+      <span style={{ width: 6, height: 6, borderRadius: "50%", background: on ? "var(--page-accent, #4f46e5)" : "#cbd5e1" }} />
       {label}: {on ? "ON" : "OFF"}
     </span>
   );
@@ -269,7 +277,7 @@ export default function PredictiveCorridorChart({
                 title={v === "km" ? "Grouped by fixed 5km corridor segments instead of nearest exit — shows the long inter-exit stretches an exit-only view snaps entirely to whichever endpoint is closest" : "Grouped by exit — the specific interchange to dispatch resources to"}
                 style={{
                   padding: "4px 12px", borderRadius: "999px", border: "none", cursor: "pointer",
-                  background: view === v ? "#4f46e5" : "transparent",
+                  background: view === v ? "var(--page-accent, #4f46e5)" : "transparent",
                   color: view === v ? "#fff" : "#4b5e7d",
                   fontWeight: 600, fontSize: "0.72rem", whiteSpace: "nowrap",
                   opacity: v === "km" && (kmSegmentForecast == null || kmSegmentForecast.length === 0) ? 0.4 : 1,
@@ -310,8 +318,8 @@ export default function PredictiveCorridorChart({
         </p>
       )}
       {topRow && (
-        <div style={{ padding: "10px 14px", borderRadius: "10px", background: "#eef2ff", border: "1px solid #c7d2fe" }}>
-          <p style={{ margin: 0, fontSize: "0.85rem", color: "#312e81" }}>
+        <div style={{ padding: "10px 14px", borderRadius: "10px", background: "color-mix(in srgb, var(--page-accent, #4f46e5) 9%, transparent)", border: "1px solid color-mix(in srgb, var(--page-accent, #4f46e5) 28%, transparent)" }}>
+          <p style={{ margin: 0, fontSize: "0.85rem", color: "color-mix(in srgb, var(--page-accent, #4f46e5) 72%, #0b1020)" }}>
             {useKmView ? (
               <>The <strong>{topRow.label}</strong> stretch</>
             ) : (
@@ -335,7 +343,7 @@ export default function PredictiveCorridorChart({
       <div style={{ width: "100%" }}>
         <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: "10px", flexWrap: "wrap", marginBottom: "6px" }}>
           <div>
-            <div style={{ fontSize: "0.68rem", fontWeight: 800, color: "#4f46e5", letterSpacing: "0.04em", textTransform: "uppercase" }}>
+            <div style={{ fontSize: "0.68rem", fontWeight: 800, color: "var(--page-accent, #4f46e5)", letterSpacing: "0.04em", textTransform: "uppercase" }}>
               {useKmView ? "Segment" : "Exit"} forecast ranking
             </div>
             <div style={{ fontSize: "0.75rem", color: "#64748b" }}>
@@ -344,7 +352,7 @@ export default function PredictiveCorridorChart({
           </div>
           <div style={{ display: "flex", alignItems: "center", gap: "12px", fontSize: "0.7rem", color: "#94a3b8" }}>
             <span style={{ display: "inline-flex", alignItems: "center", gap: "4px" }}>
-              <span style={{ width: 10, height: 10, borderRadius: "999px", background: "linear-gradient(90deg, #818cf8, #3730a3)", display: "inline-block" }} />
+              <span style={{ width: 10, height: 10, borderRadius: "999px", background: "linear-gradient(90deg, color-mix(in srgb, var(--page-accent, #4f46e5) 50%, white), var(--page-accent, #4f46e5))", display: "inline-block" }} />
               darker = more predicted
             </span>
             <span>Hover a row to inspect its numbers</span>

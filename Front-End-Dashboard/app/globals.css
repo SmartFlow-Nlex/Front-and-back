@@ -6251,3 +6251,185 @@ details[open] > .evidence-summary .evidence-close-label { display: inline; }
     transform: none;
   }
 }
+
+/* ---------------------------------------------------------------------------
+   Live corridor status, laid over the hero banner.
+
+   The home page opened on a static picture. It is a good picture, but it says
+   the same thing at 3 AM on an empty Sunday as it does mid-rush with four exits
+   crawling, so the first screen of a live traffic system carried no live
+   traffic. The strip sits in the banner's empty top-left corner - the artwork's
+   subject is centre and right in both cuts - and leaves the scroll pill at
+   bottom-centre alone.
+
+   Glass rather than a solid card: the banner should still read as the banner.
+   --------------------------------------------------------------------------- */
+.ds-hero-live {
+  position: absolute;
+  /* Top-right. Three placements were tried against the artwork: top-left
+     clipped "TRAFFIC IN" off the front of the kicker line, and bottom-left
+     covered the tail of the logo mark. The top-right corner carries only the
+     faint skyline fill in both cuts, so nothing of the brand is hidden, and
+     the scroll pill still owns the bottom centre. */
+  top: 16px;
+  right: 16px;
+  z-index: 3;
+  max-width: min(360px, calc(100% - 32px));
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 13px 16px 14px;
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.78);
+  border: 1px solid rgba(9, 30, 66, 0.1);
+  box-shadow: 0 10px 30px rgba(9, 30, 66, 0.16);
+  backdrop-filter: blur(12px) saturate(1.2);
+  -webkit-backdrop-filter: blur(12px) saturate(1.2);
+  animation: ds-hero-live-in 620ms cubic-bezier(0.22, 0.61, 0.36, 1) both 160ms;
+}
+
+@keyframes ds-hero-live-in {
+  from { opacity: 0; transform: translateY(-10px) scale(0.985); }
+  to   { opacity: 1; transform: none; }
+}
+
+.ds-hero-live-main {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  justify-content: flex-end;
+  text-align: right;
+}
+
+.ds-hero-live-kicker {
+  font-size: 0.66rem;
+  font-weight: 800;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: #5a6a86;
+}
+
+.ds-hero-live-headline {
+  font-size: 1.12rem;
+  font-weight: 800;
+  letter-spacing: -0.015em;
+  line-height: 1.15;
+  color: #b3261e;
+}
+
+/* Nothing wrong is worth a red headline. */
+.ds-hero-live-headline.is-calm { color: #10693c; }
+
+/* The pulse is the only thing on the page that says "this is now". It is a
+   ring expanding out of the dot rather than the dot itself throbbing, so the
+   value beside it never moves. */
+.ds-live-dot {
+  position: relative;
+  flex: none;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: #17a34a;
+  box-shadow: 0 0 0 3px rgba(23, 163, 74, 0.18);
+}
+
+.ds-live-dot::after {
+  content: "";
+  position: absolute;
+  inset: -3px;
+  border-radius: 50%;
+  border: 2px solid rgba(23, 163, 74, 0.55);
+  animation: ds-live-pulse 2s ease-out infinite;
+}
+
+.ds-live-dot.is-stale { background: #b45309; box-shadow: 0 0 0 3px rgba(180, 83, 9, 0.18); }
+.ds-live-dot.is-stale::after { border-color: rgba(180, 83, 9, 0.5); }
+
+@keyframes ds-live-pulse {
+  0%   { transform: scale(0.85); opacity: 0.9; }
+  70%  { transform: scale(2.1);  opacity: 0; }
+  100% { transform: scale(2.1);  opacity: 0; }
+}
+
+.ds-hero-live-stats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  justify-content: flex-end;
+}
+
+.ds-hero-stat {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 9px;
+  border-radius: 999px;
+  font-size: 0.72rem;
+  font-weight: 600;
+  white-space: nowrap;
+  background: rgba(255, 255, 255, 0.72);
+  border: 1px solid rgba(9, 30, 66, 0.1);
+  color: #33415a;
+  /* Counts tick upward on arrival; tabular keeps the pill from resizing. */
+  font-variant-numeric: tabular-nums;
+}
+
+.ds-hero-stat b { font-weight: 800; }
+.ds-hero-stat.is-congested { color: #b3261e; border-color: rgba(179, 38, 30, 0.24); }
+.ds-hero-stat.is-slow      { color: #96591a; border-color: rgba(150, 89, 26, 0.24); }
+.ds-hero-stat.is-clear     { color: #10693c; border-color: rgba(16, 105, 60, 0.22); }
+.ds-hero-stat.is-worst     { color: #33415a; }
+
+/* Dark cut: the banner behind it is dark, so the glass inverts rather than
+   staying a bright card punched into the artwork. */
+.ds-hero-live-dark {
+  background: rgba(13, 19, 32, 0.66);
+  border-color: rgba(255, 255, 255, 0.14);
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.42);
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .ds-hero-live {
+    background: rgba(13, 19, 32, 0.66);
+    border-color: rgba(255, 255, 255, 0.14);
+    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.42);
+  }
+  :root:not([data-theme="light"]) .ds-hero-live-kicker { color: #9fb0cc; }
+  :root:not([data-theme="light"]) .ds-hero-live-headline { color: #ff8b82; }
+  :root:not([data-theme="light"]) .ds-hero-live-headline.is-calm { color: #5ddb96; }
+  :root:not([data-theme="light"]) .ds-hero-stat {
+    background: rgba(255, 255, 255, 0.07);
+    border-color: rgba(255, 255, 255, 0.14);
+    color: #d7e0ef;
+  }
+  :root:not([data-theme="light"]) .ds-hero-stat.is-congested { color: #ff8b82; }
+  :root:not([data-theme="light"]) .ds-hero-stat.is-slow      { color: #f0b464; }
+  :root:not([data-theme="light"]) .ds-hero-stat.is-clear     { color: #5ddb96; }
+}
+:root[data-theme="dark"] .ds-hero-live {
+  background: rgba(13, 19, 32, 0.66);
+  border-color: rgba(255, 255, 255, 0.14);
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.42);
+}
+:root[data-theme="dark"] .ds-hero-live-kicker { color: #9fb0cc; }
+:root[data-theme="dark"] .ds-hero-live-headline { color: #ff8b82; }
+:root[data-theme="dark"] .ds-hero-live-headline.is-calm { color: #5ddb96; }
+:root[data-theme="dark"] .ds-hero-stat {
+  background: rgba(255, 255, 255, 0.07);
+  border-color: rgba(255, 255, 255, 0.14);
+  color: #d7e0ef;
+}
+:root[data-theme="dark"] .ds-hero-stat.is-congested { color: #ff8b82; }
+:root[data-theme="dark"] .ds-hero-stat.is-slow      { color: #f0b464; }
+:root[data-theme="dark"] .ds-hero-stat.is-clear     { color: #5ddb96; }
+
+/* Narrow: the banner shrinks to 260px and the artwork has no empty corner
+   left, so the strip keeps only its headline. */
+@media (max-width: 860px) {
+  .ds-hero-live { max-width: calc(100% - 32px); padding: 10px 13px 11px; }
+  .ds-hero-live-stats { display: none; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ds-hero-live { animation: none; }
+  .ds-live-dot::after { animation: none; opacity: 0; }
+}

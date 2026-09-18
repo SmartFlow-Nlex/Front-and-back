@@ -1,6 +1,7 @@
 import Image from "next/image";
 import { ChevronDown, Home } from "lucide-react";
 import InteractiveRoadMap from "./components/InteractiveRoadMap";
+import HeroLiveStatus from "./components/HeroLiveStatus";
 import PageHeader from "../../components/dashboard/PageHeader";
 
 /**
@@ -42,6 +43,8 @@ export default function DashboardHomePage() {
           unoptimized
           priority
         />
+
+        <HeroLiveStatus />
 
         <a href="#nlex-roadmap" className="ds-scroll-down">
           <span>Live Corridor Status</span>

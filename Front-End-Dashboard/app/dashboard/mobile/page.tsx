@@ -17,6 +17,7 @@ import {
   LayoutDashboard,
   ListChecks,
   Map as MapIcon,
+  Megaphone,
   MessageSquarePlus,
   Radio,
   RotateCcw,
@@ -31,6 +32,7 @@ import {
   Users,
   Wifi,
   Wrench,
+  X,
 } from "lucide-react";
 import PageHeader from "../../../components/dashboard/PageHeader";
 
@@ -111,7 +113,7 @@ const TABS: { key: TabKey; label: string; icon: Icon; blurb: string; sections: S
     key: "alerts",
     label: "Alerts",
     icon: Bell,
-    blurb: "Notices, plus any advisory published below.",
+    blurb: "Notices, and any advisory you publish.",
     sections: [
       { key: "traffic", label: "Traffic alerts", icon: Siren, blurb: "Congestion, events and incidents." },
       { key: "maintenance", label: "Maintenance notices", icon: Wrench, blurb: "Scheduled roadworks and closures." },
@@ -182,6 +184,7 @@ export default function MobileControlPage() {
   const [flash, setFlash] = useState<string | null>(null);
   const [open, setOpen] = useState<TabKey | null>("dashboard");
   const [previewTab, setPreviewTab] = useState<TabKey>("dashboard");
+  const [advisoryOpen, setAdvisoryOpen] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -203,6 +206,18 @@ export default function MobileControlPage() {
   useEffect(() => {
     void load();
   }, [load]);
+
+  // Escape closes the advisory dialog. Bound on the document rather than the
+  // panel because focus may be inside the textarea, and a dialog that traps a
+  // reader with no keyboard way out is worse than no dialog.
+  useEffect(() => {
+    if (!advisoryOpen) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setAdvisoryOpen(false);
+    };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [advisoryOpen]);
 
   const dirty = useMemo(
     () =>
@@ -313,14 +328,42 @@ export default function MobileControlPage() {
 
       <div className="ds-mc-grid">
         <div className="ds-mc-col">
+          {/* The advisory is a broadcast, not a per-screen switch, so it does
+              not belong in the list of sections. It sits above as a one-line
+              readout of whether anything is live, and opens in a dialog — which
+              also keeps this page to a single screen with no scrolling. */}
+          <div className={`ds-mc-advisory-strip${draft.advisory.active ? " is-live" : ""}`}>
+            <span className="ds-mc-advisory-icon" aria-hidden="true">
+              <Megaphone size={16} />
+            </span>
+            <span className="ds-mc-advisory-text">
+              <b>Published advisory</b>
+              {draft.advisory.active && draft.advisory.message.trim().length > 0 ? (
+                <span className="is-live-text" title={draft.advisory.message}>
+                  <span className={`ds-mc-dot is-${draft.advisory.tone}`} aria-hidden="true" />
+                  Live · {draft.advisory.message}
+                </span>
+              ) : (
+                <span>Nothing published. Travellers see only the app&apos;s own notices.</span>
+              )}
+            </span>
+            <button
+              type="button"
+              className="btn-muted ds-mc-advisory-btn"
+              disabled={loading}
+              onClick={() => setAdvisoryOpen(true)}
+            >
+              {draft.advisory.active ? "Edit" : "Publish"}
+            </button>
+          </div>
+
           <article className="panel ds-mc-panel">
             <header className="ds-mc-panel-head">
               <div>
                 <h2>What travellers get</h2>
                 <p>
-                  Switch the parts of each screen on or off. A tab appears in the app whenever
-                  anything inside it is on, so emptying a tab is how you retire it —{" "}
-                  {shownCount} of {TABS.length} tabs currently visible.
+                  A tab appears whenever anything inside it is on, so emptying one retires it.{" "}
+                  <b>{shownCount} of {TABS.length}</b> tabs visible.
                 </p>
               </div>
             </header>
@@ -424,65 +467,6 @@ export default function MobileControlPage() {
             </ul>
           </article>
 
-          <article className="panel ds-mc-panel">
-            <header className="ds-mc-panel-head">
-              <div>
-                <h2>Published advisory</h2>
-                <p>
-                  One message, broadcast to the Alerts tab of every phone. It is pinned above the
-                  app&apos;s own notices and shows whichever category a traveller is looking at.
-                </p>
-              </div>
-              <label className="ds-switch">
-                <input
-                  type="checkbox"
-                  checked={draft.advisory.active}
-                  disabled={loading}
-                  onChange={(e) =>
-                    setDraft((d) => ({ ...d, advisory: { ...d.advisory, active: e.target.checked } }))
-                  }
-                />
-                <span className="ds-switch-track" aria-hidden="true">
-                  <span className="ds-switch-thumb" />
-                </span>
-                <span className="sr-only">Publish advisory</span>
-              </label>
-            </header>
-
-            <div className="ds-mc-tones" role="group" aria-label="Advisory tone">
-              {TONES.map((tone) => (
-                <button
-                  key={tone.key}
-                  type="button"
-                  className={`ds-mc-tone is-${tone.key}${draft.advisory.tone === tone.key ? " is-active" : ""}`}
-                  aria-pressed={draft.advisory.tone === tone.key}
-                  onClick={() =>
-                    setDraft((d) => ({ ...d, advisory: { ...d.advisory, tone: tone.key } }))
-                  }
-                >
-                  <b>{tone.label}</b>
-                  <span>{tone.hint}</span>
-                </button>
-              ))}
-            </div>
-
-            <label className="ds-mc-field">
-              <span>Message</span>
-              <textarea
-                rows={3}
-                maxLength={MAX_MESSAGE}
-                value={draft.advisory.message}
-                disabled={loading}
-                placeholder="e.g. Lane closure at Km 15.2 southbound until 06:00. Expect delays."
-                onChange={(e) =>
-                  setDraft((d) => ({ ...d, advisory: { ...d.advisory, message: e.target.value } }))
-                }
-              />
-              <small className={draft.advisory.message.length > MAX_MESSAGE - 30 ? "is-near" : ""}>
-                {draft.advisory.message.length} / {MAX_MESSAGE}
-              </small>
-            </label>
-          </article>
         </div>
 
         {/* Right: what the phone will look like. Rendered from `draft`, so it
@@ -611,6 +595,127 @@ export default function MobileControlPage() {
           </article>
         </aside>
       </div>
+
+      {advisoryOpen && (
+        <div
+          className="ds-modal-backdrop"
+          role="presentation"
+          onClick={(e) => {
+            // Only a click on the backdrop itself closes it; one that started
+            // inside the dialog and drifted out while selecting text does not.
+            if (e.target === e.currentTarget) setAdvisoryOpen(false);
+          }}
+        >
+          <div
+            className="ds-modal"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="advisory-title"
+          >
+            <header className="ds-modal-head">
+              <div>
+                <h2 id="advisory-title">Published advisory</h2>
+                <p>
+                  One message, broadcast to the Alerts tab of every phone. It is pinned above the
+                  app&apos;s own notices and shows whichever category a traveller is looking at.
+                </p>
+              </div>
+              <button
+                type="button"
+                className="ds-modal-close"
+                aria-label="Close"
+                onClick={() => setAdvisoryOpen(false)}
+              >
+                <X size={17} aria-hidden="true" />
+              </button>
+            </header>
+
+            <div className="ds-modal-body">
+              <label className="ds-mc-publish-row">
+                <span>
+                  <b>Publish to every phone</b>
+                  <span>Off keeps the draft here without sending it.</span>
+                </span>
+                <span className="ds-switch">
+                  <input
+                    type="checkbox"
+                    checked={draft.advisory.active}
+                    onChange={(e) =>
+                      setDraft((d) => ({
+                        ...d,
+                        advisory: { ...d.advisory, active: e.target.checked },
+                      }))
+                    }
+                  />
+                  <span className="ds-switch-track" aria-hidden="true">
+                    <span className="ds-switch-thumb" />
+                  </span>
+                </span>
+              </label>
+
+              <div className="ds-mc-tones" role="group" aria-label="Advisory tone">
+                {TONES.map((tone) => (
+                  <button
+                    key={tone.key}
+                    type="button"
+                    className={`ds-mc-tone is-${tone.key}${draft.advisory.tone === tone.key ? " is-active" : ""}`}
+                    aria-pressed={draft.advisory.tone === tone.key}
+                    onClick={() =>
+                      setDraft((d) => ({ ...d, advisory: { ...d.advisory, tone: tone.key } }))
+                    }
+                  >
+                    <b>{tone.label}</b>
+                    <span>{tone.hint}</span>
+                  </button>
+                ))}
+              </div>
+
+              <label className="ds-mc-field">
+                <span>Message</span>
+                <textarea
+                  rows={3}
+                  autoFocus
+                  maxLength={MAX_MESSAGE}
+                  value={draft.advisory.message}
+                  placeholder="e.g. Lane closure at Km 15.2 southbound until 06:00. Expect delays."
+                  onChange={(e) =>
+                    setDraft((d) => ({ ...d, advisory: { ...d.advisory, message: e.target.value } }))
+                  }
+                />
+                <small className={draft.advisory.message.length > MAX_MESSAGE - 30 ? "is-near" : ""}>
+                  {draft.advisory.message.length} / {MAX_MESSAGE}
+                </small>
+              </label>
+
+              {/* Says what pressing Done will and will not do. The dialog edits
+                  the same draft as everything else, so nothing reaches a phone
+                  until Save & publish. */}
+              <p className="ds-modal-note">
+                {draft.advisory.active && draft.advisory.message.trim().length < 8
+                  ? "A published advisory needs at least 8 characters."
+                  : "Closing keeps your changes here. Nothing reaches a phone until you press Save & publish."}
+              </p>
+            </div>
+
+            <footer className="ds-modal-foot">
+              <button
+                type="button"
+                className="btn-muted"
+                onClick={() => {
+                  // Revert only the advisory, leaving section edits alone.
+                  if (saved) setDraft((d) => ({ ...d, advisory: saved.advisory }));
+                  setAdvisoryOpen(false);
+                }}
+              >
+                Cancel
+              </button>
+              <button type="button" className="btn-primary" onClick={() => setAdvisoryOpen(false)}>
+                Done
+              </button>
+            </footer>
+          </div>
+        </div>
+      )}
 
       {/* Save bar. Sticks to the bottom while there is something to save, so a
           change made at the top of a long page cannot be forgotten on the way

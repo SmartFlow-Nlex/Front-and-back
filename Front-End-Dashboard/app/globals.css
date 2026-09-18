@@ -7723,3 +7723,289 @@ details[open] > .evidence-summary .evidence-close-label { display: inline; }
   .ds-mc-pill.is-clickable,
   .ds-mc-linkbtn { transition: none; }
 }
+
+/* ══════════════════════════════════════════════════════════════════════════
+   MOBILE CONTROL CENTRE — v3
+   The advisory moved into a dialog so the page fits one screen without
+   scrolling, and the preview phone came down a size.
+   ══════════════════════════════════════════════════════════════════════════ */
+
+/* ── Advisory strip ──────────────────────────────────────────────────────── */
+.ds-mc-advisory-strip {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  padding: 11px 14px;
+  border-radius: 13px;
+  border: 1px solid var(--border-default);
+  background: var(--bg-surface);
+}
+
+/* A live advisory is on every phone on the corridor, so the strip says so
+   rather than leaving it to be read off the button label. */
+.ds-mc-advisory-strip.is-live {
+  border-color: color-mix(in srgb, var(--color-warning, #b45309) 38%, transparent);
+  background: color-mix(in srgb, var(--color-warning, #b45309) 7%, var(--bg-surface));
+}
+
+.ds-mc-advisory-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border-radius: 9px;
+  color: var(--text-secondary);
+  background: color-mix(in srgb, var(--text-secondary) 10%, transparent);
+}
+
+.ds-mc-advisory-strip.is-live .ds-mc-advisory-icon {
+  color: var(--color-warning, #b45309);
+  background: color-mix(in srgb, var(--color-warning, #b45309) 14%, transparent);
+}
+
+.ds-mc-advisory-text { display: grid; gap: 1px; min-width: 0; }
+.ds-mc-advisory-text b { font-size: 0.86rem; color: var(--text-primary); }
+
+.ds-mc-advisory-text > span {
+  font-size: 0.78rem;
+  color: var(--text-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ds-mc-advisory-text .is-live-text {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-primary);
+}
+
+.ds-mc-dot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; }
+.ds-mc-dot.is-info { background: #2a78d6; }
+.ds-mc-dot.is-warning { background: #b45309; }
+.ds-mc-dot.is-critical { background: #dc2626; }
+
+.ds-mc-advisory-btn { flex-shrink: 0; }
+
+/* ── Dialog ──────────────────────────────────────────────────────────────── */
+.ds-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: rgba(15, 23, 42, 0.45);
+  backdrop-filter: blur(2px);
+  animation: ds-modal-in 140ms ease-out;
+}
+
+.ds-modal {
+  width: min(560px, 100%);
+  max-height: calc(100vh - 48px);
+  display: flex;
+  flex-direction: column;
+  border-radius: 16px;
+  background: var(--bg-surface);
+  border: 1px solid var(--border-default);
+  box-shadow: 0 24px 60px rgba(15, 23, 42, 0.3);
+  overflow: hidden;
+  animation: ds-modal-rise 160ms ease-out;
+}
+
+@keyframes ds-modal-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes ds-modal-rise {
+  from { opacity: 0; transform: translateY(10px) scale(0.985); }
+  to { opacity: 1; transform: none; }
+}
+
+.ds-modal-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 18px 20px 14px;
+  border-bottom: 1px solid var(--border-default);
+}
+
+.ds-modal-head h2 { margin: 0; font-size: 1.02rem; font-weight: 700; letter-spacing: -0.01em; }
+
+.ds-modal-head p {
+  margin: 4px 0 0;
+  font-size: 0.8rem;
+  line-height: 1.5;
+  color: var(--text-secondary);
+  max-width: 52ch;
+}
+
+.ds-modal-close {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  border-radius: 8px;
+  border: 1px solid var(--border-default);
+  background: var(--bg-surface);
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.ds-modal-close:hover { background: color-mix(in srgb, var(--text-secondary) 10%, transparent); }
+
+.ds-modal-close:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--page-accent, var(--brand-primary)) 28%, transparent);
+}
+
+.ds-modal-body { padding: 16px 20px; overflow-y: auto; display: grid; gap: 14px; }
+
+.ds-modal-foot {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  padding: 14px 20px;
+  border-top: 1px solid var(--border-default);
+  background: color-mix(in srgb, var(--text-secondary) 4%, transparent);
+}
+
+.ds-modal-note {
+  margin: 0;
+  font-size: 0.76rem;
+  line-height: 1.5;
+  color: var(--text-secondary);
+}
+
+.ds-mc-publish-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 11px 13px;
+  border-radius: 11px;
+  border: 1px solid var(--border-default);
+  cursor: pointer;
+}
+
+.ds-mc-publish-row > span:first-child { display: grid; gap: 1px; }
+.ds-mc-publish-row b { font-size: 0.86rem; color: var(--text-primary); }
+.ds-mc-publish-row span span { font-size: 0.76rem; color: var(--text-secondary); }
+
+.ds-mc-tones { margin-bottom: 0; }
+
+/* ── Phone: one size down ────────────────────────────────────────────────── */
+.ds-phone-frame { width: 222px; padding: 8px; border-radius: 30px; }
+.ds-phone-notch { top: 12px; width: 64px; height: 15px; }
+.ds-phone-screen { border-radius: 23px; min-height: 384px; }
+.ds-phone-status { padding: 6px 13px 4px; font-size: 0.58rem; }
+.ds-phone-appbar { padding: 8px 12px 10px; font-size: 0.78rem; }
+.ds-phone-body { gap: 7px; padding: 9px 9px 12px; }
+.ds-phone-card { gap: 8px; padding: 8px 9px; border-radius: 10px; }
+.ds-phone-card-icon { width: 21px; height: 21px; border-radius: 6px; }
+.ds-phone-card-text b { font-size: 0.64rem; }
+.ds-phone-bar { height: 4px; }
+
+/* ── Tab bar: every label in full ────────────────────────────────────────── */
+/*
+   At five tabs the bar has about 41px each, and "Community" was being clipped
+   to "Commun…" while "Assistant" fitted — same character count, wider glyphs.
+   Three things buy the room back, and together they clear the longest label:
+   no horizontal padding on the button, a slightly tighter face, and negative
+   tracking. The current tab is no longer heavier either, since the weight
+   alone pushed it over the edge; it is already carrying the accent colour.
+*/
+.ds-phone-tabs { padding-bottom: 3px; }
+
+.ds-phone-tab { padding: 7px 0 8px; gap: 3px; }
+
+.ds-phone-tab small {
+  font-size: 0.46rem;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  line-height: 1.1;
+}
+
+.ds-phone-tab.is-current small { font-weight: 700; }
+
+/* ── The page fits one screen, so the sections list stays compact ────────── */
+.ds-mc-panel { padding: 16px 18px; }
+.ds-mc-panel-head { margin-bottom: 12px; }
+.ds-mc-features { gap: 6px; }
+.ds-mc-feature-row { padding: 4px; }
+.ds-mc-disclosure { padding: 7px 9px; gap: 12px; }
+.ds-mc-sections { padding: 2px 14px 10px 22px; }
+.ds-mc-sections ul li { padding: 7px 0; }
+.ds-mc-col { gap: 14px; }
+
+@media (prefers-reduced-motion: reduce) {
+  .ds-modal-backdrop,
+  .ds-modal { animation: none; }
+}
+
+/* ── Fitting one screen ────────────────────────────────────────────────────
+   This page is a control panel, not a document: an operator should be able to
+   see every switch and the phone at once rather than scrolling between the
+   thing they change and the picture of what it does. */
+.ds-mc-sections ul li { padding: 5px 0; }
+.ds-mc-sections-bulk { margin: 0 0 8px; }
+
+/* Closed, the bar is a 2px border with an 18px margin above it - 20px of a
+   budget that has none to spare. */
+.ds-mc-savebar { margin-top: 0; border-width: 0; }
+.ds-mc-savebar.is-open { margin-top: 14px; border-width: 1px; }
+
+/*
+   Open, the bar would add its own height and a scrollbar would appear the
+   moment anything was touched. The negative margin takes that height back out
+   of the parent's box while the element still renders: it is sticky at the
+   bottom of the scrollport, so it sits OVER the end of the page rather than
+   below it. The grid reserves the same amount of empty space at its foot, so
+   what it sits over is that reserved space and not a row of switches.
+*/
+.ds-mc-savebar.is-open { margin-bottom: -86px; }
+/* 52px, not 86: the negative margin above does not claw back the bar's full
+   height on a sticky element, so the reserve is tuned to what is actually left
+   over. Measured both ways - resting and with unsaved changes - at 1080. */
+.ds-mc-grid { padding-bottom: 52px; }
+
+/* A section row stacked its label over its description, which is two lines of
+   type for one switch and made a five-section tab taller than the screen. On
+   one line the list scans as a list, and the five blurbs are all short enough
+   to sit beside their label at this width. */
+.ds-mc-section-text {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+}
+
+.ds-mc-section-text b { flex-shrink: 0; }
+
+.ds-mc-section-text > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Separates the two without a glyph that would have to be in the markup. */
+.ds-mc-section-text > span::before {
+  content: "";
+  display: inline-block;
+  width: 3px;
+  height: 3px;
+  margin-right: 8px;
+  border-radius: 50%;
+  vertical-align: middle;
+  background: color-mix(in srgb, var(--text-secondary) 45%, transparent);
+}
+
+.ds-mc-section-icon { width: 24px; height: 24px; border-radius: 7px; }

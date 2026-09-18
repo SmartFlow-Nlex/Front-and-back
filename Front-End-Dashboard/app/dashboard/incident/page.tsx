@@ -278,29 +278,88 @@ export default function IncidentPage() {
     const boundaryKey = grain === "monthly" ? (l: string) => l : (l: string) => l.slice(0, 7);
     const labelInterval = (i: number) => i === 0 || boundaryKey(labels[i]) !== boundaryKey(labels[i - 1]);
 
-    const mk = (name: string, key: "road" | "moto" | "stalled", color: string) => ({
-      name,
-      type: "line" as const,
-      data: trendRows.map((r) => r[key]),
-      symbol: "none",
-      smooth: true,
-      itemStyle: { color },
-      lineStyle: { width: 2.5, color },
-    });
+    /* Small multiples, one panel per type, rather than three lines on one
+       scale.
 
-    const series = [mk("Road crashes", "road", TYPE_HUES[0]),
-                    mk("Motorcycle crashes", "moto", TYPE_HUES[1]),
-                    mk("Stalled vehicles", "stalled", TYPE_HUES[2])];
+       Stacked vehicles run around 900 a month, road crashes around 150 and
+       motorcycle crashes around 10. On a single linear axis the top series
+       fills the plot and the other two lie flat on the floor - two of the
+       three series were drawn but could not be read, and the chart had 1264
+       by 384 pixels in which to fail at it. Giving each its own y-axis makes
+       all three legible, and the axis labels still carry the magnitude
+       difference that the shared scale used to show.
+
+       Same three series, same values, same buckets. Only the arrangement. */
+    const PANELS = [
+      { name: "Road crashes", key: "road" as const, color: TYPE_HUES[0] },
+      { name: "Motorcycle crashes", key: "moto" as const, color: TYPE_HUES[1] },
+      { name: "Stalled vehicles", key: "stalled" as const, color: TYPE_HUES[2] },
+    ];
+
+    // Laid out in the chart's own pixels so the three panels divide the height
+    // evenly whatever the card is given.
+    const TOP = 22, BOTTOM = 34, GAP = 30;
+    const panelH = Math.max(46, (384 - TOP - BOTTOM - GAP * (PANELS.length - 1)) / PANELS.length);
+    const topOf = (i: number) => TOP + i * (panelH + GAP);
+    const last = PANELS.length - 1;
 
     return {
-      grid: { left: 52, right: 16, top: 10, bottom: 52 },
-      xAxis: { type: "category", data: labels, axisLabel: { formatter: axisLabelFor(grain), interval: labelInterval, fontSize: 10, hideOverlap: true }, axisTick: { show: false } },
-      yAxis: { type: "value", splitNumber: 3, axisLabel: { fontSize: 10 } },
-      tooltip: { trigger: "axis", axisPointer: { label: { formatter: (o) => bucketLabelFor(grain)(String((o as { value: unknown }).value)) } }, valueFormatter: (v) => (v == null ? "—" : fmtInt(Number(v))) },
-      legend: { show: true, bottom: 0, left: "center", itemWidth: 14, itemHeight: 8, itemGap: 18, padding: 0, textStyle: { fontSize: 11 } },
-      series,
+      /* One title per panel, in the series' own colour: it names the panel
+         where the reader is already looking, which a legend at the foot of a
+         stack of three cannot do. */
+      title: PANELS.map((p, i) => ({
+        text: p.name,
+        left: 56,
+        top: topOf(i) - 17,
+        textStyle: { fontSize: 11, fontWeight: 700 as const, color: p.color },
+      })),
+      grid: PANELS.map((_, i) => ({ left: 56, right: 18, top: topOf(i), height: panelH })),
+      xAxis: PANELS.map((_, i) => ({
+        gridIndex: i,
+        type: "category" as const,
+        data: labels,
+        axisTick: { show: false },
+        axisLine: { lineStyle: { color: chartTheme.axis } },
+        // Only the bottom panel carries dates; three copies of the same axis
+        // is noise, and it costs the panels the height instead.
+        axisLabel:
+          i === last
+            ? { formatter: axisLabelFor(grain), interval: labelInterval, fontSize: 10, hideOverlap: true }
+            : { show: false },
+      })),
+      yAxis: PANELS.map((_, i) => ({
+        gridIndex: i,
+        type: "value" as const,
+        splitNumber: 2,
+        axisLabel: { fontSize: 10 },
+        splitLine: { lineStyle: { color: chartTheme.split } },
+      })),
+      tooltip: {
+        trigger: "axis" as const,
+        axisPointer: {
+          // Linked, so hovering any panel marks the same month in all three.
+          link: [{ xAxisIndex: "all" }],
+          label: { formatter: (o) => bucketLabelFor(grain)(String((o as { value: unknown }).value)) },
+        },
+        valueFormatter: (v) => (v == null ? "—" : fmtInt(Number(v))),
+      },
+      axisPointer: { link: [{ xAxisIndex: "all" }] },
+      series: PANELS.map((p, i) => ({
+        name: p.name,
+        type: "line" as const,
+        xAxisIndex: i,
+        yAxisIndex: i,
+        data: trendRows.map((r) => r[p.key]),
+        symbol: "none" as const,
+        smooth: true,
+        itemStyle: { color: p.color },
+        lineStyle: { width: 2, color: p.color },
+        // A soft fill under each line: with three separate panels the shape is
+        // the message, and the fill makes it legible at 90px tall.
+        areaStyle: { color: p.color, opacity: 0.1 },
+      })),
     };
-  }, [trendRows, grain]);
+  }, [trendRows, grain, chartTheme, TYPE_HUES]);
 
   // Weekday/weekend hourly profile + day-of-week averages, normalized per day
   // so 5 weekdays vs 2 weekend days compare fairly.

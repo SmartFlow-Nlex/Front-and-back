@@ -9312,3 +9312,35 @@ details[open] > .evidence-summary .evidence-close-label { display: inline; }
   line-height: 1.45;
   color: var(--text-secondary);
 }
+
+/* ── Forecast hour picker: grouped list, and a day beside the closed one ──── */
+.mc-horizon-pick select { height: 34px; }
+
+.mc-horizon-pick optgroup {
+  font-weight: 800;
+  font-size: 0.72rem;
+  color: var(--text-secondary);
+  background: var(--bg-surface);
+}
+
+.mc-horizon-pick option { font-weight: 600; padding: 4px 0; }
+
+/* The select's row names the time; this names the day it belongs to, because a
+   native control shows only the chosen row and inside a day group that row no
+   longer says which day it is. */
+.mc-horizon-when {
+  justify-self: start;
+  margin-top: -2px;
+  font-size: 0.7rem;
+  font-weight: 700;
+  color: var(--text-secondary);
+}
+
+/* The OS draws the open list on its own surface, so the group headings need
+   colours of their own or they inherit the header's white type onto white. */
+.fc-head .mc-horizon-pick optgroup {
+  color: #334155;
+  background: #fff;
+}
+
+.fc-head .mc-horizon-pick option { color: #0f172a; background: #fff; }

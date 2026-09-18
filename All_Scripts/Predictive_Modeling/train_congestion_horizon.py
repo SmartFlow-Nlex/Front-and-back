@@ -770,10 +770,17 @@ cur.execute("""INSERT INTO gold.ml_congestion_eval (id, payload, updated_at) VAL
 print(f"  forecast base time: {BASE_TS} (+1h = {BASE_TS + pd.Timedelta(hours=1)})")
 conn.commit()
 
-cur.execute("""SELECT COUNT(*), COUNT(DISTINCT (congestion_state, probability))
+# Horizon coverage goes in the log beside the row count. The table has been
+# found holding 12 horizons at times when the last completed run wrote 168,
+# with the same base_ts on both - so something rewrites it between runs and
+# nothing recorded what. Logging what THIS run left behind makes the next
+# occurrence attributable to a run or to something outside it.
+cur.execute("""SELECT COUNT(*), COUNT(DISTINCT (congestion_state, probability)),
+                      MIN(hours_ahead), MAX(hours_ahead), MAX(base_ts)
                FROM gold.ml_predictive_congestion""")
-n, distinct = cur.fetchone()
-print(f"  ml_predictive_congestion: {n} rows, {distinct} distinct (state,probability) pairs")
+n, distinct, hz_lo, hz_hi, base = cur.fetchone()
+print(f"  ml_predictive_congestion: {n} rows, {distinct} distinct (state,probability) pairs, "
+      f"horizons {hz_lo}-{hz_hi}, base_ts {base}")
 print("  (the old run had exactly 20 — one per exit, repeated 12 times)")
 
 json.dump({

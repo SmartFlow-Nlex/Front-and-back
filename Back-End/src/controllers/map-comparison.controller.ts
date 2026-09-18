@@ -2,7 +2,7 @@ import type { Request, Response } from "express";
 import { getLiveCorridorOverview, getLiveMapGeoJson, getFeedFreshness } from "../services/map-live.service.js";
 import { cached } from "../utils/ttl-cache.js";
 import { z } from "zod";
-import { searchExitsInDb, getForecastCongestionFromDb, getForecastModelInfo } from "../services/map-comparison.service.js";
+import { searchExitsInDb, getForecastCongestionFromDb, getForecastDailyPeaksFromDb, getForecastModelInfo } from "../services/map-comparison.service.js";
 import { ExitSearchSchema } from "../validators/map-comparison.validator.js";
 import { env } from "../config/env.js";
 
@@ -302,3 +302,13 @@ export async function getMapLiveOverview(_req: Request, res: Response) {
   }
   res.json({ success: true, data });
 }
+
+// [DEV-02] GET /api/v1/map-comparison/forecast/peaks
+// One row per day for the week ahead, pointing at that day's worst hour.
+export const getMapForecastPeaks = async (_req: Request, res: Response) => {
+  const peaks = await getForecastDailyPeaksFromDb();
+  if (peaks === null) {
+    return res.status(503).json({ success: false, message: "Forecast peaks unavailable: database not reachable" });
+  }
+  res.json({ success: true, data: peaks });
+};

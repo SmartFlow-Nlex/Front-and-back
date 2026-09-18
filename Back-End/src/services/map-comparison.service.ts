@@ -243,3 +243,57 @@ export async function getForecastCongestionFromDb(hoursAhead: number) {
     return null;
   }
 }
+
+/**
+ * The hour each day is most likely to be congested, for the next seven days.
+ *
+ * A week of hourly options is twenty-nine rows that mostly say the same thing:
+ * nobody scrolls a dropdown looking for 11 PM on Tuesday. What a reader wants
+ * from a seven-day view is which day is bad and when, so this answers that
+ * directly — one row per day, already pointing at that day's worst hour.
+ *
+ * "Worst" is the hour with the most segments forecast congested, and where two
+ * hours tie, the one whose congestion the model is most confident about. Both
+ * come from the same rows the map draws, so selecting a peak lands on exactly
+ * the picture that made it the peak.
+ */
+export async function getForecastDailyPeaksFromDb(): Promise<
+  { day: string; hoursAhead: number; at: string; congested: number; confidence: number }[] | null
+> {
+  if (!db) return null;
+  try {
+    const { rows } = await db.query(
+      `WITH per_hour AS (
+         SELECT hours_ahead,
+                MAX(base_ts) AS base_ts,
+                COUNT(*) FILTER (WHERE congestion_state = 'High')::int AS congested,
+                AVG(p_high)::float                                     AS confidence
+           FROM gold.ml_predictive_congestion
+          GROUP BY hours_ahead
+       ), stamped AS (
+         SELECT hours_ahead,
+                congested,
+                confidence,
+                base_ts + make_interval(hours => hours_ahead) AS at
+           FROM per_hour
+          WHERE base_ts IS NOT NULL
+       )
+       SELECT DISTINCT ON (at::date)
+              at::date AS day, hours_ahead, at, congested, confidence
+         FROM stamped
+        ORDER BY at::date, congested DESC, confidence DESC, hours_ahead
+      `,
+    );
+
+    return rows.map((r) => ({
+      day: new Date(r.day).toISOString().slice(0, 10),
+      hoursAhead: Number(r.hours_ahead),
+      at: new Date(r.at).toISOString(),
+      congested: Number(r.congested),
+      confidence: Number(r.confidence),
+    }));
+  } catch (error) {
+    console.error("Database query failed for forecast daily peaks:", error);
+    return null;
+  }
+}

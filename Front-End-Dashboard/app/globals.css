@@ -6734,3 +6734,72 @@ details[open] > .evidence-summary .evidence-close-label { display: inline; }
   .tab-toolbar .btn-primary:hover,
   .tab-toolbar .btn-danger:hover { transform: none; }
 }
+
+/* ===========================================================================
+   TABLES
+   ---------------------------------------------------------------------------
+   The table is an operational surface - somebody scans it for one row - and it
+   was styled as a grid of equal cells: a hairline under every row, a header
+   that read like another row, and no response to the cursor at all. Nothing
+   helped the eye hold a line across seven columns.
+   =========================================================================== */
+
+/* The header is a header: it sits on its own ground, keeps its rule, and stays
+   put while the body scrolls under it. */
+.table-card thead th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--bg-surface-hover);
+  border-bottom: 1px solid var(--border-default);
+  font-size: 0.7rem;
+  font-weight: 800;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+/* Rules between rows, not under every cell, and softened - the row separation
+   was competing with the content it separated. */
+.table-card tbody td {
+  border-bottom: 1px solid color-mix(in srgb, var(--border-default) 55%, transparent);
+  font-size: 0.86rem;
+}
+
+/* The last row's rule is the card's own edge repeated. */
+.table-card tbody tr:last-child td { border-bottom: 0; }
+
+/* The line under the cursor. This is what a scan actually needs, and the
+   accent bar on the leading cell keeps the row findable once the eye is at the
+   far right of it. */
+.table-card tbody tr {
+  transition: background-color var(--transition-fast);
+}
+
+.table-card tbody tr:hover {
+  background: color-mix(in srgb, var(--page-accent, var(--brand-primary)) 6%, transparent);
+}
+
+.table-card tbody tr td:first-child {
+  position: relative;
+  font-variant-numeric: tabular-nums;
+}
+
+.table-card tbody tr:hover td:first-child::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 3px;
+  background: var(--page-accent, var(--brand-primary));
+}
+
+/* Numbers line up so a column of them can be compared down its length rather
+   than read one at a time. */
+.table-card td { font-variant-numeric: tabular-nums; }
+
+@media (prefers-reduced-motion: reduce) {
+  .table-card tbody tr { transition: none; }
+}

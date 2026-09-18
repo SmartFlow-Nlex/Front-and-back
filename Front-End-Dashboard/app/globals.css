@@ -9084,3 +9084,120 @@ details[open] > .evidence-summary .evidence-close-label { display: inline; }
 @media (prefers-reduced-motion: reduce) {
   .mc-horizon-range { transition: none; }
 }
+
+/* ══════════════════════════════════════════════════════════════════════════
+   FORECAST — expanded view and legend
+   Reuses the live map's shell (wz-*) so the two maximised views are the same
+   object in two colours rather than two designs.
+   ══════════════════════════════════════════════════════════════════════════ */
+
+.fc-shell .wz-head { align-items: center; gap: 16px; }
+
+.fc-head .wz-brand { display: flex; align-items: center; gap: 12px; }
+.fc-head h2 { margin: 0; font-size: 1.05rem; font-weight: 800; letter-spacing: -0.01em; }
+.fc-head p { margin: 2px 0 0; font-size: 0.78rem; color: var(--text-secondary); }
+
+.fc-badge {
+  flex: none;
+  padding: 4px 11px;
+  border-radius: 999px;
+  font-size: 0.66rem;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: #fff;
+  background: linear-gradient(135deg, #a855f7, #7c3aed);
+}
+
+/* In the header the picker has no room for its own heading. */
+.mc-horizon.is-compact {
+  padding: 0;
+  border: 0;
+  background: none;
+  box-shadow: none;
+  backdrop-filter: none;
+  grid-template-columns: auto auto;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.mc-horizon.is-compact .mc-horizon-pick select { min-width: 148px; }
+
+.fc-spin { animation: ds-spin 720ms linear infinite; opacity: 0.6; }
+
+/* ── The side list ───────────────────────────────────────────────────────── */
+.fc-tally { display: flex; gap: 8px; margin-bottom: 12px; }
+
+.fc-tally-item {
+  flex: 1;
+  display: grid;
+  gap: 1px;
+  padding: 8px 10px;
+  border-radius: 10px;
+  border: 1px solid var(--border-default);
+  font-size: 0.7rem;
+  font-weight: 600;
+  color: var(--text-secondary);
+  text-align: center;
+}
+
+.fc-tally-item b { font-size: 1.1rem; font-weight: 800; color: var(--text-primary); }
+.fc-tally-item.is-high { border-color: color-mix(in srgb, #e04434 40%, transparent); }
+.fc-tally-item.is-high b { color: #b3261e; }
+.fc-tally-item.is-med { border-color: color-mix(in srgb, #e08a2e 40%, transparent); }
+.fc-tally-item.is-med b { color: #b06a15; }
+.fc-tally-item.is-low { border-color: color-mix(in srgb, #23a55a 38%, transparent); }
+.fc-tally-item.is-low b { color: #1a7d45; }
+
+.fc-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 2px; }
+
+.fc-list li {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 9px;
+  padding: 7px 8px;
+  border-radius: 8px;
+  font-size: 0.78rem;
+}
+
+.fc-list li:nth-child(odd) { background: color-mix(in srgb, var(--text-secondary) 5%, transparent); }
+
+.fc-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--text-secondary); }
+.fc-list li.is-low .fc-dot { background: #23a55a; }
+.fc-list li.is-med .fc-dot { background: #e08a2e; }
+.fc-list li.is-high .fc-dot { background: #e04434; }
+
+.fc-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
+.fc-state { font-size: 0.72rem; color: var(--text-secondary); }
+.fc-prob { font-size: 0.72rem; font-weight: 700; font-variant-numeric: tabular-nums; color: var(--text-secondary); }
+
+.fc-note {
+  margin: 12px 0 0;
+  font-size: 0.72rem;
+  line-height: 1.5;
+  color: var(--text-secondary);
+}
+
+/* ── Legend ──────────────────────────────────────────────────────────────── */
+/* Matches the pin the map actually draws, so the key is recognisable rather
+   than a coloured square standing in for one. */
+.mc-legend-pin {
+  display: inline-block;
+  width: 11px;
+  height: 11px;
+  border-radius: 50%;
+  border: 2.5px solid #0e7490;
+  background: #fff;
+  box-shadow: 0 0 0 2px rgba(14, 116, 144, 0.18);
+}
+
+.mc-legend-note {
+  margin: 8px 0 0;
+  font-size: 0.68rem;
+  line-height: 1.45;
+  color: var(--text-secondary);
+}
+
+.forecast-legend .mc-density-line { height: 4px; width: 26px; border-radius: 3px; }

@@ -29,9 +29,42 @@ const DENSITY = [
   { level: 5 as const, label: "Standstill" },
 ];
 
-export default function MapLegend() {
+/**
+ * What the forecast map draws, in the order a reader scans it.
+ *
+ * The levels are indices into the shared map palette — the same numbers
+ * TrafficMapPanel maps these states to — so the key and the road cannot drift
+ * apart. Exported because the panel's own legend draws from it too.
+ */
+export const FORECAST_KEY = [
+  { state: "Low", label: "Clear", level: 0 as const },
+  { state: "Med", label: "Building", level: 2 as const },
+  { state: "High", label: "Heavy", level: 4 as const },
+];
+
+export default function MapLegend({ variant = "live" }: { variant?: "live" | "forecast" }) {
   const { isDark } = useChartTheme();
   const palette = mapPalette(isDark);
+
+  /* A forecast has no Waze reports in it — those are live observations — and
+     no density scale either: the model answers in three states. Showing the
+     live key beside it would be describing a different map. */
+  if (variant === "forecast") {
+    return (
+      <div className="map-legend">
+        <h4>Predicted congestion</h4>
+        {FORECAST_KEY.map((k) => (
+          <div key={k.state} className="wz-legend-row">
+            <span className="wz-line" style={{ background: palette.level[k.level] }} /> {k.label}
+          </div>
+        ))}
+        <h4 className="wz-legend-gap">On the map</h4>
+        <div className="wz-legend-row">
+          <span className="mc-legend-pin" aria-hidden="true" /> NLEX exit
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="map-legend">

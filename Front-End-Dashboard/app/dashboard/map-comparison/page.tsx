@@ -4,8 +4,12 @@ import { useState, useEffect, useMemo } from "react";
 import { ChevronDown, Clock, Map, Maximize2, Milestone, Navigation, Search, ZoomIn, ZoomOut } from "lucide-react";
 import type { Feature } from "geojson";
 import TrafficMapPanel from "../../../components/maps/TrafficMapPanel";
+import ForecastExpandModal from "../../../components/maps/ForecastExpandModal";
+import ForecastHorizonPicker, { type HorizonRangeKey } from "../../../components/maps/ForecastHorizonPicker";
+import { useChartTheme } from "../../../lib/chart-theme";
+import { mapPalette } from "../../../lib/map-palette";
 import WazeLiveModal from "../../../components/maps/WazeLiveModal";
-import MapLegend from "../../../components/maps/MapLegend";
+import MapLegend, { FORECAST_KEY } from "../../../components/maps/MapLegend";
 import PageHeader from "../../../components/dashboard/PageHeader";
 import { cachedJson } from "../../../lib/cached-json";
 
@@ -27,31 +31,11 @@ const CORRIDOR = corridorGuard(
 
 type ExitHit = NlexExit;
 
-/* The ranges the forecast picker offers, and how finely each is stepped.
-   Hour by hour is right for half a day and useless for a week: 168 options in
-   a dropdown is a list nobody reads, so the longer ranges step coarser. */
-const HORIZON_RANGES = [
-  { key: "12h", label: "Next 12 h", hours: 12, step: 1 },
-  { key: "24h", label: "Next 24 h", hours: 24, step: 2 },
-  { key: "7d", label: "Next 7 days", hours: 168, step: 6 },
-] as const;
-
-type HorizonRangeKey = (typeof HORIZON_RANGES)[number]["key"];
-
-/** The wall-clock time a given number of hours ahead lands on, so the reader
- *  picks a time of day rather than an offset they have to add up themselves. */
-function clockFor(hoursAhead: number): string {
-  const t = new Date(Date.now() + hoursAhead * 3_600_000);
-  const sameDay = t.getDate() === new Date().getDate();
-  return t.toLocaleTimeString(undefined, {
-    hour: "numeric",
-    minute: "2-digit",
-    ...(sameDay ? {} : { weekday: "short" }),
-  });
-}
-
 export default function MapComparisonPage() {
   const [wazeMax, setWazeMax] = useState(false);
+  const [forecastMax, setForecastMax] = useState(false);
+  const { isDark } = useChartTheme();
+  const forecastColours = mapPalette(isDark).level;
   /* What produced the forecast, fetched with it. The panel drew model output
      but said nothing about the model, so a reader had no way to tell a
      prediction from a decoration. */
@@ -72,25 +56,6 @@ export default function MapComparisonPage() {
      *  the pipeline writes as many hours ahead as it was asked for. */
     maxHorizon: number | null;
   } | null>(null);
-
-  const horizonOptions = useMemo(() => {
-    const range = HORIZON_RANGES.find((r) => r.key === horizonRange) ?? HORIZON_RANGES[0];
-    const reach = Math.min(range.hours, forecastModel?.maxHorizon ?? range.hours);
-    const out: number[] = [];
-    for (let h = 1; h <= reach; h += range.step) out.push(h);
-    // Always offer the far end of what is available, even when the step would
-    // have skipped over it.
-    if (out[out.length - 1] !== reach && reach >= 1) out.push(reach);
-    return out;
-  }, [horizonRange, forecastModel?.maxHorizon]);
-
-  // If the range or the data no longer covers the chosen hour, fall back to
-  // the nearest one that exists rather than requesting a gap.
-  useEffect(() => {
-    if (horizonOptions.length > 0 && !horizonOptions.includes(horizon)) {
-      setHorizon(horizonOptions[0]);
-    }
-  }, [horizonOptions, horizon]);
 
   const [activeReports, setActiveReports] = useState<number | null>(null);
   const [avgSpeed, setAvgSpeed] = useState<number | null>(null);
@@ -348,69 +313,33 @@ export default function MapComparisonPage() {
           <TrafficMapPanel
             title="Forecasted Traffic"
             subtitle="Predictive analysis"
-            badge="PREDICTED"
+            badge={
+              <>
+                PREDICTED
+                <button
+                  type="button"
+                  className="mc-maximise"
+                  style={{ marginLeft: 10 }}
+                  onClick={() => setForecastMax(true)}
+                >
+                  <Maximize2 size={13} /> Expand
+                </button>
+              </>
+            }
             endpoint={`${process.env.NEXT_PUBLIC_BACKEND_URL ?? "http://localhost:4000"}/api/map-comparison/forecast?hours=${horizon}`}
             layerColor="#a855f7"
             tone="purple"
           >
             {/* Forecast Controls Overlay */}
             <div className="mc-forecast-controls">
-              <div className="mc-horizon">
-                <span className="mc-horizon-head">
-                  <Clock size={13} className="mc-purple-text" /> Forecast time
-                </span>
+              <ForecastHorizonPicker
+                horizon={horizon}
+                setHorizon={setHorizon}
+                range={horizonRange}
+                setRange={setHorizonRange}
+                maxHorizon={forecastModel?.maxHorizon ?? null}
+              />
 
-                <div className="mc-horizon-ranges" role="group" aria-label="Forecast range">
-                  {HORIZON_RANGES.map((r) => {
-                    // Offered only if the warehouse can answer the whole range.
-                    // A control that silently draws an empty corridor is worse
-                    // than one that says it cannot go that far.
-                    const reach = forecastModel?.maxHorizon ?? 0;
-                    const ok = reach >= r.hours;
-                    return (
-                      <button
-                        key={r.key}
-                        type="button"
-                        className={`mc-horizon-range${horizonRange === r.key ? " is-active" : ""}`}
-                        aria-pressed={horizonRange === r.key}
-                        disabled={!ok}
-                        title={
-                          ok
-                            ? `Pick any hour within ${r.label.toLowerCase()}`
-                            : `The forecast currently reaches +${reach} h. Run the congestion pipeline further ahead to use this.`
-                        }
-                        onClick={() => {
-                          setHorizonRange(r.key);
-                          setHorizon((h) => Math.min(h, r.hours));
-                        }}
-                      >
-                        {r.label}
-                      </button>
-                    );
-                  })}
-                </div>
-
-                <label className="mc-horizon-pick">
-                  <span className="sr-only">Hours ahead</span>
-                  <select
-                    value={horizon}
-                    onChange={(e) => setHorizon(Number(e.target.value))}
-                  >
-                    {horizonOptions.map((h: number) => (
-                      <option key={h} value={h}>
-                        {`+${h} h \u00b7 ${clockFor(h)}`}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-              </div>
-
-              {/* This was a select offering "+30 minutes" — one hardcoded
-                  option, no handler, wired to nothing. Worse than useless: the
-                  predictions do not vary by horizon either, so even a working
-                  control would have moved nothing on the map. What a reader
-                  actually needs is what produced the colours, which is real and
-                  was not being shown. */}
               <div className="mc-model-card">
                 <span className="mc-model-head">
                   <Clock size={13} className="mc-purple-text" /> Forecast model
@@ -452,19 +381,30 @@ export default function MapComparisonPage() {
             <details className="mc-legend-card forecast-legend">
               <summary>Legend</summary>
               <div className="mc-legend-section">
-                <h4><span className="mc-dot purple"></span> AI Prediction Layers</h4>
-                <p className="mc-sub-label">Travel Time Zones</p>
-                <div className="mc-density-row"><span className="mc-density-box p-15"></span> 15 min</div>
-                <div className="mc-density-row"><span className="mc-density-box p-30"></span> 30 min</div>
-                <div className="mc-density-row"><span className="mc-density-box p-60"></span> 60 min</div>
+                <p className="mc-sub-label">Predicted congestion</p>
+                {FORECAST_KEY.map((k) => (
+                  <div key={k.state} className="mc-density-row">
+                    {/* Straight from the palette the map draws with, so the key
+                        cannot describe a different map to the one beside it. */}
+                    <span
+                      className="mc-density-line"
+                      style={{ background: forecastColours[k.level] }}
+                    />
+                    {k.label}
+                  </div>
+                ))}
               </div>
               <div className="mc-legend-section mt-3">
-                <p className="mc-sub-label">Predicted Congestion</p>
-                <div className="mc-density-row"><span className="mc-density-line p-low"></span> Low</div>
-                <div className="mc-density-row"><span className="mc-density-line p-med"></span> Medium</div>
-                <div className="mc-density-row"><span className="mc-density-line p-high"></span> High</div>
+                <p className="mc-sub-label">On the map</p>
+                <div className="mc-density-row">
+                  <span className="mc-legend-pin" aria-hidden="true" /> NLEX exit
+                </div>
+                <p className="mc-legend-note">
+                  Colours are the model&apos;s call for {`+${horizon} h`}, not a live reading.
+                </p>
               </div>
             </details>
+
           </TrafficMapPanel>
 
           {/* Forecast Footer Stats */}
@@ -491,6 +431,19 @@ export default function MapComparisonPage() {
       </div>
 
       <WazeLiveModal open={wazeMax} onClose={() => setWazeMax(false)} />
+
+      {/* Handed the page's own horizon state, so expanding shows the same hour
+          and changing the hour in either place moves both. */}
+      <ForecastExpandModal
+        open={forecastMax}
+        onClose={() => setForecastMax(false)}
+        horizon={horizon}
+        setHorizon={setHorizon}
+        range={horizonRange}
+        setRange={setHorizonRange}
+        maxHorizon={forecastModel?.maxHorizon ?? null}
+        model={forecastModel}
+      />
     </section>
   );
 }

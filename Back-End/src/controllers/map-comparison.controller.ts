@@ -6,9 +6,21 @@ import { searchExitsInDb, getForecastCongestionFromDb, getForecastModelInfo } fr
 import { ExitSearchSchema } from "../validators/map-comparison.validator.js";
 import { env } from "../config/env.js";
 
-/** gold.ml_predictive_congestion carries horizons 1-12 hours ahead. */
+/**
+ * How far ahead the forecast map may ask for.
+ *
+ * 336 is a sanity bound, not a statement about the data. The table holds
+ * whatever the pipeline was last asked to write - twelve hours once, a
+ * hundred and sixty-eight now - and a request past that simply returns no
+ * features. Pinning this to the coverage of the day meant the ceiling went
+ * stale the moment the pipeline ran longer: the dashboard correctly offered
+ * Next 7 days off the reported maxHorizon, and every one of those requests was
+ * refused here with "between 1 and 12".
+ */
+const MAX_FORECAST_HOURS = 336;
+
 const ForecastHorizonSchema = z.object({
-  hours: z.coerce.number().int().min(1).max(12).optional().default(1),
+  hours: z.coerce.number().int().min(1).max(MAX_FORECAST_HOURS).optional().default(1),
 });
 
 /** Served only when the database itself is unreachable. */
@@ -239,7 +251,7 @@ export const getMapRealtime = async (_req: Request, res: Response) => {
 export const getMapForecast = async (req: Request, res: Response) => {
   const parsed = ForecastHorizonSchema.safeParse(req.query);
   if (!parsed.success) {
-    return res.status(400).json({ success: false, message: "hours must be an integer between 1 and 12" });
+    return res.status(400).json({ success: false, message: `hours must be an integer between 1 and ${MAX_FORECAST_HOURS}` });
   }
 
   const [features, model] = await Promise.all([

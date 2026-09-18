@@ -366,7 +366,22 @@ export default function TrafficMapPanel({ title, subtitle, badge, endpoint, laye
       segmentBounds.filter((b) => b.to >= from && b.from <= to).map((b) => b.order);
 
     /** Waze levels for a forecast's categorical state. */
-    const FORECAST_LEVEL: Record<string, number> = { Low: 1, Medium: 3, High: 4, Severe: 5 };
+    /* The endpoint sends Low / Med / High. This table said "Medium", so every
+       medium segment missed and fell through to 0 - free flow - and drew as
+       clear green, while Low mapped to 1, which is amber. The two busiest
+       states on the corridor were being shown the wrong way round: a building
+       stretch looked empty and an empty one looked like light traffic.
+
+       Levels are the shared map palette's: 0 clear, 2 amber, 4 red. Both
+       spellings are accepted so a future rename of the label cannot silently
+       reintroduce the same fallthrough. */
+    const FORECAST_LEVEL: Record<string, number> = {
+      Low: 0,
+      Med: 2,
+      Medium: 2,
+      High: 4,
+      Severe: 5,
+    };
 
     /** Colours the corridor from whichever shape of state the endpoint sends. */
     const corridorWithState = (fc: GeoJSON.FeatureCollection): GeoJSON.FeatureCollection => {
@@ -743,8 +758,15 @@ export default function TrafficMapPanel({ title, subtitle, badge, endpoint, laye
          waiting for the reader to pan. */
       let rethinkPlazaPins: (() => void) | null = null;
 
-      // Toll Plaza HTML Markers — All 20 NLEX exits with exact coordinates from official data
-      if (isRealtime) {
+      // Toll Plaza HTML Markers — All 20 NLEX exits with exact coordinates from
+      // official data.
+      //
+      // Drawn on the forecast map too. These pins are infrastructure: the name,
+      // the municipality, the toll system. Nothing in the card is a live
+      // reading, so there is nothing here that would be untrue of a map showing
+      // next Tuesday — and without them the forecast was a coloured line with
+      // no way to tell which exit any stretch of it belonged to.
+      {
         const tollPlazas = [
           {
             name: "Balintawak",

@@ -65,6 +65,17 @@ export const writeMobileConfig = async (req: Request, res: Response) => {
   const changed = Object.entries(parsed.data.features)
     .filter(([k, v]) => before.config.features[k as keyof typeof before.config.features] !== v)
     .map(([k, v]) => `${k}=${v ? "on" : "off"}`);
+
+  // Sections are qualified by their tab, because half a dozen of them share
+  // short names and "traffic=off" alone would not say which screen it meant.
+  const sectionsChanged: string[] = [];
+  for (const [tab, group] of Object.entries(parsed.data.sections)) {
+    const prev = (before.config.sections as Record<string, Record<string, boolean>>)[tab] ?? {};
+    for (const [key, value] of Object.entries(group as Record<string, boolean>)) {
+      if (prev[key] !== value) sectionsChanged.push(`${tab}.${key}=${value ? "on" : "off"}`);
+    }
+  }
+
   const advisoryChanged =
     before.config.advisory.active !== parsed.data.advisory.active ||
     before.config.advisory.message !== parsed.data.advisory.message ||
@@ -72,6 +83,7 @@ export const writeMobileConfig = async (req: Request, res: Response) => {
 
   audit(req, "mobile_config.updated", {
     features: changed.length ? changed : "unchanged",
+    sections: sectionsChanged.length ? sectionsChanged : "unchanged",
     advisory: advisoryChanged
       ? { active: parsed.data.advisory.active, tone: parsed.data.advisory.tone }
       : "unchanged",

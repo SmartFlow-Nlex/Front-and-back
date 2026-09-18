@@ -7253,7 +7253,6 @@ details[open] > .evidence-summary .evidence-close-label { display: inline; }
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.ds-phone-tab:first-child { color: var(--page-accent, var(--brand-primary)); }
 
 /* Hidden tabs leave the bar entirely, matching what the app does, so the
    preview cannot promise a layout the phone will not produce. */
@@ -7333,4 +7332,185 @@ details[open] > .evidence-summary .evidence-close-label { display: inline; }
    column of empty background behind it. */
 @media (min-width: 1101px) {
   .ds-mc-preview-panel { position: sticky; top: 84px; }
+}
+
+/* ── Mobile Control Centre: nested sections ────────────────────────────────
+   A tab row is now a disclosure: the row itself opens the list of parts inside
+   that screen, while the switch on the right still governs the whole tab. The
+   two targets are kept separate so opening a tab to look inside it can never
+   be mistaken for switching it off. */
+
+.ds-mc-features li {
+  /* The row grid moved down to .ds-mc-feature-row, because the <li> now also
+     holds the expanded section list beneath it. */
+  display: block;
+  padding: 0;
+  overflow: hidden;
+}
+
+.ds-mc-feature-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 15px 6px 6px;
+}
+
+/* The whole row left of the switch is the disclosure target - a 14px chevron
+   is a poor thing to ask anyone to hit, particularly on a laptop trackpad. */
+.ds-mc-disclosure {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 14px;
+  padding: 8px 10px;
+  border: 0;
+  border-radius: 10px;
+  background: none;
+  font: inherit;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+  min-width: 0;
+}
+
+.ds-mc-disclosure:hover { background: color-mix(in srgb, var(--text-secondary) 7%, transparent); }
+
+.ds-mc-disclosure:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--page-accent, var(--brand-primary)) 28%, transparent);
+}
+
+.ds-mc-count {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 0.74rem;
+  font-weight: 700;
+  color: var(--text-secondary);
+  font-variant-numeric: tabular-nums;
+}
+
+/* Only ever set when the tab is ON and every section inside it is off, which
+   is the one combination that produces a blank screen. */
+.ds-mc-count.is-bad { color: var(--color-warning, #b45309); }
+
+.ds-mc-count svg { transition: transform var(--transition-fast); }
+.ds-mc-features li.is-open .ds-mc-count svg { transform: rotate(180deg); }
+
+/* ── The expanded list ───────────────────────────────────────────────────── */
+.ds-mc-sections {
+  padding: 4px 15px 14px 66px;
+  border-top: 1px dashed var(--border-default);
+  margin-top: 2px;
+}
+
+.ds-mc-sections ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 2px; }
+
+.ds-mc-sections ul li {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 14px;
+  padding: 9px 0;
+  border: 0;
+  border-radius: 0;
+  background: none;
+}
+
+.ds-mc-sections ul li + li { border-top: 1px solid color-mix(in srgb, var(--border-default) 60%, transparent); }
+
+.ds-mc-section-text { display: grid; gap: 1px; min-width: 0; }
+.ds-mc-section-text b { font-size: 0.83rem; color: var(--text-primary); }
+.ds-mc-section-text span { font-size: 0.75rem; line-height: 1.5; color: var(--text-secondary); }
+
+/* A section switch inside a tab that is off is disabled, not hidden: the
+   settings are kept and take effect again if the tab comes back, and hiding
+   them would make that look like they had been lost. */
+.ds-mc-sections ul li:has(input:disabled) .ds-mc-section-text { opacity: 0.45; }
+
+.ds-mc-sections-note {
+  margin: 8px 0 12px;
+  padding: 8px 11px;
+  border-radius: 9px;
+  font-size: 0.76rem;
+  line-height: 1.5;
+  color: var(--text-secondary);
+  background: color-mix(in srgb, var(--text-secondary) 8%, transparent);
+}
+
+.ds-mc-sections-note.is-bad {
+  color: #7c4a03;
+  background: color-mix(in srgb, var(--color-warning, #b45309) 12%, transparent);
+}
+
+.ds-switch.is-small .ds-switch-track { width: 36px; height: 21px; }
+.ds-switch.is-small .ds-switch-thumb { width: 15px; height: 15px; }
+.ds-switch.is-small input:checked + .ds-switch-track .ds-switch-thumb { transform: translateX(15px); }
+
+/* ── Phone preview: a screen, not just a tab bar ─────────────────────────── */
+.ds-phone-section {
+  display: block;
+  padding: 9px 11px;
+  border-radius: 8px;
+  border: 1px solid var(--border-default);
+  background: color-mix(in srgb, var(--page-accent, var(--brand-primary)) 5%, transparent);
+  font-size: 0.7rem;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.ds-phone-empty.is-bad {
+  color: #7c4a03;
+  border-style: solid;
+  border-color: color-mix(in srgb, var(--color-warning, #b45309) 40%, transparent);
+  background: color-mix(in srgb, var(--color-warning, #b45309) 10%, transparent);
+}
+
+/* The tab bar is the preview's own navigation now, so its buttons need to look
+   pressable and to show which screen is being shown. */
+.ds-phone-tab {
+  border: 0;
+  background: none;
+  font: inherit;
+  cursor: pointer;
+}
+
+.ds-phone-tab:hover { background: color-mix(in srgb, var(--text-secondary) 8%, transparent); }
+
+.ds-phone-tab:focus-visible {
+  outline: none;
+  box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--page-accent, var(--brand-primary)) 45%, transparent);
+}
+
+/* Replaces the old :first-child rule, which coloured whichever tab happened to
+   come first rather than the one actually being previewed. */
+.ds-phone-tab.is-current { color: var(--page-accent, var(--brand-primary)); }
+.ds-phone-tab.is-current small { font-weight: 800; }
+
+@media (prefers-reduced-motion: reduce) {
+  .ds-mc-count svg,
+  .ds-mc-disclosure { transition: none; }
+}
+
+/* ── Disabled buttons ──────────────────────────────────────────────────────
+   Nothing in the app styled these, so a button the code had genuinely
+   disabled still looked and hovered like a live one - it simply did nothing
+   when pressed, which reads as a broken button rather than an unavailable
+   one. Applies to both primitives, so every disabled action in the dashboard
+   says so. */
+.btn-primary:disabled,
+.btn-muted:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+  box-shadow: none;
+}
+
+/* Hover effects have to be cancelled explicitly: :hover still matches a
+   disabled button, so without this it would lift and brighten on approach
+   while refusing the click. */
+.btn-primary:disabled:hover,
+.btn-muted:disabled:hover {
+  transform: none;
+  filter: none;
 }

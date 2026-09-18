@@ -38,6 +38,19 @@ VALUES (
       "assistant": true,
       "alerts": true
     },
+    "sections": {
+      "dashboard": {
+        "statusSummary": true,
+        "segmentForecast": true,
+        "corridorOutlook": true,
+        "eventForecasts": true,
+        "mlHotspots": true
+      },
+      "map": { "liveStatus": true, "forecastView": true },
+      "community": { "shareUpdate": true, "reportIncident": true, "filters": true },
+      "assistant": { "quickQuestions": true },
+      "alerts": { "traffic": true, "maintenance": true }
+    },
     "advisory": {
       "active": false,
       "tone": "info",
@@ -47,3 +60,21 @@ VALUES (
   'seed'
 )
 ON CONFLICT (id) DO NOTHING;
+
+-- Back-fill a row created before `sections` existed. `||` merges at the top
+-- level only, and the WHERE clause means an operator's existing choices are
+-- never overwritten: this touches the row only when the key is absent
+-- entirely. Safe to run repeatedly.
+UPDATE nlex_mobile_config
+SET config = config || jsonb_build_object(
+      'sections', jsonb_build_object(
+        'dashboard', jsonb_build_object(
+          'statusSummary', true, 'segmentForecast', true, 'corridorOutlook', true,
+          'eventForecasts', true, 'mlHotspots', true),
+        'map', jsonb_build_object('liveStatus', true, 'forecastView', true),
+        'community', jsonb_build_object('shareUpdate', true, 'reportIncident', true, 'filters', true),
+        'assistant', jsonb_build_object('quickQuestions', true),
+        'alerts', jsonb_build_object('traffic', true, 'maintenance', true)
+      )
+    )
+WHERE id = 1 AND NOT (config ? 'sections');

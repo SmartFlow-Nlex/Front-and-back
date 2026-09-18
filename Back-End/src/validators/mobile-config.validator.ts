@@ -8,9 +8,11 @@ import { z } from "zod";
  * because an operator turns Community off, sees the switch move, and believes
  * the tab is gone. Before adding a field, wire it in the app first.
  *
- * Currently honoured by the app:
- *   features.*  -> frontend/app/(tabs)/_layout.tsx hides the tab
- *   advisory.*  -> frontend/alerts/AlertsProvider.tsx posts it as an alert
+ * Two levels:
+ *   features.*  — whether a TAB exists at all. Honoured in (tabs)/_layout.tsx,
+ *                 which sets href: null so the route stops resolving too.
+ *   sections.*  — what is inside each tab. Honoured by the screen itself.
+ *   advisory.*  — a broadcast notice, posted into the Alerts list.
  */
 
 // Mirrors the five tabs in frontend/app/(tabs)/_layout.tsx. The keys are the
@@ -29,6 +31,64 @@ const FeaturesSchema = z.object({
   alerts: z.boolean(),
 });
 
+/* ── Sections ──────────────────────────────────────────────────────────────
+ *
+ * Every field defaults to true, and every group defaults to {}. That is what
+ * lets a row written before sections existed still parse: an old document
+ * simply has no `sections` key, and zod fills the whole tree in as "on"
+ * rather than failing validation and dropping the operator's feature flags
+ * back to defaults. The same property means a dashboard that gains a section
+ * does not invalidate rows saved by the build before it.
+ */
+
+const DashboardSectionsSchema = z
+  .object({
+    statusSummary: z.boolean().default(true),
+    segmentForecast: z.boolean().default(true),
+    corridorOutlook: z.boolean().default(true),
+    eventForecasts: z.boolean().default(true),
+    mlHotspots: z.boolean().default(true),
+  })
+  .default({});
+
+const MapSectionsSchema = z
+  .object({
+    liveStatus: z.boolean().default(true),
+    forecastView: z.boolean().default(true),
+  })
+  .default({});
+
+const CommunitySectionsSchema = z
+  .object({
+    shareUpdate: z.boolean().default(true),
+    reportIncident: z.boolean().default(true),
+    filters: z.boolean().default(true),
+  })
+  .default({});
+
+const AssistantSectionsSchema = z
+  .object({
+    quickQuestions: z.boolean().default(true),
+  })
+  .default({});
+
+const AlertsSectionsSchema = z
+  .object({
+    traffic: z.boolean().default(true),
+    maintenance: z.boolean().default(true),
+  })
+  .default({});
+
+const SectionsSchema = z
+  .object({
+    dashboard: DashboardSectionsSchema,
+    map: MapSectionsSchema,
+    community: CommunitySectionsSchema,
+    assistant: AssistantSectionsSchema,
+    alerts: AlertsSectionsSchema,
+  })
+  .default({});
+
 const AdvisorySchema = z
   .object({
     active: z.boolean(),
@@ -43,10 +103,47 @@ const AdvisorySchema = z
     path: ["message"],
   });
 
-export const MobileConfigSchema = z.object({
-  features: FeaturesSchema,
-  advisory: AdvisorySchema,
-});
+/**
+ * Tabs that would render an empty screen if every section inside them were
+ * switched off.
+ *
+ * Turning a whole tab off is a legitimate thing to do and has its own switch.
+ * Leaving the tab ON while emptying it is not: the user taps it and finds a
+ * blank page, which reads as a broken app rather than as a decision. These are
+ * refused at the API so it cannot happen by a stray click in the UI either.
+ *
+ * Assistant is absent deliberately — with quickQuestions off it still has a
+ * working chat box, so an empty-section assistant is not an empty screen.
+ */
+const NON_EMPTY: { feature: MobileFeature; label: string; keys: string[] }[] = [
+  {
+    feature: "dashboard",
+    label: "Dashboard",
+    keys: ["statusSummary", "segmentForecast", "corridorOutlook", "eventForecasts", "mlHotspots"],
+  },
+  { feature: "map", label: "Corridor", keys: ["liveStatus", "forecastView"] },
+  { feature: "alerts", label: "Alerts", keys: ["traffic", "maintenance"] },
+];
+
+export const MobileConfigSchema = z
+  .object({
+    features: FeaturesSchema,
+    sections: SectionsSchema,
+    advisory: AdvisorySchema,
+  })
+  .superRefine((cfg, ctx) => {
+    for (const { feature, label, keys } of NON_EMPTY) {
+      // A tab that is switched off may hold whatever it likes; nobody sees it.
+      if (!cfg.features[feature]) continue;
+      const group = cfg.sections[feature] as Record<string, boolean>;
+      if (keys.some((k) => group[k])) continue;
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["sections", feature],
+        message: `${label} needs at least one section switched on, or the tab opens to an empty screen. Switch the whole tab off instead.`,
+      });
+    }
+  });
 
 export type MobileConfig = z.infer<typeof MobileConfigSchema>;
 
@@ -62,5 +159,18 @@ export type MobileConfig = z.infer<typeof MobileConfigSchema>;
  */
 export const DEFAULT_MOBILE_CONFIG: MobileConfig = {
   features: { dashboard: true, map: true, community: true, assistant: true, alerts: true },
+  sections: {
+    dashboard: {
+      statusSummary: true,
+      segmentForecast: true,
+      corridorOutlook: true,
+      eventForecasts: true,
+      mlHotspots: true,
+    },
+    map: { liveStatus: true, forecastView: true },
+    community: { shareUpdate: true, reportIncident: true, filters: true },
+    assistant: { quickQuestions: true },
+    alerts: { traffic: true, maintenance: true },
+  },
   advisory: { active: false, tone: "info", message: "" },
 };

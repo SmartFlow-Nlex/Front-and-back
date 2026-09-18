@@ -21,12 +21,38 @@ import { WAZE_REPORT_TYPES } from "../../lib/waze-reports";
  * map other than the one beside it.
  */
 
-const DENSITY = [
-  { level: 1 as const, label: "Light" },
-  { level: 2 as const, label: "Moderate" },
-  { level: 3 as const, label: "Heavy" },
-  { level: 4 as const, label: "Severe" },
-  { level: 5 as const, label: "Standstill" },
+/**
+ * The road's colours, grouped by the status each one counts as.
+ *
+ * Two true things were being shown one at a time. The map draws Waze's own
+ * five-level scale and all five turn up on this corridor, so a three-row key
+ * would have described a map that is not the one beside it. But every other
+ * view of the same feed — the corridor panel, the hero strip, the tallies —
+ * speaks in three states, and nothing said which colour was which. A reader
+ * counting four reds on the map against "4 congested" in the panel had no way
+ * to check the two agreed.
+ *
+ * The grouping is classify() in lib/corridor-status.ts, not a guess: level 0 is
+ * clear, 1-2 slow, 3 and above congested. Level 0 is in the list because the
+ * live map draws unreported stretches at it.
+ */
+const DENSITY_GROUPS = [
+  { status: "Clear", levels: [{ level: 0 as const, label: "Free flow" }] },
+  {
+    status: "Slow",
+    levels: [
+      { level: 1 as const, label: "Light" },
+      { level: 2 as const, label: "Moderate" },
+    ],
+  },
+  {
+    status: "Congested",
+    levels: [
+      { level: 3 as const, label: "Heavy" },
+      { level: 4 as const, label: "Severe" },
+      { level: 5 as const, label: "Standstill" },
+    ],
+  },
 ];
 
 /**
@@ -69,11 +95,20 @@ export default function MapLegend({ variant = "live" }: { variant?: "live" | "fo
   return (
     <div className="map-legend">
       <h4>Traffic density</h4>
-      {DENSITY.map((d) => (
-        <div key={d.level} className="wz-legend-row">
-          <span className="wz-line" style={{ background: palette.level[d.level] }} /> {d.label}
+      {DENSITY_GROUPS.map((g) => (
+        <div key={g.status} className="wz-legend-group">
+          <span className="wz-legend-status">{g.status}</span>
+          {g.levels.map((d) => (
+            <div key={d.level} className="wz-legend-row">
+              <span className="wz-line" style={{ background: palette.level[d.level] }} /> {d.label}
+            </div>
+          ))}
         </div>
       ))}
+      <p className="wz-legend-note">
+        Counted as three states across the dashboard: the corridor panel&apos;s clear, slow and
+        congested are these colours grouped.
+      </p>
 
       {/* Only where it can appear. On the live map an unreported stretch is
           drawn as free flow, so grey never shows; on the forecast, which covers

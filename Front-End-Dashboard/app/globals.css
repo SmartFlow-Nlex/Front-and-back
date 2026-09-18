@@ -9201,3 +9201,131 @@ details[open] > .evidence-summary .evidence-close-label { display: inline; }
 }
 
 .forecast-legend .mc-density-line { height: 4px; width: 26px; border-radius: 3px; }
+
+/* ══════════════════════════════════════════════════════════════════════════
+   FORECAST PICKER ON THE DARK HEADER
+   The picker is built for a light map overlay: a grey track, grey labels, a
+   white select. Dropped onto #0d1b34 that left "Next 24 h" and "Next 7 days"
+   as grey-on-navy, and the select floating beside the segments as a separate
+   white object. Here it is one control: a single translucent pill holding the
+   segments and the hour, divided rather than detached.
+   ══════════════════════════════════════════════════════════════════════════ */
+
+.fc-head .mc-horizon.is-compact {
+  display: flex;
+  align-items: center;
+  gap: 0;
+  padding: 3px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.09);
+  border: 1px solid rgba(255, 255, 255, 0.16);
+}
+
+.fc-head .mc-horizon-ranges {
+  background: transparent;
+  border: 0;
+  padding: 0;
+  gap: 2px;
+}
+
+.fc-head .mc-horizon-range {
+  border-radius: 999px;
+  padding: 6px 13px;
+  color: rgba(255, 255, 255, 0.66);
+  box-shadow: none;
+}
+
+.fc-head .mc-horizon-range:not(:disabled):not(.is-active):hover {
+  background: rgba(255, 255, 255, 0.14);
+  color: #fff;
+}
+
+/* White pill, purple type: the same relationship the panel's version has, in
+   the values this background needs. */
+.fc-head .mc-horizon-range.is-active {
+  background: #fff;
+  color: #6d28d9;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.25);
+}
+
+.fc-head .mc-horizon-range:disabled {
+  color: rgba(255, 255, 255, 0.3);
+  text-decoration-color: rgba(255, 255, 255, 0.35);
+}
+
+/* A rule, not a gap: the hour belongs to the range beside it, and spacing
+   alone read as two unrelated controls that happened to be adjacent. */
+.fc-head .mc-horizon-pick {
+  position: relative;
+  margin-left: 7px;
+  padding-left: 8px;
+}
+
+.fc-head .mc-horizon-pick::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 1px;
+  height: 17px;
+  background: rgba(255, 255, 255, 0.2);
+}
+
+.fc-head .mc-horizon-pick select {
+  min-width: 0;
+  border: 0;
+  background-color: transparent;
+  color: #fff;
+  font-size: 0.76rem;
+  font-weight: 700;
+  padding: 6px 25px 6px 9px;
+  background-image: url("data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%23ffffff' stroke-width='3' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+  background-position: right 7px center;
+}
+
+.fc-head .mc-horizon-pick select:hover { background-color: rgba(255, 255, 255, 0.12); border-radius: 999px; }
+
+.fc-head .mc-horizon-pick select:focus-visible {
+  border-radius: 999px;
+  box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.5);
+}
+
+/* The list itself is drawn by the OS on its own surface, so it needs colours
+   of its own or it inherits white type onto white. */
+.fc-head .mc-horizon-pick select option {
+  color: #0f172a;
+  background: #fff;
+  font-weight: 600;
+}
+
+/* Close sits level with the control rather than a size apart from it. */
+.fc-head .wz-close {
+  width: 34px;
+  height: 34px;
+  padding: 0;
+  justify-content: center;
+  border-radius: 999px;
+}
+
+.fc-head .wz-head-right { gap: 10px; align-items: center; }
+
+/* ── Live legend: levels grouped by the status they count as ─────────────── */
+.wz-legend-group + .wz-legend-group { margin-top: 7px; }
+
+.wz-legend-status {
+  display: block;
+  margin-bottom: 2px;
+  font-size: 0.62rem;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-secondary);
+}
+
+.wz-legend-note {
+  margin: 9px 0 0;
+  font-size: 0.65rem;
+  line-height: 1.45;
+  color: var(--text-secondary);
+}

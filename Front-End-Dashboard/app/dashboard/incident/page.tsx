@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { cachedJson } from "../../../lib/cached-json";
 import { attachCategoryClick } from "../../../lib/chart-click";
-import { useChartTheme, applyChartTheme, seriesRamp, seriesPair } from "../../../lib/chart-theme";
+import { useChartTheme, applyChartTheme, seriesRamp, seriesPair, seriesNominal } from "../../../lib/chart-theme";
 import ReactECharts from "echarts-for-react";
 import type { EChartsOption } from "echarts";
 import { AlertTriangle, ArrowDownWideNarrow, ArrowUpNarrowWide, CloudRain, HeartPulse, MapPin, Timer } from "lucide-react";
@@ -96,6 +96,9 @@ export default function IncidentPage() {
      automatic flip. A pair of nominal series takes the outer two steps, which is
      where the separation margin lives. See lib/chart-theme. */
   const RAMP = seriesRamp("incident", chartTheme);
+  // The three incident types have no order between them, so they take hues
+  // rather than three steps of one. See seriesNominal.
+  const TYPE_HUES = seriesNominal("incident", chartTheme);
   const [PAIR_A, PAIR_B] = seriesPair("incident", chartTheme);
   const SEQ = [chartTheme.seqLightest, ...RAMP];
   const [activeTab, setActiveTab] = useState<"Descriptive" | "Predictive" | "Prescriptive">("Descriptive");
@@ -234,9 +237,38 @@ export default function IncidentPage() {
       const cur = acc.get(k) ?? { road: 0, moto: 0, stalled: 0 };
       acc.set(k, { road: cur.road + r.road, moto: cur.moto + r.moto, stalled: cur.stalled + r.stalled });
     }
-    return [...acc.entries()]
+    const rows = [...acc.entries()]
       .sort(([a], [b]) => (a < b ? -1 : 1))
       .map(([label, v]) => ({ label, ...v, total: v.road + v.moto + v.stalled }));
+    if (grain === "daily" || rows.length < 3) return rows;
+
+    /* A bucket at either end is only drawn if the data covers the whole of it.
+       The first and last buckets are the ones a range boundary can cut in half,
+       and a half-month summed against whole months plots as a collapse. Which
+       days a bucket spans is derived from the calendar, not from how many rows
+       happen to be present, because a day with no incident has no row. */
+    const dates = data.dailyTrend.map((r) => r.d).sort();
+    const firstDay = dates[0];
+    const lastDay = dates[dates.length - 1];
+    const spanOf = (key: string): [string, string] => {
+      if (grain === "weekly") {
+        const start = new Date(`${key}T00:00`);
+        const end = new Date(start);
+        end.setDate(end.getDate() + 6);
+        return [key, end.toISOString().slice(0, 10)];
+      }
+      const [y, m] = key.split("-").map(Number);
+      return [`${key}-01`, new Date(y, m, 0).toISOString().slice(0, 10)];
+    };
+    const whole = (key: string) => {
+      const [s0, e0] = spanOf(key);
+      return s0 >= firstDay && e0 <= lastDay;
+    };
+    let lo = 0;
+    let hi = rows.length - 1;
+    if (!whole(rows[lo].label)) lo += 1;
+    if (hi > lo && !whole(rows[hi].label)) hi -= 1;
+    return rows.slice(lo, hi + 1);
   }, [data, grain]);
 
   const trendOption = useMemo<EChartsOption | null>(() => {
@@ -255,7 +287,9 @@ export default function IncidentPage() {
       lineStyle: { width: 2.5, color },
     });
 
-    const series = [mk("Road crashes", "road", RAMP[2]), mk("Motorcycle crashes", "moto", RAMP[1]), mk("Stalled vehicles", "stalled", RAMP[0])];
+    const series = [mk("Road crashes", "road", TYPE_HUES[0]),
+                    mk("Motorcycle crashes", "moto", TYPE_HUES[1]),
+                    mk("Stalled vehicles", "stalled", TYPE_HUES[2])];
 
     return {
       grid: { left: 52, right: 16, top: 10, bottom: 52 },

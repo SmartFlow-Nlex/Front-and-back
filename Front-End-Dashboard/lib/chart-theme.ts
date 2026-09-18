@@ -180,6 +180,43 @@ const SERIES_RAMPS: Record<VizTab, { light: [string, string, string]; dark: [str
   emissions: { light: ["#4cbd79", "#118f46", "#08582b"], dark: ["#6ed99a", "#23a55a", "#12703a"] },
 };
 
+/* ---------------------------------------------------------------------------
+   NOMINAL series: three categories with no order between them.
+
+   The ramps above are ordinal by construction, and the note explains why three
+   steps of one hue cannot pass the categorical gates. That leaves a gap: a
+   chart whose three series are genuinely nominal — road crashes vs motorcycle
+   crashes vs stalled vehicles, say — has no order to encode and must not be
+   given one. Handing it RAMP[0..2] is exactly the case the note rules out, and
+   in dark mode those three ambers are near indistinguishable.
+
+   So nominal triples get their own hues, anchored on the tab's colour so the
+   page still reads as itself. Checked with the dataviz validator at --pairs
+   all, because a reader compares any two lines, not only adjacent ones:
+
+     light  amber/blue/magenta   worst pair dE 12.6 CVD, 20.8 normal
+     dark   amber/blue/magenta   worst pair dE 13.1 CVD, 20.7 normal
+
+   Green is deliberately absent: green against amber is dE 1.9 under
+   protanopia, so an emissions-led nominal triple cannot be built from the
+   tab hue. Emissions has no nominal triple today — its Class 1/2/3 series are
+   ordinal and correctly take the ramp — and if one is ever needed it will have
+   to lead with a hue other than green. */
+const NOMINAL_TRIPLES: Record<VizTab, { light: [string, string, string]; dark: [string, string, string] }> = {
+  traffic:   { light: ["#2a78d6", "#b8760a", "#c2185b"], dark: ["#5288e2", "#bb8a12", "#cf5a90"] },
+  incident:  { light: ["#b8760a", "#2a78d6", "#c2185b"], dark: ["#bb8a12", "#5288e2", "#cf5a90"] },
+  emissions: { light: ["#008300", "#2a78d6", "#c2185b"], dark: ["#2e9e57", "#5288e2", "#cf5a90"] },
+};
+
+/**
+ * Three hues for three UNORDERED series, led by the tab's own colour.
+ * Use this instead of seriesRamp whenever the series have no natural order;
+ * use seriesRamp when they do (Class 1/2/3, good-to-poor air quality).
+ */
+export function seriesNominal(tab: VizTab, t: ChartTheme): [string, string, string] {
+  return t.isDark ? NOMINAL_TRIPLES[tab].dark : NOMINAL_TRIPLES[tab].light;
+}
+
 /** The tab's three ordinal steps, lightest first, for the active theme. */
 export function seriesRamp(tab: VizTab, t: ChartTheme): [string, string, string] {
   return t.isDark ? SERIES_RAMPS[tab].dark : SERIES_RAMPS[tab].light;

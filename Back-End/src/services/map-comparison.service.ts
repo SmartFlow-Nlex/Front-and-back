@@ -278,15 +278,20 @@ export async function getForecastDailyPeaksFromDb(): Promise<
            FROM per_hour
           WHERE base_ts IS NOT NULL
        )
+       -- to_char, not at::date. The driver parses a DATE into a JS Date at
+       -- LOCAL midnight, and toISOString then walks it back across UTC, so
+       -- every day came out one behind: the peak at 2026-09-19 13:00 was
+       -- labelled 2026-09-18. Formatting it in Postgres keeps the calendar
+       -- day the grouping actually used.
        SELECT DISTINCT ON (at::date)
-              at::date AS day, hours_ahead, at, congested, confidence
+              to_char(at, 'YYYY-MM-DD') AS day, hours_ahead, at, congested, confidence
          FROM stamped
         ORDER BY at::date, congested DESC, confidence DESC, hours_ahead
       `,
     );
 
     return rows.map((r) => ({
-      day: new Date(r.day).toISOString().slice(0, 10),
+      day: String(r.day),
       hoursAhead: Number(r.hours_ahead),
       at: new Date(r.at).toISOString(),
       congested: Number(r.congested),

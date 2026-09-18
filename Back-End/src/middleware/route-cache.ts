@@ -30,11 +30,38 @@ const refreshing = new Set<string>();
 
 const LIVE_PREFIXES = ["/api/map-comparison/real-time", "/api/map-comparison/live-overview", "/api/traffic/realtime", "/api/dashboard/corridor-status"];
 const SHORT_PREFIXES = ["/api/maintenance", "/api/audit-log", "/api/health"];
+/* Rewritten by the congestion pipeline every hour, and each response carries
+   the base_ts it was computed from. Ten minutes of that is a forecast map
+   captioned with the wrong base hour; the read behind it is one horizon of
+   nineteen rows, so a short TTL costs little. */
+const FORECAST_PREFIXES = ["/api/map-comparison/forecast"];
 
 export function ttlFor(url: string): number {
   if (LIVE_PREFIXES.some((p) => url.startsWith(p))) return 30_000;
   if (SHORT_PREFIXES.some((p) => url.startsWith(p))) return 15_000;
+  if (FORECAST_PREFIXES.some((p) => url.startsWith(p))) return 60_000;
   return 10 * 60_000;
+}
+
+/* An empty answer is never worth serving stale.
+ *
+ * The congestion pipeline rewrites its table hourly and can extend how far
+ * ahead it reaches. Before one such run /forecast?hours=24 genuinely had no
+ * rows, so this cache stored an empty FeatureCollection whose model block
+ * reported maxHorizon 12 - correct at the time. After the run the warehouse
+ * held 168 horizons, but the next reader was still handed that empty body,
+ * and the horizon picker reads maxHorizon from it: the "Next 24 h" and "Next
+ * 7 days" buttons stayed disabled, so nobody could ask a second time and
+ * collect the fresh copy the background refresh had just fetched.
+ *
+ * Reproducing an empty result is cheap and can only improve on it, so a stale
+ * entry with no payload is treated as a miss rather than as an answer. */
+function isEmptyPayload(body: unknown): boolean {
+  if (body == null || typeof body !== "object") return false;
+  const b = body as Record<string, unknown>;
+  if (Array.isArray(b.features)) return b.features.length === 0;
+  if (Array.isArray(b.data)) return b.data.length === 0;
+  return false;
 }
 
 function prefixOf(url: string): string {
@@ -78,13 +105,15 @@ export function routeCache(req: Request, res: Response, next: NextFunction): voi
     res.status(hit.status).json(hit.body);
     return;
   }
-  if (!bypass && hit && !fresh) {
+  if (!bypass && hit && !fresh && !isEmptyPayload(hit.body)) {
     // Serve what we have now; bring the next reader a fresh copy.
     res.setHeader("X-Cache", "STALE");
     res.status(hit.status).json(hit.body);
     refreshInBackground(url);
     return;
   }
+  // An expired entry holding nothing falls through to the miss path below, so
+  // this caller waits for a real answer instead of being told there is none.
 
   // Miss (or bypass). Coalesce concurrent misses for this URL: later callers
   // wait for the first run, then answer from the store.

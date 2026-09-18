@@ -34,6 +34,7 @@ EXPECTATION
   Accuracy will fall well below 78.1%, steeply with horizon. That is not a
   regression; it is the first honest measurement of a harder task.
 """
+import time as _time_mod
 import json
 import sys
 import warnings
@@ -125,8 +126,29 @@ SEQ_LEN = 24
 SARIMAX_ORIGIN_STEP = 12          # refit cadence across the test window
 
 
+_STEP_T0 = [None, None]  # [name, started_at] of the step currently running
+_RUN_T0 = _time_mod.monotonic()
+
+
 def banner(t):
+    """Announce a step, and report how long the previous one took.
+
+    Runs were taking anywhere from five to twenty-six minutes with no way to
+    tell which part was responsible: the log said what was happening but never
+    how long it had taken, so "make it faster" had nothing to aim at. Each
+    step now closes with its own duration, and the run closes with a total.
+    """
+    if _STEP_T0[0] is not None:
+        print(f"  [{_STEP_T0[0]} took {_time_mod.monotonic() - _STEP_T0[1]:.1f}s]")
+    _STEP_T0[0], _STEP_T0[1] = t.split(":")[0], _time_mod.monotonic()
     print("\n" + "=" * 70 + f"\n  {t}\n" + "=" * 70)
+
+
+def banner_done():
+    """Close the last step and print the run total."""
+    if _STEP_T0[0] is not None:
+        print(f"  [{_STEP_T0[0]} took {_time_mod.monotonic() - _STEP_T0[1]:.1f}s]")
+    print(f"  [total {_time_mod.monotonic() - _RUN_T0:.1f}s]")
 
 
 # ── 1. Data ─────────────────────────────────────────────────────────────────
@@ -765,3 +787,4 @@ json.dump({
 print("  congestion_results_horizon.json written")
 conn.close()
 banner("DONE")
+banner_done()

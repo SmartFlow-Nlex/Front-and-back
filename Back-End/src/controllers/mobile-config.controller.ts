@@ -77,17 +77,31 @@ export const writeMobileConfig = async (req: Request, res: Response) => {
     }
   }
 
-  const advisoryChanged =
-    before.config.advisory.active !== parsed.data.advisory.active ||
-    before.config.advisory.message !== parsed.data.advisory.message ||
-    before.config.advisory.tone !== parsed.data.advisory.tone;
+  // Advisories go to the log as what they say, not as a count: this is the one
+  // part of the configuration that puts words on a stranger's phone, so the
+  // record of who broadcast what has to hold the text itself.
+  const beforeById = new Map(before.config.advisories.map((a) => [a.id, a]));
+  const afterById = new Map(parsed.data.advisories.map((a) => [a.id, a]));
+  const advisoryChanges: string[] = [];
+  for (const a of parsed.data.advisories) {
+    const prev = beforeById.get(a.id);
+    if (!prev) {
+      advisoryChanges.push(`added ${a.active ? "and published " : ""}[${a.tone}] ${a.message}`);
+    } else if (prev.active !== a.active) {
+      advisoryChanges.push(`${a.active ? "published" : "withdrew"} [${a.tone}] ${a.message}`);
+    } else if (prev.message !== a.message || prev.tone !== a.tone) {
+      advisoryChanges.push(`edited [${a.tone}] ${a.message}`);
+    }
+  }
+  for (const prev of before.config.advisories) {
+    if (!afterById.has(prev.id)) advisoryChanges.push(`deleted [${prev.tone}] ${prev.message}`);
+  }
 
   audit(req, "mobile_config.updated", {
     tabs: changed.length ? changed : "unchanged",
     sections: sectionsChanged.length ? sectionsChanged : "unchanged",
-    advisory: advisoryChanged
-      ? { active: parsed.data.advisory.active, tone: parsed.data.advisory.tone }
-      : "unchanged",
+    advisories: advisoryChanges.length ? advisoryChanges : "unchanged",
+    livePublished: parsed.data.advisories.filter((a) => a.active).length,
   });
 
   res.json({

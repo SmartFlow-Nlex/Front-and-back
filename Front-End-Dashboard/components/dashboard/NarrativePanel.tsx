@@ -21,7 +21,6 @@ import AiModelInsight, { type InsightMetric } from "./AiModelInsight";
  * one of them lie.
  */
 export default function NarrativePanel({
-  subtitle,
   chips,
   contextLine,
   metrics,
@@ -31,8 +30,8 @@ export default function NarrativePanel({
   horizonDays = 1,
   labelFor,
 }: {
-  /** Shown under the title while collapsed. */
-  subtitle: string;
+  /** Kept for callers; the collapsed state is now a button with no room for it. */
+  subtitle?: string;
   /** The headline verdict, visible before anyone opens the panel. */
   chips?: ReactNode;
   /** One muted line above the read-out saying what it was read from. */
@@ -46,6 +45,9 @@ export default function NarrativePanel({
 }) {
   const [open, setOpen] = useState(false);
 
+  // Nothing but the button until it is pressed.
+  if (!open) return <GenerateReportButton onClick={() => setOpen(true)} />;
+
   return (
     <section
       style={{
@@ -54,10 +56,10 @@ export default function NarrativePanel({
         background:
           "linear-gradient(135deg, color-mix(in srgb, var(--page-accent, #4f46e5) 11%, var(--bg-surface)), color-mix(in srgb, var(--page-accent, #4f46e5) 4%, var(--bg-surface)))",
         boxShadow: "inset 0 1px 0 rgba(255,255,255,0.5)",
-        padding: open ? "18px 20px" : "12px 18px",
+        padding: "18px 20px",
         display: "flex",
         flexDirection: "column",
-        gap: open ? 14 : 0,
+        gap: 14,
       }}
     >
       <div style={{ display: "flex", alignItems: "center", gap: 16, flexWrap: "wrap" }}>
@@ -75,48 +77,39 @@ export default function NarrativePanel({
             <h4 style={{ margin: 0, fontSize: "0.98rem", fontWeight: 800, letterSpacing: "-0.01em", color: "var(--text-primary)" }}>
               Narrative Explanation
             </h4>
-            {!open && (
-              <p style={{ margin: "3px 0 0", fontSize: "0.78rem", color: "var(--text-secondary)" }}>{subtitle}</p>
-            )}
           </div>
         </div>
-
-        {!open && chips && (
-          <div style={{ display: "flex", gap: 8, flexWrap: "wrap", flex: 1, justifyContent: "flex-end" }}>{chips}</div>
-        )}
 
         <button
           onClick={() => setOpen((v) => !v)}
           style={{
             display: "inline-flex", alignItems: "center", gap: 6, padding: "6px 14px",
-            marginLeft: open ? "auto" : 0, flexShrink: 0,
+            marginLeft: "auto", flexShrink: 0,
             borderRadius: 999, cursor: "pointer", fontSize: "0.76rem", fontWeight: 600,
-            border: open ? "1px solid var(--border-strong)" : "1px solid transparent",
-            background: open ? "var(--bg-surface)" : "linear-gradient(135deg, color-mix(in srgb, var(--page-accent, #4f46e5) 82%, white), var(--page-accent, #4f46e5))",
-            color: open ? "var(--text-secondary)" : "#fff",
-            boxShadow: open ? "none" : "0 1px 6px color-mix(in srgb, var(--page-accent, #4f46e5) 35%, transparent)",
+            border: "1px solid var(--border-strong)",
+            background: "var(--bg-surface)",
+            color: "var(--text-secondary)",
           }}
         >
-          {open ? "Hide report" : "Generate report"}
+          Hide report
         </button>
       </div>
 
-      {open && (
-        <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-          {contextLine && (
-            <p style={{ margin: 0, fontSize: "0.8rem", color: "var(--text-secondary)" }}>{contextLine}</p>
-          )}
-          <AiModelInsight
-            quantity="volume"
-            metrics={metrics}
-            horizonDays={horizonDays}
-            endpoint={endpoint}
-            subjectKey={subjectKey}
-            buildBody={buildBody}
-            labelFor={labelFor}
-          />
-        </div>
-      )}
+      <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+        {chips && <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>{chips}</div>}
+        {contextLine && (
+          <p style={{ margin: 0, fontSize: "0.8rem", color: "var(--text-secondary)" }}>{contextLine}</p>
+        )}
+        <AiModelInsight
+          quantity="volume"
+          metrics={metrics}
+          horizonDays={horizonDays}
+          endpoint={endpoint}
+          subjectKey={subjectKey}
+          buildBody={buildBody}
+          labelFor={labelFor}
+        />
+      </div>
     </section>
   );
 }
@@ -136,5 +129,40 @@ export function NarrativeChip({ tone = "neutral", children }: { tone?: "good" | 
     >
       {children}
     </span>
+  );
+}
+
+/**
+ * The one control a collapsed Narrative Explanation shows.
+ *
+ * Generating spends a language-model request, so it stays a deliberate press
+ * rather than something every page load pays for on a reader who may never
+ * scroll this far. Shared by all three cards so the offer looks identical
+ * wherever it appears.
+ */
+export function GenerateReportButton({ onClick }: { onClick: () => void }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      style={{
+        display: "inline-flex",
+        alignItems: "center",
+        gap: 7,
+        padding: "8px 16px",
+        borderRadius: 999,
+        cursor: "pointer",
+        fontSize: "0.78rem",
+        fontWeight: 600,
+        border: "1px solid transparent",
+        background:
+          "linear-gradient(135deg, color-mix(in srgb, var(--page-accent, #4f46e5) 82%, white), var(--page-accent, #4f46e5))",
+        color: "#fff",
+        boxShadow: "0 1px 6px color-mix(in srgb, var(--page-accent, #4f46e5) 35%, transparent)",
+      }}
+    >
+      <Sparkles size={14} strokeWidth={2.4} />
+      Generate report
+    </button>
   );
 }

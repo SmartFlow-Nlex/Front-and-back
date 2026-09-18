@@ -52,7 +52,9 @@ VALUES (
       "assistant": { "quickQuestions": true, "capabilities": true },
       "alerts": { "traffic": true, "maintenance": true }
     },
+    "advisories": [],
     "advisory": {
+      "_comment": "DERIVED from advisories by the API for older app builds. Never edit by hand.",
       "active": false,
       "tone": "info",
       "message": ""
@@ -86,3 +88,24 @@ UPDATE nlex_mobile_config
 SET config = jsonb_set(
       config, '{sections,assistant,capabilities}', 'true'::jsonb, true)
 WHERE id = 1 AND NOT (config -> 'sections' -> 'assistant' ? 'capabilities');
+
+-- Back-fill the advisories list for a row written when there was only one.
+-- A single advisory with text becomes a one-item list; an empty one becomes an
+-- empty list. The API migrates on read as well, so this only keeps the stored
+-- document honest for anyone inspecting the table by hand.
+UPDATE nlex_mobile_config
+SET config = jsonb_set(
+      config,
+      '{advisories}',
+      CASE
+        WHEN coalesce(config -> 'advisory' ->> 'message', '') <> ''
+          THEN jsonb_build_array(
+                 jsonb_build_object(
+                   'id', 'legacy',
+                   'active', coalesce((config -> 'advisory' ->> 'active')::boolean, false),
+                   'tone', coalesce(config -> 'advisory' ->> 'tone', 'info'),
+                   'message', config -> 'advisory' ->> 'message'))
+        ELSE '[]'::jsonb
+      END,
+      true)
+WHERE id = 1 AND NOT (config ? 'advisories');

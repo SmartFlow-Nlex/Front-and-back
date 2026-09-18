@@ -5,6 +5,7 @@ import AiModelInsight, { type InsightMetric } from "./AiModelInsight";
 import { Sparkles } from "lucide-react";
 import { createPortal } from "react-dom";
 import { META, type ModelKey, type ModelMetric } from "./incidentPredictive.shared";
+import { GenerateReportButton } from "./NarrativePanel";
 
 /**
  * Generative narrative for the incident forecast chart. Ported from
@@ -250,6 +251,9 @@ export default function IncidentNarrative({
 
   const byModel = new Map(metrics.map((m) => [m.model, m]));
 
+  // Nothing but the button until it is pressed.
+  if (!open) return <GenerateReportButton onClick={() => setOpen(true)} />;
+
   return (
     <section
       style={{
@@ -331,7 +335,7 @@ export default function IncidentNarrative({
             boxShadow: open ? "none" : "0 1px 6px color-mix(in srgb, var(--page-accent, #4f46e5) 35%, transparent)",
           }}
         >
-          {open ? "Hide report" : "Generate report"}
+          Hide report
         </button>
       </div>
 

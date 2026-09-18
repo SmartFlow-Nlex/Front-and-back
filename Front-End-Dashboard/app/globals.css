@@ -8283,3 +8283,368 @@ details[open] > .evidence-summary .evidence-close-label { display: inline; }
    and the list absorbs it. A negative margin here only confused the scroll
    height it was meant to protect. */
 .ds-mc-savebar.is-open { max-height: 72px; padding: 12px 18px; }
+
+/* ══════════════════════════════════════════════════════════════════════════
+   ADVISORIES — a managed list rather than one message
+   ══════════════════════════════════════════════════════════════════════════ */
+
+/* ── The strip ───────────────────────────────────────────────────────────── */
+.ds-mc-advisory-text b {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.ds-mc-advisory-counts {
+  font-size: 0.7rem;
+  font-weight: 700;
+  color: var(--text-secondary);
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--text-secondary) 11%, transparent);
+}
+
+.ds-mc-advisory-strip.is-live .ds-mc-advisory-counts {
+  color: var(--color-warning, #b45309);
+  background: color-mix(in srgb, var(--color-warning, #b45309) 15%, transparent);
+}
+
+/* Several live advisories share the line, each truncating rather than one
+   pushing the others out. The full text is on the title attribute and in the
+   dialog; the strip is an at-a-glance answer to "is anything on a phone?". */
+.ds-mc-advisory-text .is-live-text {
+  display: flex;
+  gap: 14px;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.ds-mc-advisory-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  max-width: 34ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 0.78rem;
+  color: var(--text-primary);
+}
+
+/* ── The dialog ──────────────────────────────────────────────────────────── */
+.ds-modal.is-wide { width: min(680px, 100%); }
+
+.ds-modal-foot-note {
+  margin-right: auto;
+  font-size: 0.78rem;
+  color: var(--text-secondary);
+}
+
+.ds-adv-empty {
+  display: grid;
+  justify-items: center;
+  gap: 7px;
+  text-align: center;
+  padding: 30px 24px;
+  border: 1px dashed var(--border-default);
+  border-radius: 12px;
+  color: var(--text-secondary);
+}
+
+.ds-adv-empty svg { color: var(--page-accent, var(--brand-primary)); opacity: 0.5; }
+.ds-adv-empty b { font-size: 0.95rem; color: var(--text-primary); }
+.ds-adv-empty span { font-size: 0.82rem; line-height: 1.55; max-width: 44ch; }
+
+.ds-adv-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 10px; }
+
+.ds-adv-list li {
+  display: grid;
+  gap: 8px;
+  padding: 12px 13px;
+  border: 1px solid var(--border-default);
+  border-radius: 12px;
+  background: var(--bg-surface);
+}
+
+/* A published advisory is on every phone on the corridor. It should not look
+   the same as a draft sitting in a list nobody has seen. */
+.ds-adv-list li.is-live {
+  border-color: color-mix(in srgb, var(--color-warning, #b45309) 40%, transparent);
+  background: color-mix(in srgb, var(--color-warning, #b45309) 5%, var(--bg-surface));
+}
+
+.ds-adv-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.ds-adv-state {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.72rem;
+  font-weight: 800;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  color: var(--text-secondary);
+  min-width: 82px;
+}
+
+.ds-adv-state.is-live { color: var(--color-warning, #b45309); }
+
+/* Three words on one row here rather than three described cards: inside a list
+   item the hint under each label only repeats what the word already says. */
+.ds-mc-tones.is-inline {
+  display: flex;
+  gap: 4px;
+  margin: 0;
+  margin-left: auto;
+}
+
+.ds-mc-tones.is-inline .ds-mc-tone { padding: 4px 9px; }
+.ds-mc-tones.is-inline .ds-mc-tone b { font-size: 0.72rem; }
+
+.ds-adv-delete {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+  border: 1px solid var(--border-default);
+  background: var(--bg-surface);
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.ds-adv-delete:hover {
+  color: var(--color-danger, #dc2626);
+  border-color: color-mix(in srgb, var(--color-danger, #dc2626) 40%, transparent);
+  background: color-mix(in srgb, var(--color-danger, #dc2626) 8%, transparent);
+}
+
+.ds-adv-delete:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-danger, #dc2626) 25%, transparent);
+}
+
+.ds-adv-list textarea {
+  width: 100%;
+  resize: vertical;
+  padding: 9px 11px;
+  border-radius: 10px;
+  border: 1px solid var(--border-default);
+  background: var(--bg-surface);
+  color: var(--text-primary);
+  font: inherit;
+  font-size: 0.85rem;
+  line-height: 1.55;
+}
+
+.ds-adv-list textarea:focus-visible {
+  outline: none;
+  border-color: var(--page-accent, var(--brand-primary));
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--page-accent, var(--brand-primary)) 20%, transparent);
+}
+
+.ds-adv-list small {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 0.72rem;
+  color: var(--text-secondary);
+  font-variant-numeric: tabular-nums;
+}
+
+/* Says how much further to go rather than just refusing at the end. */
+.ds-adv-hint { color: var(--color-warning, #b45309); font-weight: 600; }
+.ds-adv-list small .is-near { color: var(--color-warning, #b45309); font-weight: 700; }
+
+.ds-adv-add {
+  width: 100%;
+  justify-content: center;
+  border-style: dashed;
+}
+
+@media (max-width: 640px) {
+  .ds-mc-tones.is-inline { margin-left: 0; }
+  .ds-adv-head { gap: 8px; }
+}
+
+/* ── Toasts ────────────────────────────────────────────────────────────────
+   "Saved" and "Save failed" used to be banners at the top of the page: they
+   appeared, pushed everything down by their own height, then vanished five
+   seconds later and let it all snap back. A message about something that has
+   already happened should not move the thing it happened to. These float
+   clear of the layout instead.
+
+   The "showing built-in defaults" banner is deliberately NOT one of these. It
+   describes a standing condition rather than an event, and it should stay on
+   screen for as long as it is true. */
+.ds-toasts {
+  position: fixed;
+  right: 22px;
+  bottom: 22px;
+  z-index: 70;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  align-items: flex-end;
+  pointer-events: none;
+}
+
+.ds-toasts:empty { display: none; }
+
+.ds-toast {
+  pointer-events: auto;
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  max-width: 420px;
+  padding: 12px 14px;
+  border-radius: 12px;
+  border: 1px solid transparent;
+  font-size: 0.84rem;
+  line-height: 1.5;
+  box-shadow: 0 12px 30px rgba(15, 23, 42, 0.16);
+  animation: ds-toast-in 200ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+@keyframes ds-toast-in {
+  from { opacity: 0; transform: translateY(10px); }
+  to { opacity: 1; transform: none; }
+}
+
+.ds-toast.is-ok {
+  color: #065f46;
+  background: color-mix(in srgb, var(--color-success, #0f8a4a) 12%, var(--bg-surface));
+  border-color: color-mix(in srgb, var(--color-success, #0f8a4a) 35%, transparent);
+}
+
+.ds-toast.is-error {
+  color: #991b1b;
+  background: color-mix(in srgb, var(--color-danger, #dc2626) 11%, var(--bg-surface));
+  border-color: color-mix(in srgb, var(--color-danger, #dc2626) 35%, transparent);
+}
+
+/* An error stays until it is dismissed - it may be the only record of why a
+   save did not happen - so it needs a way out. The success toast times out. */
+.ds-toast button {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  margin: -2px -4px 0 0;
+  border: 0;
+  border-radius: 6px;
+  background: none;
+  color: inherit;
+  opacity: 0.65;
+  cursor: pointer;
+}
+
+.ds-toast button:hover { opacity: 1; background: rgba(15, 23, 42, 0.08); }
+
+/* ── Live versus pending, in the advisory list ───────────────────────────── */
+.ds-adv-pending {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 0.68rem;
+  font-weight: 800;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  white-space: nowrap;
+  color: var(--page-accent, var(--brand-primary));
+  background: color-mix(in srgb, var(--page-accent, var(--brand-primary)) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--page-accent, var(--brand-primary)) 30%, transparent);
+}
+
+/* The switch had no visible name, which is most of why it was mistaken for
+   the thing that publishes. */
+.ds-adv-publish {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  cursor: pointer;
+  font-size: 0.74rem;
+  font-weight: 700;
+  color: var(--text-secondary);
+}
+
+.ds-adv-publish:has(input:disabled) { opacity: 0.5; cursor: not-allowed; }
+
+.ds-adv-explain {
+  margin: 0;
+  padding: 10px 12px;
+  border-radius: 10px;
+  font-size: 0.78rem;
+  line-height: 1.55;
+  color: var(--text-secondary);
+  background: color-mix(in srgb, var(--text-secondary) 7%, transparent);
+}
+
+.ds-adv-explain b { color: var(--text-primary); }
+
+@media (prefers-reduced-motion: reduce) {
+  .ds-toast { animation: none; }
+}
+
+/* ── Advisory dialog, tightened ───────────────────────────────────────────
+   Two paragraphs were doing the work the layout should have been doing. The
+   row is now three bands - where it stands, what it says, how it goes out -
+   so each control has room to be read, and the header carries a count instead
+   of a description. */
+.ds-adv-title { display: flex; align-items: baseline; gap: 10px; }
+.ds-adv-title h2 { margin: 0; }
+
+.ds-modal-head { align-items: center; padding: 16px 20px; }
+
+.ds-adv-explain { display: none; }
+
+/* Top band: the state, what a save would change, and the way out. */
+.ds-adv-head { gap: 8px; }
+.ds-adv-head .ds-adv-delete { margin-left: auto; }
+.ds-adv-state { min-width: 0; }
+
+/* Bottom band: tone on the left, the counter in the middle, publish on the
+   right - the control that matters most sitting where the eye ends up. */
+.ds-adv-foot {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.ds-adv-count {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 10px;
+  margin-left: auto;
+  font-size: 0.72rem;
+  color: var(--text-secondary);
+  font-variant-numeric: tabular-nums;
+}
+
+.ds-adv-publish {
+  padding: 4px 10px 4px 12px;
+  border-radius: 999px;
+  border: 1px solid var(--border-default);
+  background: var(--bg-surface);
+}
+
+/* Once it is marked to go out, the control says so on its own. */
+.ds-adv-list li.is-live .ds-adv-publish,
+.ds-adv-publish:has(input:checked) {
+  border-color: color-mix(in srgb, var(--page-accent, var(--brand-primary)) 40%, transparent);
+  color: var(--page-accent, var(--brand-primary));
+}
+
+.ds-adv-list li { gap: 10px; padding: 13px 14px; }
+.ds-adv-list small { display: none; }

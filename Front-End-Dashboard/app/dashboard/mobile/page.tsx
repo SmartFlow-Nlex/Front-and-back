@@ -19,6 +19,7 @@ import {
   Map as MapIcon,
   Megaphone,
   MessageSquarePlus,
+  Plus,
   Radio,
   RotateCcw,
   Route,
@@ -27,6 +28,7 @@ import {
   Siren,
   Smartphone,
   Sparkles,
+  Trash2,
   TrendingUp,
   TriangleAlert,
   Users,
@@ -46,10 +48,14 @@ type AdvisoryTone = "info" | "warning" | "critical";
 
 type Sections = Record<TabKey, Record<string, boolean>>;
 
+type Advisory = { id: string; active: boolean; tone: AdvisoryTone; message: string };
+
 type MobileConfig = {
   features: Record<TabKey, boolean>;
   sections: Sections;
-  advisory: { active: boolean; tone: AdvisoryTone; message: string };
+  /** Held in the order an operator arranged them. The API also returns a
+   *  derived single `advisory` for older app builds; nothing here reads it. */
+  advisories: Advisory[];
 };
 
 type Meta = { source: "db" | "defaults"; updatedAt: string | null; updatedBy: string | null };
@@ -128,8 +134,14 @@ const TONES: { key: AdvisoryTone; label: string; hint: string }[] = [
 ];
 
 const MAX_MESSAGE = 280;
-/** Below this an advisory cannot be published; see setAdvisory. */
+/** Below this an advisory cannot be published. Mirrors the API. */
 const MIN_MESSAGE = 8;
+/** Every published advisory is pinned above the app's own notices, so a long
+ *  list stops being a notice and starts being the Alerts screen. */
+const MAX_ADVISORIES = 6;
+
+const newAdvisoryId = () =>
+  `adv-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
 
 function allOn(): Sections {
   return TABS.reduce((acc, t) => {
@@ -148,7 +160,7 @@ function tabShown(sections: Sections, key: TabKey): boolean {
 const FALLBACK: MobileConfig = {
   features: { dashboard: true, map: true, community: true, assistant: true, alerts: true },
   sections: allOn(),
-  advisory: { active: false, tone: "info", message: "" },
+  advisories: [],
 };
 
 /**
@@ -244,24 +256,77 @@ export default function MobileControlPage() {
     () =>
       saved
         ? JSON.stringify(saved.sections) !== JSON.stringify(draft.sections) ||
-          JSON.stringify(saved.advisory) !== JSON.stringify(draft.advisory)
+          JSON.stringify(saved.advisories) !== JSON.stringify(draft.advisories)
         : false,
     [saved, draft]
   );
 
   /** The message is what makes an advisory publishable, so the two are kept in
    *  step here rather than validated after the fact. Below the minimum the
-   *  broadcast is simply off: otherwise the strip reads "Nothing published"
-   *  while the save bar refuses to save, which is the page disagreeing with
-   *  itself and leaving no obvious way out. */
-  const setAdvisory = (patch: Partial<MobileConfig["advisory"]>) =>
-    setDraft((d) => {
-      const next = { ...d.advisory, ...patch };
-      if (next.message.trim().length < MIN_MESSAGE) next.active = false;
-      return { ...d, advisory: next };
-    });
+   *  broadcast is simply off: otherwise a row reads as a draft while the save
+   *  bar refuses to save and names a rule with no visible cause. */
+  const patchAdvisory = (id: string, patch: Partial<Advisory>) =>
+    setDraft((d) => ({
+      ...d,
+      advisories: d.advisories.map((a) => {
+        if (a.id !== id) return a;
+        const next = { ...a, ...patch };
+        if (next.message.trim().length < MIN_MESSAGE) next.active = false;
+        return next;
+      }),
+    }));
 
-  const canPublish = draft.advisory.message.trim().length >= MIN_MESSAGE;
+  const addAdvisory = () =>
+    setDraft((d) =>
+      d.advisories.length >= MAX_ADVISORIES
+        ? d
+        : {
+            ...d,
+            advisories: [
+              ...d.advisories,
+              { id: newAdvisoryId(), active: false, tone: "info" as AdvisoryTone, message: "" },
+            ],
+          }
+    );
+
+  const removeAdvisory = (id: string) =>
+    setDraft((d) => ({ ...d, advisories: d.advisories.filter((a) => a.id !== id) }));
+
+  const livePublished = draft.advisories.filter(
+    (a) => a.active && a.message.trim().length >= MIN_MESSAGE
+  );
+
+  /** What is actually on phones right now, as opposed to what the draft says.
+   *  The switch records intent; only a save changes what travellers see. */
+  const savedAdvisories = useMemo(
+    () => new Map((saved?.advisories ?? []).map((a) => [a.id, a])),
+    [saved]
+  );
+
+  /** How many advisories a save would actually change on a phone. This is the
+   *  difference between the switch and the button, said as a number instead of
+   *  as a paragraph. */
+  const pendingCount = useMemo(() => {
+    const prevIds = new Set(savedAdvisories.keys());
+    let n = draft.advisories.filter((a) => {
+      const prev = savedAdvisories.get(a.id);
+      return !prev || prev.active !== a.active || prev.message !== a.message || prev.tone !== a.tone;
+    }).length;
+    for (const id of prevIds) if (!draft.advisories.some((a) => a.id === id)) n += 1;
+    return n;
+  }, [draft.advisories, savedAdvisories]);
+
+  const pendingFor = (a: Advisory): { live: boolean; change: string | null } => {
+    const prev = savedAdvisories.get(a.id);
+    if (!prev) return { live: false, change: a.active ? "new, will publish" : "new draft" };
+    if (prev.active !== a.active) {
+      return { live: prev.active, change: a.active ? "will publish" : "will withdraw" };
+    }
+    if (prev.message !== a.message || prev.tone !== a.tone) {
+      return { live: prev.active, change: "edited" };
+    }
+    return { live: prev.active, change: null };
+  };
 
   const anythingOn = useMemo(() => TABS.some((t) => tabShown(draft.sections, t.key)), [draft]);
 
@@ -269,8 +334,8 @@ export default function MobileControlPage() {
   // disabled and says why, rather than letting the operator find out from a red
   // banner after pressing Save.
   const blockedReason = useMemo(() => {
-    if (draft.advisory.active && !canPublish) {
-      return "A published advisory needs at least 8 characters.";
+    if (draft.advisories.some((a) => a.active && a.message.trim().length < MIN_MESSAGE)) {
+      return `A published advisory needs at least ${MIN_MESSAGE} characters.`;
     }
     if (!anythingOn) return "Everything is switched off — the app would open to nothing.";
     return null;
@@ -285,7 +350,7 @@ export default function MobileControlPage() {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         // `features` is derived from `sections` by the API, so it is not sent.
-        body: JSON.stringify({ sections: draft.sections, advisory: draft.advisory }),
+        body: JSON.stringify({ sections: draft.sections, advisories: draft.advisories }),
       });
       const body = await res.json();
       if (!res.ok || !body?.success) throw new Error(body?.message ?? `Save failed (${res.status})`);
@@ -346,34 +411,51 @@ export default function MobileControlPage() {
         </div>
       )}
 
-      {error && (
-        <div className="ds-mc-banner is-error" role="alert">
-          <AlertTriangle size={16} aria-hidden="true" />
-          <div>{error}</div>
-        </div>
-      )}
-
-      {flash && (
-        <div className="ds-mc-banner is-ok" role="status">
-          <Info size={16} aria-hidden="true" />
-          <div>{flash}</div>
-        </div>
-      )}
+      <div className="ds-toasts" aria-live="polite">
+        {error && (
+          <div className="ds-toast is-error" role="alert">
+            <AlertTriangle size={16} aria-hidden="true" />
+            <div>{error}</div>
+            <button type="button" aria-label="Dismiss" onClick={() => setError(null)}>
+              <X size={14} aria-hidden="true" />
+            </button>
+          </div>
+        )}
+        {flash && (
+          <div className="ds-toast is-ok" role="status">
+            <Info size={16} aria-hidden="true" />
+            <div>{flash}</div>
+          </div>
+        )}
+      </div>
 
         {/* The advisory is a broadcast, not a per-screen switch, so it does
             not belong in the list of sections. It sits above as a one-line
             readout of whether anything is live, and opens in a dialog — which
             also keeps this page to a single screen with no scrolling. */}
-        <div className={`ds-mc-advisory-strip${draft.advisory.active ? " is-live" : ""}`}>
+        <div className={`ds-mc-advisory-strip${livePublished.length > 0 ? " is-live" : ""}`}>
           <span className="ds-mc-advisory-icon" aria-hidden="true">
             <Megaphone size={16} />
           </span>
           <span className="ds-mc-advisory-text">
-            <b>Published advisory</b>
-            {draft.advisory.active && draft.advisory.message.trim().length > 0 ? (
-              <span className="is-live-text" title={draft.advisory.message}>
-                <span className={`ds-mc-dot is-${draft.advisory.tone}`} aria-hidden="true" />
-                Live · {draft.advisory.message}
+            <b>
+              Advisories
+              {draft.advisories.length > 0 && (
+                <span className="ds-mc-advisory-counts">
+                  {livePublished.length} published
+                  {draft.advisories.length - livePublished.length > 0 &&
+                    ` \u00b7 ${draft.advisories.length - livePublished.length} draft`}
+                </span>
+              )}
+            </b>
+            {livePublished.length > 0 ? (
+              <span className="is-live-text">
+                {livePublished.map((a) => (
+                  <span key={a.id} className="ds-mc-advisory-chip" title={a.message}>
+                    <span className={`ds-mc-dot is-${a.tone}`} aria-hidden="true" />
+                    {a.message}
+                  </span>
+                ))}
               </span>
             ) : (
               <span>Nothing published. Travellers see only the app&apos;s own notices.</span>
@@ -385,7 +467,7 @@ export default function MobileControlPage() {
             disabled={loading}
             onClick={() => setAdvisoryOpen(true)}
           >
-            {draft.advisory.active ? "Edit" : "Publish"}
+            Manage
           </button>
         </div>
 
@@ -554,22 +636,21 @@ export default function MobileControlPage() {
                       </div>
                     ) : (
                       <>
-                        {/* The advisory rides on the Alerts screen, so it only
-                            appears when that is the screen being previewed. */}
+                        {/* Advisories ride on the Alerts screen, so they only
+                            appear when that is the screen being previewed. */}
                         {previewTab === "alerts" &&
-                          draft.advisory.active &&
-                          draft.advisory.message.trim().length > 0 && (
-                            <div className={`ds-phone-advisory is-${draft.advisory.tone}`}>
+                          livePublished.map((a) => (
+                            <div key={a.id} className={`ds-phone-advisory is-${a.tone}`}>
                               <b>
-                                {draft.advisory.tone === "critical"
+                                {a.tone === "critical"
                                   ? "Critical"
-                                  : draft.advisory.tone === "warning"
+                                  : a.tone === "warning"
                                     ? "Advisory"
                                     : "Notice"}
                               </b>
-                              <span>{draft.advisory.message}</span>
+                              <span>{a.message}</span>
                             </div>
-                          )}
+                          ))}
 
                         {previewOn.map((s) => {
                           const SIcon = s.icon;
@@ -653,18 +734,21 @@ export default function MobileControlPage() {
           }}
         >
           <div
-            className="ds-modal"
+            className="ds-modal is-wide"
             role="dialog"
             aria-modal="true"
             aria-labelledby="advisory-title"
           >
             <header className="ds-modal-head">
-              <div>
-                <h2 id="advisory-title">Published advisory</h2>
-                <p>
-                  One message, broadcast to the Alerts tab of every phone. It is pinned above the
-                  app&apos;s own notices and shows whichever category a traveller is looking at.
-                </p>
+              <div className="ds-adv-title">
+                <h2 id="advisory-title">Advisories</h2>
+                {draft.advisories.length > 0 && (
+                  <span className="ds-mc-advisory-counts">
+                    {livePublished.length} on phones
+                    {draft.advisories.length - livePublished.length > 0 &&
+                      ` \u00b7 ${draft.advisories.length - livePublished.length} draft`}
+                  </span>
+                )}
               </div>
               <button
                 type="button"
@@ -677,81 +761,145 @@ export default function MobileControlPage() {
             </header>
 
             <div className="ds-modal-body">
-              <label className="ds-mc-publish-row">
-                <span>
-                  <b>Publish to every phone</b>
+              {draft.advisories.length === 0 ? (
+                <div className="ds-adv-empty">
+                  <Megaphone size={22} aria-hidden="true" />
+                  <b>No advisories yet</b>
                   <span>
-                    {canPublish
-                      ? "Off keeps the draft here without sending it."
-                      : `Write at least ${MIN_MESSAGE} characters below to enable this.`}
+                    An advisory is a message you put on every phone: a closure, an event, a
+                    warning. Add one and it stays a draft until you publish it.
                   </span>
-                </span>
-                <span className="ds-switch">
-                  <input
-                    type="checkbox"
-                    checked={draft.advisory.active}
-                    disabled={!canPublish}
-                    onChange={(e) => setAdvisory({ active: e.target.checked })}
-                  />
-                  <span className="ds-switch-track" aria-hidden="true">
-                    <span className="ds-switch-thumb" />
-                  </span>
-                </span>
-              </label>
+                </div>
+              ) : (
+                <ul className="ds-adv-list">
+                  {draft.advisories.map((a) => {
+                    const ready = a.message.trim().length >= MIN_MESSAGE;
+                    const short = MIN_MESSAGE - a.message.trim().length;
+                    const { live, change } = pendingFor(a);
+                    return (
+                      <li key={a.id} className={live ? "is-live" : ""}>
+                        {/* Top: where this stands, and what a save would change. */}
+                        <div className="ds-adv-head">
+                          <span className={`ds-adv-state${live ? " is-live" : ""}`}>
+                            <span className={`ds-mc-dot is-${a.tone}`} aria-hidden="true" />
+                            {live ? "On phones" : "Not sent"}
+                          </span>
+                          {change && <span className="ds-adv-pending">{change}</span>}
+                          <button
+                            type="button"
+                            className="ds-adv-delete"
+                            aria-label="Delete advisory"
+                            onClick={() => removeAdvisory(a.id)}
+                          >
+                            <Trash2 size={15} aria-hidden="true" />
+                          </button>
+                        </div>
 
-              <div className="ds-mc-tones" role="group" aria-label="Advisory tone">
-                {TONES.map((tone) => (
-                  <button
-                    key={tone.key}
-                    type="button"
-                    className={`ds-mc-tone is-${tone.key}${draft.advisory.tone === tone.key ? " is-active" : ""}`}
-                    aria-pressed={draft.advisory.tone === tone.key}
-                    onClick={() => setAdvisory({ tone: tone.key })}
-                  >
-                    <b>{tone.label}</b>
-                    <span>{tone.hint}</span>
-                  </button>
-                ))}
-              </div>
+                        {/* Middle: what it says. */}
+                        <textarea
+                          rows={2}
+                          maxLength={MAX_MESSAGE}
+                          value={a.message}
+                          placeholder="e.g. Lane closure at Km 15.2 southbound until 06:00."
+                          onChange={(e) => patchAdvisory(a.id, { message: e.target.value })}
+                        />
 
-              <label className="ds-mc-field">
-                <span>Message</span>
-                <textarea
-                  rows={3}
-                  autoFocus
-                  maxLength={MAX_MESSAGE}
-                  value={draft.advisory.message}
-                  placeholder="e.g. Lane closure at Km 15.2 southbound until 06:00. Expect delays."
-                  onChange={(e) => setAdvisory({ message: e.target.value })}
-                />
-                <small className={draft.advisory.message.length > MAX_MESSAGE - 30 ? "is-near" : ""}>
-                  {draft.advisory.message.length} / {MAX_MESSAGE}
-                </small>
-              </label>
+                        {/* Bottom: how it goes out. */}
+                        <div className="ds-adv-foot">
+                          <div className="ds-mc-tones is-inline" role="group" aria-label="Tone">
+                            {TONES.map((tone) => (
+                              <button
+                                key={tone.key}
+                                type="button"
+                                className={`ds-mc-tone is-${tone.key}${a.tone === tone.key ? " is-active" : ""}`}
+                                aria-pressed={a.tone === tone.key}
+                                onClick={() => patchAdvisory(a.id, { tone: tone.key })}
+                              >
+                                <b>{tone.label}</b>
+                              </button>
+                            ))}
+                          </div>
 
-              {/* Says what pressing Done will and will not do. The dialog edits
-                  the same draft as everything else, so nothing reaches a phone
-                  until Save & publish. */}
-              <p className="ds-modal-note">
-                Closing keeps your changes here. Nothing reaches a phone until you press{" "}
-                <b>Save &amp; publish</b>.
-              </p>
+                          <span className="ds-adv-count">
+                            <span className="ds-adv-hint">
+                              {!ready && a.message.length > 0
+                                ? `${short} more to publish`
+                                : ""}
+                            </span>
+                            <span className={a.message.length > MAX_MESSAGE - 30 ? "is-near" : ""}>
+                              {a.message.length} / {MAX_MESSAGE}
+                            </span>
+                          </span>
+
+                          <label
+                            className="ds-adv-publish"
+                            title={ready ? "Mark this to go live on the next save" : "Write more first"}
+                          >
+                            <span>Publish</span>
+                            <span className="ds-switch is-small">
+                              <input
+                                type="checkbox"
+                                checked={a.active}
+                                disabled={!ready}
+                                onChange={(e) => patchAdvisory(a.id, { active: e.target.checked })}
+                              />
+                              <span className="ds-switch-track" aria-hidden="true">
+                                <span className="ds-switch-thumb" />
+                              </span>
+                            </span>
+                          </label>
+                        </div>
+                      </li>
+                    );
+                  })}
+                </ul>
+              )}
+
+              <button
+                type="button"
+                className="btn-muted ds-adv-add"
+                onClick={addAdvisory}
+                disabled={draft.advisories.length >= MAX_ADVISORIES}
+              >
+                <Plus size={15} aria-hidden="true" />
+                {draft.advisories.length >= MAX_ADVISORIES
+                  ? "Limit reached"
+                  : "Add advisory"}
+              </button>
             </div>
 
+            {/* Saving lives here as well as on the page, because publishing an
+                advisory is a whole task on its own: an operator who came to post
+                a closure should not have to find a bar behind the dialog to
+                finish it. It saves the same draft the page does, sections
+                included, so the two can never disagree about what was sent. */}
             <footer className="ds-modal-foot">
+              <span className="ds-modal-foot-note">
+                {blockedReason ??
+                  (pendingCount > 0
+                    ? `${pendingCount} change${pendingCount === 1 ? "" : "s"} to send`
+                    : dirty
+                      ? "Unsaved changes elsewhere on the page"
+                      : "Nothing to send")}
+              </span>
               <button
                 type="button"
                 className="btn-muted"
                 onClick={() => {
-                  // Revert only the advisory, leaving section edits alone.
-                  if (saved) setDraft((d) => ({ ...d, advisory: saved.advisory }));
+                  // Revert only the advisories, leaving section edits alone.
+                  if (saved) setDraft((d) => ({ ...d, advisories: saved.advisories }));
                   setAdvisoryOpen(false);
                 }}
               >
                 Cancel
               </button>
-              <button type="button" className="btn-primary" onClick={() => setAdvisoryOpen(false)}>
-                Done
+              <button
+                type="button"
+                className="btn-primary"
+                disabled={saving || !dirty || Boolean(blockedReason)}
+                onClick={() => void save().then(() => setAdvisoryOpen(false))}
+              >
+                <Save size={14} aria-hidden="true" /> {saving ? "Saving\u2026" : "Save & publish"}
               </button>
             </footer>
           </div>
@@ -761,7 +909,10 @@ export default function MobileControlPage() {
       {/* Save bar. Sticks to the bottom while there is something to save, so a
           change made at the top of a long page cannot be forgotten on the way
           down it. */}
-      <div className={`ds-mc-savebar${dirty ? " is-open" : ""}`} aria-hidden={!dirty}>
+      <div
+        className={`ds-mc-savebar${dirty && !advisoryOpen ? " is-open" : ""}`}
+        aria-hidden={!dirty || advisoryOpen}
+      >
         <div className="ds-mc-savebar-text">
           {blockedReason ? (
             <span className="is-blocked">

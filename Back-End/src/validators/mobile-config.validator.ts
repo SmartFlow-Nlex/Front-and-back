@@ -11,7 +11,12 @@ import { z } from "zod";
  *   sections.*  — what is inside each tab. The only thing an operator sets.
  *   features.*  — whether each TAB exists. DERIVED, never chosen: a tab is
  *                 shown when at least one of its sections is. See below.
- *   advisory.*  — a broadcast notice, posted into the Alerts list.
+ *   advisories  — broadcast notices, pinned above the app's own Alerts. A
+ *                 list, so an operator can hold several and publish or
+ *                 withdraw them one at a time.
+ *   advisory    — DERIVED: the first published advisory, written only so a
+ *                 mobile build older than the list still finds what it
+ *                 expects. Nothing reads it back.
  */
 
 // Mirrors the five tabs in frontend/app/(tabs)/_layout.tsx. The keys are the
@@ -82,19 +87,58 @@ const SectionsSchema = z
 
 export type MobileSections = z.infer<typeof SectionsSchema>;
 
-const AdvisorySchema = z
+/** Upper bound on what can be pinned at once. Every active advisory is pinned
+ *  above the app's own notices, so a long list stops being a notice and starts
+ *  being the Alerts screen. */
+export const MAX_ADVISORIES = 6;
+export const MIN_ADVISORY_MESSAGE = 8;
+
+const AdvisoryItemSchema = z
   .object({
+    id: z.string().trim().min(1).max(64),
     active: z.boolean(),
     tone: z.enum(ADVISORY_TONES),
     // Long enough for a real closure notice, short enough to read on a phone
     // without the card becoming a wall of text.
     message: z.string().trim().max(280),
   })
-  .refine((v) => !v.active || v.message.length >= 8, {
+  .refine((v) => !v.active || v.message.length >= MIN_ADVISORY_MESSAGE, {
     // Publishing an empty advisory would push a blank card to every phone.
-    message: "An advisory needs a message of at least 8 characters before it can be published",
+    message: `A published advisory needs a message of at least ${MIN_ADVISORY_MESSAGE} characters`,
     path: ["message"],
   });
+
+export type MobileAdvisory = z.infer<typeof AdvisoryItemSchema>;
+
+const AdvisoriesSchema = z
+  .array(AdvisoryItemSchema)
+  .max(MAX_ADVISORIES, `At most ${MAX_ADVISORIES} advisories can be held at once`)
+  .default([])
+  .superRefine((list, ctx) => {
+    const seen = new Set<string>();
+    for (const a of list) {
+      if (seen.has(a.id)) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: "Two advisories share an id",
+        });
+        return;
+      }
+      seen.add(a.id);
+    }
+  });
+
+/** The single advisory this used to hold, derived from the list.
+ *
+ *  Written alongside `advisories` purely so a mobile build released before the
+ *  list existed still finds what it expects. It is the first active one, since
+ *  that is what such a build would have shown. Nothing reads it back. */
+function legacyAdvisory(list: MobileAdvisory[]) {
+  const first = list.find((a) => a.active && a.message.trim().length >= MIN_ADVISORY_MESSAGE);
+  return first
+    ? { active: true, tone: first.tone, message: first.message }
+    : { active: false, tone: "info" as const, message: "" };
+}
 
 /**
  * A tab is shown when anything inside it is.
@@ -131,7 +175,26 @@ export const MobileConfigSchema = z
     // Accepted and discarded, so the dashboard can PUT back exactly what it GET.
     features: z.record(z.string(), z.boolean()).optional(),
     sections: SectionsSchema,
-    advisory: AdvisorySchema,
+    advisories: AdvisoriesSchema,
+    // A row written before the list existed carries one of these instead.
+    advisory: z
+      .object({
+        active: z.boolean(),
+        tone: z.enum(ADVISORY_TONES),
+        message: z.string().trim().max(280),
+      })
+      .optional(),
+  })
+  .transform((cfg) => {
+    // Migrate in place on read: an old single advisory becomes a one-item list
+    // so the rest of the system only ever deals with the list.
+    const list =
+      cfg.advisories.length > 0
+        ? cfg.advisories
+        : cfg.advisory && cfg.advisory.message.trim().length > 0
+          ? [{ id: "legacy", ...cfg.advisory, message: cfg.advisory.message.trim() }]
+          : [];
+    return { sections: cfg.sections, advisories: list };
   })
   .superRefine((cfg, ctx) => {
     // Every tab empty means an app with no tabs at all.
@@ -145,7 +208,8 @@ export const MobileConfigSchema = z
   .transform((cfg) => ({
     features: deriveFeatures(cfg.sections),
     sections: cfg.sections,
-    advisory: cfg.advisory,
+    advisories: cfg.advisories,
+    advisory: legacyAdvisory(cfg.advisories),
   }));
 
 export type MobileConfig = z.infer<typeof MobileConfigSchema>;
@@ -177,5 +241,6 @@ const DEFAULT_SECTIONS: MobileSections = {
 export const DEFAULT_MOBILE_CONFIG: MobileConfig = {
   features: deriveFeatures(DEFAULT_SECTIONS),
   sections: DEFAULT_SECTIONS,
+  advisories: [],
   advisory: { active: false, tone: "info", message: "" },
 };

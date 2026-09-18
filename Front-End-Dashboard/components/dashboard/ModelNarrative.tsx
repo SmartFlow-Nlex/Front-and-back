@@ -3,6 +3,7 @@
 import { useState } from "react";
 import AiModelInsight, { type InsightMetric } from "./AiModelInsight";
 import { Sparkles } from "lucide-react";
+import { GenerateReportButton } from "./NarrativePanel";
 
 /**
  * Generative narrative for the forecast chart.
@@ -172,6 +173,9 @@ export default function ModelNarrative({
     .sort((a, b) => (a.rank ?? 99) - (b.rank ?? 99));
   const best = accepted[0];
 
+  // Nothing but the button until it is pressed.
+  if (!open) return <GenerateReportButton onClick={() => setOpen(true)} />;
+
   return (
     <section
       style={{
@@ -254,7 +258,7 @@ export default function ModelNarrative({
             boxShadow: open ? "none" : "0 1px 6px color-mix(in srgb, var(--page-accent, #4f46e5) 35%, transparent)",
           }}
         >
-          {open ? "Hide report" : "Generate report"}
+          Hide report
         </button>
       </div>
 

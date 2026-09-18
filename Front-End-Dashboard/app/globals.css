@@ -8141,3 +8141,82 @@ details[open] > .evidence-summary .evidence-close-label { display: inline; }
 }
 
 .ds-mc-features > li { flex: 0 0 auto; }
+
+/* ══════════════════════════════════════════════════════════════════════════
+   MOBILE CONTROL CENTRE — v4: alignment
+   ══════════════════════════════════════════════════════════════════════════ */
+
+/* The advisory sat inside the left column, which pushed the tab panel down by
+   its height while the preview beside it started at the top - so the two
+   panels of a two-column page did not begin on the same line. It is a
+   page-level thing, not a left-column thing, so it now spans the full width
+   and the columns below it start level. */
+.ds-mc-page > .ds-mc-advisory-strip { margin: 0 0 14px; }
+
+/* Sticky was there for a page that scrolled. It no longer does, and all sticky
+   can do now is let the preview drift out of line with the panel beside it. */
+.ds-mc-page .ds-mc-preview-panel { position: static; }
+
+/* Both columns start at the top of the grid and the panels align. */
+.ds-mc-page .ds-mc-grid { align-items: start; }
+.ds-mc-page .ds-mc-col { height: 100%; }
+.ds-mc-page aside.ds-mc-col { height: auto; }
+
+/* Fading only the foot made a row cut off at the TOP of the scroll look like a
+   rendering fault rather than like scrolled-past content. Both ends now. */
+.ds-mc-features {
+  --fade: 16px;
+  -webkit-mask-image: linear-gradient(to bottom, transparent 0, #000 var(--fade), #000 calc(100% - var(--fade)), transparent 100%);
+  mask-image: linear-gradient(to bottom, transparent 0, #000 var(--fade), #000 calc(100% - var(--fade)), transparent 100%);
+  scroll-padding-block: 4px;
+}
+
+/* ── Phone tab bar ───────────────────────────────────────────────────────── */
+/*
+   "Community" kept being the one clipped - same character count as
+   "Assistant", wider glyphs - and tuning the type to fit exactly meant it
+   broke again at a different zoom. The label now has real headroom instead of
+   a measured fit: a smaller face, and the icon a little tighter above it.
+*/
+.ds-phone-tabs { padding: 0 1px 3px; }
+.ds-phone-tab { padding: 6px 0 7px; gap: 2px; }
+.ds-phone-tab small { font-size: 0.4rem; letter-spacing: -0.025em; }
+
+/* The current tab was marked by colour plus a hover wash plus a focus ring,
+   which together read as a stray box drawn around one tab. A rule above the
+   icon is quieter and survives both. */
+.ds-phone-tab { position: relative; }
+.ds-phone-tab:hover { background: transparent; }
+
+.ds-phone-tab.is-current::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 18px;
+  height: 2px;
+  border-radius: 0 0 2px 2px;
+  background: var(--page-accent, var(--brand-primary));
+}
+
+.ds-phone-tab:focus-visible {
+  outline: none;
+  box-shadow: none;
+  background: color-mix(in srgb, var(--page-accent, var(--brand-primary)) 12%, transparent);
+}
+
+/* Measured headroom, not a measured fit. At 0.4rem in a 202px frame the widest
+   label, "Community", had 2.6px of slack in 37px - about 7%, which is inside
+   the variation between one zoom level and another, so it clipped on a machine
+   other than the one it was tuned on. A hair more frame and a smaller face put
+   every label at roughly a fifth of its track in reserve. */
+.ds-phone-frame { width: 206px; }
+.ds-phone-tab small { font-size: 0.37rem; letter-spacing: -0.03em; }
+
+/* The gap under the advisory was three margins stacking - the strip's, the
+   grid's and the panel's own - which came to 53px against the 14px between
+   everything else on the page. One margin owns it now. */
+.ds-mc-page > .ds-mc-advisory-strip { margin-bottom: 0; }
+.ds-mc-page .ds-mc-grid { margin-top: 14px; }
+.ds-mc-page .ds-mc-col > .panel { margin-top: 0; }

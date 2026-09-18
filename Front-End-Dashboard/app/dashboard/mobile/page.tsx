@@ -326,37 +326,37 @@ export default function MobileControlPage() {
         </div>
       )}
 
+        {/* The advisory is a broadcast, not a per-screen switch, so it does
+            not belong in the list of sections. It sits above as a one-line
+            readout of whether anything is live, and opens in a dialog — which
+            also keeps this page to a single screen with no scrolling. */}
+        <div className={`ds-mc-advisory-strip${draft.advisory.active ? " is-live" : ""}`}>
+          <span className="ds-mc-advisory-icon" aria-hidden="true">
+            <Megaphone size={16} />
+          </span>
+          <span className="ds-mc-advisory-text">
+            <b>Published advisory</b>
+            {draft.advisory.active && draft.advisory.message.trim().length > 0 ? (
+              <span className="is-live-text" title={draft.advisory.message}>
+                <span className={`ds-mc-dot is-${draft.advisory.tone}`} aria-hidden="true" />
+                Live · {draft.advisory.message}
+              </span>
+            ) : (
+              <span>Nothing published. Travellers see only the app&apos;s own notices.</span>
+            )}
+          </span>
+          <button
+            type="button"
+            className="btn-muted ds-mc-advisory-btn"
+            disabled={loading}
+            onClick={() => setAdvisoryOpen(true)}
+          >
+            {draft.advisory.active ? "Edit" : "Publish"}
+          </button>
+        </div>
+
       <div className="ds-mc-grid">
         <div className="ds-mc-col">
-          {/* The advisory is a broadcast, not a per-screen switch, so it does
-              not belong in the list of sections. It sits above as a one-line
-              readout of whether anything is live, and opens in a dialog — which
-              also keeps this page to a single screen with no scrolling. */}
-          <div className={`ds-mc-advisory-strip${draft.advisory.active ? " is-live" : ""}`}>
-            <span className="ds-mc-advisory-icon" aria-hidden="true">
-              <Megaphone size={16} />
-            </span>
-            <span className="ds-mc-advisory-text">
-              <b>Published advisory</b>
-              {draft.advisory.active && draft.advisory.message.trim().length > 0 ? (
-                <span className="is-live-text" title={draft.advisory.message}>
-                  <span className={`ds-mc-dot is-${draft.advisory.tone}`} aria-hidden="true" />
-                  Live · {draft.advisory.message}
-                </span>
-              ) : (
-                <span>Nothing published. Travellers see only the app&apos;s own notices.</span>
-              )}
-            </span>
-            <button
-              type="button"
-              className="btn-muted ds-mc-advisory-btn"
-              disabled={loading}
-              onClick={() => setAdvisoryOpen(true)}
-            >
-              {draft.advisory.active ? "Edit" : "Publish"}
-            </button>
-          </div>
-
           <article className="panel ds-mc-panel">
             <header className="ds-mc-panel-head">
               <div>
@@ -384,9 +384,19 @@ export default function MobileControlPage() {
                         className="ds-mc-disclosure"
                         aria-expanded={expanded}
                         aria-controls={`sections-${key}`}
-                        onClick={() => {
-                          setOpen(expanded ? null : key);
+                        onClick={(e) => {
+                          const opening = !expanded;
+                          setOpen(opening ? key : null);
                           setPreviewTab(key);
+                          if (!opening) return;
+                          // After the sections render, bring the row's own top
+                          // into view. Without this the list keeps its previous
+                          // offset and the tab just opened can be the one cut
+                          // off at the top of the scroll.
+                          const row = e.currentTarget.closest("li");
+                          window.requestAnimationFrame(() =>
+                            row?.scrollIntoView({ block: "nearest", behavior: "smooth" })
+                          );
                         }}
                       >
                         <span className="ds-mc-feature-icon" aria-hidden="true">

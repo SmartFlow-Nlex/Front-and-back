@@ -9,14 +9,19 @@ export default function PageHeader({
   title,
   subtitle,
   actions,
+  accent,
 }: {
   icon: LucideIcon;
   title: string;
   subtitle?: ReactNode;
   actions?: ReactNode;
+  /** Which analytics domain this page belongs to. Sets --page-accent, which
+   *  the header icon and the mode tabs colour themselves from, so Traffic,
+   *  Incidents and Emissions are identifiable before a word is read. */
+  accent?: "traffic" | "incident" | "emissions";
 }) {
   return (
-    <header className="ds-page-header">
+    <header className="ds-page-header" data-accent={accent}>
       <span className="ds-page-header-icon">
         <Icon size={20} strokeWidth={2.2} />
       </span>

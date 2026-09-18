@@ -1873,6 +1873,28 @@ body {
   margin: 0 0 18px;
 }
 
+/* ---------------------------------------------------------------------------
+   Analytics identity.
+
+   Three analytics domains, three colours, so a reader knows which one they are
+   in before reading a word: Traffic blue, Incidents amber, Emissions green.
+   The hues are the same families lib/chart-theme.ts already gives each tab's
+   series, so the page furniture and the data agree.
+
+   --page-accent is set once here, on the header, and inherits down the page.
+   Anything that wants to carry the domain reads it and falls back to the brand
+   blue, so a page that declares no accent is unchanged.
+   --------------------------------------------------------------------------- */
+.ds-page-header { --page-accent: var(--brand-primary); }
+.ds-page-header[data-accent="traffic"]  { --page-accent: #2a78d6; }
+.ds-page-header[data-accent="incident"] { --page-accent: #b8760a; }
+.ds-page-header[data-accent="emissions"]{ --page-accent: #0f8a4a; }
+
+/* The mode tabs are a SIBLING of the header, so an accent declared only on the
+   header cannot reach them. Every analytics page already carries a .viz-*
+   class on its root for the KPI accents below, so the page accent hangs off
+   the same hook and inherits to everything on the page. */
+
 .ds-page-header-icon {
   display: grid;
   place-items: center;
@@ -1880,8 +1902,8 @@ body {
   height: 38px;
   flex: none;
   border-radius: 12px;
-  background: color-mix(in srgb, var(--brand-primary) 12%, transparent);
-  color: var(--brand-primary);
+  background: color-mix(in srgb, var(--page-accent) 12%, transparent);
+  color: var(--page-accent);
 }
 
 .ds-page-header-text {
@@ -5314,9 +5336,9 @@ body {
    same three ramp steps plus two reserved status colours. Set on the page shell
    so the tiles inherit without every tile knowing which tab it is on.
    --------------------------------------------------------------------------- */
-.viz-traffic   { --kpi-1: #3f7ad9; --kpi-2: #1d3f8f; --kpi-3: #8ab6f5; --kpi-4: var(--color-info);    --kpi-5: var(--color-success); }
-.viz-incident  { --kpi-1: #b8760a; --kpi-2: #7d4606; --kpi-3: #e0b01f; --kpi-4: var(--color-danger);  --kpi-5: var(--color-warning); }
-.viz-emissions { --kpi-1: #118f46; --kpi-2: #08582b; --kpi-3: #4cbd79; --kpi-4: var(--color-success); --kpi-5: var(--color-info); }
+.viz-traffic   { --page-accent: #2a78d6; --kpi-1: #3f7ad9; --kpi-2: #1d3f8f; --kpi-3: #8ab6f5; --kpi-4: var(--color-info);    --kpi-5: var(--color-success); }
+.viz-incident  { --page-accent: #b8760a; --kpi-1: #b8760a; --kpi-2: #7d4606; --kpi-3: #e0b01f; --kpi-4: var(--color-danger);  --kpi-5: var(--color-warning); }
+.viz-emissions { --page-accent: #0f8a4a; --kpi-1: #118f46; --kpi-2: #08582b; --kpi-3: #4cbd79; --kpi-4: var(--color-success); --kpi-5: var(--color-info); }
 
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) .viz-traffic   { --kpi-1: #5b8fe6; --kpi-2: #a8c8f8; --kpi-3: #2f5fba; }
@@ -6525,11 +6547,10 @@ details[open] > .evidence-summary .evidence-close-label { display: inline; }
 
 /* The icon tile carries the brand gradient and a soft throw, so each page
    opens on one deliberate spot of colour instead of a flat pale square. */
-.ds-page-header .ds-page-icon,
-.ds-page-header [class*="icon"] {
-  background: linear-gradient(135deg, var(--brand-primary), color-mix(in srgb, var(--brand-primary) 55%, #7c5cff)) !important;
+.ds-page-header .ds-page-header-icon {
+  background: linear-gradient(135deg, var(--page-accent), color-mix(in srgb, var(--page-accent) 62%, #ffffff)) !important;
   color: #fff !important;
-  box-shadow: 0 6px 18px color-mix(in srgb, var(--brand-primary) 32%, transparent);
+  box-shadow: 0 6px 18px color-mix(in srgb, var(--page-accent) 34%, transparent);
 }
 
 .ds-page-header h1 { letter-spacing: -0.025em; }

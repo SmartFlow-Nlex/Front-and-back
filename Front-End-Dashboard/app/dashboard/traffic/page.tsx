@@ -775,7 +775,7 @@ export default function TrafficPage() {
   if (activeTab !== "Descriptive") {
     return (
       <section className={`${styles.page} viz-traffic`}>
-        <PageHeader icon={TrendingUp} title="Traffic Overview" subtitle="Volume, congestion, and speed patterns across NLEX" />
+        <PageHeader accent="traffic" icon={TrendingUp} title="Traffic Overview" subtitle="Volume, congestion, and speed patterns across NLEX" />
         <div className={styles.filterRow} style={{ flexWrap: "wrap", rowGap: 8 }}>
           {/* Predictive keeps the Range presets (they set how much history the
               forecast card shows) but not Custom, and not the Weather filter:
@@ -852,7 +852,7 @@ export default function TrafficPage() {
 
   return (
     <section className={`${styles.page} viz-traffic`}>
-      <PageHeader icon={TrendingUp} title="Traffic Overview" subtitle="Volume, congestion, and speed patterns across NLEX" />
+      <PageHeader accent="traffic" icon={TrendingUp} title="Traffic Overview" subtitle="Volume, congestion, and speed patterns across NLEX" />
 
       {/* Row A — global filters */}
       <div className={styles.filterRow}>

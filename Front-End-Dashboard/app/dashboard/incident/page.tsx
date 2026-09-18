@@ -777,7 +777,7 @@ export default function IncidentPage() {
   if (activeTab !== "Descriptive") {
     return (
       <section className={`${styles.page} viz-incident`}>
-        <PageHeader icon={AlertTriangle} title="Incident Overview" subtitle="Road crashes, hazards, and response patterns across NLEX" />
+        <PageHeader accent="incident" icon={AlertTriangle} title="Incident Overview" subtitle="Road crashes, hazards, and response patterns across NLEX" />
         <div className={styles.filterRow}>
           {activeTab === "Predictive" && (
             <>
@@ -884,7 +884,7 @@ export default function IncidentPage() {
 
   return (
     <section className={`${styles.page} viz-incident`}>
-      <PageHeader icon={AlertTriangle} title="Incident Overview" subtitle="Road crashes, hazards, and response patterns across NLEX" />
+      <PageHeader accent="incident" icon={AlertTriangle} title="Incident Overview" subtitle="Road crashes, hazards, and response patterns across NLEX" />
 
       {/* Row A — global filters */}
       <div className={styles.filterRow}>

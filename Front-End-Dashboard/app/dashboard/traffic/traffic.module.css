@@ -206,10 +206,13 @@
   color: var(--text-primary, #1c2434);
 }
 
+/* The selected mode carries the page's domain colour, so Traffic, Incidents
+   and Emissions are told apart by the one control every analytics page has in
+   the same place. Falls back to the brand blue where no accent is set. */
 .modeTabActive {
-  background: var(--brand-primary, #3e67ef);
+  background: var(--page-accent, var(--brand-primary, #3e67ef));
   color: #fff;
-  box-shadow: var(--shadow-sm);
+  box-shadow: 0 4px 14px color-mix(in srgb, var(--page-accent, var(--brand-primary)) 32%, transparent);
 }
 
 .updating {

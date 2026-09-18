@@ -687,7 +687,7 @@ export default function SustainabilityPage() {
   if (activeTab !== "Descriptive") {
     return (
       <section className={`${styles.page} viz-emissions`}>
-        <PageHeader icon={Leaf} title="Emissions Overview" subtitle="Vehicle emissions and air quality trends across NLEX" />
+        <PageHeader accent="emissions" icon={Leaf} title="Emissions Overview" subtitle="Vehicle emissions and air quality trends across NLEX" />
         <div className={styles.filterRow}>
           {activeTab === "Prescriptive" && <span className={styles.filterLabel}>Projected emission reduction by strategy</span>}
           <span className={styles.spacer} />
@@ -720,7 +720,7 @@ export default function SustainabilityPage() {
 
   return (
     <section className={`${styles.page} viz-emissions`}>
-      <PageHeader icon={Leaf} title="Emissions Overview" subtitle="Vehicle emissions and air quality trends across NLEX" />
+      <PageHeader accent="emissions" icon={Leaf} title="Emissions Overview" subtitle="Vehicle emissions and air quality trends across NLEX" />
 
       {/* Row A — global filters */}
       <div className={styles.filterRow}>

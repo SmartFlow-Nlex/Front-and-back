@@ -38,11 +38,28 @@ export function mapPalette(isDark: boolean) {
     arrow: isDark ? "#e2e8f0" : "#ffffff",
     alert: isDark ? "#f87171" : "#dc2626",
     alertRing: isDark ? "#0b1220" : "#ffffff",
-    /* Congestion levels. Brighter in dark so they hold up against the wash,
-       deeper in light so they do not glow out against white. */
+    /* Congestion levels, banded to match how the rest of the app CLASSIFIES
+       them. Brighter in dark so they hold up against the wash, deeper in light
+       so they do not glow out against white.
+
+       The bands are not free. corridor-status.ts classify() draws the line at
+       level >= 3 for congested and treats 1-2 as slow, and the Live Corridor
+       Status panel paints three colours from that. This palette used to
+       disagree with it at both ends: level 1 took the SAME green as level 0
+       while classify() already called it slow, and level 3 took an orange
+       while classify() already called it congested. The same jam was then
+       green on the map and amber in the panel - which is precisely what a
+       reader notices, because the two sit one scroll apart reading the same
+       feed.
+
+       So: 0 is clear, 1-2 are the slow band, 3-5 are the congested band, and
+       the anchor of each band is the exact colour the corridor legend uses
+       (#23a55a, #e08a2e, #e04434). The map keeps two shades inside a band, so
+       Standstill still reads heavier than Heavy; it simply can no longer land
+       in a different band from the word the panel puts on it. */
     level: isDark
-      ? { 0: "#10b981", 1: "#10b981", 2: "#fbbf24", 3: "#fb923c", 4: "#f87171", 5: "#ef4444" }
-      : { 0: "#059669", 1: "#059669", 2: "#d97706", 3: "#ea580c", 4: "#dc2626", 5: "#991b1b" },
+      ? { 0: "#34d399", 1: "#fbbf24", 2: "#f59e0b", 3: "#f87171", 4: "#ef4444", 5: "#dc2626" }
+      : { 0: "#23a55a", 1: "#e8a83f", 2: "#e08a2e", 3: "#e8695a", 4: "#e04434", 5: "#b3261e" },
   };
 }
 

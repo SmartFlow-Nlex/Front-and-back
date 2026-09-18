@@ -343,20 +343,6 @@ export default function InteractiveRoadMap() {
              picks the shade, but only within the band its own status allows,
              so a level-4 jam is deeper than a level-3 and nothing classed
              slow can ever render green. */
-          /* Bands chosen against the palette, not against Waze's numbering.
-             mapPalette gives level 1 the SAME green as level 0, while
-             classify() already calls level 1 "slow" - which is why Paso de
-             Blas read SLOW over a green road. Slow therefore takes the two
-             amber steps and congested the two reds, so the hue can never
-             contradict the word beside it, and the level still picks which of
-             the two steps within its own band. */
-          const lvl = data.level ?? 0;
-          const shade =
-            data.colorClass === "seg-red"
-              ? (lvl >= 4 ? 5 : 4)
-              : data.colorClass === "seg-orange"
-                ? (lvl >= 2 ? 3 : 2)
-                : 0;
           const noRamp = access === "No Access";
           return (
             <span
@@ -366,10 +352,18 @@ export default function InteractiveRoadMap() {
                  and a mismatch is otherwise only findable by eye. */
               data-status={noRamp ? "no-ramp" : data.colorClass}
               data-exit={r.exit.exit_name}
-              className={`ds-rd-seg ${noRamp ? "no-ramp" : ""} ${
+              /* Three classes, three colours, and they are the legend's own:
+                 .ds-rd-seg.seg-red/.seg-orange/.seg-green are declared once in
+                 globals.css beside .ds-rd-legend i.seg-*, so the key under the
+                 road and the road itself cannot drift apart.
+
+                 This used to paint an inline background from Waze's 0-5 level
+                 palette, which put five shades on a road whose legend offers
+                 three, and overrode these rules while doing it. The level is
+                 not lost - the hover rail still reports "jam level 4 of 5". */
+              className={`ds-rd-seg ${noRamp ? "no-ramp" : data.colorClass} ${
                 activeStation === r.exit.exit_name ? "is-active" : ""
               }`}
-              style={noRamp ? undefined : { background: levelColour(palette, shade) }}
             />
           );
         })}

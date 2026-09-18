@@ -907,7 +907,7 @@ export default function TrafficPage() {
       </div>
 
       {/* Row B — KPI tiles */}
-      <div className={styles.kpiRow}>
+      <div className={`${styles.kpiRow} ds-rise`}>
         <article className={styles.kpiTile}>
           <span className={styles.kpiIcon} aria-hidden="true"><Activity size={15} /></span>
           <h3>Total Volume<InfoTooltip text="All vehicles counted at NLEX toll plazas over the selected Range, compared with the equivalent prior period." /></h3>

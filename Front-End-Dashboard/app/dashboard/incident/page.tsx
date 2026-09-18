@@ -845,7 +845,7 @@ export default function IncidentPage() {
       </div>
 
       {/* Row B — KPI tiles */}
-      <div className={styles.kpiRow}>
+      <div className={`${styles.kpiRow} ds-rise`}>
         <article className={styles.kpiTile}>
           <span className={styles.kpiIcon} aria-hidden="true"><AlertTriangle size={15} /></span>
           <h3>

@@ -783,7 +783,7 @@ export default function SustainabilityPage() {
       </div>
 
       {/* Row B — KPI tiles */}
-      <div className={styles.kpiRow}>
+      <div className={`${styles.kpiRow} ds-rise`}>
         <article className={styles.kpiTile}>
           <span className={styles.kpiIcon} aria-hidden="true"><Leaf size={15} /></span>
           <h3>Total CO₂ (Modeled)<InfoTooltip text="Tonnes of CO₂ modeled from vehicle volume and class mix over the Range using per-class emission factors — not a sensor reading." /></h3>

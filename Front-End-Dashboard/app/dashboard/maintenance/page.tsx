@@ -484,7 +484,7 @@ export default function MaintenancePage() {
       </div>
 
       {/* Row B — KPI tiles */}
-      <div className={styles.kpiRow}>
+      <div className={`${styles.kpiRow} ds-rise`}>
         <article className={styles.kpiTile}>
           <h3>In Progress</h3>
           <div className={styles.kpiValue}>{loading ? "…" : counts.in_progress}</div>

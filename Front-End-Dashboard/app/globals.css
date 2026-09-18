@@ -6205,3 +6205,49 @@ details[open] > .evidence-summary .evidence-chevron svg { transform: rotate(90de
 .evidence-summary .evidence-close-label { display: none; }
 details[open] > .evidence-summary .evidence-open-label { display: none; }
 details[open] > .evidence-summary .evidence-close-label { display: inline; }
+
+/* ---------------------------------------------------------------------------
+   Entrance motion for analytics grids.
+
+   Everything on these pages arrives at once: five KPI tiles, then the cards,
+   all fully formed the instant the fetch resolves. That reads as a page that
+   was drawn rather than one that is alive, and it also hides the order the eye
+   should follow.
+
+   `ds-rise` gives a container's direct children a short fade-and-lift, each a
+   beat behind the last, so the row assembles left to right and the reader is
+   walked through the hierarchy once. It runs on mount only - not on re-render,
+   not on data refresh - because a dashboard whose tiles jump every time a
+   number updates is worse than a static one.
+
+   Deliberately small: 10px of travel and 380ms. Motion here is punctuation,
+   not the message.
+   --------------------------------------------------------------------------- */
+@keyframes ds-rise {
+  from { opacity: 0; transform: translateY(10px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+.ds-rise > * {
+  animation: ds-rise 380ms cubic-bezier(0.22, 0.61, 0.36, 1) both;
+}
+
+/* Six steps is enough for a KPI row; anything past it shares the last beat
+   rather than making a long page crawl in. */
+.ds-rise > *:nth-child(1) { animation-delay: 0ms; }
+.ds-rise > *:nth-child(2) { animation-delay: 45ms; }
+.ds-rise > *:nth-child(3) { animation-delay: 90ms; }
+.ds-rise > *:nth-child(4) { animation-delay: 135ms; }
+.ds-rise > *:nth-child(5) { animation-delay: 180ms; }
+.ds-rise > *:nth-child(n + 6) { animation-delay: 225ms; }
+
+/* A reader who has asked for less motion gets the content, immediately, with
+   no transform and no delay - not a slower version of the same thing. */
+@media (prefers-reduced-motion: reduce) {
+  .ds-rise > *,
+  .ds-rise > *:nth-child(n) {
+    animation: none;
+    opacity: 1;
+    transform: none;
+  }
+}

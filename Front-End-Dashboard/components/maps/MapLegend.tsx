@@ -1,7 +1,7 @@
 "use client";
 
 import { useChartTheme } from "../../lib/chart-theme";
-import { mapPalette } from "../../lib/map-palette";
+import { JAM_SCALE, mapPalette, STATUS_OF_LEVEL } from "../../lib/map-palette";
 import { lookOf } from "../../lib/waze-report-look";
 import { WAZE_REPORT_TYPES } from "../../lib/waze-reports";
 
@@ -21,28 +21,19 @@ import { WAZE_REPORT_TYPES } from "../../lib/waze-reports";
  * map other than the one beside it.
  */
 
-/**
- * The three states the corridor is ever in, and the shades each is drawn with.
- *
- * The map paints six palette values, but they are three bands: one green, two
- * ambers, three reds. The shading carries severity WITHIN a state; the state is
- * what the rest of the dashboard counts, and classify() in lib/corridor-status
- * draws the same lines - 0 clear, 1-2 slow, 3 and above congested.
- *
- * So the key names three things and shows each one's range, rather than listing
- * six shades and leaving the reader to work out that four of them mean the same
- * thing as the number in the panel beside it.
- */
-const STATUS_KEY = [
-  { status: "Clear", levels: [0] as const },
-  { status: "Slow", levels: [1, 2] as const },
-  { status: "Congested", levels: [3, 4, 5] as const },
-];
+/** The three states the corridor is ever in, in the colours it is drawn in. */
+const STATUS_KEY = ["clear", "slow", "congested"] as const;
+
+const STATUS_LABEL: Record<(typeof STATUS_KEY)[number], string> = {
+  clear: "Clear",
+  slow: "Slow",
+  congested: "Congested",
+};
 
 export const FORECAST_KEY = [
-  { state: "Low", label: "Clear", level: 0 as const },
-  { state: "Med", label: "Slow", level: 2 as const },
-  { state: "High", label: "Congested", level: 4 as const },
+  { state: "Low", label: "Clear", status: "clear" as const },
+  { state: "Med", label: "Slow", status: "slow" as const },
+  { state: "High", label: "Congested", status: "congested" as const },
 ];
 
 export default function MapLegend({ variant = "live" }: { variant?: "live" | "forecast" }) {
@@ -58,7 +49,7 @@ export default function MapLegend({ variant = "live" }: { variant?: "live" | "fo
         <h4>Predicted congestion</h4>
         {FORECAST_KEY.map((k) => (
           <div key={k.state} className="wz-legend-row">
-            <span className="wz-line" style={{ background: palette.level[k.level] }} /> {k.label}
+            <span className="wz-line" style={{ background: palette.status[k.status] }} /> {k.label}
           </div>
         ))}
         <h4 className="wz-legend-gap">On the map</h4>
@@ -72,23 +63,37 @@ export default function MapLegend({ variant = "live" }: { variant?: "live" | "fo
   return (
     <div className="map-legend">
       <h4>Traffic</h4>
-      {STATUS_KEY.map((g) => (
-        <div key={g.status} className="wz-legend-row">
-          {/* One swatch per state, carrying that state's shades: a reader can
-              see the darker reds belong to congested rather than hunting for
-              them in a list of six. */}
-          <span
-            className="wz-line"
-            style={{
-              background:
-                g.levels.length === 1
-                  ? palette.level[g.levels[0]]
-                  : `linear-gradient(90deg, ${g.levels.map((l) => palette.level[l]).join(", ")})`,
-            }}
-          />{" "}
-          {g.status}
+      {STATUS_KEY.map((k) => (
+        <div key={k} className="wz-legend-row">
+          <span className="wz-line" style={{ background: palette.status[k] }} /> {STATUS_LABEL[k]}
         </div>
       ))}
+
+      {/* The three states are what the road is drawn in and what the panel
+          counts. Waze's own six levels are what they are made of — offered
+          here rather than spread across the key, so the legend still answers
+          "what am I looking at" in three lines. */}
+      <details className="wz-scale">
+        <summary>Waze levels 0–5</summary>
+        <p>
+          A level is how far traffic has fallen below free-flow speed on that stretch — not a
+          count of vehicles.
+        </p>
+        <ul>
+          {JAM_SCALE.map((r) => (
+            <li key={r.level}>
+              <span className="wz-scale-chip" style={{ background: palette.level[r.level] }}>
+                {r.level}
+              </span>
+              <span className="wz-scale-band">{r.band}</span>
+              <span className="wz-scale-word">{r.label}</span>
+              <span className={`wz-scale-status is-${STATUS_OF_LEVEL(r.level)}`}>
+                {STATUS_OF_LEVEL(r.level)}
+              </span>
+            </li>
+          ))}
+        </ul>
+      </details>
 
       {/* Only where it can appear. On the live map an unreported stretch is
           drawn as free flow, so grey never shows; on the forecast, which covers

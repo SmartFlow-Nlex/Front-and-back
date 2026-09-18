@@ -24,12 +24,21 @@ export type HorizonRangeKey = (typeof HORIZON_RANGES)[number]["key"];
 export function clockFor(hoursAhead: number): string {
   const t = new Date(Date.now() + hoursAhead * 3_600_000);
   t.setMinutes(0, 0, 0);
-  const sameDay = t.getDate() === new Date().getDate();
-  return t.toLocaleTimeString(undefined, {
-    hour: "numeric",
-    minute: "2-digit",
-    ...(sameDay ? {} : { weekday: "short" }),
+
+  const now = new Date();
+  const sameDay = t.toDateString() === now.toDateString();
+  const time = t.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
+  if (sameDay) return time;
+
+  /* Past today, the weekday alone is not enough: a week out there are two
+     Saturdays in the list and "Sat 10:00 AM" appears twice, meaning different
+     days. The date is what tells them apart. */
+  const day = t.toLocaleDateString(undefined, {
+    weekday: "short",
+    month: "short",
+    day: "numeric",
   });
+  return `${day} · ${time}`;
 }
 
 /** The hours worth offering for a range, clamped to what the warehouse holds. */

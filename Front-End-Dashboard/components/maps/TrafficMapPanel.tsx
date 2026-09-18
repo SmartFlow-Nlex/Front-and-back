@@ -535,14 +535,16 @@ export default function TrafficMapPanel({ title, subtitle, badge, endpoint, laye
         source: "nlex-corridor",
         layout: { "line-join": "round", "line-cap": "round" },
         paint: {
+          // Three colours, banded exactly as classify() bands them: 0 clear,
+          // 1-2 slow, 3 and above congested. The ramp used to paint a shade per
+          // level, which meant a reader matching four reds on the road against
+          // "4 congested" in the panel had to decide for themselves whether
+          // salmon counted.
           "line-color": [
             "match", ["get", "level"],
-            0, PALETTE.level[0],
-            1, PALETTE.level[1],
-            2, PALETTE.level[2],
-            3, PALETTE.level[3],
-            4, PALETTE.level[4],
-            5, PALETTE.level[5],
+            0, PALETTE.status.clear,
+            [1, 2], PALETTE.status.slow,
+            [3, 4, 5], PALETTE.status.congested,
             // Falls through for NO_READING. Grey says the feed reported
             // nothing here, rather than implying a free flow it never saw.
             PALETTE.noData,

@@ -35,7 +35,7 @@ export default function MapComparisonPage() {
   const [wazeMax, setWazeMax] = useState(false);
   const [forecastMax, setForecastMax] = useState(false);
   const { isDark } = useChartTheme();
-  const forecastColours = mapPalette(isDark).level;
+  const forecastColours = mapPalette(isDark).status;
   /* What produced the forecast, fetched with it. The panel drew model output
      but said nothing about the model, so a reader had no way to tell a
      prediction from a decoration. */
@@ -388,7 +388,7 @@ export default function MapComparisonPage() {
                         cannot describe a different map to the one beside it. */}
                     <span
                       className="mc-density-line"
-                      style={{ background: forecastColours[k.level] }}
+                      style={{ background: forecastColours[k.status] }}
                     />
                     {k.label}
                   </div>

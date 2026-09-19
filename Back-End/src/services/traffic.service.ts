@@ -1,4 +1,5 @@
 import { db } from "../config/db.js";
+import { forecastTable } from "./forecast-source.js";
 
 // Hourly columns of nlex_traffic_volume (h00..h23)
 const HOUR_COLS = Array.from({ length: 24 }, (_, i) => `h${String(i).padStart(2, "0")}`);
@@ -718,6 +719,8 @@ export async function getMLPredictiveCongestion() {
     // NEIGHBOURS, so a wrong row order hides the only pattern worth seeing.
     // `estimated` marks positions calibrated from coordinates rather than taken
     // from the NLEX reference, so the UI can be honest about which is which.
+    // Prefer the table only this pipeline writes; see forecast-source.
+    const src = await forecastTable(db);
     const { rows } = await db.query(`
       SELECT c.segment_name AS "segment", c.hours_ahead AS "hours",
              c.congestion_state AS "state", c.probability,
@@ -734,7 +737,7 @@ export async function getMLPredictiveCongestion() {
              -- formatted it in a non-Manila zone would show the wrong hour.
              to_char(c.base_ts, 'YYYY-MM-DD HH24:MI') AS "baseTs",
              k.km_post::float AS "km", COALESCE(k.estimated, false) AS "kmEstimated"
-      FROM gold.ml_predictive_congestion c
+      FROM ${src} c
       LEFT JOIN gold.exit_km_post k ON k.exit_name = c.segment_name
       ORDER BY k.km_post NULLS LAST, c.segment_name ASC, c.hours_ahead ASC`);
     return rows;

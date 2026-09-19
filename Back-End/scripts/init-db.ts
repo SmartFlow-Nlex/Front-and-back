@@ -121,6 +121,9 @@ const WAREHOUSE_READS = [
   // Built by `npm run seed-holidays` — if this is missing or empty, run that.
   "ph_holidays",
   "gold.ml_predictive_volume", "gold.ml_predictive_congestion", "gold.ml_event_surge_forecast",
+  // Written only by train_congestion_horizon.py; the dashboard prefers it over
+  // the shared gold.ml_predictive_congestion. Absent until that has run once.
+  "gold.ml_congestion_forecast",
   "silver.nlex_accident_events_clean", "silver.nlex_breakdown_events_clean",
 ];
 

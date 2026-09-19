@@ -1,4 +1,5 @@
 import { db } from "../config/db.js";
+import { forecastTable } from "./forecast-source.js";
 
 // [DEV-01 & DEV-03] Fetch merged real-time data (volumes + active incidents).
 //
@@ -135,6 +136,8 @@ export async function getForecastModelInfo(): Promise<{
 } | null> {
   if (!db) return null;
   try {
+    // Prefer the table only this pipeline writes; see forecast-source.
+    const src = await forecastTable(db);
     const [{ rows: model }, { rows: variance }] = await Promise.all([
       db.query(
         `SELECT model_name, r2, updated_at,
@@ -156,7 +159,7 @@ export async function getForecastModelInfo(): Promise<{
                     COUNT(DISTINCT hours_ahead)                                  AS horizons,
                     MIN(hours_ahead)                                             AS lo,
                     MAX(hours_ahead)                                             AS hi
-               FROM gold.ml_predictive_congestion
+               FROM ${src}
               GROUP BY segment_name
            ) per_segment`,
       ),
@@ -183,7 +186,7 @@ export async function getForecastModelInfo(): Promise<{
 /**
  * [DEV-02] Predicted congestion for the forecast map panel.
  *
- * Reads gold.ml_predictive_congestion (written by the traffic ML pipeline) and
+ * Reads the congestion forecast (see forecast-source for which table) and
  * attaches the real corridor geometry from dim_location, so the panel draws
  * actual model output. It previously returned a single hardcoded LineString
  * with a fixed congestion_score of 0.78 and never touched the database.
@@ -199,6 +202,8 @@ export async function getForecastModelInfo(): Promise<{
 export async function getForecastCongestionFromDb(hoursAhead: number) {
   if (!db) return null;
   try {
+    // Prefer the table only this pipeline writes; see forecast-source.
+    const src = await forecastTable(db);
     const { rows } = await db.query(
       `SELECT g.segment_name,
               g.hours_ahead,
@@ -207,7 +212,7 @@ export async function getForecastCongestionFromDb(hoursAhead: number) {
               d.segment_name AS corridor_segment,
               d.location_id,
               ST_AsGeoJSON(d.geom::geometry) AS geojson
-       FROM gold.ml_predictive_congestion g
+       FROM ${src} g
        JOIN LATERAL (
          SELECT dl.location_id, dl.segment_name, dl.geom
          FROM dim_location dl
@@ -262,13 +267,15 @@ export async function getForecastDailyPeaksFromDb(): Promise<
 > {
   if (!db) return null;
   try {
+    // Prefer the table only this pipeline writes; see forecast-source.
+    const src = await forecastTable(db);
     const { rows } = await db.query(
       `WITH per_hour AS (
          SELECT hours_ahead,
                 MAX(base_ts) AS base_ts,
                 COUNT(*) FILTER (WHERE congestion_state = 'High')::int AS congested,
                 AVG(p_high)::float                                     AS confidence
-           FROM gold.ml_predictive_congestion
+           FROM ${src}
           GROUP BY hours_ahead
        ), stamped AS (
          SELECT hours_ahead,

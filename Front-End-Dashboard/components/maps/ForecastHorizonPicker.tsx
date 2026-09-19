@@ -198,7 +198,12 @@ export default function ForecastHorizonPicker({
                   // hour is the answer to "when that day", and the count says
                   // why that hour and not another.
                   <option key={p.day} value={p.hoursAhead}>
-                    {`${dayOf(t)}  ·  ${timeOf(t)}  ·  ${p.congested} congested`}
+                    {`${dayOf(t)}  ·  ${timeOf(t)}  ·  ${
+                      // "0 congested" is true but reads as a missing number.
+                      // On a day the model expects nothing heavy, the worst
+                      // hour is simply a clear one, so say that.
+                      p.congested > 0 ? `${p.congested} congested` : "clear"
+                    }`}
                   </option>
                 );
               })

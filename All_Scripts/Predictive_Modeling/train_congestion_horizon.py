@@ -730,21 +730,50 @@ cur.execute("""COMMENT ON COLUMN gold.ml_predictive_congestion.base_ts IS
 # chance of congestion rather than only the winning label and its confidence.
 for _col in ("p_low", "p_med", "p_high"):
     cur.execute(f"ALTER TABLE gold.ml_predictive_congestion ADD COLUMN IF NOT EXISTS {_col} numeric(6,4)")
+
+# A second copy, in a table only this script writes.
+#
+# gold.ml_predictive_congestion is shared: four people work on this system at
+# once and every checkout of this trainer writes it, each starting with
+# DELETE FROM. Checkouts older than "Congestion map: a day and a week ahead"
+# still have HORIZONS = range(1, 13), so whenever one of those runs it replaces
+# a full week with twelve hours -- observed at 12:00 with base_ts 11:00 on a
+# day this machine had not run since 06:00. Nothing written to that table can
+# survive it, whatever it is keyed on.
+#
+# So the dashboard reads this one instead. The shared table is still written
+# exactly as before, so a teammate's app sees no change at all.
+cur.execute("""CREATE TABLE IF NOT EXISTS gold.ml_congestion_forecast (
+    id            serial PRIMARY KEY,
+    segment_name  text NOT NULL,
+    hours_ahead   int  NOT NULL,
+    congestion_state text NOT NULL,
+    probability   numeric,
+    base_ts       timestamp,
+    p_low         numeric(6,4),
+    p_med         numeric(6,4),
+    p_high        numeric(6,4))""")
+cur.execute("""COMMENT ON TABLE gold.ml_congestion_forecast IS
+  'Congestion forecast for the dashboard, written only by train_congestion_horizon.py. Same rows as gold.ml_predictive_congestion, which is shared with older checkouts of this trainer that write only twelve horizons.'""")
+cur.execute("""CREATE INDEX IF NOT EXISTS ml_congestion_forecast_hours_idx
+               ON gold.ml_congestion_forecast (hours_ahead)""")
 conn.commit()
 
 # One round trip instead of 3,360. At 168 horizons the row-at-a-time loop was
 # the reason the write took long enough to be noticed at all; batched, the
 # table is swapped in about a second.
-cur.execute("DELETE FROM gold.ml_predictive_congestion")
-execute_values(
-    cur,
-    """INSERT INTO gold.ml_predictive_congestion
-       (segment_name, hours_ahead, congestion_state, probability, base_ts, p_low, p_med, p_high)
-       VALUES %s""",
-    [(seg, hz, st, pb, BASE_TS.to_pydatetime(), p0, p1, p2)
-     for seg, hz, st, pb, p0, p1, p2 in out],
-    page_size=500,
-)
+_rows = [(seg, hz, st, pb, BASE_TS.to_pydatetime(), p0, p1, p2)
+         for seg, hz, st, pb, p0, p1, p2 in out]
+for _table in ("gold.ml_predictive_congestion", "gold.ml_congestion_forecast"):
+    cur.execute(f"DELETE FROM {_table}")
+    execute_values(
+        cur,
+        f"""INSERT INTO {_table}
+            (segment_name, hours_ahead, congestion_state, probability, base_ts, p_low, p_med, p_high)
+            VALUES %s""",
+        _rows,
+        page_size=500,
+    )
 
 # One row of evaluation detail the card reads to explain itself: class
 # balance, per-class precision/recall, Brier, and the calibration table.
@@ -777,9 +806,9 @@ conn.commit()
 # occurrence attributable to a run or to something outside it.
 cur.execute("""SELECT COUNT(*), COUNT(DISTINCT (congestion_state, probability)),
                       MIN(hours_ahead), MAX(hours_ahead), MAX(base_ts)
-               FROM gold.ml_predictive_congestion""")
+               FROM gold.ml_congestion_forecast""")
 n, distinct, hz_lo, hz_hi, base = cur.fetchone()
-print(f"  ml_predictive_congestion: {n} rows, {distinct} distinct (state,probability) pairs, "
+print(f"  ml_congestion_forecast: {n} rows, {distinct} distinct (state,probability) pairs, "
       f"horizons {hz_lo}-{hz_hi}, base_ts {base}")
 print("  (the old run had exactly 20 — one per exit, repeated 12 times)")
 

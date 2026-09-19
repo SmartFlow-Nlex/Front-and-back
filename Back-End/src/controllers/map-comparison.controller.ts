@@ -247,7 +247,8 @@ export const getMapRealtime = async (_req: Request, res: Response) => {
 };
 
 // [DEV-02] GET /api/v1/map-comparison/forecast?hours=1
-// Predicted congestion per corridor segment, from gold.ml_predictive_congestion.
+// Predicted congestion per corridor segment, from whichever forecast table
+// forecast-source resolves to.
 export const getMapForecast = async (req: Request, res: Response) => {
   const parsed = ForecastHorizonSchema.safeParse(req.query);
   if (!parsed.success) {

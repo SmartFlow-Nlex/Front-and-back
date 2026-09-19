@@ -359,3 +359,118 @@ export async function calculateCarbonEmissionBatch(inputs: CarbonEmissionInput[]
   const idlingFactor = await getIdlingFactor();
   return inputs.map((input, index) => calculateRow(input, index + 1, idlingFactor));
 }
+
+/* ── Fleet-mix forecast ──────────────────────────────────────────────────────
+ *
+ * Serves gold.ml_predictive_fleet_mix, written by
+ * smartflow_scripts/3_training_testing/fleet_mix/train_fleet_mix.py.
+ *
+ * Shares are stored as fractions summing to 1, not percentages, and are
+ * returned that way — the conversion belongs at the point of display, so a
+ * caller doing arithmetic never has to guess which scale it is holding.
+ *
+ * The response carries the model leaderboard alongside the series for the same
+ * reason the CO2 panel does: a forecast shown without the evidence that it beat
+ * a trivial baseline is a line on a chart, not a result. `rejected_reason`
+ * travels too, so the panel can show WHY the LSTM was not used rather than
+ * quietly omitting it.
+ */
+export async function getFleetMixForecast(days?: number) {
+  if (!db) return null;
+
+  try {
+    const params: unknown[] = [];
+    let where = "";
+    if (days != null) {
+      // Anchored to the last OBSERVED day, never to now(): the projection block
+      // extends past the data, and a window measured from today would crop it.
+      where = `WHERE forecast_date >= (
+                 SELECT MAX(forecast_date) - ($1::int * INTERVAL '1 day')
+                 FROM gold.ml_predictive_fleet_mix WHERE actual_c1 IS NOT NULL)`;
+      params.push(days);
+    }
+
+    const [seriesQ, splitQ, metricsQ] = await Promise.all([
+      db.query(
+        `SELECT forecast_date::text AS d,
+                actual_c1::float, actual_c2::float, actual_c3::float,
+                pred_c1::float, pred_c2::float, pred_c3::float,
+                heavy_pred::float, heavy_surge, champion_model,
+                is_holdout, is_future
+         FROM gold.ml_predictive_fleet_mix ${where}
+         ORDER BY forecast_date ASC`, params),
+      db.query(
+        `SELECT COUNT(*) FILTER (WHERE NOT is_holdout AND NOT is_future)::int AS context_days,
+                COUNT(*) FILTER (WHERE is_holdout)::int AS holdout_days,
+                COUNT(*) FILTER (WHERE is_future)::int  AS future_days,
+                COUNT(*) FILTER (WHERE heavy_surge)::int AS surge_days,
+                MIN(forecast_date) FILTER (WHERE is_future)::text AS future_start,
+                MAX(forecast_date) FILTER (WHERE is_future)::text AS future_end,
+                MAX(updated_at)::text AS updated_at
+         FROM gold.ml_predictive_fleet_mix`),
+      db.query(
+        `SELECT model_name, rank, accepted, mae, rmse, wmape, r2, mase, mape,
+                rejected_reason, diagnosis, split_label, updated_at
+         FROM gold.ml_model_metrics
+         WHERE target = 'Fleet Mix'
+         ORDER BY accepted DESC, rank NULLS LAST, mase ASC`),
+    ]);
+
+    const champion = seriesQ.rows.find((r) => r.champion_model)?.champion_model ?? null;
+
+    return {
+      champion,
+      series: seriesQ.rows,
+      split: splitQ.rows[0] ?? null,
+      // `mase` here holds the skill ratio against persistence and `mae` the
+      // mean per-class error in percentage points — the metrics table is shared
+      // with the other targets, so the columns are reused rather than added to.
+      models: metricsQ.rows,
+    };
+  } catch (error) {
+    console.error("Database query failed for fleet-mix forecast:", error);
+    return null;
+  }
+}
+
+/* ── Fleet profile for the simulation sandbox ────────────────────────────────
+ *
+ * The sandbox modelled CO2 from constants compiled into the browser bundle —
+ * 160/550/950 g/km against the 192/354/1492 in nlex_emission_factors, and a
+ * fleet of 78/16/6 against an observed 78.1/13.0/8.9. So the sandbox's CO2
+ * rate and the Emissions dashboard computed the same quantity from different
+ * numbers, and the sandbox understated heavy-vehicle output by a third —
+ * precisely the traffic its heavy-vehicle restriction strategy exists to
+ * target.
+ *
+ * This serves both from the warehouse so there is one source for them.
+ */
+export async function getFleetProfile() {
+  if (!db) return null;
+  try {
+    const [factors, mix] = await Promise.all([
+      db.query(
+        `SELECT vehicle_class, class_label, co2_g_per_km::float
+         FROM nlex_emission_factors ORDER BY vehicle_class`,
+      ),
+      db.query(
+        `SELECT SUM(class_1)::float AS c1, SUM(class_2)::float AS c2, SUM(class_3)::float AS c3
+         FROM gold.fact_traffic_hourly`,
+      ),
+    ]);
+    const m = mix.rows[0] ?? { c1: 0, c2: 0, c3: 0 };
+    const total = (m.c1 ?? 0) + (m.c2 ?? 0) + (m.c3 ?? 0);
+    return {
+      factors: factors.rows,
+      // Shares as fractions summing to 1, the same convention the fleet-mix
+      // forecast uses, so nothing downstream has to guess the scale.
+      mix: total > 0
+        ? { 1: m.c1 / total, 2: m.c2 / total, 3: m.c3 / total }
+        : null,
+      source: "nlex_emission_factors + gold.fact_traffic_hourly",
+    };
+  } catch (error) {
+    console.error("Database query failed for fleet profile:", error);
+    return null;
+  }
+}

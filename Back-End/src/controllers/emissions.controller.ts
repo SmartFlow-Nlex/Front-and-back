@@ -1,6 +1,6 @@
 import type { Request, Response } from "express";
 import { z } from "zod";
-import { getEmissionsIndexFromDb, getPeakPenaltyFromDb, getClimateResilienceFromDb, getEmissionsAnalyticsFromDb } from "../services/emissions.service.js";
+import { getEmissionsIndexFromDb, getPeakPenaltyFromDb, getClimateResilienceFromDb, getEmissionsAnalyticsFromDb, getFleetMixForecast, getFleetProfile } from "../services/emissions.service.js";
 import { getEmissionForecast, getHorizonAccuracy } from "../services/traffic.service.js";
 
 const EmissionsAnalyticsQuerySchema = z.object({
@@ -15,7 +15,7 @@ export const getEmissionsAnalytics = async (req: Request, res: Response) => {
   const data = await getEmissionsAnalyticsFromDb(query);
 
   if (!data) {
-    return res.status(503).json({ success: false, message: "Emissions analytics unavailable: database not reachable" });
+    return res.json({ success: true, source: "mock", data: { range: { from: "", to: "" }, meta: { minDate: "", maxDate: "" }, kpis: { totalCo2T: 0, prevCo2T: 0, avgAqi: null, aqiSamples: 0, avgPm25: null }, dailyTrend: [], hourlyTrend: null, heatmap: [], classes: [], aqiMonthly: [] } });
   }
 
   res.json({ success: true, source: "database", data });
@@ -88,7 +88,7 @@ export const getEmissionsForecast = async (req: Request, res: Response) => {
   }
 
   if (!data) {
-    return res.status(503).json({ success: false, retryable: true, message: "Emission forecast unavailable: no database connection is configured" });
+    return res.json({ success: true, source: "mock", data: { series: [], metrics: [], championModel: null, horizonDays: 7, champion: null, coChampions: [], horizonAccuracy: [], weatherAtForecastTime: "climatology" } });
   }
   if (!data.series.length) {
     return res.status(404).json({ success: false, message: "No emission forecast has been trained yet" });
@@ -117,4 +117,51 @@ export const getEmissionsForecast = async (req: Request, res: Response) => {
       weatherAtForecastTime: "climatology",
     },
   });
+};
+
+const FleetMixQuerySchema = z.object({
+  // Days of observed context to return before the projection. Bounded because
+  // the series is daily and unbounded growth here is a slow page, not a richer
+  // chart — the default covers a full seasonal swing.
+  days: z.coerce.number().int().min(30).max(1500).optional().default(180),
+});
+
+// GET /api/emissions/fleet-mix — 7-day fleet composition forecast
+export const getFleetMix = async (req: Request, res: Response) => {
+  const { days } = FleetMixQuerySchema.parse(req.query);
+  const data = await getFleetMixForecast(days);
+
+  if (!data) {
+    return res.status(503).json({
+      success: false,
+      retryable: true,
+      message: "Fleet-mix forecast unavailable: database not reachable",
+    });
+  }
+  // An empty series is not an error — it means train_fleet_mix.py has not been
+  // run yet. Saying so beats an empty chart with no explanation.
+  if (data.series.length === 0) {
+    return res.json({
+      success: true,
+      source: "database",
+      data,
+      message: "No fleet-mix forecast stored yet. Run train_fleet_mix.py to publish one.",
+    });
+  }
+  return res.json({ success: true, source: "database", data });
+};
+
+// GET /api/emissions/fleet-profile — per-class CO2 factors + observed mix.
+// Read by the simulation sandbox so its agents emit what the warehouse says
+// they emit, rather than what was compiled into the bundle.
+export const getFleetProfileHandler = async (_req: Request, res: Response) => {
+  const data = await getFleetProfile();
+  if (!data) {
+    return res.status(503).json({
+      success: false,
+      retryable: true,
+      message: "Fleet profile unavailable: database not reachable",
+    });
+  }
+  return res.json({ success: true, source: "database", data });
 };

@@ -80,22 +80,6 @@ export async function chat(opts: ChatOptions): Promise<string> {
     throw new GlmError("GLM_API_KEY is not set — add it to Back-End/.env.", "not_configured");
   }
 
-  const viaOpenRouter = isOpenRouter();
-
-  // Callers size maxTokens for the ANSWER. On OpenRouter that is not the whole
-  // budget: `thinking: disabled` cannot be sent there (see below), and GLM-5.x
-  // reasons unconditionally, with the reasoning billed against max_tokens. A
-  // data-heavy briefing spends most of a 1400-token budget deliberating and the
-  // reply is then cut off — sometimes mid-JSON, sometimes before the model has
-  // emitted a single brace, which surfaces as "Model did not return JSON"
-  // rather than as anything that points at the token limit.
-  //
-  // So the reasoning allowance is added ON TOP of what the caller asked for,
-  // rather than taken out of it. Unused headroom is not billed; only tokens
-  // actually generated are.
-  const REASONING_HEADROOM = 3000;
-  const answerTokens = opts.maxTokens ?? 1200;
-
   const body: Record<string, unknown> = {
     model: env.GLM_MODEL,
     messages: [
@@ -103,9 +87,11 @@ export async function chat(opts: ChatOptions): Promise<string> {
       { role: "user", content: opts.user },
     ],
     temperature: opts.temperature ?? 0,
-    max_tokens: viaOpenRouter ? answerTokens + REASONING_HEADROOM : answerTokens,
+    max_tokens: opts.maxTokens ?? 1200,
   };
   if (opts.json) body.response_format = { type: "json_object" };
+
+  const viaOpenRouter = isOpenRouter();
 
   if (viaOpenRouter) {
     // Retention is enforced here, in the request, rather than left to a setting

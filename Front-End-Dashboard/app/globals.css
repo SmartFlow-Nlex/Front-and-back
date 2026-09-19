@@ -2476,166 +2476,6 @@ body {
   font-size: 0.88rem;
 }
 
-.sandbox-grid {
-  display: grid;
-  grid-template-columns: 2.4fr 1fr;
-  gap: 14px;
-}
-
-/* ---------- AI Sandbox: fit the page to the viewport so the whole page
-   no longer scrolls; only the Scenario card's controls scroll, while its
-   "Scenario" title stays pinned in place. ---------- */
-.sandbox-page {
-  display: flex;
-  flex-direction: column;
-}
-
-.sandbox-page .dm-head,
-.sandbox-page .sandbox-metric-row {
-  flex-shrink: 0;
-}
-
-
-
-/* Left card: let the simulation canvas grow to fill the card so there is no
-   empty space below the prescriptive recommendation. */
-.sandbox-page .sandbox-main {
-  display: flex;
-  flex-direction: column;
-}
-
-/* Each card is as tall as its own contents — stretching the shorter one to
-   match the taller only ever produced empty space inside it. */
-.sandbox-page .sandbox-grid {
-  align-items: start;
-}
-
-/* Docked, the wrapper is invisible to layout — the legend and recommendation
-   remain direct children of the card, exactly as before. */
-.sandbox-footbar {
-  display: contents;
-}
-
-/* ── Expanded simulation ──────────────────────────────────────────────────────
-   Full screen is not the docked card made bigger; it is a different reading of
-   the same thing. The card furniture goes, the road takes the viewport, and the
-   controls and read-out become bars over it — so the pixels go to the corridor
-   rather than to margins.
-
-   A flex column, not a grid: the card has four children and a three-row grid
-   quietly created a second column and scattered them across it. */
-.sandbox-main.is-expanded {
-  position: fixed;
-  inset: 0;
-  z-index: 300;
-  margin: 0;
-  padding: 0;
-  border: 0;
-  border-radius: 0;
-  box-shadow: none;
-  background: #0b1020;
-  display: flex;
-  flex-direction: column;
-  overflow: hidden;
-}
-
-.sandbox-main.is-expanded .sandbox-head {
-  flex: 0 0 auto;
-  padding: 12px 20px;
-  background: rgba(11, 16, 32, 0.82);
-  backdrop-filter: blur(8px);
-  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
-}
-.sandbox-main.is-expanded .sandbox-head h2 {
-  color: #f1f5f9;
-}
-
-.sandbox-main.is-expanded .sandbox-canvas {
-  flex: 1 1 auto;
-  min-height: 0;
-  width: 100%;
-  height: auto !important;
-  margin: 0;
-  border-radius: 0;
-}
-
-/* One bar along the bottom rather than two stacked blocks, so the road keeps
-   the height they would otherwise take. */
-.sandbox-main.is-expanded .sandbox-footbar {
-  display: flex;
-  align-items: center;
-  gap: 20px;
-  flex: 0 0 auto;
-  padding: 10px 20px;
-  background: rgba(11, 16, 32, 0.82);
-  backdrop-filter: blur(8px);
-  border-top: 1px solid rgba(255, 255, 255, 0.08);
-}
-.sandbox-main.is-expanded .sandbox-legend {
-  flex: 0 0 auto;
-  margin: 0;
-  color: #cbd5e1;
-}
-.sandbox-main.is-expanded .sandbox-reco {
-  flex: 1 1 auto;
-  margin: 0;
-  background: rgba(255, 255, 255, 0.05);
-  border-left-color: rgba(255, 255, 255, 0.35);
-}
-.sandbox-main.is-expanded .sandbox-reco strong {
-  color: #94a3b8;
-}
-.sandbox-main.is-expanded .sandbox-reco p {
-  color: #f1f5f9;
-}
-
-body:has(.sandbox-main.is-expanded) {
-  overflow: hidden;
-}
-
-.sandbox-page .sandbox-side {
-  display: flex;
-  flex-direction: column;
-}
-
-.sandbox-page .sandbox-side > h2,
-.sandbox-page .sandbox-side > .sandbox-side-head {
-  flex-shrink: 0;
-}
-
-/* The controls used to live in their own scroll box inside a viewport-locked
-   card. That only worked while the rest of the page was short enough to leave
-   it room; with the forecast strip above it there was about 140px left — a
-   scrollbar that technically moved and was useless to use. The page now scrolls
-   as a whole, like every other tab, and this is a plain container. */
-.sandbox-side-scroll {
-  display: flex;
-  flex-direction: column;
-}
-
-.sandbox-main,
-.sandbox-side {
-  background: var(--bg-surface);
-  border: 1px solid var(--border-default);
-  border-radius: var(--radius-lg);
-  padding: 18px;
-  box-shadow: var(--shadow-card);
-}
-
-.sandbox-head {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 8px;
-}
-
-.sandbox-head h2 {
-  margin: 0;
-  font-size: 1.3rem;
-  font-weight: 800;
-}
-
 .btn-primary,
 .btn-muted,
 .btn-danger {
@@ -2700,192 +2540,10 @@ body:has(.sandbox-main.is-expanded) {
   top: 38px;
   border-top: 4px dashed rgba(255, 255, 255, .4);
 }
-
-/* ---- Live agent sandbox ---- */
-.sandbox-metric-row {
-  display: grid;
-  grid-template-columns: repeat(6, 1fr);
-  gap: 10px;
-  margin-top: 12px;
-}
-.sandbox-metric {
-  background: var(--bg-surface);
-  border: 1px solid var(--border-default);
-  border-radius: var(--radius-md);
-  padding: 12px 14px;
-  box-shadow: var(--shadow-card);
-}
-.sandbox-metric h3 {
-  margin: 0;
-  font-size: 0.68rem;
-  font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-  color: var(--text-muted);
-}
-.sandbox-metric-val {
-  font-size: 1.35rem;
-  font-weight: 800;
-  color: var(--text-primary);
-  margin-top: 4px;
-  line-height: 1.1;
-}
-.sandbox-metric-delta {
-  font-size: 0.72rem;
-  font-weight: 700;
-}
-.sandbox-metric-delta.up { color: #16a34a; }
-.sandbox-metric-delta.down { color: var(--color-danger); }
-.sandbox-metric-delta.muted { color: var(--text-muted); font-weight: 500; }
-
-.sandbox-canvas {
-  width: 100%;
-  height: 300px;
-  margin-top: 12px;
-  border-radius: var(--radius-md);
-  display: block;
-}
-
-.sandbox-legend {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 16px;
-  margin-top: 10px;
-  font-size: 0.78rem;
-  color: var(--text-secondary);
-}
-.sandbox-legend span { display: inline-flex; align-items: center; gap: 6px; }
-.sandbox-legend i { width: 12px; height: 12px; border-radius: 3px; display: inline-block; }
-
-.sandbox-reco {
-  margin-top: 14px;
-  border-radius: var(--radius-md);
-  padding: 12px 14px;
-  border-left: 4px solid;
-}
-.sandbox-reco strong { font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.05em; }
-.sandbox-reco p { margin: 4px 0 0; font-size: 0.9rem; line-height: 1.45; color: var(--text-primary); }
-.sandbox-reco.good { background: #ddf3e7; border-color: #1d7a4c; }
-.sandbox-reco.good strong { color: #1d7a4c; }
-.sandbox-reco.warn { background: #fdf3d6; border-color: #b45309; }
-.sandbox-reco.warn strong { color: #b45309; }
-.sandbox-reco.bad { background: var(--color-danger-bg); border-color: var(--color-danger); }
-.sandbox-reco.bad strong { color: var(--color-danger); }
-
-.sandbox-speed-seg {
-  display: inline-flex;
-  gap: 2px;
-  background: #e7ecf5;
-  border-radius: var(--radius-sm);
-  padding: 2px;
-  margin-right: 6px;
-  vertical-align: middle;
-}
-.sandbox-speed-seg button {
-  border: 0;
-  background: transparent;
-  padding: 5px 9px;
-  font-size: 0.8rem;
-  font-weight: 700;
-  border-radius: 5px;
-  cursor: pointer;
-  color: #3b4f6b;
-}
-.sandbox-speed-seg button.active { background: #fff; color: var(--brand-primary); box-shadow: var(--shadow-sm); }
-
-.sandbox-mini-label {
-  display: block;
-  font-size: 0.78rem;
-  color: var(--text-secondary);
-  margin: 12px 0 6px;
-}
-.sandbox-lane-toggles { display: flex; gap: 6px; }
-.sandbox-lane-toggles button {
-  flex: 1;
-  border: 1px solid #d7deec;
-  background: var(--bg-surface);
-  border-radius: var(--radius-sm);
-  padding: 8px 0;
-  font-weight: 700;
-  font-size: 0.82rem;
-  cursor: pointer;
-  color: var(--text-secondary);
-  transition: all var(--transition-fast);
-}
-.sandbox-lane-toggles button.closed {
-  background: var(--color-danger-bg);
-  border-color: var(--color-danger-border);
-  color: var(--color-danger);
-}
-/* In the full-screen bar the toggles sit in an unsized flex row, so `flex: 1`
-   collapsed them to slivers and the closed state was hard to see on the dark
-   background. Give them a real size and a dark-bar palette. */
-.sandbox-fs-bar .sandbox-lane-toggles button {
-  flex: 0 0 auto;
-  min-width: 38px;
-  padding: 5px 10px;
-  background: rgba(255, 255, 255, 0.07);
-  border-color: rgba(255, 255, 255, 0.16);
-  color: #e2e8f0;
-}
-.sandbox-fs-bar .sandbox-lane-toggles button:hover {
-  background: rgba(255, 255, 255, 0.13);
-}
-.sandbox-fs-bar .sandbox-lane-toggles button.closed {
-  background: rgba(220, 38, 38, 0.35);
-  border-color: rgba(252, 165, 165, 0.85);
-  color: #ffffff;
-}
-.sandbox-btn-row { display: flex; gap: 8px; margin-top: 10px; }
-.sandbox-btn-row .btn-primary, .sandbox-btn-row .btn-muted { margin-left: 0; }
-
-/* Incident placement mode */
-.sandbox-canvas.placing { cursor: crosshair; }
 .btn-muted.active {
   background: var(--color-danger-bg);
   color: var(--color-danger);
   box-shadow: inset 0 0 0 1px var(--color-danger-border);
-}
-.sandbox-place-hint {
-  margin: 8px 0 0;
-  font-size: 0.76rem;
-  font-weight: 600;
-  color: var(--color-danger);
-}
-
-/* ---------- Simulation Controls / Command mode toggle ---------- */
-.sandbox-side-head {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-  margin-bottom: 14px;
-}
-.sandbox-side-head h2 {
-  margin: 0;
-}
-.sandbox-mode-seg {
-  display: flex;
-  gap: 3px;
-  background: #e7ecf5;
-  border-radius: var(--radius-sm);
-  padding: 3px;
-}
-.sandbox-mode-seg button {
-  flex: 1;
-  border: 0;
-  background: transparent;
-  padding: 7px 10px;
-  font-size: 0.82rem;
-  font-weight: 700;
-  border-radius: 6px;
-  cursor: pointer;
-  color: #3b4f6b;
-  transition: background-color var(--transition-fast), color var(--transition-fast);
-}
-.sandbox-mode-seg button.active {
-  background: #fff;
-  color: var(--brand-primary);
-  box-shadow: var(--shadow-sm);
 }
 
 /* ---------- AI Command Prompt (preview) ---------- */
@@ -2946,31 +2604,6 @@ body:has(.sandbox-main.is-expanded) {
   border-radius: 8px;
   padding: 10px 12px;
 }
-.sandbox-baseline-note {
-  font-size: 0.76rem;
-  color: var(--text-muted);
-  margin: 8px 0 0;
-  line-height: 1.4;
-}
-
-.sandbox-side label {
-  display: block;
-  margin-top: 12px;
-  font-size: 0.88rem;
-  color: var(--text-secondary);
-  font-weight: 600;
-}
-
-.sandbox-side select {
-  width: 100%;
-  margin-top: 6px;
-  height: 40px;
-  border: 1px solid #c8d1df;
-  border-radius: var(--radius-sm);
-  padding: 0 10px;
-  font-size: 0.88rem;
-  background: var(--bg-surface);
-}
 
 .dir-toggle {
   margin-top: 14px;
@@ -2992,132 +2625,6 @@ body:has(.sandbox-main.is-expanded) {
 .dir-toggle .active {
   background: var(--brand-primary);
   color: #fff;
-}
-
-/* ---------- Sandbox Section Titles ---------- */
-.sandbox-section-title {
-  margin-top: 18px;
-  margin-bottom: 2px;
-  font-size: 0.82rem;
-  font-weight: 700;
-  color: var(--brand-primary);
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-}
-
-/* ---------- Sandbox Swap Button ---------- */
-.sandbox-swap-row {
-  display: flex;
-  justify-content: center;
-  margin: 6px 0 2px;
-}
-
-.sandbox-swap-btn {
-  width: 38px;
-  height: 38px;
-  border-radius: var(--radius-full);
-  border: 1px solid #d0d7e4;
-  background: var(--bg-surface);
-  color: var(--text-secondary);
-  font-size: 1.1rem;
-  cursor: pointer;
-  display: grid;
-  place-items: center;
-  transition: background-color var(--transition-fast), border-color var(--transition-fast);
-}
-
-.sandbox-swap-btn:hover {
-  background: #edf1f9;
-  border-color: var(--brand-primary);
-  color: var(--brand-primary);
-}
-
-/* ---------- Sandbox Slider Groups ---------- */
-.sandbox-slider-group {
-  margin-top: 18px;
-}
-
-.sandbox-slider-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: baseline;
-  margin-bottom: 8px;
-}
-
-.sandbox-slider-label {
-  font-size: 0.92rem;
-  font-weight: 700;
-  color: var(--text-primary);
-}
-
-.sandbox-slider-value {
-  font-size: 0.92rem;
-  font-weight: 800;
-}
-
-.sandbox-slider-hint {
-  display: block;
-  margin-top: 4px;
-  font-size: 0.78rem;
-  color: var(--text-muted);
-  font-style: italic;
-}
-
-/* ---------- Custom Range Slider ---------- */
-.sandbox-range {
-  -webkit-appearance: none;
-  appearance: none;
-  width: 100%;
-  height: 6px;
-  border-radius: 999px;
-  outline: none;
-  cursor: pointer;
-  background: linear-gradient(
-    to right,
-    var(--range-color) 0%,
-    var(--range-color) var(--range-pct, 50%),
-    #dce2ef var(--range-pct, 50%),
-    #dce2ef 100%
-  );
-}
-
-.sandbox-range.inflow   { --range-color: var(--brand-primary); }
-.sandbox-range.lanes    { --range-color: #16a34a; }
-.sandbox-range.capacity { --range-color: #ea580c; }
-
-/* Webkit thumb */
-.sandbox-range::-webkit-slider-thumb {
-  -webkit-appearance: none;
-  appearance: none;
-  width: 18px;
-  height: 18px;
-  border-radius: 50%;
-  background: var(--range-color);
-  border: 3px solid #fff;
-  box-shadow: 0 1px 4px rgba(0, 0, 0, .18);
-  cursor: pointer;
-  transition: transform var(--transition-fast);
-}
-
-.sandbox-range::-webkit-slider-thumb:hover {
-  transform: scale(1.2);
-}
-
-/* Firefox thumb */
-.sandbox-range::-moz-range-thumb {
-  width: 18px;
-  height: 18px;
-  border-radius: 50%;
-  background: var(--range-color);
-  border: 3px solid #fff;
-  box-shadow: 0 1px 4px rgba(0, 0, 0, .18);
-  cursor: pointer;
-}
-
-.sandbox-range::-moz-range-track {
-  height: 6px;
-  border-radius: 999px;
-  background: transparent;
 }
 
 
@@ -3289,9 +2796,12 @@ body:has(.sandbox-main.is-expanded) {
     font-size: 1.05rem;
   }
 
+  /* Was 100x100 -- two and a half times the desktop mark, taller than the
+     64px bar it sits in, and it pushed the wordmark and clock off the edge on
+     every page below this width. */
   .ds-top-brand img {
-    width: 100px;
-    height: 100px;
+    width: 32px;
+    height: 32px;
   }
 }
 
@@ -3369,10 +2879,6 @@ body:has(.sandbox-main.is-expanded) {
   .sandbox-page,
   .sandbox-page .sandbox-side {
     overflow: visible;
-  }
-
-  .sandbox-page {
-    max-height: none;
   }
 
   .sandbox-page .sandbox-grid {
@@ -6214,6 +5720,12 @@ body:has(.sandbox-main.is-expanded) {
 .ds-rd-scale-chip.lv-4,
 .ds-rd-scale-chip.lv-5 { background: #e04434; }
 
+/* Live Map: two full maps side by side need ~1000px to breathe; below that the
+   forecast-model card lands on the other map's controls. Stack them. */
+@media (max-width: 1100px) {
+  .mc-map-grid { grid-template-columns: minmax(0, 1fr) !important; }
+}
+
 /* ── AI Sandbox: parsed-command proposal ──────────────────────────────────────
    The model's actions are shown for confirmation before they touch the
    simulation, so this block reads as a preview, not as applied state. */
@@ -6281,11 +5793,850 @@ body:has(.sandbox-main.is-expanded) {
 }
 .ai-plan-discard:hover { background: var(--bg-subtle, #f5f5f7); }
 
-/* ── AI Sandbox: forecast-day strip ───────────────────────────────────────────
-   Sits between the page header and the metric row, so it must not compete with
-   the simulation grid for height — the grid is what scrolls, and an
-   unconstrained flex child here squeezed it until the side card's scroll area
-   collapsed. Fixed at its content height, and kept deliberately compact. */
+/* Evidence disclosure on the forecast cards: the chevron turns and the label
+   flips between Show and Hide with the native open state, so the summary
+   reads as a control and not as a line of text. */
+.evidence-summary::-webkit-details-marker { display: none; }
+.evidence-summary .evidence-chevron svg { transition: transform 160ms ease; }
+details[open] > .evidence-summary .evidence-chevron svg { transform: rotate(90deg); }
+.evidence-summary .evidence-close-label { display: none; }
+details[open] > .evidence-summary .evidence-open-label { display: none; }
+details[open] > .evidence-summary .evidence-close-label { display: inline; }
+
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   AI SANDBOX — merged from the sandbox-updated-hans2 branch (2026-09-19)
+
+   That branch carried a much more developed AI Sandbox (simulation 767 lines
+   vs 439, page 1894 vs 1001, plus the closure-stretch feature), and its markup
+   needs its own stylesheet. These rules are appended rather than spliced into
+   place so nothing in this file's other 6,000 lines is disturbed; being last,
+   they win at equal specificity.
+
+   The reset immediately below is required. The older sandbox here was
+   viewport-locked (`overflow: hidden` on the page, `flex: 1` on the grid) and
+   the newer one scrolls with the page like every other tab. Appending alone
+   would leave the old lock in force, because nothing in the new rules happens
+   to set those same properties.
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+.sandbox-page {
+  min-height: auto;
+  overflow: visible;
+}
+
+.sandbox-page .sandbox-grid {
+  flex: none;
+  grid-template-rows: none;
+}
+
+.sandbox-grid {
+  display: grid;
+  grid-template-columns: 2.4fr 1fr;
+  gap: 14px;
+}
+
+/* ---------- AI Sandbox: fit the page to the viewport so the whole page
+   no longer scrolls; only the Scenario card's controls scroll, while its
+   "Scenario" title stays pinned in place. ---------- */
+.sandbox-page {
+  display: flex;
+  flex-direction: column;
+}
+
+.sandbox-page .dm-head,
+.sandbox-page .sandbox-metric-row {
+  flex-shrink: 0;
+}
+
+
+
+/* Left card: let the simulation canvas grow to fill the card so there is no
+   empty space below the prescriptive recommendation. */
+.sandbox-page .sandbox-main {
+  display: flex;
+  flex-direction: column;
+}
+
+/* The two cards now end together.
+ *
+ * They used to be sized independently (align-items: start), because stretching
+ * the simulation card left a white band inside it: the canvas height was
+ * pinned to laneCount × LANE_PX, so the extra height went to dead space under
+ * the road rather than to the road.
+ *
+ * That is fixed at the source instead. The canvas takes a min-height rather
+ * than a fixed height and flexes to fill the card, and the docked lane ceiling
+ * is raised so render() — which sizes a lane as
+ * min((height - padding) / lanes, ceiling) — scales the lanes up into the
+ * space instead of centring a short road in a tall box. The road grows; there
+ * is no band to leave behind. */
+.sandbox-page .sandbox-grid {
+  /* Each card takes the height its content needs.
+   *
+   * Stretching them to end level was right when the control rail was short and
+   * the simulation card was the taller of the two. It is wrong now: the rail
+   * carries carriageway, exits, interventions, the speed zone and the baseline,
+   * so it runs far past anything the road can use, and stretching the
+   * simulation card to match simply inflated it with blank space — a 640 px
+   * road floating in a 1,200 px card.
+   *
+   * A card that ends where its content ends leaves page background beside the
+   * rail, which reads as layout. A card that ends level but is two-thirds empty
+   * reads as a bug, which is what it looked like. */
+  align-items: start;
+}
+
+.sandbox-page .sandbox-main .sandbox-canvas {
+  /* Grow to fill the card, but only up to what the road can usefully use.
+   *
+   * Letting it grow without limit was the wrong half of "the two cards end
+   * together": the control rail is now long (carriageway, exits, interventions,
+   * baseline), so the canvas stretched past 1,200 px and centred a 640 px road
+   * inside it, leaving ~250 px of blank card above and below the carriageway.
+   * Capping the canvas and pushing the legend to the bottom of the card fills
+   * that space with content instead of air, and the cards still end level. */
+  flex: 1 1 auto;
+  max-height: 460px;
+}
+
+/* Legend and recommendation sit at the FOOT of the card. `.sandbox-footbar` is
+   display:contents while docked, so these are direct flex children and the auto
+   margin on the first of them absorbs whatever height the canvas did not. */
+.sandbox-page .sandbox-main .sandbox-legend {
+  margin-top: auto;
+}
+
+/* ── Rail proportions ────────────────────────────────────────────────────────
+   The control rail was the tallest thing on the page by a wide margin, and the
+   left card is sized by its canvas (lane count × lane height), so it cannot
+   grow to meet it — everything below the recommendation was empty page.
+   Stretching the card is not the fix; that was tried and just moved the gap
+   inside the card, which is why align-items:start is set above.
+
+   So shorten the rail instead. Most of its height was wrapped text, not
+   controls: at 2.4fr/1fr the rail was narrow enough that every italic hint
+   broke across three or four lines. Widening it to 2fr/1fr with a 340px floor
+   lets those hints set in one or two lines, which takes real height out of the
+   column without hiding anything or shrinking a single control. */
+.sandbox-page .sandbox-grid {
+  grid-template-columns: minmax(0, 2fr) minmax(340px, 1fr);
+}
+
+/* Docked, the wrapper is invisible to layout — the legend and recommendation
+   remain direct children of the card, exactly as before. */
+.sandbox-footbar {
+  display: contents;
+}
+
+/* ── Expanded simulation ──────────────────────────────────────────────────────
+   Full screen is not the docked card made bigger; it is a different reading of
+   the same thing. The card furniture goes, the road takes the viewport, and the
+   controls and read-out become bars over it — so the pixels go to the corridor
+   rather than to margins.
+
+   A flex column, not a grid: the card has four children and a three-row grid
+   quietly created a second column and scattered them across it. */
+.sandbox-main.is-expanded {
+  position: fixed;
+  inset: 0;
+  z-index: 300;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+  background: #0b1020;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.sandbox-main.is-expanded .sandbox-head {
+  flex: 0 0 auto;
+  padding: 12px 20px;
+  background: rgba(11, 16, 32, 0.82);
+  backdrop-filter: blur(8px);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+.sandbox-main.is-expanded .sandbox-head h2 {
+  color: #f1f5f9;
+}
+
+/* Full screen fills the height, and the lanes fill with it. Capping the lanes
+   to a fixed multiple of true scale was tried and reverted — it left the
+   carriageway as a thin ribbon stranded at the top of an empty page. */
+.sandbox-main.is-expanded .sandbox-canvas {
+  flex: 1 1 auto;
+  min-height: 0;
+  width: 100%;
+  height: auto;
+  margin: 0;
+  border-radius: 0;
+}
+
+/* One bar along the bottom rather than two stacked blocks, so the road keeps
+   the height they would otherwise take. */
+.sandbox-main.is-expanded .sandbox-footbar {
+  display: flex;
+  align-items: center;
+  gap: 20px;
+  flex: 0 0 auto;
+  padding: 10px 20px;
+  background: rgba(11, 16, 32, 0.82);
+  backdrop-filter: blur(8px);
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+}
+.sandbox-main.is-expanded .sandbox-legend {
+  flex: 0 0 auto;
+  margin: 0;
+  color: #cbd5e1;
+}
+.sandbox-main.is-expanded .sandbox-reco {
+  flex: 1 1 auto;
+  margin: 0;
+  background: rgba(255, 255, 255, 0.05);
+  border-left-color: rgba(255, 255, 255, 0.35);
+}
+.sandbox-main.is-expanded .sandbox-reco strong {
+  color: #94a3b8;
+}
+.sandbox-main.is-expanded .sandbox-reco p {
+  color: #f1f5f9;
+}
+
+body:has(.sandbox-main.is-expanded) {
+  overflow: hidden;
+}
+
+.sandbox-page .sandbox-side {
+  display: flex;
+  flex-direction: column;
+}
+
+.sandbox-page .sandbox-side > h2,
+.sandbox-page .sandbox-side > .sandbox-side-head {
+  flex-shrink: 0;
+}
+
+/* The controls used to live in their own scroll box inside a viewport-locked
+   card. That only worked while the rest of the page was short enough to leave
+   it room; with the forecast strip above it there was about 140px left — a
+   scrollbar that technically moved and was useless to use. The page now scrolls
+   as a whole, like every other tab, and this is a plain container. */
+.sandbox-side-scroll {
+  display: flex;
+  flex-direction: column;
+}
+
+.sandbox-main,
+.sandbox-side {
+  background: var(--bg-surface);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-lg);
+  padding: 18px;
+  box-shadow: var(--shadow-card);
+}
+
+.sandbox-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.sandbox-head h2 {
+  margin: 0;
+  font-size: 1.3rem;
+  font-weight: 800;
+}
+
+/* ---- Live agent sandbox ---- */
+.sandbox-metric-row {
+  display: grid;
+  grid-template-columns: repeat(6, 1fr);
+  gap: 10px;
+  margin-top: 12px;
+}
+.sandbox-metric {
+  background: var(--bg-surface);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-md);
+  padding: 12px 14px;
+  box-shadow: var(--shadow-card);
+}
+.sandbox-metric h3 {
+  margin: 0;
+  font-size: 0.68rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-muted);
+}
+.sandbox-metric-val {
+  font-size: 1.35rem;
+  font-weight: 800;
+  color: var(--text-primary);
+  margin-top: 4px;
+  line-height: 1.1;
+}
+.sandbox-metric-delta {
+  font-size: 0.72rem;
+  font-weight: 700;
+}
+.sandbox-metric-delta.up { color: #16a34a; }
+.sandbox-metric-delta.down { color: var(--color-danger); }
+.sandbox-metric-delta.muted { color: var(--text-muted); font-weight: 500; }
+
+.sandbox-canvas {
+  width: 100%;
+  height: 300px;
+  margin-top: 12px;
+  border-radius: var(--radius-md);
+  display: block;
+}
+
+.sandbox-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+  margin-top: 10px;
+  font-size: 0.78rem;
+  color: var(--text-secondary);
+}
+.sandbox-legend span { display: inline-flex; align-items: center; gap: 6px; }
+.sandbox-legend i { width: 12px; height: 12px; border-radius: 3px; display: inline-block; }
+
+.sandbox-reco {
+  margin-top: 14px;
+  border-radius: var(--radius-md);
+  padding: 12px 14px;
+  border-left: 4px solid;
+}
+.sandbox-reco strong { font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.05em; }
+.sandbox-reco p { margin: 4px 0 0; font-size: 0.9rem; line-height: 1.45; color: var(--text-primary); }
+.sandbox-reco.good { background: #ddf3e7; border-color: #1d7a4c; }
+.sandbox-reco.good strong { color: #1d7a4c; }
+.sandbox-reco.warn { background: #fdf3d6; border-color: #b45309; }
+.sandbox-reco.warn strong { color: #b45309; }
+.sandbox-reco.bad { background: var(--color-danger-bg); border-color: var(--color-danger); }
+.sandbox-reco.bad strong { color: var(--color-danger); }
+
+.sandbox-speed-seg {
+  display: inline-flex;
+  gap: 2px;
+  background: #e7ecf5;
+  border-radius: var(--radius-sm);
+  padding: 2px;
+  margin-right: 6px;
+  vertical-align: middle;
+}
+.sandbox-speed-seg button {
+  border: 0;
+  background: transparent;
+  padding: 5px 9px;
+  font-size: 0.8rem;
+  font-weight: 700;
+  border-radius: 5px;
+  cursor: pointer;
+  color: #3b4f6b;
+}
+.sandbox-speed-seg button.active { background: #fff; color: var(--brand-primary); box-shadow: var(--shadow-sm); }
+
+.sandbox-mini-label {
+  display: block;
+  font-size: 0.78rem;
+  color: var(--text-secondary);
+  margin: 12px 0 6px;
+}
+.sandbox-lane-toggles { display: flex; gap: 6px; }
+.sandbox-lane-toggles button {
+  flex: 1;
+  border: 1px solid #d7deec;
+  background: var(--bg-surface);
+  border-radius: var(--radius-sm);
+  padding: 8px 0;
+  font-weight: 700;
+  font-size: 0.82rem;
+  cursor: pointer;
+  color: var(--text-secondary);
+  transition: all var(--transition-fast);
+}
+.sandbox-lane-toggles button.closed {
+  background: var(--color-danger-bg);
+  border-color: var(--color-danger-border);
+  color: var(--color-danger);
+}
+/* In the full-screen bar the toggles sit in an unsized flex row, so `flex: 1`
+   collapsed them to slivers and the closed state was hard to see on the dark
+   background. Give them a real size and a dark-bar palette. */
+.sandbox-fs-bar .sandbox-lane-toggles button {
+  flex: 0 0 auto;
+  min-width: 38px;
+  padding: 5px 10px;
+  background: rgba(255, 255, 255, 0.07);
+  border-color: rgba(255, 255, 255, 0.16);
+  color: #e2e8f0;
+}
+.sandbox-fs-bar .sandbox-lane-toggles button:hover {
+  background: rgba(255, 255, 255, 0.13);
+}
+.sandbox-fs-bar .sandbox-lane-toggles button.closed {
+  background: rgba(220, 38, 38, 0.35);
+  border-color: rgba(252, 165, 165, 0.85);
+  color: #ffffff;
+}
+.sandbox-btn-row { display: flex; gap: 8px; margin-top: 10px; }
+.sandbox-btn-row .btn-primary, .sandbox-btn-row .btn-muted { margin-left: 0; }
+
+/* Incident placement mode */
+.sandbox-canvas.placing { cursor: crosshair; }
+.btn-muted.active {
+  background: var(--color-danger-bg);
+  color: var(--color-danger);
+  box-shadow: inset 0 0 0 1px var(--color-danger-border);
+}
+/* Guidance, not an error — see the PlaceHint component. It was
+   var(--color-danger), which made "pick a lane" read as a fault. */
+.sandbox-place-hint {
+  margin: 8px 0 0;
+  font-size: 0.76rem;
+  font-weight: 600;
+  color: var(--color-warning);
+}
+
+/* ---------- Simulation Controls / Command mode toggle ---------- */
+.sandbox-side-head {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-bottom: 14px;
+}
+.sandbox-side-head h2 {
+  margin: 0;
+}
+.sandbox-mode-seg {
+  display: flex;
+  gap: 3px;
+  background: #e7ecf5;
+  border-radius: var(--radius-sm);
+  padding: 3px;
+}
+.sandbox-mode-seg button {
+  flex: 1;
+  border: 0;
+  background: transparent;
+  padding: 7px 10px;
+  font-size: 0.82rem;
+  font-weight: 700;
+  border-radius: 6px;
+  cursor: pointer;
+  color: #3b4f6b;
+  transition: background-color var(--transition-fast), color var(--transition-fast);
+}
+.sandbox-mode-seg button.active {
+  background: #fff;
+  color: var(--brand-primary);
+  box-shadow: var(--shadow-sm);
+}
+
+/* Baseline panel. It is a three-step procedure, not a lone button, so it is
+   marked up as an ordered list whose steps tick themselves off as the operator
+   works through them. .sandbox-baseline-note (a trailing summary line) is gone;
+   step 2 now reports what it captured, in place. */
+.sandbox-baseline-lede {
+  margin: 0;
+  font-size: 0.76rem;
+  line-height: 1.4;
+  color: var(--text-secondary);
+}
+.sandbox-steps {
+  list-style: none;
+  margin: 10px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.sandbox-step {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+}
+/* The marker carries the state: grey ahead, brand on the current step, green
+   once done. Fixed size so the three titles stay left-aligned whether the
+   marker shows a digit or a tick. */
+.sandbox-step .n {
+  flex: 0 0 18px;
+  height: 18px;
+  margin-top: 1px;
+  border-radius: var(--radius-full);
+  display: grid;
+  place-items: center;
+  font-size: 0.66rem;
+  font-weight: 700;
+  line-height: 1;
+  background: var(--border-default);
+  color: var(--text-muted);
+  transition: background var(--transition-fast), color var(--transition-fast);
+}
+.sandbox-step.is-now .n { background: var(--brand-primary); color: var(--text-on-dark); }
+.sandbox-step.is-done .n { background: var(--color-success); color: var(--text-on-dark); }
+.sandbox-step .t {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+.sandbox-step .t b {
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: var(--text-muted);
+}
+.sandbox-step.is-now .t b,
+.sandbox-step.is-done .t b { color: var(--text-primary); }
+.sandbox-step .t i {
+  font-style: normal;
+  font-size: 0.72rem;
+  line-height: 1.4;
+  color: var(--text-secondary);
+}
+.sandbox-step .sandbox-btn-row { margin-top: 5px; }
+
+/* Hour-of-day picker. The inflow is no longer a guess with a peaking factor
+   on it, so the control says which hour it is showing and what that hour
+   actually carries — the provenance is the point. */
+.sandbox-hour { margin-top: 10px; }
+.sandbox-hour-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 8px;
+  font-size: 0.76rem;
+  color: var(--text-secondary);
+}
+.sandbox-hour-head b { color: var(--text-primary); font-weight: 700; }
+.sandbox-hour input[type="range"] { width: 100%; margin: 4px 0 2px; }
+.sandbox-hour-note {
+  margin: 0;
+  font-size: 0.7rem;
+  line-height: 1.35;
+  color: var(--text-muted);
+}
+
+/* Confidence run. */
+.sandbox-hour-note.src {
+  margin-top: 4px;
+  padding-top: 4px;
+  border-top: 1px dashed var(--border-default);
+  color: var(--text-secondary);
+}
+
+.sandbox-reps-label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 10px;
+  font-size: 0.76rem;
+  color: var(--text-secondary);
+}
+.sandbox-reps-label input[type="range"] { flex: 1; min-width: 0; }
+.sandbox-reps-label b { color: var(--text-primary); min-width: 18px; text-align: right; }
+.sandbox-reps-prog { font-size: 0.76rem; color: var(--text-secondary); align-self: center; }
+.sandbox-reps-out {
+  margin-top: 10px;
+  border-top: 1px solid var(--border-default);
+  padding-top: 8px;
+}
+.sandbox-reps-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 0.76rem;
+  padding: 2px 0;
+}
+.sandbox-reps-row .l { color: var(--text-secondary); }
+.sandbox-reps-row .v { font-weight: 700; color: var(--text-primary); white-space: nowrap; }
+/* The interval is the point of the panel, but it is not the headline figure —
+   same size, lighter, so it reads as qualification rather than as data. */
+.sandbox-reps-row .v i { font-style: normal; font-weight: 500; color: var(--text-secondary); }
+.sandbox-reps-warn {
+  margin: 8px 0 0;
+  padding: 6px 8px;
+  border-radius: var(--radius-sm);
+  background: var(--color-warning-bg);
+  border: 1px solid var(--color-warning-border);
+  color: var(--color-warning);
+  font-size: 0.7rem;
+  line-height: 1.35;
+}
+.sandbox-live-note {
+  margin: 8px 0 0;
+  padding: 7px 10px;
+  border-radius: var(--radius-sm);
+  background: var(--color-info-bg);
+  border: 1px solid var(--color-info-border);
+  color: var(--color-info);
+  font-size: 0.74rem;
+  line-height: 1.4;
+}
+.sandbox-live-note.warn {
+  background: var(--color-warning-bg);
+  border-color: var(--color-warning-border);
+  color: var(--color-warning);
+}
+.sandbox-main.is-expanded .sandbox-live-note { display: none; }
+
+.sandbox-reps-note {
+  margin: 6px 0 0;
+  font-size: 0.68rem;
+  line-height: 1.35;
+  color: var(--text-muted);
+}
+
+.sandbox-side label {
+  display: block;
+  margin-top: 12px;
+  font-size: 0.88rem;
+  color: var(--text-secondary);
+  font-weight: 600;
+}
+
+.sandbox-side select {
+  width: 100%;
+  margin-top: 6px;
+  height: 40px;
+  border: 1px solid #c8d1df;
+  border-radius: var(--radius-sm);
+  padding: 0 10px;
+  font-size: 0.88rem;
+  background: var(--bg-surface);
+}
+
+.sandbox-section-title {
+  margin-top: 18px;
+  margin-bottom: 2px;
+  font-size: 0.82rem;
+  font-weight: 700;
+  color: var(--brand-primary);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+/* ---------- Sandbox Swap Button ---------- */
+.sandbox-swap-row {
+  display: flex;
+  justify-content: center;
+  margin: 6px 0 2px;
+}
+
+.sandbox-swap-btn {
+  width: 38px;
+  height: 38px;
+  border-radius: var(--radius-full);
+  border: 1px solid #d0d7e4;
+  background: var(--bg-surface);
+  color: var(--text-secondary);
+  font-size: 1.1rem;
+  cursor: pointer;
+  display: grid;
+  place-items: center;
+  transition: background-color var(--transition-fast), border-color var(--transition-fast);
+}
+
+.sandbox-swap-btn:hover {
+  background: #edf1f9;
+  border-color: var(--brand-primary);
+  color: var(--brand-primary);
+}
+
+/* ---------- Sandbox Slider Groups ---------- */
+.sandbox-slider-group {
+  margin-top: 18px;
+}
+
+.sandbox-slider-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  margin-bottom: 8px;
+}
+
+.sandbox-slider-label {
+  font-size: 0.92rem;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+.sandbox-slider-value {
+  font-size: 0.92rem;
+  font-weight: 800;
+}
+
+.sandbox-slider-hint {
+  display: block;
+  margin-top: 4px;
+  font-size: 0.78rem;
+  color: var(--text-muted);
+  font-style: italic;
+}
+
+/* ── Rail vertical rhythm ────────────────────────────────────────────────────
+   Eight stacked control groups at 18px apart, each with a 12px label gap and a
+   hint below it, added up to more whitespace than controls. These are related
+   settings read as one column, not separate sections that need air between
+   them, so the gaps tighten and the hints set closer to the control they
+   describe — which also reads as a stronger grouping than the loose version
+   did. Scoped to .sandbox-page so no other tab's sliders move. */
+.sandbox-page .sandbox-slider-group {
+  margin-top: 12px;
+}
+
+.sandbox-page .sandbox-slider-header {
+  margin-bottom: 5px;
+}
+
+.sandbox-page .sandbox-slider-hint {
+  margin-top: 2px;
+  font-size: 0.74rem;
+  line-height: 1.35;
+}
+
+.sandbox-page .sandbox-side label {
+  margin-top: 8px;
+}
+
+.sandbox-page .sandbox-section-title {
+  margin-top: 14px;
+}
+
+/* Three place-on-the-road actions share one row. Equal columns rather than
+   flex so the widest label cannot push the other two into wrapping, and the
+   labels sit a step smaller because three of them now share the width one
+   used to have. */
+.sandbox-page .sandbox-btn-row-3 {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.sandbox-page .sandbox-btn-row-3 .btn-muted {
+  padding-inline: 4px;
+  font-size: 0.78rem;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* The rail's inputs and buttons were sized for a form, not for a column of
+   twenty controls read at a glance. A few pixels off each compounds down the
+   rail without making anything hard to hit — these stay well above the 24px
+   minimum target size. */
+.sandbox-page .sandbox-km-input {
+  padding: 4px 8px;
+}
+
+.sandbox-page .sandbox-btn-row {
+  margin-top: 8px;
+}
+
+/* ---------- Custom Range Slider ---------- */
+.sandbox-range {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 100%;
+  height: 6px;
+  border-radius: 999px;
+  outline: none;
+  cursor: pointer;
+  background: linear-gradient(
+    to right,
+    var(--range-color) 0%,
+    var(--range-color) var(--range-pct, 50%),
+    #dce2ef var(--range-pct, 50%),
+    #dce2ef 100%
+  );
+}
+
+.sandbox-range.inflow   { --range-color: var(--brand-primary); }
+.sandbox-range.lanes    { --range-color: #16a34a; }
+.sandbox-range.capacity { --range-color: #ea580c; }
+
+/* Webkit thumb */
+.sandbox-range::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: var(--range-color);
+  border: 3px solid #fff;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, .18);
+  cursor: pointer;
+  transition: transform var(--transition-fast);
+}
+
+.sandbox-range::-webkit-slider-thumb:hover {
+  transform: scale(1.2);
+}
+
+/* Firefox thumb */
+.sandbox-range::-moz-range-thumb {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: var(--range-color);
+  border: 3px solid #fff;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, .18);
+  cursor: pointer;
+}
+
+.sandbox-range::-moz-range-track {
+  height: 6px;
+  border-radius: 999px;
+  background: transparent;
+}
+
+@media (max-width: 980px) {
+  .sandbox-grid {
+    grid-template-columns: 1fr;
+  }
+
+  /* Stacked layout: revert to normal full-page scroll, drop the
+     viewport-locked Scenario-card scrolling used on wide screens. */
+  .sandbox-page,
+  .sandbox-page .sandbox-side {
+    overflow: visible;
+  }
+
+  .sandbox-page {
+    max-height: none;
+  }
+
+  .sandbox-page .sandbox-grid {
+    grid-template-rows: none;
+    /* Repeated at this specificity on purpose. The plain `.sandbox-grid { 1fr }`
+       above no longer wins here: the two-column rule that shortens the rail is
+       written as `.sandbox-page .sandbox-grid`, so without this the 340px rail
+       minimum would survive below 980px and force a sideways scroll. */
+    grid-template-columns: 1fr;
+  }
+
+  .sandbox-side-scroll {
+    overflow: visible;
+    margin-right: 0;
+    padding-right: 0;
+  }
+}
+
+@media (max-width: 640px) {
+  .sandbox-head h2 {
+    font-size: 1.1rem;
+  }
+}
+
+@media (prefers-color-scheme: dark) {
 .sandbox-page .sandbox-forecast {
   flex-shrink: 0;
 }
@@ -6530,4 +6881,5 @@ body:has(.sandbox-main.is-expanded) {
 .sandbox-fs-bar .sandbox-km-input:focus {
   border-color: #a78bfa;
   box-shadow: 0 0 0 3px rgba(167, 139, 250, 0.25);
+}
 }

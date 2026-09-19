@@ -38,3 +38,7 @@ smartflow_scripts/**/__pycache__/
 **/.env.example
 # The scripts' blank settings template holds no values, so teammates need it.
 !smartflow_scripts/config/.env.example
+
+# Dev-server logs written by start_project.bat / npm run dev.
+*-dev.log
+**/*-dev.log

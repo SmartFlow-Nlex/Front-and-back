@@ -40,16 +40,9 @@ export default function FeatureBriefing({
   const [busy, setBusy] = useState(true);
   const [failed, setFailed] = useState(false);
   const [showFacts, setShowFacts] = useState(false);
-  const mounted = useRef(true);
-  // Identifies the request whose answer is still wanted. Tying cancellation to
-  // the request rather than to the effect's lifetime means a re-render cannot
-  // orphan a call that is still running — which, on a request that takes the
-  // better part of a minute, is the difference between the panel resolving and
-  // it sitting on "Preparing the read-out…" indefinitely.
-  const reqId = useRef(0);
+  const cancelled = useRef(false);
 
   const load = useCallback(() => {
-    const id = ++reqId.current;
     setBusy(true);
     setFailed(false);
     fetch(`${BACKEND}/api/ai-insight/explain`, {
@@ -59,36 +52,22 @@ export default function FeatureBriefing({
     })
       .then((r) => r.json())
       .then((j) => {
-        if (!mounted.current || reqId.current !== id) return; // superseded or gone
+        if (cancelled.current) return;
         if (j?.success) setData(j.data as Briefing);
         else setFailed(true);
       })
-      .catch(() => {
-        if (mounted.current && reqId.current === id) setFailed(true);
-      })
-      .finally(() => {
-        if (mounted.current && reqId.current === id) setBusy(false);
-      });
+      .catch(() => !cancelled.current && setFailed(true))
+      .finally(() => !cancelled.current && setBusy(false));
   }, [feature, months]);
 
-  // What has already been auto-loaded. Without this, React's development
-  // double-invoke fires the request twice on every mount — two calls of ~48s
-  // each, and twice the tokens, for one panel.
-  const autoLoadedFor = useRef<string | null>(null);
-
   useEffect(() => {
-    mounted.current = true;
-    const wanted = `${feature}|${months ?? "12"}`;
-    if (autoLoadedFor.current !== wanted) {
-      autoLoadedFor.current = wanted;
-      load();
-    }
+    cancelled.current = false;
+    load();
     return () => {
-      mounted.current = false;
+      cancelled.current = true;
     };
-  }, [feature, months, load]);
+  }, [load]);
 
-  if (failed && !data) return null;
 
   return (
     <article
@@ -135,7 +114,14 @@ export default function FeatureBriefing({
 
       {busy && !data ? (
         <p style={{ margin: 0, fontSize: "0.82rem", color: "var(--text-muted)", fontStyle: "italic" }}>
-          Preparing the read-out…
+          Asking the model to read the current figures… this can take up to a minute on the free tier.
+        </p>
+      ) : failed && !data ? (
+        <p style={{ margin: 0, fontSize: "0.82rem", lineHeight: 1.55, color: "#b54708", background: "#fffaeb", borderLeft: "3px solid #f79009", borderRadius: 8, padding: "9px 11px", display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap" }}>
+          <span style={{ flex: "1 1 240px" }}>The explanation could not be generated.</span>
+          <button onClick={load} style={{ padding: "5px 13px", borderRadius: 999, cursor: "pointer", fontSize: "0.74rem", fontWeight: 600, border: "1px solid #f79009", background: "transparent", color: "#b54708" }}>
+            Try again
+          </button>
         </p>
       ) : data ? (
         <>

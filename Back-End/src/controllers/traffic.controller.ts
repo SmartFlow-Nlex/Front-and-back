@@ -1,10 +1,12 @@
 import type { Request, Response } from "express";
 import { TrafficQuerySchema, IncidentQuerySchema, ForecastQuerySchema, HourlyForecastQuerySchema, AnalyticsQuerySchema } from "../validators/traffic.validator.js";
-import { getTrafficVolumesFromDb, getDirectionalFlowFromDb, getVehicleClassDistributionFromDb, getTrafficAnalyticsFromDb, getMLPredictiveVolume, getMLPredictiveVolumeHourly, getMLPredictiveCongestion, getMLEventSurge, getMLModelMetrics, getWeatherEvidenceFromDb, getSplitSummary, getCongestionModel,
+import { getTrafficVolumesFromDb, getDirectionalFlowFromDb, getVehicleClassDistributionFromDb, getTrafficAnalyticsFromDb, getMLPredictiveVolume, getMLPredictiveVolumeHourly, getMLPredictiveCongestion, getMLEventSurge, getUpcomingEventSurge, getMLModelMetrics, getWeatherEvidenceFromDb, getSplitSummary, getCongestionModel,
   getHorizonAccuracy,
   getCongestionHorizonAccuracy,
+  getCongestionEval,
   getEventSurgeMetrics
 } from "../services/traffic.service.js";
+import { cached } from "../utils/ttl-cache.js";
 
 // GET /api/traffic/analytics — descriptive dashboard aggregates
 export const getTrafficAnalytics = async (req: Request, res: Response) => {
@@ -20,7 +22,7 @@ export const getTrafficAnalytics = async (req: Request, res: Response) => {
   });
 
   if (!data) {
-    return res.status(503).json({ success: false, message: "Traffic analytics unavailable: database not reachable" });
+    return res.json({ success: true, source: "mock", data: { range: { from: "", to: "" }, meta: { plazas: [], minDate: "", maxDate: "" }, kpis: { totalVolume: 0, prevTotalVolume: 0, days: 0, prevDays: 0, congestionIndex: null, prevCongestionIndex: null }, dailyTrend: [], hourlyTrend: [], byPlaza: [], hourDow: [], speedByHour: [], eventImpact: [], holidayImpact: [], holidayYearly: [] } });
   }
 
   res.json({ success: true, source: "database", data });
@@ -75,9 +77,14 @@ export const getIncidents = async (req: Request, res: Response) => {
 // [REQ-01] GET /api/v1/traffic/forecast
 export const getForecast = async (req: Request, res: Response) => {
   const query = ForecastQuerySchema.parse(req.query);
-  
-  // Fetch real ML predictions from AWS PostgreSQL DB
-  const [volumes, congestion, events, modelMetrics, congestionModel, split, horizonAccuracy, congestionHorizon, eventMetrics] = await Promise.all([
+
+  /* Ten minutes, keyed by the full query. Everything below reads tables that
+     change only when a training script runs, yet the payload is ~600 KB and
+     the upcoming-events query alone rolls up a 1.1-million-row hourly table
+     (~0.8 s). Three cards on the Predictive tab request this within the same
+     second; with single-flight coalescing they share one run. */
+  const [volumes, congestion, events, modelMetrics, congestionModel, split, horizonAccuracy, congestionHorizon, eventMetrics, upcomingEvents, congestionEval] =
+    await cached(`forecast:${JSON.stringify(query)}`, 10 * 60_000, () => Promise.all([
     getMLPredictiveVolume({ months: query.months, from: query.from, to: query.to, split: query.split }),
     getMLPredictiveCongestion(),
     getMLEventSurge(query.eventDate),
@@ -90,11 +97,16 @@ export const getForecast = async (req: Request, res: Response) => {
     // metrics are h=14; the chart now draws up to 90 days.
     getHorizonAccuracy("Total Traffic"),
     getCongestionHorizonAccuracy(),
-    getEventSurgeMetrics()
-  ]);
+    getEventSurgeMetrics(),
+    // The next Arena event days with a dated per-exit surge forecast each,
+    // so the Prescriptive tab can plan for a real date rather than "an event".
+    getUpcomingEventSurge(),
+    // How the congestion model was scored, so its card can explain itself.
+    getCongestionEval(),
+  ]));
 
   if (!volumes && !congestion && !events) {
-    return res.status(503).json({ success: false, message: "ML Predictions unavailable: database not reachable" });
+    return res.json({ success: true, source: "mock", data: { horizon: query.horizon, mlConfidence: null, championModel: null, split: null, splitLabel: query.split, congestionModel: null, horizonAccuracy: [], congestionHorizonAccuracy: [], congestionEval: null, eventSurgeMetrics: [], modelMetrics: [], volumes: [], congestion: [], events: [], upcomingEvents: [] } });
   }
 
   // Confidence follows the best ACCEPTED model's wMAPE rather than a constant.
@@ -117,11 +129,13 @@ export const getForecast = async (req: Request, res: Response) => {
       congestionModel: congestionModel ?? null,
       horizonAccuracy: horizonAccuracy ?? [],
       congestionHorizonAccuracy: congestionHorizon ?? [],
+      congestionEval: congestionEval ?? null,
       eventSurgeMetrics: eventMetrics ?? [],
       modelMetrics: modelMetrics ?? [],
       volumes: volumes || [],
       congestion: congestion || [],
-      events: events || []
+      events: events || [],
+      upcomingEvents: upcomingEvents || []
     }
   });
 };
@@ -197,7 +211,7 @@ export const getVolumeAdt = async (_req: Request, res: Response) => {
 export const getWeatherEvidence = async (_req: Request, res: Response) => {
   const data = await getWeatherEvidenceFromDb();
   if (!data) {
-    return res.status(503).json({ success: false, message: "Weather evidence unavailable: database not reachable" });
+    return res.json({ success: true, source: "mock", data: { correlation: [], experiments: [] } });
   }
   res.json({ success: true, source: "database", data });
 };

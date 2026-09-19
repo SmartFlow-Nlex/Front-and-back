@@ -111,7 +111,7 @@ export async function getTrafficAnalyticsFromDb(filters: AnalyticsFilters) {
     const NB_SB = `COALESCE(SUM(${DAY_TOTAL}) FILTER (WHERE direction = 'NB'), 0)::bigint AS nb,
                    COALESCE(SUM(${DAY_TOTAL}) FILTER (WHERE direction = 'SB'), 0)::bigint AS sb`;
 
-    const [daily, hourly, byPlaza, hourDow, speedByHour, eventImpact, holidayImpact, holidayYearly, kpi, plazaList] =
+    const [daily, hourly, byPlaza, hourDow, speedByHour, eventImpact, holidayImpact, holidayYearly, kpi, plazaList, plazaHour] =
       await Promise.all([
         // Daily NB/SB volume
         wet === null
@@ -420,6 +420,30 @@ export async function getTrafficAnalyticsFromDb(filters: AnalyticsFilters) {
             ),
         // All plaza names for the filter control
         db.query(`SELECT DISTINCT toll_plaza AS plaza FROM nlex_traffic_volume ORDER BY 1`),
+        // Average volume per plaza x hour-of-day, for the Prescriptive tab's
+        // per-plaza booth plan. hourDow above is corridor-wide; a plaza's own
+        // peak hour and peak share differ from the corridor's, and staffing
+        // is decided per plaza.
+        wet === null
+          ? db.query(
+              `WITH hourly AS (
+                 SELECT t.date, t.toll_plaza AS plaza, u.hr - 1 AS hour, SUM(u.v) AS v
+                 FROM nlex_traffic_volume t,
+                      LATERAL unnest(${HOUR_ARRAY}) WITH ORDINALITY AS u(v, hr)
+                 WHERE ${volumeWhere}
+                 GROUP BY 1, 2, 3
+               )
+               SELECT plaza, hour::int, ROUND(AVG(v))::int AS v
+               FROM hourly GROUP BY 1, 2 ORDER BY 1, 2`,
+              params
+            )
+          : db.query(
+              `WITH ${TWX_CTE}, ${HV_CTE},
+               hourly AS (SELECT date, toll_plaza AS plaza, hour, SUM(v) AS v FROM hvw GROUP BY 1, 2, 3)
+               SELECT plaza, hour::int, ROUND(AVG(v))::int AS v
+               FROM hourly GROUP BY 1, 2 ORDER BY 1, 2`,
+              wparams
+            ),
       ]);
 
     const data = {
@@ -439,6 +463,7 @@ export async function getTrafficAnalyticsFromDb(filters: AnalyticsFilters) {
         : null,
       byPlaza: byPlaza.rows.map((r) => ({ plaza: r.plaza, v: Number(r.v) })),
       hourDow: hourDow.rows,
+      plazaHourProfile: plazaHour.rows.map((r) => ({ plaza: r.plaza, hour: Number(r.hour), v: Number(r.v) })),
       speedByHour: speedByHour.rows,
       eventImpact: eventImpact.rows.map((r) => ({
         label: r.label,
@@ -696,6 +721,10 @@ export async function getMLPredictiveCongestion() {
     const { rows } = await db.query(`
       SELECT c.segment_name AS "segment", c.hours_ahead AS "hours",
              c.congestion_state AS "state", c.probability,
+             -- The whole probability vector, not only the winner's: the card
+             -- shows a chance of congestion (heavy or severe) per cell, the
+             -- way a weather strip shows a chance of rain.
+             c.p_low::float AS "pLow", c.p_med::float AS "pMed", c.p_high::float AS "pHigh",
              -- The clock time each horizon refers to. "+1h" alone is a label
              -- with no referent; the reader cannot tell what it counts from.
              --
@@ -844,6 +873,127 @@ export async function getMLEventSurge(eventDate?: string) {
   }
 }
 
+// [ML-03b] Dated surge forecast for the NEXT Arena events.
+//
+// getMLEventSurge(eventDate) above already turns the measured uplift into a
+// forecast for one named date. Its comment says nothing in the warehouse knows
+// when the next event is; public.philippine_arena_events now does -- the
+// schedule runs into 2027 -- so this enumerates the upcoming event days and
+// runs that same construction for each in one query.
+//
+// Baseline is built exactly as the single-date path builds it: the median of
+// each exit's daily total on the same weekday in the same month, so a Saturday
+// concert in November is measured against November Saturdays. The two paths
+// must agree or the Prescriptive tab would forecast a different surge from the
+// Predictive tab for the same date.
+//
+// One row per event DAY. The source repeats multi-day runs as both a range row
+// ("November 7–8, 2026") and single-day rows, so days are collapsed on
+// start_date; the shortest title is kept. is_derived marks recurring events the
+// ETL inferred (New Year Countdown) rather than announced dates.
+export type UpcomingEventExit = {
+  exit: string; baseline: number; surge: number; surgeLo: number; surgeHi: number;
+  uplift: number; nEvents: number;
+};
+export type UpcomingEvent = {
+  date: string; title: string; isDerived: boolean; capacity: number | null;
+  // Where it is. Three BTS nights are at the Philippine Sports Stadium --
+  // same complex, same exit, a third of the Arena's capacity -- and the
+  // uplift was measured on Arena days, so the card must be able to say so.
+  venue: string | null;
+  exits: UpcomingEventExit[];
+};
+
+// Every scheduled day, not the next six. An audit found 13 distinct upcoming
+// days with the cap at 6, which silently dropped everything from March 2027.
+// A dropdown holds thirteen entries comfortably; the cap only guards runaway.
+export async function getUpcomingEventSurge(limit = 60): Promise<UpcomingEvent[] | null> {
+  if (!db) return null;
+  try {
+    const { rows } = await db.query(
+      `WITH today AS (
+         -- Event days are Manila days; the server clock is UTC and is a day
+         -- behind for eight hours of every night.
+         SELECT (now() AT TIME ZONE 'Asia/Manila')::date AS d
+       ),
+       src AS (
+         SELECT e.start_date, e.title, e.is_derived, e.capacity, e.venue, e.date_raw
+         FROM philippine_arena_events e, today
+         WHERE e.start_date >= today.d
+       ),
+       -- Multi-day runs come from the source as a range row ("May 15–16, 2027")
+       -- and, sometimes, one row per day. LANY's range was split into days;
+       -- Bruno Mars' was not, so its second night was missing from the
+       -- schedule. Same-month ranges are expanded here to the days the range
+       -- names; days that already have their own row are left alone by the
+       -- GROUP BY below.
+       expanded AS (
+         SELECT start_date, title, is_derived, capacity, venue FROM src
+         UNION ALL
+         SELECT (start_date + g)::date, title, is_derived, capacity, venue
+         FROM (
+           SELECT *,
+                  (regexp_match(date_raw, '^[A-Za-z]+\\s+(\\d{1,2})\\s*[–-]\\s*(\\d{1,2}),?\\s*(\\d{4})$'))[2]::int AS end_day
+           FROM src
+         ) r,
+         LATERAL generate_series(1, GREATEST(0, r.end_day - EXTRACT(DAY FROM r.start_date)::int)) AS g
+         WHERE r.end_day IS NOT NULL
+       ),
+       up AS (
+         SELECT start_date AS d,
+                (array_agg(title ORDER BY length(title), title))[1] AS title,
+                bool_and(is_derived) AS is_derived,
+                MAX(NULLIF(replace((regexp_match(capacity, '[0-9][0-9,]*'))[1], ',', ''), '')::int) AS capacity,
+                (array_agg(venue ORDER BY venue NULLS LAST))[1] AS venue
+         FROM expanded
+         GROUP BY start_date
+         ORDER BY start_date
+         LIMIT $1
+       ),
+       daily AS (
+         SELECT date, exit_canonical AS plaza, SUM(total) AS v
+         FROM gold.fact_traffic_hourly GROUP BY 1, 2
+       ),
+       norm AS (
+         SELECT u.d, t.plaza, PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY t.v)::int AS baseline
+         FROM up u
+         JOIN daily t ON EXTRACT(DOW FROM t.date) = EXTRACT(DOW FROM u.d)
+                     AND EXTRACT(MONTH FROM t.date) = EXTRACT(MONTH FROM u.d)
+         GROUP BY 1, 2
+       )
+       SELECT u.d::text AS date, u.title, u.is_derived AS "isDerived", u.capacity, u.venue,
+              n.plaza AS exit, n.baseline,
+              ROUND(n.baseline * f.uplift)::int    AS surge,
+              ROUND(n.baseline * f.uplift_lo)::int AS "surgeLo",
+              ROUND(n.baseline * f.uplift_hi)::int AS "surgeHi",
+              ROUND(f.uplift, 4)::float AS uplift, f.n_events AS "nEvents"
+       FROM up u
+       JOIN norm n ON n.d = u.d
+       JOIN gold.ml_event_surge_forecast f ON f.exit_name = n.plaza AND f.material
+       ORDER BY u.d, (n.baseline * (f.uplift - 1)) DESC`,
+      [limit],
+    );
+
+    const byDate = new Map<string, UpcomingEvent>();
+    for (const r of rows) {
+      const ev: UpcomingEvent = byDate.get(r.date) ?? {
+        date: r.date, title: r.title, isDerived: !!r.isDerived,
+        capacity: r.capacity == null ? null : Number(r.capacity), venue: r.venue ?? null, exits: [],
+      };
+      ev.exits.push({
+        exit: r.exit, baseline: Number(r.baseline), surge: Number(r.surge),
+        surgeLo: Number(r.surgeLo), surgeHi: Number(r.surgeHi),
+        uplift: Number(r.uplift), nEvents: Number(r.nEvents),
+      });
+      byDate.set(r.date, ev);
+    }
+    return [...byDate.values()];
+  } catch (error) {
+    console.error("Failed to fetch upcoming event surge:", error);
+    return null;
+  }
+}
+
 // [ML-04] Hourly breakdown for one forecast day — powers the click-to-drill-down
 // on the predictive volume chart.
 //
@@ -851,7 +1001,14 @@ export async function getMLEventSurge(eventDate?: string) {
 // observed. Future days have no hourly ground truth and the models only predict
 // a daily total, so the predicted curve is that total redistributed over the
 // station's typical shape for the same weekday (last 90 days of history).
-export type HourlyForecastPoint = { hour: number; actual: number | null; predicted: number | null };
+export type HourlyForecastPoint = {
+  hour: number;
+  actual: number | null;
+  predicted: number | null;
+  /** Mean across the corridor's weather stations for that Manila hour. */
+  rainfall: number | null;
+  temperature: number | null;
+};
 export type HourlyForecastResult = {
   date: string;
   weekday: string;
@@ -895,20 +1052,22 @@ export async function getMLPredictiveVolumeHourly(
   )`;
 
   try {
-    const [dayRes, actualRes, profileRes] = await Promise.all([
+    const [dayRes, actualRes, profileRes, weatherRes] = await Promise.all([
       // The day's totals as the models see them
       db.query(
         `SELECT forecast_date::text AS date, actual_volume, ${column} AS predicted, is_future
          FROM gold.ml_predictive_volume WHERE forecast_date = $1::date AND split_label = $2`,
         [date, split]
       ),
-      // Observed hourly totals, if this date has been recorded
+      // Observed hourly totals, if this date has been recorded. Entries and the
+      // 'Total' class only: the table also carries per-class rows and exit
+      // records, and summing everything gave bars adding to twice the day.
       wetFilter === null
         ? db.query(
             `SELECT u.hr - 1 AS hour, COALESCE(SUM(u.v), 0)::bigint AS v
              FROM nlex_traffic_volume t,
                   LATERAL unnest(${HOUR_ARRAY}) WITH ORDINALITY AS u(v, hr)
-             WHERE t.date = $1::date
+             WHERE t.date = $1::date AND t.type = 'Entries' AND t.vehicle_class = 'Total'
              GROUP BY 1 ORDER BY 1`,
             [date]
           )
@@ -920,7 +1079,7 @@ export async function getMLPredictiveVolumeHourly(
                SELECT t.date AS d, u.hr - 1 AS hour, u.v AS v
                FROM nlex_traffic_volume t,
                     LATERAL unnest(${HOUR_ARRAY}) WITH ORDINALITY AS u(v, hr)
-               WHERE t.date = $1::date
+               WHERE t.date = $1::date AND t.type = 'Entries' AND t.vehicle_class = 'Total'
              )
              SELECT hv.hour, COALESCE(SUM(hv.v), 0)::bigint AS v
              FROM hv JOIN wx w ON w.d = hv.d AND w.h = hv.hour
@@ -934,11 +1093,25 @@ export async function getMLPredictiveVolumeHourly(
            SELECT t.date, u.hr - 1 AS hour, u.v
            FROM nlex_traffic_volume t,
                 LATERAL unnest(${HOUR_ARRAY}) WITH ORDINALITY AS u(v, hr)
-           WHERE EXTRACT(dow FROM t.date) = EXTRACT(dow FROM $1::date)
+           WHERE t.type = 'Entries' AND t.vehicle_class = 'Total'
+             AND EXTRACT(dow FROM t.date) = EXTRACT(dow FROM $1::date)
              AND t.date < $1::date
              AND t.date >= $1::date - interval '90 days'
          )
          SELECT hour, AVG(v)::float AS v FROM hv GROUP BY 1 ORDER BY 1`,
+        [date]
+      ),
+      // Per-hour weather for this day. AVERAGED across the 21 stations, never
+      // summed: summing is the bug that inflated corridor rainfall ~20x
+      // elsewhere in this file. Hours the stations did not report stay null so
+      // the chart can leave a gap rather than draw a dry hour.
+      db.query(
+        `SELECT EXTRACT(hour FROM timestamp_utc + interval '8 hours')::int AS hour,
+                AVG(rainfall)::float AS rainfall,
+                AVG(temperature)::float AS temperature
+         FROM public.hourly_weather
+         WHERE (timestamp_utc + interval '8 hours')::date = $1::date
+         GROUP BY 1 ORDER BY 1`,
         [date]
       ),
     ]);
@@ -950,6 +1123,12 @@ export async function getMLPredictiveVolumeHourly(
 
     const actualByHour = new Map<number, number>(
       actualRes.rows.map((r: { hour: number; v: string }) => [Number(r.hour), Number(r.v)])
+    );
+    const weatherByHour = new Map<number, { rainfall: number | null; temperature: number | null }>(
+      weatherRes.rows.map((r: { hour: number; rainfall: number | null; temperature: number | null }) => [
+        Number(r.hour),
+        { rainfall: r.rainfall == null ? null : Number(r.rainfall), temperature: r.temperature == null ? null : Number(r.temperature) },
+      ])
     );
     const profile = profileRes.rows.map((r: { hour: number; v: number }) => Number(r.v));
     const profileTotal = profile.reduce((s, v) => s + v, 0);
@@ -964,6 +1143,8 @@ export async function getMLPredictiveVolumeHourly(
       // than zero — a zero bar would read as "no traffic".
       actual: !hasActualHours ? null : wetFilter === null ? actualByHour.get(h) ?? 0 : actualByHour.get(h) ?? null,
       predicted: canShapePrediction ? Math.round((profile[h] / profileTotal) * dayPredicted) : null,
+      rainfall: weatherByHour.get(h)?.rainfall ?? null,
+      temperature: weatherByHour.get(h)?.temperature ?? null,
     }));
 
     return {
@@ -1410,6 +1591,38 @@ export type CongestionHorizonAccuracy = {
  * `persistenceAccuracy` is the "nothing changes" benchmark at the same horizon.
  * It is the honest bar: a forecaster that cannot beat it adds nothing.
  */
+/**
+ * How the congestion model was scored, in enough detail for the card to
+ * explain its percentage: test size, class balance, per-class precision and
+ * recall, Brier score and a calibration table for P(congested). Written by
+ * train_congestion_horizon.py each run as one JSON row.
+ */
+export type CongestionEval = {
+  model: string;
+  test_rows: number;
+  test_days: number;
+  class_share: Record<string, number>;
+  per_class: Record<string, { precision: number; recall: number; support: number }>;
+  brier: number;
+  macro_f1: number;
+  calibration: { lo: number; hi: number; n: number; predicted: number; observed: number }[];
+  thresholds_kmh: { severe_below: number; heavy_below: number };
+  features: string[];
+};
+
+export async function getCongestionEval(): Promise<CongestionEval | null> {
+  if (!db) return null;
+  try {
+    const { rows } = await db.query(`SELECT payload FROM gold.ml_congestion_eval WHERE id = 1`);
+    return (rows[0]?.payload as CongestionEval) ?? null;
+  } catch (error) {
+    // Absent until the first run that writes it; the card simply omits the
+    // section rather than the whole forecast failing.
+    console.error("Database query failed for congestion eval:", error);
+    return null;
+  }
+}
+
 export async function getCongestionHorizonAccuracy(): Promise<CongestionHorizonAccuracy[] | null> {
   if (!db) return null;
   try {

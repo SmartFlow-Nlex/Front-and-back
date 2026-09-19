@@ -33,14 +33,8 @@ const envSchema = z.object({
 
   // Zero Data Retention. Only meaningful when GLM_BASE_URL points at
   // OpenRouter — Z.ai publishes no ZDR tier to request, so the flag has
-  // nothing to attach to there. "on" restricts routing to endpoints that do
-  // not retain prompts, and refuses providers that store or train on them.
-  //
-  // Default "on": the only reason to route through OpenRouter rather than
-  // straight to Z.ai is the retention guarantee, so silently not asking for it
-  // would be the surprising behaviour.
+  // nothing to attach to there.
   GLM_ZDR: z.enum(["on", "off"]).default("on"),
-  // OpenRouter attribution, shown on their dashboard. Cosmetic.
   GLM_SITE_URL: z.string().default("http://localhost:3002"),
   GLM_SITE_NAME: z.string().default("SmartFlow NLEX"),
 

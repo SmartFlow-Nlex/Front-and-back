@@ -1,4 +1,6 @@
 import cors from "cors";
+import { routeCache } from "./middleware/route-cache.js";
+import compression from "compression";
 import express from "express";
 import morgan from "morgan";
 import { rateLimit } from "express-rate-limit";
@@ -45,11 +47,17 @@ app.use(
     },
   }),
 );
+/* gzip every response. The forecast payload is ~615 KB of JSON and was going
+   over the wire uncompressed; text this repetitive compresses about 5:1. */
+app.use(compression());
 app.use(express.json({ limit: "2mb" }));
 app.use(morgan("dev"));
 
 // Mount API routes with rate limiter
-app.use("/api", apiLimiter, apiRoutes);
+/* Route-level GET cache for every API response -- see middleware/route-cache.
+   Mounted after the limiter so a cache hit still counts as a request, and
+   before the routes so handlers never see a request the cache can answer. */
+app.use("/api", apiLimiter, routeCache, apiRoutes);
 
 app.use(notFoundHandler);
 app.use(errorHandler);

@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import { cachedJson } from "../../../lib/cached-json";
 import { attachCategoryClick } from "../../../lib/chart-click";
 import { useChartTheme, applyChartTheme, seriesRamp, seriesPair } from "../../../lib/chart-theme";
 import ReactECharts from "echarts-for-react";
@@ -168,8 +169,10 @@ export default function IncidentPage() {
     }
     if (weather !== "all") qs.set("weather", weather);
     if (source !== "all") qs.set("source", source);
-    fetch(`${BACKEND}/api/incident/analytics?${qs}`, { cache: "no-store" })
-      .then((r) => r.json())
+    // Memoised per query string: switching tabs or returning to this page
+    // renders from memory instead of refetching. Five minutes, refreshed
+    // quietly in the background once stale. See lib/cached-json.
+    cachedJson<{ success: boolean; message?: string; data: Analytics }>(`${BACKEND}/api/incident/analytics?${qs}`)
       .then((json) => {
         if (cancelled) return;
         if (!json.success) throw new Error(json.message ?? "Request failed");
@@ -691,7 +694,11 @@ export default function IncidentPage() {
           {activeTab === "Prescriptive" && (
             <>
               {rangeFilter}
-              <span className={styles.filterLabel} style={{ color: "var(--text-muted)", fontWeight: 400 }}>
+              {/* .filterNote, not .filterLabel: the label class carries
+                  white-space:nowrap for one-word controls, and on this
+                  sentence it ran the text off the screen. A merge had put
+                  the label class back once already. */}
+              <span className={styles.filterNote}>
                 Applies to Resource Staging and VMS Advisory Routing — clearance-time recommendations come from a
                 trained model and don&apos;t change per Range.
               </span>

@@ -1,16 +1,18 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import { cachedJson } from "../../../lib/cached-json";
 import { attachCategoryClick } from "../../../lib/chart-click";
 import { useChartTheme, applyChartTheme, seriesRamp, seriesPair } from "../../../lib/chart-theme";
 import ReactECharts from "echarts-for-react";
 import type { EChartsOption } from "echarts";
 import { Activity, ArrowDownWideNarrow, ArrowUpNarrowWide, Building2, CalendarClock, Clock, Gauge, TrendingUp } from "lucide-react";
-import DashboardChart from "../../../components/dashboard/DashboardChart";
+import { BoothStaffingPanel, CongestionResponsePanel, EventInterventionPanel } from "../../../components/dashboard/PrescriptiveTrafficPanels";
 import ChartSkeleton, { KpiSkeleton } from "../../../components/dashboard/ChartSkeleton";
 import CustomSelect from "../../../components/dashboard/CustomSelect";
 import RampKey from "../../../components/dashboard/RampKey";
 import PageHeader from "../../../components/dashboard/PageHeader";
+import InfoTooltip from "../../../components/dashboard/InfoTooltip";
 import PredictiveVolumeChart from "../../../components/dashboard/PredictiveVolumeChart";
 import PredictiveCongestionChart from "../../../components/dashboard/PredictiveCongestionChart";
 import PredictiveEventChart from "../../../components/dashboard/PredictiveEventChart";
@@ -40,6 +42,7 @@ type Analytics = {
   hourlyTrend: { d: string; hour: number; nb: number; sb: number }[] | null;
   byPlaza: { plaza: string; v: number }[];
   hourDow: { dow: number; hour: number; v: number }[];
+  plazaHourProfile?: { plaza: string; hour: number; v: number }[];
   speedByHour: { hour: number; speed: number; jam_level: number }[];
   eventImpact: {
     label: string; date: string; dayVolume: number; baseline: number; deviationPct: number | null;
@@ -113,15 +116,6 @@ function buildTrend(data: Analytics, grain: Granularity): TrendRow[] {
 
 const ROLLING_WINDOW: Record<Granularity, number> = { hourly: 24, daily: 7, weekly: 0, monthly: 0 };
 
-// ---------- Prescriptive mock (unchanged tab) ----------
-const prescriptiveImpactOption: EChartsOption = {
-  grid: { left: 46, right: 20, top: 20, bottom: 36 },
-  xAxis: { type: "category", data: ["Strategy A", "Strategy B", "Strategy C"] },
-  yAxis: { type: "value" },
-  tooltip: { trigger: "axis" },
-  series: [{ type: "bar", data: [15, 25, 40], itemStyle: { color: "#29b471", borderRadius: [8, 8, 0, 0] } }],
-};
-
 export default function TrafficPage() {
   // Chart furniture follows the active theme; series hues stay fixed.
   const chartTheme = useChartTheme();
@@ -177,8 +171,10 @@ export default function TrafficPage() {
     if (plazaSel.length > 0) qs.set("plazas", plazaSel.join(","));
     if (vClass !== "All") qs.set("vehicleClass", vClass);
     if (weather !== "all") qs.set("weather", weather);
-    fetch(`${BACKEND}/api/traffic/analytics?${qs}`, { cache: "no-store" })
-      .then((r) => r.json())
+    // Memoised per query string: switching tabs or returning to this page
+    // renders from memory instead of refetching. Five minutes, refreshed
+    // quietly in the background once stale. See lib/cached-json.
+    cachedJson<{ success: boolean; message?: string; data: Analytics }>(`${BACKEND}/api/traffic/analytics?${qs}`)
       .then((json) => {
         if (cancelled) return;
         if (!json.success) throw new Error(json.message ?? "Request failed");
@@ -780,49 +776,29 @@ export default function TrafficPage() {
       <section className={`${styles.page} viz-traffic`}>
         <PageHeader icon={TrendingUp} title="Traffic Overview" subtitle="Volume, congestion, and speed patterns across NLEX" />
         <div className={styles.filterRow} style={{ flexWrap: "wrap", rowGap: 8 }}>
-          {/* Predictive carries the same Range/Weather controls as Descriptive */}
+          {/* Predictive keeps the Range presets (they set how much history the
+              forecast card shows) but not Custom, and not the Weather filter:
+              the forecast card carries its own weather toggle. */}
           {activeTab === "Predictive" && (
-            <>
-              <div className={styles.filterGroup}>
-                <svg width="15" height="15" viewBox="0 0 16 16" fill="none" style={{ color: "var(--text-muted)" }}><rect x="2" y="2" width="12" height="12" rx="3" stroke="currentColor" strokeWidth="1.4" /><path d="M2 6h12" stroke="currentColor" strokeWidth="1.4" /><path d="M5.5 2V4M10.5 2V4" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" /></svg>
-                <span className={styles.filterLabel}>Range</span>
-                <div className={styles.segmented}>
-                  {(["3", "12", "all", "custom"] as const).map((m) => (
-                    <button key={m} className={rangeMode === m ? "active" : ""} onClick={() => setRangeMode(m)}>
-                      {rangeMode === m && <svg width="12" height="12" viewBox="0 0 16 16" fill="none" style={{ marginRight: 4, marginBottom: -1 }}><path d="M3.5 8.5l3 3 6-7" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" /></svg>}
-                      {m === "3" ? "3 mo" : m === "12" ? "12 mo" : m === "all" ? "All" : "Custom"}
-                    </button>
-                  ))}
-                </div>
-                {rangeMode === "custom" && (
-                  <DateRangePicker
-                    startDate={customFrom}
-                    minDate={data?.meta.minDate}
-                    maxDate={data?.meta.maxDate}
-                    endDate={customTo}
-                    onChange={(start, end) => {
-                      setCustomFrom(start);
-                      setCustomTo(end);
-                    }}
-                  />
-                )}
+            <div className={styles.filterGroup}>
+              <svg width="15" height="15" viewBox="0 0 16 16" fill="none" style={{ color: "var(--text-muted)" }}><rect x="2" y="2" width="12" height="12" rx="3" stroke="currentColor" strokeWidth="1.4" /><path d="M2 6h12" stroke="currentColor" strokeWidth="1.4" /><path d="M5.5 2V4M10.5 2V4" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" /></svg>
+              <span className={styles.filterLabel}>Range</span>
+              <div className={styles.segmented}>
+                {(["3", "12", "all"] as const).map((m) => (
+                  <button key={m} className={rangeMode === m ? "active" : ""} onClick={() => setRangeMode(m)}>
+                    {rangeMode === m && <svg width="12" height="12" viewBox="0 0 16 16" fill="none" style={{ marginRight: 4, marginBottom: -1 }}><path d="M3.5 8.5l3 3 6-7" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" /></svg>}
+                    {m === "3" ? "3 mo" : m === "12" ? "12 mo" : "All"}
+                  </button>
+                ))}
               </div>
-
-              <div className={styles.filterGroup}>
-                <svg width="15" height="15" viewBox="0 0 16 16" fill="none" style={{ color: "var(--text-muted)" }}><path d="M4.5 11.5a3 3 0 1 1 .4-5.97 4 4 0 0 1 7.75 1.1A2.5 2.5 0 0 1 12 11.5H4.5z" stroke="currentColor" strokeWidth="1.4" strokeLinejoin="round" /><path d="M6 13.2v1M9 13.2v1M12 13.2v1" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" /></svg>
-                <span className={styles.filterLabel}>Weather</span>
-                <div className={styles.segmented}>
-                  {(["all", "dry", "wet"] as const).map((w) => (
-                    <button key={w} className={weather === w ? "active" : ""} onClick={() => setWeather(w)}>
-                      {weather === w && <svg width="12" height="12" viewBox="0 0 16 16" fill="none" style={{ marginRight: 4, marginBottom: -1 }}><path d="M3.5 8.5l3 3 6-7" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" /></svg>}
-                      {w === "all" ? "All" : w === "dry" ? "Dry" : "Wet"}
-                    </button>
-                  ))}
-                </div>
-              </div>
-            </>
+            </div>
           )}
-          {activeTab === "Prescriptive" && <span className={styles.filterLabel}>Projected impact of traffic strategies</span>}
+          {activeTab === "Prescriptive" && (
+            <span className={styles.filterNote}>
+              Staffing, congestion response and event ranking, computed from the Predictive tab&apos;s own forecast —
+              Range does not apply.
+            </span>
+          )}
           <span className={styles.spacer} />
           <div className={styles.modeTabs}>
             {(["Descriptive", "Predictive", "Prescriptive"] as const).map((t) => (
@@ -847,16 +823,27 @@ export default function TrafficPage() {
             <div className={styles.spanHalf}><PredictiveEventChart /></div>
           </>
         ) : (
-          <article className={`${styles.chartCard} ${styles.chart1}`}>
-            <div className={styles.chartHead}>
-              <div className={styles.headText}>
-                <h3>Projected Impact of Strategies (Throughput Gain)</h3>
-              </div>
+          /* Three panels, one per row of the analytics diagram, each acting on
+             the Predictive tab's own forecast rather than a separate model.
+             The booth plan takes the descriptive plaza shares and per-plaza
+             hourly profiles from the same analytics payload the Descriptive
+             tab charts, so it cannot disagree with the "Volume by Plaza" and
+             hour-of-day views about where and when the peak is. */
+          <>
+            <div className={styles.spanFull}>
+              <BoothStaffingPanel
+                byPlaza={data?.byPlaza ?? []}
+                plazaHour={data?.plazaHourProfile ?? []}
+                typicalDaily={derived && derived.curAdt > 0 ? derived.curAdt : null}
+              />
             </div>
-            <div className={styles.chartBody}>
-              <DashboardChart option={prescriptiveImpactOption} height={280} />
+            <div className={styles.spanFull}>
+              <CongestionResponsePanel />
             </div>
-          </article>
+            <div className={styles.spanFull}>
+              <EventInterventionPanel />
+            </div>
+          </>
         )}
       </section>
     );
@@ -923,7 +910,7 @@ export default function TrafficPage() {
       <div className={styles.kpiRow}>
         <article className={styles.kpiTile}>
           <span className={styles.kpiIcon} aria-hidden="true"><Activity size={15} /></span>
-          <h3>Total Volume</h3>
+          <h3>Total Volume<InfoTooltip text="All vehicles counted at NLEX toll plazas over the selected Range, compared with the equivalent prior period." /></h3>
           <div className={styles.kpiValue} title={data ? `${fmtInt(data.kpis.totalVolume)} vehicles` : undefined}>
             {kpiValue(data ? fmtCompact(data.kpis.totalVolume) : null)}
           </div>
@@ -936,7 +923,7 @@ export default function TrafficPage() {
         </article>
         <article className={styles.kpiTile}>
           <span className={styles.kpiIcon} aria-hidden="true"><CalendarClock size={15} /></span>
-          <h3>Avg Daily Volume</h3>
+          <h3>Avg Daily Volume<InfoTooltip text="Total volume divided by the number of days in the Range — the corridor's typical day." /></h3>
           <div className={styles.kpiValue}>{kpiValue(derived ? fmtInt(derived.curAdt) : null)}</div>
           <div className={styles.sparkBox}>
             {sparkOption && <ReactECharts option={sparkOption} style={{ width: "100%", height: "100%" }} opts={{ renderer: "canvas" }} />}
@@ -944,13 +931,13 @@ export default function TrafficPage() {
         </article>
         <article className={styles.kpiTile}>
           <span className={styles.kpiIcon} aria-hidden="true"><Clock size={15} /></span>
-          <h3>Peak Hour (Weekdays)</h3>
+          <h3>Peak Hour (Weekdays)<InfoTooltip text="The hour of a weekday that carries the most vehicles on average across the Range." /></h3>
           <div className={styles.kpiValue}>{kpiValue(derived ? fmtHour(derived.peakHour) : null)}</div>
           <p className={styles.kpiHint}>{derived ? `${fmtInt(derived.peakHourVolume)} vehicles/hr avg` : "—"}</p>
         </article>
         <article className={styles.kpiTile}>
           <span className={styles.kpiIcon} aria-hidden="true"><Building2 size={15} /></span>
-          <h3>Busiest Plaza</h3>
+          <h3>Busiest Plaza<InfoTooltip text="The toll plaza with the largest share of the Range's volume." /></h3>
           <div className={styles.kpiValue}>{kpiValue(derived?.busiest ? derived.busiest.plaza : null)}</div>
           <p className={styles.kpiHint}>
             {derived?.busiest && derived.plazaTotal > 0 ? `${((derived.busiest.v / derived.plazaTotal) * 100).toFixed(1)}% of selected volume` : "—"}
@@ -958,7 +945,7 @@ export default function TrafficPage() {
         </article>
         <article className={styles.kpiTile}>
           <span className={styles.kpiIcon} aria-hidden="true"><Gauge size={15} /></span>
-          <h3>Congestion Index</h3>
+          <h3>Congestion Index<InfoTooltip text="Average Waze jam severity on the corridor, 0 (free flow) to 5 (standstill), over the Range." /></h3>
           <div className={styles.kpiValue}>{kpiValue(data?.kpis.congestionIndex != null ? `${data.kpis.congestionIndex.toFixed(2)} / 5` : null)}</div>
           <p className={styles.kpiHint}>
             {derived?.congestionDelta != null ? (
@@ -977,7 +964,7 @@ export default function TrafficPage() {
       <article className={`${styles.chartCard} ${styles.chart1} ${styles.hero}`}>
         <div className={styles.chartHead}>
           <div className={styles.headText}>
-            <h3>Volume Trend</h3>
+            <h3>Volume Trend<InfoTooltip text="Vehicles per day, week or month over the Range, with the 7-day average smoothing out weekday swings. Click a point to see that period's hourly breakdown." /></h3>
           </div>
         </div>
         <div className={styles.heroFilters}>
@@ -1063,7 +1050,7 @@ export default function TrafficPage() {
       <article className={`${styles.chartCard} ${styles.chart2}`}>
         <div className={styles.chartHead}>
           <div className={styles.headText}>
-            <h3>Average Volume by Hour × Day of Week</h3>
+            <h3>Average Volume by Hour × Day of Week<InfoTooltip text="Typical vehicles per hour for each day of the week — darker cells are busier. Shows when the corridor peaks." /></h3>
           </div>
         </div>
         <div className={styles.chartBody}>{chartFrame(heatmapOption, "No data for the selected filters", onHeatmapClick, false, (c) => { heatChart.current = c; })}</div>
@@ -1081,7 +1068,7 @@ export default function TrafficPage() {
       <article className={`${styles.chartCard} ${styles.chart3}`}>
         <div className={styles.chartHead}>
           <div className={styles.headText}>
-            <h3>Volume by Plaza</h3>
+            <h3>Volume by Plaza<InfoTooltip text="Share of the Range's volume handled by each toll plaza. Click a bar for its hourly profile." /></h3>
           </div>
           <button
             type="button"
@@ -1104,7 +1091,7 @@ export default function TrafficPage() {
       <article className={`${styles.chartCard} ${styles.chart4}`}>
         <div className={styles.chartHead}>
           <div className={styles.headText}>
-            <h3>Average Speed in Jams by Hour</h3>
+            <h3>Average Speed in Jams by Hour<InfoTooltip text="Mean speed reported inside Waze jams for each hour of the day — lower means slower-moving jams at that hour." /></h3>
           </div>
         </div>
         <div className={styles.chartBody}>{chartFrame(speedOption, "No congestion data in the selected range", onSpeedClick, true, (c) => { speedChart.current = c; })}</div>
@@ -1122,7 +1109,7 @@ export default function TrafficPage() {
       <article className={`${styles.chartCard} ${styles.chart5}`}>
         <div className={styles.chartHead}>
           <div className={styles.headText}>
-            <h3>{impactMode === "Events" ? "Arena Event Impact (venue exit entries)" : "Holiday Impact vs Normal Days"}</h3>
+            <h3>{impactMode === "Events" ? "Arena Event Impact (venue exit entries)" : "Holiday Impact vs Normal Days"}<InfoTooltip text="How volume on Philippine Arena event days or public holidays compares with the normal days around them (±45-day local baseline). Toggle Events / Holidays above." /></h3>
           </div>
           <button
             type="button"

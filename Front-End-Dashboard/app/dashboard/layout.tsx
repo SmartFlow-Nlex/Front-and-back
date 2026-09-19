@@ -3,7 +3,7 @@
 import Image from "next/image";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AlertTriangle, Brain, Calendar, Car, ChevronDown, ClipboardList, Home, Leaf, LogOut, Map, Menu, TrendingUp, User, Wrench, X } from "lucide-react";
 import { supabase } from "../../lib/supabase";
 import ThemeToggle from "../../components/dashboard/ThemeToggle";
@@ -161,6 +161,21 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
 
   const [now, setNow] = useState(new Date());
 
+  // The pages pin their filter rows directly beneath the topbar. Its height is
+  // 64px on desktop but wraps taller on narrow screens, so publish the measured
+  // value as --ds-topbar-h on the scroll container rather than hard-coding it.
+  const topbarRef = useRef<HTMLElement | null>(null);
+  useEffect(() => {
+    const bar = topbarRef.current;
+    const main = bar?.parentElement;
+    if (!bar || !main || typeof ResizeObserver === "undefined") return;
+    const apply = () => main.style.setProperty("--ds-topbar-h", `${Math.round(bar.getBoundingClientRect().height)}px`);
+    apply();
+    const ro = new ResizeObserver(apply);
+    ro.observe(bar);
+    return () => ro.disconnect();
+  }, []);
+
   useEffect(() => {
     const timer = setInterval(() => setNow(new Date()), 1000);
     return () => clearInterval(timer);
@@ -252,7 +267,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
       </aside>
 
       <main className="ds-main">
-        <header className="ds-topbar">
+        <header className="ds-topbar" ref={topbarRef}>
           <div className="ds-topbar-left">
             <button type="button" className="ds-menu-button" aria-label="Toggle menu" onClick={toggleSidebar}>
               <span />

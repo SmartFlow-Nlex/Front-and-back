@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import AiModelInsight, { type InsightMetric } from "./AiModelInsight";
+import { Sparkles } from "lucide-react";
 
 /**
  * Generative narrative for the forecast chart.
@@ -174,9 +175,10 @@ export default function ModelNarrative({
   return (
     <section
       style={{
-        border: "1px solid #e8edf5",
+        border: "1px solid color-mix(in srgb, #4f46e5 28%, transparent)",
         borderRadius: 12,
-        background: "var(--bg-surface)",
+        background: "linear-gradient(135deg, color-mix(in srgb, #6366f1 11%, var(--bg-surface)), color-mix(in srgb, #4f46e5 4%, var(--bg-surface)))",
+        boxShadow: "inset 0 1px 0 rgba(255,255,255,0.5)",
         padding: open ? "18px 20px" : "12px 18px",
         display: "flex",
         flexDirection: "column",
@@ -184,8 +186,13 @@ export default function ModelNarrative({
       }}
     >
       <div style={{ display: "flex", alignItems: "center", gap: 16, flexWrap: "wrap" }}>
-        <div style={{ minWidth: 190 }}>
-          <h4 style={{ margin: 0, fontSize: "0.98rem", fontWeight: 700, color: "var(--text-primary)" }}>
+        <div style={{ minWidth: 190, display: "flex", alignItems: "center", gap: 10 }}>
+          <span style={{ display: "grid", placeItems: "center", width: 30, height: 30, borderRadius: 9, flex: "none",
+            background: "linear-gradient(135deg, #6366f1, #4f46e5)", color: "#fff", boxShadow: "0 1px 6px rgba(79,70,229,0.35)" }}>
+            <Sparkles size={15} strokeWidth={2.4} />
+          </span>
+          <div>
+          <h4 style={{ margin: 0, fontSize: "0.98rem", fontWeight: 800, letterSpacing: "-0.01em", color: "var(--text-primary)" }}>
             Narrative Explanation
           </h4>
           {!open && (
@@ -193,6 +200,7 @@ export default function ModelNarrative({
               Plain-language read-out of how {selected.length === 1 ? "the selected model" : `the ${selected.length} selected models`} performed
             </p>
           )}
+          </div>
         </div>
 
         {/* Collapsed, the row was mostly dead space. These chips put the headline
@@ -263,8 +271,8 @@ export default function ModelNarrative({
           {showWeather === undefined ? null : showWeather ? " · weather-driven variants" : " · weather-free variants"}
         </p>
 
-      {/* Same rows the prose above was composed from, so the two cannot
-          describe different models. */}
+      {/* The read-out is the language model's alone. The metrics it was given
+          are the ones on the card above, so the two cannot disagree. */}
       <AiModelInsight
         quantity={quantity}
         horizonDays={horizonDays}
@@ -292,134 +300,6 @@ export default function ModelNarrative({
             diagnosis: r.diagnosis ?? null,
           }))}
       />
-
-        {selected.map((k) => {
-        const r = rowFor(k);
-        if (!r) {
-          return (
-            <article key={k} style={{ fontSize: "0.85rem", color: "var(--text-secondary)" }}>
-              <b style={{ color: "var(--text-primary)" }}>{LBL[k]}</b> — no stored metrics for this model yet.
-            </article>
-          );
-        }
-
-        const isAcc = !!r.accepted;
-        const wmape = fmt2(r.wmape);
-        const mae = fmtMag(r.mae);
-        const rmse = fmtMag(r.rmse);
-
-        // With vs without weather, only when both variants exist
-        const twinName = TWIN[k];
-        const twin = twinName ? byName.get(twinName) : undefined;
-        const base = byName.get(DBN[k]);
-        let weatherLine: string | null = null;
-        if (twin && base && base.wmape != null && twin.wmape != null) {
-          const delta = twin.wmape - base.wmape; // > 0 => weather version is better
-          const pair = `${base.wmape.toFixed(2)}% with vs ${twin.wmape.toFixed(2)}% without`;
-          if (Math.abs(delta) < 0.05) weatherLine = `Weather made no real difference — ${pair}.`;
-          else if (delta > 0) weatherLine = `Weather helped by ${delta.toFixed(2)} pts — ${pair}.`;
-          else weatherLine = `Weather hurt it by ${Math.abs(delta).toFixed(2)} pts — ${pair}.`;
-        }
-
-        const icLine =
-          r.aic != null && r.bic != null
-            ? `AIC ${Math.round(r.aic).toLocaleString()} · BIC ${Math.round(r.bic).toLocaleString()} — fit to history within the ARIMA family only, not forecasting skill.`
-            : null;
-
-        const verdictLine = isAcc
-          ? isTied(r)
-            ? `Accepted — ${r.diagnosis}.`
-            : `Accepted${r.rank != null ? ` — rank #${r.rank} of ${rankedCount}` : ""}.`
-          : r.rejected_reason
-          ? `Rejected — ${r.rejected_reason}.`
-          : "Rejected.";
-
-        const vsBest =
-          !isTied(r) && best && best.wmape != null && r.wmape != null && r.model_name !== best.model_name
-            ? ` ${(r.wmape - best.wmape).toFixed(2)} pts behind ${best.model_name.replace("_nw", " (no weather)")} at ${best.wmape.toFixed(2)}%.`
-            : "";
-
-        // Compact stat strip — scannable, and keeps the prose down to verdicts.
-        const stats: { label: string; value: string; tone?: string }[] = [];
-        if (wmape) stats.push({ label: "WMAPE", value: `${wmape}%`, tone: CLR[k] });
-        if (mae) stats.push({ label: "MAE", value: vocab.maeUnit ? `${mae} ${vocab.maeUnit}` : mae });
-        if (rmse) stats.push({ label: "RMSE", value: rmse });
-        if (r.r2 != null && isFinite(r.r2)) stats.push({ label: "R²", value: r.r2.toFixed(3) });
-        if (r.mase != null && isFinite(r.mase))
-          stats.push({ label: "MASE", value: r.mase.toFixed(3), tone: r.mase < 1 ? "var(--color-success)" : "var(--color-danger)" });
-
-        return (
-          <article
-            key={k}
-            style={{
-              borderLeft: `3px solid ${isAcc ? "#16a34a" : "var(--border-strong)"}`,
-              paddingLeft: 14,
-              display: "flex",
-              flexDirection: "column",
-              gap: 7,
-            }}
-          >
-            <div style={{ display: "flex", alignItems: "center", gap: 9, flexWrap: "wrap" }}>
-              <b style={{ fontSize: "0.9rem", color: "var(--text-primary)" }}>{LBL[k]}</b>
-              <span
-                style={{
-                  fontSize: "0.64rem", fontWeight: 700, padding: "2px 7px", borderRadius: 999,
-                  background: isAcc ? "var(--color-success-bg)" : "var(--bg-surface-hover)",
-                  color: isAcc ? "var(--color-success)" : "var(--text-secondary)",
-                }}
-              >
-                {isAcc ? (isTied(r) ? "CO-CHAMPION" : `RANK #${r.rank ?? "—"}`) : "REJECTED"}
-              </span>
-              {!showWeather && twinName && r.model_name === twinName && (
-                <span style={{ fontSize: "0.66rem", color: "var(--text-muted)" }}>weather-free</span>
-              )}
-              <span style={{ fontSize: "0.78rem", color: "var(--text-secondary)" }}>{HOW[k]}</span>
-            </div>
-
-            {/* Numbers as a strip rather than buried in a sentence */}
-            <div style={{ display: "flex", gap: 14, flexWrap: "wrap" }}>
-              {stats.map((st) => (
-                <span key={st.label} style={{ display: "inline-flex", alignItems: "baseline", gap: 5 }}>
-                  <span style={{ fontSize: "0.64rem", color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.04em" }}>
-                    {st.label}
-                  </span>
-                  <b style={{ fontSize: "0.84rem", color: st.tone ?? "var(--text-primary)" }}>{st.value}</b>
-                </span>
-              ))}
-            </div>
-
-            <div style={{ fontSize: "0.8rem", color: "var(--text-secondary)", lineHeight: 1.5 }}>
-              {maseSentence(r.mase)}
-              {weatherLine ? <> {weatherLine}</> : null}
-            </div>
-
-            {icLine && (
-              <div style={{ fontSize: "0.74rem", color: "var(--text-muted)" }}>{icLine}</div>
-            )}
-
-            <div style={{ fontSize: "0.8rem", fontWeight: 600, color: isAcc ? "var(--color-success)" : "var(--color-warning)" }}>
-              {verdictLine}
-              <span style={{ fontWeight: 400, color: "var(--text-secondary)" }}>{vsBest}</span>
-            </div>
-          </article>
-        );
-      })}
-
-      <p
-        style={{
-          margin: 0,
-          fontSize: "0.74rem",
-          color: "var(--text-muted)",
-          lineHeight: 1.5,
-          borderTop: "1px solid #eef2f7",
-          paddingTop: 10,
-        }}
-      >
-        All figures are out-of-sample: each was produced by a model refit on data ending before the
-        days it predicted. Accuracy beyond {horizonDays} days ahead is not covered by these numbers,
-        and the Future band is a projection rather than a validated forecast.
-        {quantityNote ? <> {quantityNote}</> : null}
-      </p>
 
       </div>
       )}

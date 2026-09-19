@@ -29,6 +29,7 @@
 import type { EChartsOption } from "echarts";
 import { useEffect, useMemo, useState } from "react";
 import DashboardChart from "./DashboardChart";
+import InfoTooltip from "./InfoTooltip";
 import ModelNarrative, { type MetricRow, type NarrativeVocab } from "./ModelNarrative";
 import { aggregateSeries, type Granularity } from "./aggregateSeries";
 import { useThemeTokens, zoneTints } from "./useThemeTokens";
@@ -517,6 +518,7 @@ export default function PredictiveEmissionChart() {
       <article className="chart-card wide" style={{ padding: "24px", display: "flex", flexDirection: "column", gap: 12 }}>
         <h3 style={{ fontSize: "1.05rem", color: "var(--text-primary)", fontWeight: 700, margin: 0 }}>
           Corridor CO₂ Walk-Forward Forecast
+          <InfoTooltip text="Modeled daily CO₂ for the corridor: the model's past fit, its held-out test period, and the forecast ahead. Pick a model above." />
         </h3>
         <div style={{ color: "var(--color-danger, #ef4444)", fontSize: "0.88rem" }}>{error}</div>
         <p style={{ margin: 0, fontSize: "0.78rem", color: "var(--text-muted)", maxWidth: 620, lineHeight: 1.5 }}>
@@ -764,6 +766,7 @@ export default function PredictiveEmissionChart() {
             }}
           >
             Corridor CO₂ Walk-Forward Forecast
+            <InfoTooltip text="Modeled daily CO₂ for the corridor: the model's past fit, its held-out test period, and the forecast ahead. Pick a model above." />
           </h3>
           <p style={{ color: "var(--text-secondary)", fontSize: "0.82rem", margin: "4px 0 0 0" }}>
             {isAggregated ? (

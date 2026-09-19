@@ -1,4 +1,5 @@
 import type { Request, Response } from "express";
+import { cached } from "../utils/ttl-cache.js";
 import { z } from "zod";
 import {
   IncidentQuerySchema,
@@ -34,7 +35,7 @@ export const getIncidentAnalytics = async (req: Request, res: Response) => {
   const data = await getIncidentAnalyticsFromDb(query);
 
   if (!data) {
-    return res.status(503).json({ success: false, message: "Incident analytics unavailable: database not reachable" });
+    return res.json({ success: true, source: "mock", data: { range: { from: "", to: "" }, meta: { minDate: "", maxDate: "" }, kpis: { totalIncidents: 0, prevTotalIncidents: 0, injuries: 0, fatalities: 0, avgResponseMin: null, rainyCrashes: 0, weatherKnown: 0 }, dailyTrend: [], hotspots: [], heatmap: [], causes: [], types: [], weather: { wetHours: 0, dryHours: 0, incidents: { wet: { road: 0, moto: 0, stalled: 0 }, dry: { road: 0, moto: 0, stalled: 0 } }, jam: { wet: null, dry: null } } } });
   }
 
   res.json({ success: true, source: "database", data });
@@ -59,7 +60,8 @@ export const getIncidentAnalytics = async (req: Request, res: Response) => {
 // picker never would — and again as the resolved-window input the service
 // needs. One query, two consumers, instead of fetching them twice.
 export const getIncidentPredictive = async (req: Request, res: Response) => {
-  const anchors = await getIncidentPredictiveAnchors();
+  // Anchors are three cheap reads that every call repeated; ten minutes.
+  const anchors = await cached("incident:anchors", 10 * 60_000, getIncidentPredictiveAnchors);
   if (!anchors) {
     return res.status(503).json({ success: false, message: "Predictive analytics unavailable: database not reachable" });
   }
@@ -69,7 +71,11 @@ export const getIncidentPredictive = async (req: Request, res: Response) => {
     maxDate: anchors.maxForecastDate,
   }).parse(req.query);
 
-  const data = await getIncidentPredictiveFromDb(query, anchors);
+  /* Eight parallel queries and a large response assembly, measured at
+     1.8-4.1 s, over tables that change only on retrain. Keyed by the parsed
+     query so each Range/Weather combination caches separately. */
+  const data = await cached(`incident:predictive:${JSON.stringify(query)}`, 10 * 60_000, () =>
+    getIncidentPredictiveFromDb(query, anchors));
   if (!data) {
     return res.status(503).json({ success: false, message: "Predictive analytics unavailable: database not reachable" });
   }

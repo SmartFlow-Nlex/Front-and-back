@@ -3,10 +3,16 @@
 import { useEffect, useMemo, useState } from "react";
 import type { EChartsOption } from "echarts";
 import DashboardChart from "./DashboardChart";
+import InfoTooltip from "./InfoTooltip";
+import CongestionNarrative from "./CongestionNarrative";
+import { ShieldCheck, ChevronRight } from "lucide-react";
+import { loadForecast, invalidateForecast } from "./prescriptiveTraffic.shared";
 
 type State = "Low" | "Med" | "High";
 
 type RawRow = { segment: string; hours: number; state: State; probability: number | string;
+                /** Per-state probabilities, calibrated. pMed + pHigh is the chance of congestion. */
+                pLow?: number | string | null; pMed?: number | string | null; pHigh?: number | string | null;
                 km?: number | null; kmEstimated?: boolean;
                 /** Manila wall-clock "YYYY-MM-DD HH:MM" the horizons count from. */
                 baseTs?: string | null };
@@ -35,13 +41,53 @@ type RawRow = { segment: string; hours: number; state: State; probability: numbe
 //    with green (point 1) and printing "SEVERE" on every cell so the exceptions
 //    had nothing to stand out against — both fixed elsewhere, without needing
 //    to weaken the colour that carries the warning.
+//
+// WHAT THE STATES MEAN. train_congestion_horizon.py labels each exit-hour from
+// the length-weighted average speed of the Waze jams reported there: under 30
+// km/h is High, 30-60 is Med, and an hour with NO jam report at all is Low.
+// Jams are slow by definition -- the training table averages 7.6 km/h and
+// never exceeds 56 -- so Med is all but impossible and any hour that has a
+// report is High. The map is therefore "will Waze carry a jam report at this
+// exit this hour", not a corridor speed. The legend used to promise "Free flow
+// > 60 km/h", a speed the data cannot contain; the blue cell means the model
+// expects no report, which is what it says now.
 const STATE_META: Record<State, { rank: number; color: string; text: string; label: string; short: string; speed: string }> = {
-  Low: { rank: 0, color: "#cfe4f7", text: "#12507e", label: "Free flow", short: "FREE", speed: "> 60 km/h" },
-  Med: { rank: 1, color: "#f0a63a", text: "#5c3208", label: "Heavy", short: "HEAVY", speed: "30–60 km/h" },
-  High: { rank: 2, color: "#dc2626", text: "#ffffff", label: "Severe", short: "SEVERE", speed: "< 30 km/h" },
+  Low: { rank: 0, color: "#cfe4f7", text: "#12507e", label: "Moving", short: "MOVING", speed: "no jam, or over 20 km/h" },
+  Med: { rank: 1, color: "#f0a63a", text: "#5c3208", label: "Heavy", short: "HEAVY", speed: "10–20 km/h" },
+  High: { rank: 2, color: "#dc2626", text: "#ffffff", label: "Severe", short: "SEVERE", speed: "under 10 km/h" },
 };
 
 const LOW_CONF = 0.8;
+
+/* SEVERE RISK — why the grid needs a second channel.
+ *
+ * A cell is coloured by the winning class, and Severe almost never wins. It is
+ * 14% of reality but the champion's recall on it is 0.079: it names fewer than
+ * one severe hour in twelve. So a cell can carry a 37% chance of crawling under
+ * 10 km/h and still render the same calm blue as one carrying 2%. The card used
+ * to answer this by telling the reader to open each tooltip and look for the
+ * severe % — twenty exits times twelve hours is 240 tooltips to rule out a
+ * hazard, which is not a thing anyone does.
+ *
+ * The probabilities themselves are trustworthy even where the label is not:
+ * the calibration table tracks observed against predicted within a few points
+ * in every bin. So the risk is readable straight off pHigh, independently of
+ * which class won. Cells at or above this threshold carry a red dot — the
+ * argmax colour still says what the model PREDICTS, the dot says what it
+ * cannot rule out. Two channels, two questions, no tooltips.
+ *
+ * The dot is a separate scatter series, NOT a border on the cell. Borders were
+ * tried first and failed for a specific reason worth recording: severe risk
+ * runs in contiguous stretches, so neighbouring cells' borders butt together
+ * and render as one unbroken red bar straight through the row — it read as a
+ * strikethrough over the whole run rather than as a mark on each cell, and the
+ * merged line fought the fill colours for the same edge pixels.
+ *
+ * 0.25 rather than a rounder 0.5: at 0.5 nothing on a normal day would ever
+ * mark, which is the original failure in a new costume. A quarter chance of a
+ * ten-km/h crawl is already worth a second look.
+ */
+const SEVERE_RISK = 0.25;
 
 /** "+1h" is meaningless without an anchor, so every hour label carries the
  *  clock time it refers to. baseTs is wall-clock text (see the service): parsing
@@ -79,23 +125,62 @@ function kmIndex(rows: { segment: string; km?: number | null; kmEstimated?: bool
   }
   return m;
 }
+/** One numbered step of the Validation evidence: a bold question-style title
+ *  over its answer, so a reader can skim the five titles and stop at the one
+ *  they came for. */
+function EvBlock({ n, title, children }: { n: number; title: string; children: React.ReactNode }) {
+  return (
+    <div style={{ display: "grid", gridTemplateColumns: "22px minmax(0,1fr)", gap: 10, alignItems: "start" }}>
+      <span style={{
+        display: "grid", placeItems: "center", width: 22, height: 22, borderRadius: 999, fontSize: "0.7rem", fontWeight: 800,
+        background: "var(--bg-surface-hover)", border: "1px solid var(--border-default)", color: "var(--text-secondary)",
+      }}>{n}</span>
+      <div style={{ minWidth: 0 }}>
+        <div style={{ fontSize: "0.82rem", fontWeight: 800, color: "var(--text-primary)", letterSpacing: "-0.01em", marginBottom: 4 }}>{title}</div>
+        <div style={{ fontSize: "0.76rem" }}>{children}</div>
+      </div>
+    </div>
+  );
+}
+
 const kmLabel = (e?: { km: number | null; est: boolean }) =>
   e?.km == null ? "—" : `${e.km}${e.est ? "*" : ""}`;
 
 type CellItem = {
   value: [number, number, number];
-  state: State;
+  /** Chance of congestion (heavy or severe), 0-1, when the row carries it. */
+  pCong?: number | null;
+  pHigh?: number | null;
+  /** pHigh >= SEVERE_RISK while the winning label is NOT High — the hazard the
+   *  argmax colour drops. Drives the corner wedge on the grid. */
+  severeRisk?: boolean;
+  /** "Pending" marks an hour inside the frame the stored forecast does not
+      reach yet -- drawn blank, filled by the next hourly refresh. */
+  state: State | "Pending";
   conf: number;
   /** First cell of a contiguous run of this state — the only one that is labelled. */
   runStart?: boolean;
   label: { color: string };
 };
-const BACKEND = process.env.NEXT_PUBLIC_BACKEND_URL ?? "http://localhost:4000";
 
 type Alert = { segment: string; state: State; from: number; to: number; conf: number };
 
 /** Accuracy at each forecast horizon, with the "nothing changes" benchmark. */
 type HzAcc = { horizon: number; accuracy: number | null; persistenceAccuracy: number | null };
+
+/** How the served model was scored; written by the training run, one row. */
+type CongestionEval = {
+  model: string;
+  test_rows: number;
+  test_days: number;
+  class_share: Record<string, number>;
+  per_class: Record<string, { precision: number; recall: number; support: number }>;
+  brier: number;
+  macro_f1: number;
+  calibration: { lo: number; hi: number; n: number; predicted: number; observed: number }[];
+  thresholds_kmh: { severe_below: number; heavy_below: number };
+  features: string[];
+};
 
 export default function PredictiveCongestionChart() {
   const [raw, setRaw] = useState<RawRow[] | null>(null);
@@ -112,6 +197,7 @@ export default function PredictiveCongestionChart() {
   const [extraExits, setExtraExits] = useState<string[]>([]);
   const COLLAPSED_EXITS = 5;
   const [hzAcc, setHzAcc] = useState<HzAcc[]>([]);
+  const [evalInfo, setEvalInfo] = useState<CongestionEval | null>(null);
 
   // One km lookup for the whole component: the heatmap, the alert list and the
   // detail drawer all order by corridor position and must agree on it.
@@ -120,27 +206,29 @@ export default function PredictiveCongestionChart() {
   useEffect(() => {
     let cancelled = false;
     const timers: ReturnType<typeof setTimeout>[] = [];
-    // Previously this logged to the console and returned, which left `raw` null
-    // and the card stuck on "Loading ML congestion forecast from AWS..." with no
-    // error and no way to recover — a failure looked identical to a slow load.
+    // Reads the shared, cached forecast rather than fetching the ~600 KB
+    // payload again: the volume and event cards on this tab want the same
+    // response in the same second. A failure is not cached by the loader, so
+    // each retry here is a real retry. Previously a failure left the card
+    // stuck on "Loading…" with no way to recover.
     (async () => {
       const MAX_TRIES = 3;
       for (let tryNo = 1; tryNo <= MAX_TRIES; tryNo++) {
         try {
-          const res = await fetch(`${BACKEND}/api/traffic/forecast`);
-          const json = await res.json().catch(() => ({}));
+          const fc = await loadForecast();
           if (cancelled) return;
-          if (res.ok && json.success && json.data?.congestion) {
-            setRaw(json.data.congestion as RawRow[]);
-            setModelInfo(json.data.congestionModel ?? null);
-            if (Array.isArray(json.data.congestionHorizonAccuracy)) {
-              setHzAcc(json.data.congestionHorizonAccuracy as HzAcc[]);
+          if (fc.congestion.length > 0) {
+            setRaw(fc.congestion as unknown as RawRow[]);
+            setModelInfo((fc.extras.congestionModel as ModelInfo | undefined) ?? null);
+            setEvalInfo((fc.extras.congestionEval as CongestionEval | null | undefined) ?? null);
+            if (Array.isArray(fc.extras.congestionHorizonAccuracy)) {
+              setHzAcc(fc.extras.congestionHorizonAccuracy as HzAcc[]);
             }
             setLoadError(null);
             return;
           }
           if (tryNo === MAX_TRIES) {
-            setLoadError(json.message ?? `HTTP ${res.status}`);
+            setLoadError("No congestion forecast in the payload");
             return;
           }
         } catch (e) {
@@ -160,6 +248,40 @@ export default function PredictiveCongestionChart() {
     };
   }, [attempt]);
 
+  /* Pick up each hourly republish without a manual reload.
+   *
+   * The forecast is rewritten every hour by the "SmartFlow congestion refresh"
+   * task, and the grid is drawn against the wall clock: a column stops being a
+   * forecast the moment its hour ends. A tab left open all evening therefore
+   * drifted twice over — it held the payload from first mount, and it never
+   * recomputed "now", so the columns kept their original labels while the
+   * hours behind them passed. Left long enough it counted down to an empty
+   * grid with fresh rows sitting unread in the database.
+   *
+   * Firing shortly after the hour turns over (rather than 60 minutes after
+   * mount) keeps every open tab on the same cadence as the publisher, and
+   * refetching on focus covers the laptop that was asleep at the turnover.
+   */
+  useEffect(() => {
+    const reload = () => { invalidateForecast(); setAttempt((a) => a + 1); };
+
+    let interval: ReturnType<typeof setInterval> | null = null;
+    // 90s past the hour: the task starts on the hour and takes ~80s to publish.
+    const msToNextHour = 3.6e6 - (Date.now() % 3.6e6) + 90_000;
+    const timeout = setTimeout(() => {
+      reload();
+      interval = setInterval(reload, 3.6e6);
+    }, msToNextHour);
+
+    const onFocus = () => { if (document.visibilityState === "visible") reload(); };
+    document.addEventListener("visibilitychange", onFocus);
+    return () => {
+      clearTimeout(timeout);
+      if (interval) clearInterval(interval);
+      document.removeEventListener("visibilitychange", onFocus);
+    };
+  }, []);
+
   useEffect(() => {
     if (!alertsOpen) return;
     const onKey = (e: KeyboardEvent) => e.key === "Escape" && setAlertsOpen(false);
@@ -178,12 +300,72 @@ export default function PredictiveCongestionChart() {
     const byKm = Array.from(new Set(raw.map((d) => d.segment))).sort(
       (a, b) => (KMI.get(a)?.km ?? 9999) - (KMI.get(b)?.km ?? 9999)
     );
-    const maxHour = Math.max(...raw.map((d) => d.hours));
+    const storedHours = Math.max(...raw.map((d) => d.hours));
     const baseTs = raw.find((r) => r.baseTs)?.baseTs ?? null;
-    // Two lines per column: the horizon and the hour it lands on.
+
+    /* The forecast counts from the last COMPLETE hour of Waze ingestion, which
+       is always at least an hour behind the clock: the 11:00 hour is only
+       complete at noon. So by the time anyone reads the card, its first column
+       or two describe hours that have already finished.
+       Those are history, not forecast. Drop every hour whose window has fully
+       passed and start the grid at the hour we are actually in, so "what
+       happens next" is the first thing on screen rather than the third. */
+    const baseMsForTrim = (() => {
+      const m = /^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2})/.exec(baseTs ?? "");
+      if (!m) return null;
+      return new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]), Number(m[4]), Number(m[5])).getTime();
+    })();
+    /* Everything below is measured against the CLOCK, never against the first
+       column. Column h covers the hour starting at base + h, so:
+         - it is past once that hour has ended, i.e. it starts before this hour
+         - it is "now" only when it IS this hour
+       Anchoring "now" to the first surviving column instead was wrong whenever
+       the data was fully fresh: with base at 2 PM the first column is the 3 PM
+       hour, and the card called 3 PM "now" at 2:26 PM. */
+    const hourMs = 3.6e6;
+    const thisHourStart = (() => {
+      const d = new Date();
+      d.setMinutes(0, 0, 0);
+      return d.getTime();
+    })();
+    const startOf = (h: number) => (baseMsForTrim == null ? null : baseMsForTrim + h * hourMs);
+
+    const skippedHours =
+      baseMsForTrim == null
+        ? 0
+        : Math.min(
+            storedHours,
+            Array.from({ length: storedHours }, (_, i) => i + 1).filter(
+              (h) => (startOf(h) as number) < thisHourStart,
+            ).length,
+          );
+    const maxHour = storedHours - skippedHours;
+
+    // Hours between this one and the column: 0 is the hour in progress.
+    const relHours = Array.from({ length: maxHour }, (_, i) => {
+      const t = startOf(skippedHours + i + 1);
+      return t == null ? i + 1 : Math.round((t - thisHourStart) / hourMs);
+    });
+    const relLabel = (n: number) => (n <= 0 ? "now" : `+${n}h`);
+
     const hourLabels = Array.from({ length: maxHour }, (_, i) => {
-      const clock = hourClock(baseTs, i + 1);
-      return clock ? `+${i + 1}h\n${clock}` : `+${i + 1}h`;
+      const clock = hourClock(baseTs, skippedHours + i + 1);
+      const rel = relLabel(relHours[i]);
+      return clock ? `${rel}\n${clock}` : rel;
+    });
+
+    /* The frame is always the stored width, like a weather strip that always
+       shows the same number of hours. Dropping past hours used to shrink the
+       grid -- twelve columns at 3 PM, four by 11 PM -- which read as the
+       forecast "deducting" itself. Hours the stored run does not reach are
+       kept as blank columns labelled with their clock time, so the frame holds
+       still and the gap says plainly that a refresh is due. */
+    const frameHours = storedHours;
+    const frameLabels = Array.from({ length: frameHours }, (_, i) => {
+      const clock = hourClock(baseTs, skippedHours + i + 1);
+      const t = startOf(skippedHours + i + 1);
+      const rel = relLabel(t == null ? i + 1 : Math.round((t - thisHourStart) / hourMs));
+      return clock ? `${rel}\n${clock}` : rel;
     });
 
     // ECharts draws a category y-axis bottom-up, so reverse to read north-bound
@@ -196,13 +378,20 @@ export default function PredictiveCongestionChart() {
 
     raw.forEach((d) => {
       const y = segments.indexOf(d.segment);
-      const x = d.hours - 1;
+      // Shift into now-relative columns; anything before column 0 has passed.
+      const x = d.hours - 1 - skippedHours;
       if (y < 0 || x < 0 || x >= maxHour) return;
       const conf = Number(d.probability);
       states[y][x] = d.state;
       confs[y][x] = conf;
       const meta = STATE_META[d.state] ?? STATE_META.Low;
-      cells.push({ value: [x, y, meta.rank], state: d.state, conf, label: { color: meta.text } });
+      const pMed = d.pMed == null ? null : Number(d.pMed);
+      const pHigh = d.pHigh == null ? null : Number(d.pHigh);
+      const pCong = pMed != null && pHigh != null ? pMed + pHigh : null;
+      // Only where the label does not already say High — a red cell needs no
+      // wedge telling the reader it might be red.
+      const severeRisk = pHigh != null && pHigh >= SEVERE_RISK && d.state !== "High";
+      cells.push({ value: [x, y, meta.rank], state: d.state, conf, pCong, pHigh, severeRisk, label: { color: meta.text } });
     });
 
     // Flag the first cell of each run so the label formatter can print the state
@@ -211,6 +400,13 @@ export default function PredictiveCongestionChart() {
       const [x, y] = c.value;
       c.runStart = x === 0 || states[y][x - 1] !== c.state;
     });
+
+    // Blank cells for the hours the stored forecast does not reach.
+    for (let y = 0; y < segments.length; y++) {
+      for (let x = maxHour; x < frameHours; x++) {
+        cells.push({ value: [x, y, 3], state: "Pending", conf: 0, label: { color: "#94a3b8" } });
+      }
+    }
 
     // ---- Operational summary ----
     const atRisk = new Set<string>();
@@ -264,13 +460,17 @@ export default function PredictiveCongestionChart() {
     // neighbouring exits is bad for a long stretch". Congestion propagates
     // between neighbours, so a CONTIGUOUS block is the meaningful shape - and it
     // is far quicker to read as one sentence than as 240 coloured cells.
+    // Measured over every CONGESTED exit, heavy or severe: a window can be busy
+    // end to end without one hour crawling under 10 km/h, and reading the span
+    // off severe alone then printed "no congestion predicted" beside a grid
+    // that was amber from end to end.
     const severeIdx = segments
-      .map((seg, i) => (severeSegments.has(seg) ? i : -1))
+      .map((seg, i) => (atRisk.has(seg) ? i : -1))
       .filter((i) => i >= 0)
       .sort((a, b) => a - b);
     const contiguous =
       severeIdx.length > 1 && severeIdx[severeIdx.length - 1] - severeIdx[0] === severeIdx.length - 1;
-    const severeKms = [...severeSegments]
+    const severeKms = [...atRisk]
       .map((seg) => KMI.get(seg)?.km)
       .filter((k): k is number => k != null)
       .sort((a, b) => a - b);
@@ -282,15 +482,28 @@ export default function PredictiveCongestionChart() {
     const flatHours = perHour.length > 1 && perHour.every((n) => n === perHour[0]);
 
     // How long the worst segments stay bad, and how sure the model is.
-    const severeAlerts = alerts.filter((a) => a.state === "High");
-    const allHours =
-      severeAlerts.length > 0 &&
-      severeAlerts.every((a) => a.from === 1 && a.to === maxHour);
-    const severeConfs = severeAlerts.map((a) => a.conf).sort((x, y) => x - y);
+    //
+    // These used to look at Severe alone, which was the only congested class
+    // the old 30 km/h cut ever produced. With the classes re-cut at this
+    // corridor's own speeds, Heavy is the common state and a window can be
+    // busy for twelve hours without one Severe hour in it — so "congested"
+    // has to mean Heavy or Severe, or the card reports zero on a red day.
+    const allHours = alerts.length > 0 && alerts.every((a) => a.from === 1 && a.to === maxHour);
+    /* Over every congested CELL, not over episode peaks. An episode carries the
+       highest confidence in its run, so taking the range across episodes
+       reported a floor of 44% while the least confident cell on the grid was
+       38% — a tile labelled "confidence on severe cells" that no cell had. */
+    const severeConfs = cells
+      .filter((c) => c.state !== "Low")
+      .map((c) => c.conf)
+      .sort((x, y) => x - y);
 
     const peakIdx = perHour.indexOf(Math.max(...perHour));
     const worstIdx = perSegment.indexOf(Math.max(...perSegment));
-    const firstSevere = alerts.find((a) => a.state === "High");
+    // The first congested run of any grade, and separately the first severe
+    // one, so the card can say "heavy from +1h, severe from +4h".
+    const firstAlert = alerts[0] ?? null;
+    const firstSevere = alerts.find((a) => a.state === "High") ?? null;
 
     return {
       segments,
@@ -300,12 +513,14 @@ export default function PredictiveCongestionChart() {
       alerts,
       severeCount: alerts.filter((a) => a.state === "High").length,
       atRisk: atRisk.size,
+      congestedSegments: [...atRisk],
       severeSegments: [...severeSegments],
       severeCells,
       peakHour: perHour[peakIdx] > 0 ? peakIdx + 1 : null,
       peakHourCount: perHour[peakIdx],
       worstSegment: perSegment[worstIdx] > 0 ? segments[worstIdx] : null,
       worstSegmentCount: perSegment[worstIdx],
+      firstAlert,
       firstSevere,
       contiguous,
       baseTs,
@@ -315,13 +530,28 @@ export default function PredictiveCongestionChart() {
       flatHours,
       allHours,
       maxHour,
+      storedHours,
+      skippedHours,
+      relHours,
+      frameHours,
+      frameLabels,
       confLo: severeConfs.length ? severeConfs[0] : null,
       confHi: severeConfs.length ? severeConfs[severeConfs.length - 1] : null,
       // Whether the model EVER predicts Heavy. It does not, and a legend entry
       // for a state that never appears reads as a gap in the data rather than a
       // property of the model.
+      heavyCount: alerts.filter((a) => a.state === "Med").length,
       everHeavy: cells.some((c) => c.state === "Med"),
       lowConfCount: cells.filter((c) => c.state !== "Low" && c.conf < LOW_CONF).length,
+      // Severe RISK, counted off the calibrated probability rather than the
+      // label, so the panel can report a hazard the champion never names.
+      severeRiskCells: cells.filter((c) => c.severeRisk).length,
+      severeRiskSegments: new Set(
+        cells.filter((c) => c.severeRisk).map((c) => segments[c.value[1]]),
+      ).size,
+      severeRiskPeak: cells
+        .filter((c) => c.severeRisk)
+        .reduce<number | null>((mx, c) => (mx == null || (c.pHigh ?? 0) > mx ? (c.pHigh ?? 0) : mx), null),
     };
   }, [raw, KMI]);
 
@@ -332,6 +562,7 @@ export default function PredictiveCongestionChart() {
           <>
             <h3 style={{ margin: 0, fontSize: "1.05rem", fontWeight: 700, color: "#0f172a" }}>
               Predictive Congestion State Map
+              <InfoTooltip text="Predicted jam state at each exit for the next 12 hours, from Waze jam reports. Red = crawling under 10 km/h, amber = heavy at 10-20 km/h, blue = moving freely or no jam reported. The cuts are this corridor's own: a generic 30 km/h threshold put every reported jam in one class." />
             </h3>
             <div style={{ color: "var(--color-danger, #ef4444)", fontSize: "0.88rem" }}>{loadError}</div>
             <div>
@@ -354,7 +585,7 @@ export default function PredictiveCongestionChart() {
     );
   }
 
-  const { segments, hourLabels, cells, perHour, alerts } = model;
+  const { segments, hourLabels, cells, perHour, alerts, frameLabels, frameHours } = model;
   const maxPerHour = Math.max(...perHour, 1);
 
   // A stored forecast does not know it has aged. base_ts only advances when the
@@ -368,13 +599,20 @@ export default function PredictiveCongestionChart() {
                     Number(m[4]), Number(m[5])).getTime();
   })();
   const ageHours = baseMs == null ? null : (Date.now() - baseMs) / 3.6e6;
-  const elapsedHours = baseMs == null ? 0
-    : hourLabels.filter((_, i) => baseMs + (i + 1) * 3.6e6 < Date.now()).length;
-  const stale = ageHours != null && elapsedHours > 0;
+  /* Hours that had already finished are dropped before the grid is built (see
+     skippedHours in the memo), so nothing on screen is in the past. What is
+     left to say is whether anything remains at all: when every stored hour has
+     run out the card has no forecast to show and says so. */
+  const expired = model.maxHour === 0;
+  const skippedHours = model.skippedHours;
   // A state earns a text label only while it is the exception. Free flow is
   // included: when the corridor is mostly severe, the clear cells are the news.
+  // Shares are over the FORECAST cells only. Counting the blank not-yet-
+  // forecast columns in the denominator made every real state look like a
+  // minority, and the grid labelled "SEVERE" on all forty of its red cells.
+  const forecastCells = cells.filter((c) => c.state !== "Pending");
   const stateShare = (["Low", "Med", "High"] as State[]).map((st) => ({
-    st, share: cells.filter((c) => c.state === st).length / Math.max(cells.length, 1),
+    st, share: forecastCells.filter((c) => c.state === st).length / Math.max(forecastCells.length, 1),
   }));
   const minorityStates = new Set(stateShare.filter((x) => x.share > 0 && x.share < 0.25).map((x) => x.st));
   // 20 segments at 34px was a 680px grid, and with the header, banner, KPI row
@@ -419,9 +657,9 @@ export default function PredictiveCongestionChart() {
   // The strip needs its own axis and hour labels, so it gets real height. It
   // was 34px of unlabelled bars floating under the grid, which is why it read
   // as a mystery total rather than a count per hour.
-  const stripTop = heatTop + heatHeight + 66;
-  const stripHeight = 60;
-  const chartHeight = stripTop + stripHeight + 68;
+  const stripTop = heatTop + heatHeight + 34;
+  const stripHeight = 52;
+  const chartHeight = stripTop + stripHeight + 50;
 
   const option: EChartsOption = {
     // A cartesian heatmap throws "Heatmap must use with visualMap" without
@@ -435,33 +673,35 @@ export default function PredictiveCongestionChart() {
         { value: 0, color: STATE_META.Low.color },
         { value: 1, color: STATE_META.Med.color },
         { value: 2, color: STATE_META.High.color },
+        { value: 3, color: "#f1f5f9" },   // pending: not yet forecast
       ],
     },
-    title: [
-      {
-        // "SEGMENTS CONGESTED PER HOUR" in grey caps, detached at the far left,
-        // read as a label for nothing in particular — a reader could not tell
-        // whether the bars were a count, a total or a percentage.
-        text: `How many of the ${segments.length} exits are congested, hour by hour`,
-        left: 150,
-        top: stripTop - 60,
-        textStyle: { fontSize: 12, fontWeight: 700, color: "#334155" },
-        subtextStyle: { fontSize: 10.5, color: "#94a3b8" },
-      },
-    ],
     tooltip: {
       backgroundColor: "rgba(255,255,255,0.97)",
       borderColor: "#e2e8f0",
       borderWidth: 1,
       textStyle: { color: "#334155" },
-      extraCssText: "box-shadow: 0 6px 16px rgba(15,23,42,0.12); border-radius: 8px;",
+      // Keep the panel inside the chart box. Unconfined, a cell near the top
+      // row put its tooltip over the card header and out past the card edge,
+      // covering the title and the filter row it was meant to explain.
+      confine: true,
+      extraCssText: "box-shadow: 0 6px 16px rgba(15,23,42,0.12); border-radius: 8px; max-width: 320px; white-space: normal;",
       formatter: (params: unknown) => {
         const p = params as { seriesIndex: number; data: CellItem | number; dataIndex: number };
-        if (p.seriesIndex === 1) {
-          const n = p.data as number;
-          return `<b>${hourLabels[p.dataIndex]}</b><br/>${n} of ${segments.length} segments congested`;
+        // Series order is heatmap(0), severe-risk dots(1, silent), bar strip(2).
+        if (p.seriesIndex === 2) {
+          const n = (p as { value?: number | null }).value;
+          if (n == null) return `<b>${frameLabels[p.dataIndex]}</b><br/>Not yet forecast — filled by the next hourly refresh`;
+          return `<b>${frameLabels[p.dataIndex]}</b><br/>${n} of ${segments.length} segments congested`;
         }
         const d = p.data as CellItem;
+        if (d.state === "Pending") {
+          return `
+          <div style="padding:2px 4px; min-width:215px;">
+            <b style="font-size:1.05em; color:#0f172a;">${shownSegments[d.value[1]]}</b>
+            <div style="margin-top:6px; color:#64748b;">${frameLabels[d.value[0]]?.replace("\n", " · ")}: not yet forecast. The stored run does not reach this hour; the hourly refresh will fill it.</div>
+          </div>`;
+        }
         const [x, y] = d.value;
         const meta = STATE_META[d.state];
         const low = d.conf < LOW_CONF;
@@ -472,9 +712,13 @@ export default function PredictiveCongestionChart() {
             <div style="margin-top:8px; display:grid; grid-template-columns:112px 1fr; gap:5px 8px; font-size:0.9em;">
               <span style="color:#64748b;">Horizon</span><span style="font-weight:600;">${hourLabels[x]}</span>
               <span style="color:#64748b;">Predicted state</span><span style="color:${d.state === "Low" ? STATE_META.Low.text : d.state === "Med" ? STATE_META.Med.text : STATE_META.High.color}; font-weight:700;">${meta.label}</span>
-              <span style="color:#64748b;">Speed band</span><span style="font-weight:500;">${meta.speed}</span>
-              <span style="color:#64748b;">Model confidence</span><span style="font-weight:600; color:${low ? "#b45309" : "#334155"};">${(d.conf * 100).toFixed(1)}%${low ? " · lower" : ""}</span>
+              <span style="color:#64748b;">Meaning</span><span style="font-weight:500;">${meta.speed}</span>
+              ${d.pCong != null ? `<span style="color:#64748b;">Chance of congestion</span><span style="font-weight:700; color:${d.pCong >= 0.5 ? "#b91c1c" : "#334155"};">${Math.round(d.pCong * 100)}%${d.pHigh != null ? ` <span style="font-weight:500; color:#64748b;">(severe ${Math.round(d.pHigh * 100)}%)</span>` : ""}</span>` : ""}
+              <span style="color:#64748b;">Most likely state</span><span style="font-weight:600; color:${low ? "#b45309" : "#334155"};">${meta.label} · ${(d.conf * 100).toFixed(0)}%${low ? " · under 80%, indicative" : ""}</span>
             </div>
+            ${d.severeRisk ? `<div style="margin-top:8px; padding:6px 8px; border-radius:6px; background:#fef2f2; border:1px solid #fecaca; color:#991b1b; font-size:0.85em;">
+              <b>● Severe risk.</b> ${Math.round((d.pHigh as number) * 100)}% chance of severe, yet ${meta.label} wins the label — the model names under 8% of severe hours.
+            </div>` : ""}
           </div>`;
       },
     },
@@ -486,7 +730,7 @@ export default function PredictiveCongestionChart() {
       {
         gridIndex: 0,
         type: "category",
-        data: hourLabels,
+        data: frameLabels,
         position: "top",
         axisTick: { show: false },
         axisLine: { show: false },
@@ -513,15 +757,15 @@ export default function PredictiveCongestionChart() {
       {
         gridIndex: 1,
         type: "category",
-        data: hourLabels,
+        data: frameLabels,
         axisTick: { show: false },
         axisLine: { lineStyle: { color: "#e2e8f0" } },
         // The reader read these bars as a running total. It is a total
         // ACROSS EXITS at one hour, never a total across the 12 hours -
         // so the title says "at each hour ahead" rather than just "total".
-        name: "Total exits affected at each hour ahead",
+        name: `Exits congested at each hour ahead, of ${segments.length}`,
         nameLocation: "middle",
-        nameGap: 42,
+        nameGap: 38,
         nameTextStyle: { color: "#64748b", fontSize: 11, fontWeight: 700 },
         // Was dropping the clock line to save height, which left the bars
         // labelled only by horizon while the grid above showed the hour.
@@ -551,10 +795,6 @@ export default function PredictiveCongestionChart() {
         gridIndex: 0,
         type: "category",
         data: shownSegments.map((s) => `${s}  ·  km ${kmLabel(KMI.get(s))}`),
-        name: "Exit  ·  km-post          Hours ahead  ·  clock time",
-        nameLocation: "end",
-        nameGap: 22,
-        nameTextStyle: { color: "#94a3b8", fontSize: 10, fontWeight: 600, align: "right" },
         axisTick: { show: false },
         axisLine: { show: false },
         axisLabel: { color: "#334155", fontWeight: 600, fontSize: 11 },
@@ -598,34 +838,47 @@ export default function PredictiveCongestionChart() {
           // grid, which flips automatically if the forecast flips.
           formatter: (params: unknown) => {
             const d = (params as { data: CellItem }).data;
-            if (!d.runStart || !minorityStates.has(d.state)) return "";
+            if (d.state === "Pending") return "";
+            if (!d.runStart || !minorityStates.has(d.state as State)) return "";
             return d.conf < LOW_CONF ? `${STATE_META[d.state].short}*` : STATE_META[d.state].short;
           },
           fontSize: 9,
           fontWeight: 700,
         },
         itemStyle: { borderColor: "#fff", borderWidth: 3, borderRadius: 4 },
-        // Wash over the elapsed columns so a stale forecast looks stale.
-        markArea: elapsedHours > 0 ? {
-          silent: true,
-          itemStyle: { color: "rgba(248,250,252,0.62)" },
-          data: [[
-            { xAxis: hourLabels[0] },
-            { xAxis: hourLabels[Math.min(elapsedHours, hourLabels.length) - 1] },
-          ]] as never[],
-        } : undefined,
+        // Nothing on the grid is in the past now, so there is nothing to grey.
         emphasis: { itemStyle: { borderColor: "#0f172a", borderWidth: 2, shadowBlur: 10, shadowColor: "rgba(15,23,42,0.3)" } },
+      },
+      {
+        // Severe-risk marks. One dot per cell, centred, drawn over the fill.
+        // `silent` keeps every hover on the heatmap underneath, so the dot adds
+        // a mark without stealing the cell's tooltip; the white halo keeps it
+        // legible on both the amber and the pale blue fill.
+        name: "Severe risk",
+        type: "scatter",
+        xAxisIndex: 0,
+        yAxisIndex: 0,
+        silent: true,
+        symbol: "circle",
+        symbolSize: 7,
+        data: shownCells.filter((c) => c.severeRisk).map((c) => [c.value[0], c.value[1]]),
+        itemStyle: { color: STATE_META.High.color, borderColor: "#fff", borderWidth: 1.5 },
+        z: 5,
       },
       {
         name: "Segments congested",
         type: "bar",
         xAxisIndex: 1,
         yAxisIndex: 1,
-        data: perHour.map((n) => ({
-          value: n,
-          itemStyle: { color: n === maxPerHour && n > 0 ? "#475569" : "#e2e8f0", borderRadius: [3, 3, 0, 0] },
-          label: { color: n === maxPerHour && n > 0 ? "#334155" : "#94a3b8" },
-        })),
+        data: Array.from({ length: frameHours }, (_, i) => {
+          if (i >= perHour.length) return { value: null, itemStyle: { color: "transparent" }, label: { show: false } };
+          const n = perHour[i];
+          return {
+            value: n,
+            itemStyle: { color: n === maxPerHour && n > 0 ? "#475569" : "#e2e8f0", borderRadius: [3, 3, 0, 0] },
+            label: { color: n === maxPerHour && n > 0 ? "#334155" : "#94a3b8" },
+          };
+        }),
         barMaxWidth: 40,
         label: {
           show: true,
@@ -638,14 +891,6 @@ export default function PredictiveCongestionChart() {
     ],
   };
 
-  const kpi = (label: string, value: string, sub: string, tone?: string) => (
-    <div style={{ background: "#f8fafc", border: "1px solid #e2e8f0", borderRadius: "8px", padding: "8px 11px" }}>
-      <div style={{ fontSize: "0.68rem", color: "#64748b", textTransform: "uppercase", letterSpacing: "0.05em", fontWeight: 600 }}>{label}</div>
-      <div style={{ fontSize: "1rem", fontWeight: 700, color: tone ?? "#0f172a", margin: "1px 0" }}>{value}</div>
-      <div style={{ fontSize: "0.72rem", color: "#94a3b8" }}>{sub}</div>
-    </div>
-  );
-
   const VISIBLE_ALERTS = 4;
   const shown = alerts.slice(0, VISIBLE_ALERTS);
 
@@ -656,426 +901,533 @@ export default function PredictiveCongestionChart() {
     .filter((g) => g.runs.length > 0)
     .sort((a, b) => (KMI.get(a.seg)?.km ?? 9999) - (KMI.get(b.seg)?.km ?? 9999));
 
-  const alertCard = (a: Alert, key: string) => {
+  /* One row per episode. The cards each restated a heatmap row in three
+     lines; a row does it in one and four of them fit where two cards did. */
+  const alertRow = (a: Alert, key: string) => {
     const severe = a.state === "High";
     const span = a.to - a.from + 1;
     return (
-      <div
-        key={key}
-        style={{
-          display: "flex", alignItems: "center", gap: "12px",
-          padding: "10px 12px", borderRadius: "8px",
-          background: severe ? "#fef2f2" : "#fffbeb",
-          border: `1px solid ${severe ? "#fecaca" : "#fde68a"}`,
-        }}
-      >
-        <span
-          style={{
-            flex: "none", padding: "3px 8px", borderRadius: "999px",
-            background: severe ? STATE_META.High.color : STATE_META.Med.color,
-            color: severe ? "#fff" : STATE_META.Med.text,
-            fontSize: "0.64rem", fontWeight: 800, letterSpacing: "0.04em",
-          }}
-        >
+      <div key={key} style={{ display: "grid", gridTemplateColumns: "64px 1fr auto auto", alignItems: "center", gap: 10, padding: "7px 10px", borderRadius: 8, background: severe ? "#fef2f2" : "#fffbeb", border: `1px solid ${severe ? "#fecaca" : "#fde68a"}`, fontSize: "0.8rem" }}>
+        <span style={{ padding: "2px 7px", borderRadius: 999, textAlign: "center", background: severe ? STATE_META.High.color : STATE_META.Med.color, color: severe ? "#fff" : STATE_META.Med.text, fontSize: "0.62rem", fontWeight: 800, letterSpacing: "0.04em" }}>
           {severe ? "SEVERE" : "HEAVY"}
         </span>
-        <div style={{ minWidth: 0, fontSize: "0.82rem", lineHeight: 1.4 }}>
-          <div style={{ fontWeight: 700, color: "#0f172a" }}>
-            {a.segment} <span style={{ fontWeight: 500, color: "#94a3b8" }}>km {kmLabel(KMI.get(a.segment))}</span>
-          </div>
-          <div style={{ color: "#64748b" }}>
-            {a.from === a.to ? `+${a.from}h` : `+${a.from}h → +${a.to}h`} · {span}h · {(a.conf * 100).toFixed(0)}% confidence
-          </div>
-        </div>
+        <span style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+          <b style={{ color: "#0f172a" }}>{a.segment}</b> <span style={{ color: "#94a3b8" }}>km {kmLabel(KMI.get(a.segment))}</span>
+        </span>
+        <span style={{ color: "#475569", fontVariantNumeric: "tabular-nums", whiteSpace: "nowrap" }}>
+          {/* Columns are now-relative: column 1 is the hour in progress, so it
+              is "now" and column n is "+(n-1)h". */}
+          {(() => {
+            const rel = model.relHours;
+            const lbl = (col: number) => {
+              const n = rel[col - 1];
+              return n == null ? `+${col}h` : n <= 0 ? "now" : `+${n}h`;
+            };
+            return a.from === a.to ? lbl(a.from) : `${lbl(a.from)} → ${lbl(a.to)}`;
+          })()} <span style={{ color: "#94a3b8" }}>· {span}h</span>
+        </span>
+        <span style={{ color: a.conf < LOW_CONF ? "#b45309" : "#94a3b8", fontVariantNumeric: "tabular-nums", whiteSpace: "nowrap" }}>{(a.conf * 100).toFixed(0)}%</span>
       </div>
     );
   };
 
   // A one-sentence read of the whole card, for stakeholders who will not
-  // decode a 108-cell grid.
-  // "A and B and C and D and E are forecast to hit severe congestion" made the
-  // reader assemble the picture from a list. The shape of the problem - one
-  // unbroken stretch of road, bad for the whole window - is the thing to say.
+  // decode a 108-cell grid. The shape of the problem - one unbroken stretch of
+  // road, bad for the whole window - is the thing to say.
+  const nCongested = model.congestedSegments.length;
   const nSevere = model.severeSegments.length;
   const kmSpan =
     model.kmFrom != null && model.kmTo != null ? Math.round(model.kmTo - model.kmFrom) : null;
-  const whenText = model.allHours
-    ? `for the whole ${model.maxHour}-hour window`
-    : `starting +${model.firstSevere?.from}h`;
 
-  const spH = model.severePerHour as number[];
+  const spH = model.perHour as number[];
   const firstCount = spH[0] ?? 0;
   const peakCount = Math.max(...spH);
   const peakAt = spH.indexOf(peakCount) + 1;
-  const clear = segments.filter((sg) => !model.severeSegments.includes(sg));
+  const clear = segments.filter((sg) => !model.congestedSegments.includes(sg));
 
-  // Naming nineteen exits made the reader parse a list; naming the one that
-  // stays clear says the same thing in a glance. And a single "starting +1h"
-  // was wrong once the forecast became real - congestion BUILDS, so say so.
   const whoText =
-    nSevere === segments.length
+    nCongested === segments.length
       ? `every exit on the corridor`
-      : nSevere > segments.length * 0.6
-      ? `all but ${clear.length} exit${clear.length === 1 ? "" : "s"} (${clear.join(", ")} stay${clear.length === 1 ? "s" : ""} clear)`
+      : nCongested > segments.length * 0.6
+      ? `all but ${clear.length} exit${clear.length === 1 ? "" : "s"} (${clear.join(", ")} keep${clear.length === 1 ? "s" : ""} moving)`
       : model.contiguous && kmSpan != null
-      ? `${nSevere} neighbouring exits over about ${kmSpan} km, km ${model.kmFrom} to ${model.kmTo}`
-      : `${nSevere} of ${segments.length} exits (${model.severeSegments.join(", ")})`;
+      ? `${nCongested} neighbouring exits over about ${kmSpan} km, km ${model.kmFrom} to ${model.kmTo}`
+      : `${nCongested} of ${segments.length} exits (${model.congestedSegments.join(", ")})`;
 
-  const headline = !model.firstSevere
-    ? `No severe congestion forecast in the next ${hourLabels.length} hours.`
+  // The grade to name: severe if any hour crawls, otherwise heavy.
+  const worstWord = nSevere > 0 ? "severe" : "heavy";
+
+  const headline = !model.firstAlert
+    ? `Traffic is forecast to keep moving at every exit for the next ${hourLabels.length} hours.`
     : firstCount < peakCount
-    ? `Congestion builds: ${firstCount} of ${segments.length} exit${firstCount === 1 ? "" : "s"} severe at +1h, rising to ${peakCount} by +${peakAt}h. By the peak it is ${whoText}.`
-    : `${whoText} — forecast severe from +1h${model.allHours ? ` and holding for the whole ${model.maxHour}-hour window` : ""}.`;
+    ? `Congestion builds: ${firstCount} of ${segments.length} exit${firstCount === 1 ? "" : "s"} congested at +1h, rising to ${peakCount} by +${peakAt}h. By the peak it is ${whoText}${nSevere > 0 ? `, with ${nSevere} crawling under 10 km/h` : ""}.`
+    : `${whoText.charAt(0).toUpperCase()}${whoText.slice(1)} — congested from the first hour${model.allHours ? ` and holding for the whole ${model.maxHour}-hour window` : ""}${nSevere > 0 ? `, ${nSevere} of them crawling under 10 km/h at some point` : ", none of it severe"}.`;
 
+  const stat = (value: string, label: string, tone?: string) => (
+    <div style={{ display: "flex", flexDirection: "column", gap: 1, minWidth: 0 }}>
+      <span style={{ fontSize: "1.02rem", fontWeight: 800, color: tone ?? "#0f172a", letterSpacing: "-0.01em", fontVariantNumeric: "tabular-nums", lineHeight: 1.1, whiteSpace: "nowrap" }}>{value}</span>
+      <span style={{ fontSize: "0.68rem", color: "#64748b" }}>{label}</span>
+    </div>
+  );
+
+  const pct = (v: number | null) => (v == null ? "—" : `${(v * 100).toFixed(0)}%`);
+  const hzFirst = hzAcc[0];
+  const hzLast = hzAcc[hzAcc.length - 1];
+  const beatsFrom = hzAcc.find(
+    (a) => a.accuracy != null && a.persistenceAccuracy != null && a.accuracy > a.persistenceAccuracy);
+  const hiddenSorted = [...hiddenSegments].sort((a, b) => (firstSevere(a) ?? 99) - (firstSevere(b) ?? 99));
+
+  /* Layout, top to bottom: what am I looking at -> the finding -> four numbers
+     -> the grid, with its own legend directly above it -> what to act on ->
+     everything a reviewer wants behind one disclosure. The previous card put
+     the accuracy strip between the title and the finding, the legend in the
+     header far from the grid it explains, fifteen chips of exit names, and
+     four three-line cards that each restated a heatmap row. */
   return (
-    <article className="chart-card wide" style={{ padding: "18px 20px", display: "flex", flexDirection: "column", gap: "12px", marginTop: "24px" }}>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: "16px", flexWrap: "wrap" }}>
-        <div>
-          <h3 style={{ fontSize: "1.05rem", color: "#0f172a", fontWeight: 700, margin: 0, letterSpacing: "-0.01em", display: "flex", alignItems: "center", gap: "8px" }}>
+    <article className="chart-card wide" style={{ padding: "22px 24px", display: "flex", flexDirection: "column", gap: "14px", marginTop: "24px" }}>
+      {/* Row 1: title left, provenance right, anchor time beneath. */}
+      <div>
+        <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
+          <h3 style={{ fontSize: "1.05rem", color: "#0f172a", fontWeight: 700, margin: 0, letterSpacing: "-0.01em" }}>
             Predictive Congestion State Map
-            {/* Read from gold.ml_model_metrics, never hardcoded. The caption said
-                XGBoost while the accepted model was GRU, so the label and the data
-                described different models. Accuracy sits beside it so the panel
-                states how well it actually does. */}
+            <InfoTooltip text="Predicted jam state at each exit for the next 12 hours, from Waze jam reports. Red = crawling under 10 km/h, amber = heavy at 10-20 km/h, blue = moving freely or no jam reported. The cuts are this corridor's own: a generic 30 km/h threshold put every reported jam in one class." />
+          </h3>
+          <div style={{ display: "flex", gap: 6, flexWrap: "wrap", justifyContent: "flex-end" }}>
             <span
               title={modelInfo && !modelInfo.accepted && modelInfo.rejectedReason ? modelInfo.rejectedReason : undefined}
               style={{
-                fontSize: "0.72rem", padding: "2px 8px", borderRadius: "999px", fontWeight: 600,
+                fontSize: "0.7rem", padding: "2px 8px", borderRadius: "999px", fontWeight: 600, whiteSpace: "nowrap",
                 background: modelInfo?.accepted ? "#ecfdf5" : "#f1f5f9",
                 border: `1px solid ${modelInfo?.accepted ? "#a7f3d0" : "#dce2ef"}`,
                 color: modelInfo?.accepted ? "#047857" : "#475569",
               }}
             >
-              {modelInfo?.model ?? "—"}
-              {modelInfo?.accuracy != null && ` · ${(modelInfo.accuracy * 100).toFixed(1)}%`}
-              {modelInfo && !modelInfo.accepted && " · not accepted"}
+              {modelInfo?.model ?? "—"}{modelInfo?.accuracy != null && ` · ${(modelInfo.accuracy * 100).toFixed(1)}%`}{modelInfo && !modelInfo.accepted && " · not accepted"}
             </span>
-          {stale && (
-            <span
-              title={`This forecast was generated from data ending ${model.baseTs}. ${elapsedHours} of ${hourLabels.length} forecast hours have already passed. Re-run train_congestion_horizon.py to refresh it.`}
-              style={{
-                fontSize: "0.72rem", padding: "2px 8px", borderRadius: 999, fontWeight: 700,
-                background: elapsedHours === hourLabels.length ? "#fef2f2" : "#fffbeb",
-                border: `1px solid ${elapsedHours === hourLabels.length ? "#fecaca" : "#fde68a"}`,
-                color: elapsedHours === hourLabels.length ? "#b91c1c" : "#92400e",
-                cursor: "help",
-              }}
-            >
-              {elapsedHours === hourLabels.length
-                ? `⚠ expired · ${Math.round(ageHours!)}h old`
-                : `⚠ ${elapsedHours} of ${hourLabels.length} hours elapsed`}
-            </span>
-          )}
-        </h3>
-        <p style={{ color: "#64748b", fontSize: "0.82rem", margin: "4px 0 0 0" }}>
-            {/* "one row per exit, ordered north-bound, hover for confidence" all
-                described what the grid already shows. Only the anchor time is
-                genuinely unguessable, so that is what survives. */}
-            {stale ? "Covered" : "Next"} {hourLabels.length} hours from{" "}
-            <b style={{ color: "#334155" }}>{baseLabel(model.baseTs) ?? "the last reading"}</b>
-            <span
-              style={{ cursor: "help" }}
-              title="Rows are exits ordered north-bound by km-post. Hover any cell for the model's confidence. The base time is the last complete hour of Waze ingestion."
-            >
-              {" "}· hover for detail
-            </span>
-          </p>
-        </div>
-        <div style={{ display: "flex", gap: "14px", alignItems: "center", fontSize: "0.76rem", color: "#64748b", fontWeight: 500, flexWrap: "wrap" }}>
-          {(["Low", "Med", "High"] as State[]).map((s) => {
-            // Heavy is in the legend but this model never predicts it, so an
-            // unexplained swatch reads as missing data rather than as a known
-            // limitation. Say so instead of letting the reader wonder.
-            const absent = s === "Med" && !model.everHeavy;
-            return (
+            {!expired && ageHours != null && ageHours > 2 && (
               <span
-                key={s}
-                title={absent ? "This model never predicts Heavy — it was trained on jam-only data and cannot separate the middle state" : undefined}
+                title={`The hourly refresh has not published since ${model.baseTs}. Check the Scheduled Task "SmartFlow congestion refresh" and All_Scripts/Predictive_Modeling/refresh_congestion.log.`}
                 style={{
-                  display: "inline-flex", alignItems: "center", gap: "6px",
-                  whiteSpace: "nowrap", opacity: absent ? 0.45 : 1,
+                  fontSize: "0.7rem", padding: "2px 8px", borderRadius: 999, fontWeight: 700, cursor: "help", whiteSpace: "nowrap",
+                  background: "#fffbeb", border: "1px solid #fde68a", color: "#92400e",
                 }}
               >
-                <span style={{ width: 13, height: 13, background: STATE_META[s].color, borderRadius: "3px" }} />
-                {STATE_META[s].label} <span style={{ color: "#94a3b8" }}>({STATE_META[s].speed})</span>
-                {absent && <span style={{ color: "#94a3b8", fontStyle: "italic" }}>· never predicted</span>}
+                {`⚠ refresh overdue · ${Math.round(ageHours)}h old`}
               </span>
-            );
-          })}
-          {model.lowConfCount > 0 && (
-            <span style={{ color: "#94a3b8", whiteSpace: "nowrap" }}>
-              <b style={{ color: "#64748b" }}>*</b> lower confidence (&lt;80%)
-            </span>
-          )}
+            )}
+            {expired && (
+              <span
+                title={`This forecast was generated from data ending ${model.baseTs} and its whole ${model.storedHours}-hour window has now passed. The hourly refresh task should replace it; see All_Scripts/Predictive_Modeling/README_congestion.md.`}
+                style={{
+                  fontSize: "0.7rem", padding: "2px 8px", borderRadius: 999, fontWeight: 700, cursor: "help", whiteSpace: "nowrap",
+                  background: "#fef2f2",
+                  border: "1px solid #fecaca",
+                  color: "#b91c1c",
+                }}
+              >
+                {`⚠ expired · ${Math.round(ageHours ?? 0)}h old`}
+              </span>
+            )}
+          </div>
         </div>
+        <p style={{ color: "#64748b", fontSize: "0.82rem", margin: "4px 0 0 0" }}>
+          {expired
+            ? <>No hours left in this forecast · last covered <b style={{ color: "#334155" }}>{baseLabel(model.baseTs) ?? "the last reading"}</b></>
+            : <>Forecast made <b style={{ color: "#334155" }}>{baseLabel(model.baseTs) ?? "at the last reading"}</b>, next {frameHours} hours
+                {" "}· renews every hour
+                {frameHours > hourLabels.length && (
+                  <span style={{ color: "#b45309" }}> · {frameHours - hourLabels.length} hour{frameHours - hourLabels.length === 1 ? "" : "s"} not yet forecast</span>
+                )}</>}
+          <span style={{ cursor: "help" }} title="Rows are exits ordered north-bound by km-post. Hover any cell for the model's confidence. The base time is the last complete hour of Waze ingestion."> · hover for detail</span>
+        </p>
       </div>
 
-      {/* One averaged accuracy hides the decay across the horizon, and the
-          "nothing changes" benchmark is what the model actually has to beat.
-          Both come from gold.ml_congestion_horizon_accuracy. */}
-      {hzAcc.length > 1 && (() => {
-        const first = hzAcc[0];
-        const last = hzAcc[hzAcc.length - 1];
-        const pct = (v: number | null) => (v == null ? "—" : `${(v * 100).toFixed(0)}%`);
-        const beatsFrom = hzAcc.find(
-          (a) => a.accuracy != null && a.persistenceAccuracy != null && a.accuracy > a.persistenceAccuracy);
-        return (
-          <div style={{
-            display: "flex", alignItems: "center", gap: 14, flexWrap: "wrap",
-            padding: "8px 12px", borderRadius: 8, background: "#f8fafc",
-            border: "1px solid #e2e8f0", fontSize: "0.75rem", color: "#64748b",
-          }}>
-            <span style={{ fontWeight: 700, color: "#334155", whiteSpace: "nowrap" }}>
-              {(() => {
-                const a0 = first.accuracy ?? 0;
-                const a1 = last.accuracy ?? 0;
-                if (a1 < a0 - 0.03) return "Accuracy fades with distance";
-                if (a1 > a0 + 0.03) return "Accuracy improves with distance";
-                return "Accuracy holds across the horizon";
-              })()}
-            </span>
-            <span style={{ display: "inline-flex", gap: 4, alignItems: "flex-end", height: 26 }}>
-              {hzAcc.map((a) => {
-                const beats = a.accuracy != null && a.persistenceAccuracy != null
-                  && a.accuracy > a.persistenceAccuracy;
-                return (
-                  <span
-                    key={a.horizon}
-                    title={`+${a.horizon}h — model ${pct(a.accuracy)}, "nothing changes" ${pct(a.persistenceAccuracy)}`}
-                    style={{
-                      width: 9, borderRadius: 2, background: beats ? "#16a34a" : "#cbd5e1",
-                      height: `${Math.max(4, ((a.accuracy ?? 0) - 0.5) * 90)}px`,
-                    }}
-                  />
-                );
-              })}
-            </span>
-            <span style={{ whiteSpace: "nowrap" }}>
-              <b style={{ color: "#334155" }}>{pct(first.accuracy)}</b> at +1h →{" "}
-              <b style={{ color: "#334155" }}>{pct(last.accuracy)}</b> at +{last.horizon}h
-            </span>
-            {/* The full benchmark sentence lived here and doubled the height of
-                the strip. It is one hover away instead. */}
-            <span
-              style={{ color: "#94a3b8", cursor: "help" }}
-              title={
-                !beatsFrom
-                  ? "Never beats simply assuming nothing changes — the map adds no value over the current state."
-                  : beatsFrom.horizon === 1
-                  ? `Beats "assume nothing changes" at every horizon; that benchmark falls to ${pct(last.persistenceAccuracy)} by +${last.horizon}h.`
-                  : `Beats "assume nothing changes" from +${beatsFrom.horizon}h onward; below that they are level.`
-              }
-            >
-              {beatsFrom ? "beats no-change ⓘ" : "no better than no-change ⓘ"}
-            </span>
-          </div>
-        );
-      })()}
-
-      {/* Plain-language read of the grid */}
-      <div
-        style={{
-          padding: "9px 12px",
-          borderRadius: "8px",
-          background: model.firstSevere ? "#fef2f2" : "#f0fdf4",
-          border: `1px solid ${model.firstSevere ? "#fecaca" : "#bbf7d0"}`,
-          color: model.firstSevere ? "#991b1b" : "#166534",
-          fontSize: "0.86rem",
-          lineHeight: 1.5,
-        }}
-      >
+      {/* Row 2: the finding. */}
+      <div style={{
+        padding: "12px 14px", borderRadius: "10px", fontSize: "0.88rem", lineHeight: 1.5,
+        background: nSevere > 0 ? "#fef2f2" : model.firstAlert ? "#fffbeb" : "#f0fdf4",
+        border: `1px solid ${nSevere > 0 ? "#fecaca" : model.firstAlert ? "#fde68a" : "#bbf7d0"}`,
+        color: nSevere > 0 ? "#991b1b" : model.firstAlert ? "#92400e" : "#166534",
+      }}>
         {headline}
       </div>
 
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(165px, 1fr))", gap: "8px" }}>
-        {/* Previously four cards, three of which restated the sentence above and
-            two of which showed the SAME number ("Severe risk 5 of 20" and "Heavy
-            or worse 5 of 20") because the model never predicts Heavy. These
-            answer different questions: how many, where, how long, how sure. */}
-        {kpi("Exits affected", `${model.severeSegments.length} of ${segments.length}`,
-             model.severeSegments.length > 0 ? "forecast below 30 km/h" : "corridor is clear",
-             model.severeSegments.length > 0 ? "#b91c1c" : "#15803d")}
-        {kpi("Where", kmSpan != null ? `km ${model.kmFrom}–${model.kmTo}` : "—",
-             kmSpan != null
-               ? `${kmSpan} km${model.contiguous ? " · one unbroken stretch" : " · not contiguous"}`
-               : "no congestion predicted")}
-        {kpi("How long", model.allHours ? `all ${model.maxHour}h` : model.worstSegment ? `${model.worstSegmentCount} of ${hourLabels.length}h` : "—",
-             model.flatHours ? "same every hour — no peak window" : "varies by hour")}
-        {kpi("Model confidence",
-             model.confLo != null && model.confHi != null
-               ? `${Math.round(model.confLo * 100)}–${Math.round(model.confHi * 100)}%`
-               : "—",
-             model.confLo != null && model.confLo < LOW_CONF ? "below the 80% mark — treat as indicative" : "on the severe predictions",
-             model.confLo != null && model.confLo < LOW_CONF ? "#b45309" : undefined)}
+      {/* Row 3: how many, where, how long, how sure — once each, one line. */}
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(4, minmax(0, 1fr))", gap: "12px 18px", padding: "12px 16px", background: "var(--bg-surface-hover)", borderRadius: "10px" }}>
+        {stat(`${nCongested} of ${segments.length}`, nCongested > 0 ? "exits with a jam expected" : "exits affected · all moving", nCongested > 0 ? (nSevere > 0 ? "#b91c1c" : "#b45309") : "#15803d")}
+        {stat(kmSpan != null ? `km ${model.kmFrom}–${model.kmTo}` : "—", kmSpan != null ? `${kmSpan} km${model.contiguous ? ", one stretch" : ", not contiguous"}` : "no congestion predicted")}
+        {stat(model.allHours ? `all ${model.maxHour}h` : model.worstSegment ? `${model.worstSegmentCount} of ${hourLabels.length}h` : "—", model.flatHours ? "same every hour" : "at the worst exit")}
+        {(() => {
+          const pc = cells.filter((c) => c.state !== "Pending" && c.pCong != null).map((c) => c.pCong as number);
+          if (pc.length) {
+            const mean = pc.reduce((a, b) => a + b, 0) / pc.length;
+            return stat(`${Math.round(mean * 100)}%`, "avg chance of congestion across the grid", mean >= 0.5 ? "#b91c1c" : undefined);
+          }
+          return stat(model.confLo != null && model.confHi != null ? `${Math.round(model.confLo * 100)}–${Math.round(model.confHi * 100)}%` : "—",
+              model.confLo != null && model.confLo < LOW_CONF ? "confidence · some cells under 80%" : "confidence across congested cells",
+              model.confLo != null && model.confLo < LOW_CONF ? "#b45309" : undefined);
+        })()}
       </div>
 
-      <div style={{ width: "100%", height: `${chartHeight}px` }}>
-        <DashboardChart option={option} height={chartHeight} />
-      </div>
-
-      {/* Per-exit chips. "Show all 20" was all-or-nothing; usually a reader
-          wants the default five plus the two or three exits they are
-          responsible for. Ordered by how soon each turns severe, so the ones
-          worth adding surface first. */}
-      {(hiddenCount > 0 || extraExits.length > 0) && (
-        <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
-          <span style={{ fontSize: "0.72rem", color: "#94a3b8", fontWeight: 600, marginRight: 2 }}>
-            Add exit
-            {urgentHidden && (
-              <span style={{ color: "#b45309" }}> · some hidden turn severe sooner</span>
-            )}
-          </span>
-
-          {[...hiddenSegments]
-            .sort((a, b) => (firstSevere(a) ?? 99) - (firstSevere(b) ?? 99))
-            .map((sg) => {
-              const f = firstSevere(sg);
-              const early = f != null && f < earliestShown;
+      {/* Row 4: the grid, with its legend and its exit picker attached to it. */}
+      <div>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, flexWrap: "wrap", marginBottom: 2 }}>
+          <div style={{ display: "flex", gap: 12, alignItems: "center", fontSize: "0.74rem", color: "#64748b", flexWrap: "wrap" }}>
+            {(["Low", "Med", "High"] as State[]).map((st) => {
+              const absent = st === "Med" && !model.everHeavy;
               return (
-                <button
-                  key={sg}
-                  onClick={() => setExtraExits((cur) => [...cur, sg])}
-                  title={f ? `Turns severe at +${f}h` : "Stays clear across the window"}
-                  style={{
-                    padding: "3px 9px", borderRadius: 999, cursor: "pointer", fontSize: "0.71rem",
-                    fontWeight: 600, background: "var(--bg-surface, #fff)",
-                    border: `1px solid ${early ? "#fcd9a4" : "var(--border-default, #dce2ef)"}`,
-                    color: early ? "#b45309" : "#64748b",
-                  }}
-                >
-                  + {sg}
-                  {f != null && <span style={{ opacity: 0.7 }}> · +{f}h</span>}
-                </button>
+                <span key={st} title={absent ? "No exit-hour in this forecast falls in the 10-20 km/h band" : undefined}
+                      style={{ display: "inline-flex", alignItems: "center", gap: 5, whiteSpace: "nowrap", opacity: absent ? 0.45 : 1 }}>
+                  <span style={{ width: 11, height: 11, background: STATE_META[st].color, borderRadius: 3 }} />
+                  {STATE_META[st].label} <span style={{ color: "#94a3b8" }}>{STATE_META[st].speed}</span>
+                  {absent && <span style={{ color: "#94a3b8", fontStyle: "italic" }}>· never predicted</span>}
+                </span>
               );
             })}
+            {/* The ring is the only thing on the grid that is NOT the model's
+                own label, so it says so plainly: the colour is the prediction,
+                the ring is the risk the prediction leaves out. */}
+            {model.severeRiskCells > 0 && (
+              <span title={`pHigh at or above ${Math.round(SEVERE_RISK * 100)}% on a cell the model did not label Severe. Severe is 14% of hours but the model names under 8% of them, so the fill alone hides this.`}
+                    style={{ display: "inline-flex", alignItems: "center", gap: 5, whiteSpace: "nowrap" }}>
+                <span style={{ position: "relative", width: 11, height: 11, borderRadius: 3, background: STATE_META.Med.color, display: "inline-block" }}>
+                  <span style={{ position: "absolute", top: "50%", left: "50%", transform: "translate(-50%,-50%)", width: 5, height: 5, borderRadius: 999, background: STATE_META.High.color, boxShadow: "0 0 0 1px #fff" }} />
+                </span>
+                Severe risk <span style={{ color: "#94a3b8" }}>{Math.round(SEVERE_RISK * 100)}%+ chance, not predicted</span>
+              </span>
+            )}
+            {model.lowConfCount > 0 && <span style={{ color: "#94a3b8", whiteSpace: "nowrap" }}><b>*</b> under 80% sure</span>}
+          </div>
 
-          {hiddenCount > 0 && (
-            <button
-              onClick={() => setExtraExits(hiddenSegments)}
-              style={{
-                padding: "3px 9px", borderRadius: 999, cursor: "pointer", fontSize: "0.71rem",
-                fontWeight: 700, background: "var(--bg-surface, #fff)",
-                border: "1px solid var(--border-default, #dce2ef)", color: "#475569",
-              }}
-            >
-              All {segments.length}
-            </button>
-          )}
-          {extraExits.length > 0 && (
-            <button
-              onClick={() => setExtraExits([])}
-              style={{
-                padding: "3px 9px", borderRadius: 999, cursor: "pointer", fontSize: "0.71rem",
-                fontWeight: 600, background: "transparent", border: "none", color: "#94a3b8",
-              }}
-            >
-              reset
-            </button>
-          )}
+          {/* Which exits are drawn. A select instead of fifteen chips: the
+              reader pulls in the two or three they are responsible for. */}
+          <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: "0.72rem", color: "#64748b", flexWrap: "wrap" }}>
+            <span>Showing <b style={{ color: "#475569" }}>{shownSegments.length}</b> of {segments.length} exits</span>
+            {hiddenCount > 0 && (
+              <select
+                value=""
+                onChange={(e) => { if (e.target.value) setExtraExits((cur) => [...cur, e.target.value]); }}
+                title={urgentHidden ? "Some hidden exits turn severe sooner than any shown" : undefined}
+                style={{ font: "inherit", fontWeight: 600, color: urgentHidden ? "#b45309" : "#475569", background: "#fff", border: `1px solid ${urgentHidden ? "#fcd9a4" : "#dce2ef"}`, borderRadius: 8, padding: "3px 8px", cursor: "pointer" }}
+              >
+                <option value="">{urgentHidden ? "Add exit… (some hidden turn severe sooner)" : "Add exit…"}</option>
+                {hiddenSorted.map((sg) => {
+                  const f = firstSevere(sg);
+                  return <option key={sg} value={sg}>{sg}{f != null ? ` — severe at +${f}h` : " — stays clear"}</option>;
+                })}
+              </select>
+            )}
+            {hiddenCount > 0 && (
+              <button onClick={() => setExtraExits(hiddenSegments)} style={{ padding: "3px 9px", borderRadius: 999, cursor: "pointer", fontSize: "0.71rem", fontWeight: 700, background: "#fff", border: "1px solid #dce2ef", color: "#475569" }}>
+                All {segments.length}
+              </button>
+            )}
+            {extraExits.length > 0 && (
+              <button onClick={() => setExtraExits([])} style={{ padding: "3px 6px", borderRadius: 999, cursor: "pointer", fontSize: "0.71rem", fontWeight: 600, background: "transparent", border: "none", color: "#94a3b8" }}>
+                reset
+              </button>
+            )}
+          </div>
         </div>
-      )}
 
+        <div style={{ width: "100%", height: `${chartHeight}px` }}>
+          <DashboardChart option={option} height={chartHeight} />
+        </div>
+      </div>
+
+      {/* Row 5: what to act on. Four rows; the rest in the dialog. */}
       <div>
-        <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: "12px", marginBottom: "10px" }}>
-          <h4 style={{ margin: 0, fontSize: "0.9rem", color: "#0f172a", fontWeight: 700 }}>
-            What to act on{" "}
-            <span style={{ color: "#94a3b8", fontWeight: 500 }}>
-              · {model.severeCount} severe, {alerts.length - model.severeCount} heavy
+        <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 12, marginBottom: 8 }}>
+          <h4 style={{ margin: 0, fontSize: "0.88rem", color: "#0f172a", fontWeight: 700 }}>
+            What to act on <span style={{ color: "#94a3b8", fontWeight: 500 }}>
+              · {alerts.length} episode{alerts.length === 1 ? "" : "s"} across {nCongested} of {segments.length} exits
+              {model.severeCount > 0 && <> · {model.severeCount} severe</>}
+              {model.heavyCount > 0 && <> · {model.heavyCount} heavy</>}
+              {model.severeRiskCells > 0 && (
+                <> · <span style={{ color: "#b91c1c", fontWeight: 700 }}>{model.severeRiskCells} at severe risk</span></>
+              )}
             </span>
           </h4>
           {alerts.length > VISIBLE_ALERTS && (
-            <button
-              onClick={() => setAlertsOpen(true)}
-              style={{
-                display: "inline-flex", alignItems: "center", gap: "6px",
-                border: "1px solid #dce2ef", background: "#fff", borderRadius: "999px",
-                padding: "5px 13px", fontSize: "0.76rem", fontWeight: 600, color: "#475569", cursor: "pointer",
-              }}
-            >
+            <button onClick={() => setAlertsOpen(true)} style={{ display: "inline-flex", alignItems: "center", gap: 6, border: "1px solid #dce2ef", background: "#fff", borderRadius: 999, padding: "4px 12px", fontSize: "0.74rem", fontWeight: 600, color: "#475569", cursor: "pointer" }}>
               View all {alerts.length}
-              <svg width="12" height="12" viewBox="0 0 16 16" fill="none">
-                <path d="M6 3.5L10.5 8L6 12.5" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
-              </svg>
+              <svg width="12" height="12" viewBox="0 0 16 16" fill="none"><path d="M6 3.5L10.5 8L6 12.5" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" /></svg>
             </button>
           )}
         </div>
-
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(320px, 1fr))", gap: "10px" }}>
+        <div style={{ display: "grid", gap: 6 }}>
           {alerts.length === 0 ? (
-            <div style={{ padding: "12px 14px", background: "#f0fdf4", border: "1px solid #bbf7d0", borderRadius: "8px", fontSize: "0.85rem", color: "#166534" }}>
-              No heavy or severe congestion predicted in the next {hourLabels.length} hours.
-            </div>
+            /* "Nothing predicted" is not the same as "nothing coming", and a
+               green box said the stronger thing. With Severe recall at 0.079 an
+               empty alert list is the model's normal output on a day that does
+               get severe hours, so when the ring is on the grid this reports
+               the risk instead of an all-clear it cannot support. */
+            model.severeRiskCells > 0 ? (
+              <div style={{ padding: "10px 12px", background: "#fffbeb", border: "1px solid #fde68a", borderRadius: 8, fontSize: "0.84rem", color: "#92400e" }}>
+                No episode crosses the labelling threshold — but{" "}
+                <b>{model.severeRiskCells} cell{model.severeRiskCells === 1 ? "" : "s"}</b> across{" "}
+                <b>{model.severeRiskSegments} exit{model.severeRiskSegments === 1 ? "" : "s"}</b> carry a{" "}
+                {Math.round(SEVERE_RISK * 100)}%+ chance of severe congestion
+                {model.severeRiskPeak != null && <> (peak {Math.round(model.severeRiskPeak * 100)}%)</>}. They carry a red dot on the grid.
+              </div>
+            ) : (
+              expired ? (
+                /* An expired forecast has nothing to say about the hours ahead.
+                   Reporting that as "no congestion predicted in the next 0
+                   hours" read as an all-clear, which is the opposite of what an
+                   empty grid means. */
+                <div style={{ padding: "10px 12px", background: "#f8fafc", border: "1px solid #e2e8f0", borderRadius: 8, fontSize: "0.84rem", color: "#475569" }}>
+                  Nothing to act on because this forecast has run out — its last hour was{" "}
+                  <b style={{ color: "#334155" }}>{baseLabel(model.baseTs) ?? "the last reading"}</b>, not because the corridor is clear.
+                  Re-run the hourly refresh to see the hours ahead.
+                </div>
+              ) : (
+                <div style={{ padding: "10px 12px", background: "#f0fdf4", border: "1px solid #bbf7d0", borderRadius: 8, fontSize: "0.84rem", color: "#166534" }}>
+                  No heavy or severe congestion predicted in the next {hourLabels.length} hours, and no exit-hour carries a {Math.round(SEVERE_RISK * 100)}%+ chance of severe.
+                </div>
+              )
+            )
           ) : (
-            shown.map((a, i) => alertCard(a, `${a.segment}-${a.from}-${i}`))
+            shown.map((a, i) => alertRow(a, `${a.segment}-${a.from}-${i}`))
           )}
         </div>
       </div>
+
+      {/* Row 6: the model's own read-out, in the open. The control that asks
+          for it has to be visible, and the panel is the same one the forecast
+          cards carry so the tab reads as one system. */}
+      <CongestionNarrative
+        modelInfo={
+          modelInfo
+            ? {
+                model: modelInfo.model,
+                accuracy: modelInfo.accuracy ?? null,
+                accepted: Boolean(modelInfo.accepted),
+                rejectedReason: modelInfo.rejectedReason ?? null,
+                baseline: modelInfo.baseline ?? null,
+              }
+            : null
+        }
+        horizons={hzAcc.map((a) => ({
+          horizon: a.horizon,
+          accuracy: a.accuracy,
+          persistenceAccuracy: a.persistenceAccuracy,
+        }))}
+        exitsTotal={segments.length}
+        exitsSevere={nSevere}
+        hoursCovered={hourLabels.length}
+        neverPredictsHeavy={!model.everHeavy}
+      />
+
+      {/* Row 7: model evidence, behind one disclosure. */}
+      {hzAcc.length > 1 && hzFirst && hzLast && (
+        <details style={{ fontSize: "0.76rem", color: "#64748b", borderTop: "1px solid #eef2f7", paddingTop: 10 }}>
+          <summary
+            className="evidence-summary"
+            style={{ cursor: "pointer", listStyle: "none", display: "flex", gap: 12, flexWrap: "wrap", alignItems: "center" }}
+          >
+            <span style={{
+              display: "grid", placeItems: "center", width: 28, height: 28, borderRadius: 8,
+              background: "color-mix(in srgb, var(--color-success) 14%, transparent)", color: "var(--color-success)", flex: "none",
+            }}>
+              <ShieldCheck size={16} strokeWidth={2.4} />
+            </span>
+            <span style={{ fontSize: "0.98rem", fontWeight: 800, letterSpacing: "-0.01em", color: "var(--text-primary)" }}>
+              Validation evidence
+            </span>
+            <span style={{
+              display: "inline-flex", alignItems: "center", gap: 6, padding: "3px 10px", borderRadius: 999,
+              background: "var(--bg-surface-hover)", border: "1px solid var(--border-default)",
+              fontSize: "0.74rem", fontWeight: 600, color: "var(--text-secondary)", fontVariantNumeric: "tabular-nums",
+            }}>
+              {(() => {
+                const a0 = hzFirst.accuracy ?? 0; const a1 = hzLast.accuracy ?? 0;
+                return a1 < a0 - 0.03 ? "accuracy fades with distance" : a1 > a0 + 0.03 ? "accuracy improves with distance" : "accuracy holds across the horizon";
+              })()} · {pct(hzFirst.accuracy)} at +1h → {pct(hzLast.accuracy)} at +{hzLast.horizon}h
+              {" · "}{beatsFrom ? "beats no-change" : "no better than no-change"}
+            </span>
+            <span className="evidence-chevron" style={{ marginLeft: "auto", display: "inline-flex", alignItems: "center", gap: 4, fontSize: "0.74rem", fontWeight: 600, color: "var(--text-secondary)" }}>
+              <span className="evidence-open-label">Show</span>
+              <span className="evidence-close-label">Hide</span>
+              <ChevronRight size={15} strokeWidth={2.4} />
+            </span>
+          </summary>
+
+          <div style={{ display: "grid", gap: 14, marginTop: 12, color: "#475569", lineHeight: 1.55 }}>
+            {/* 1. How it was tested. One sentence, because everything below
+                   is meaningless without knowing the numbers come from hours
+                   the model never saw. */}
+            <EvBlock n={1} title="How it was tested">
+              {evalInfo ? (
+                <>The model learned from the earlier weeks of Waze data, then had to forecast the <b>last {evalInfo.test_days} days it had never seen</b> —
+                {" "}{evalInfo.test_rows.toLocaleString()} exit-hours. Every number here is scored on those unseen hours only.</>
+              ) : (
+                <>The model learned from the earlier weeks of Waze data and is scored only on the final days it never saw.</>
+              )}
+            </EvBlock>
+
+            {/* 2. What the headline percentage means, against the guesses a
+                   person could make without a model. */}
+            <EvBlock n={2} title={`What ${modelInfo?.accuracy != null ? (modelInfo.accuracy * 100).toFixed(1) + "%" : "the accuracy"} means`}>
+              <p style={{ margin: "0 0 8px" }}>
+                Out of every 100 exit-hours in that unseen window, the model named the right state (Moving, Heavy or Severe) for about
+                {" "}<b>{modelInfo?.accuracy != null ? Math.round(modelInfo.accuracy * 100) : "—"}</b>. That only means something next to what you would score without a model:
+              </p>
+              <div style={{ display: "grid", gap: 5 }}>
+                {[
+                  { label: `${modelInfo?.model ?? "Model"} (this card)`, v: modelInfo?.accuracy ?? null, tone: "#16a34a", bold: true },
+                  { label: `Assume each exit does what it usually does at this hour`, v: modelInfo?.baseline?.accuracy ?? null, tone: "#94a3b8" },
+                  { label: `Assume nothing changes from now (+1h)`, v: hzFirst?.persistenceAccuracy ?? null, tone: "#94a3b8" },
+                  { label: `Assume nothing changes from now (+${hzLast?.horizon ?? 12}h)`, v: hzLast?.persistenceAccuracy ?? null, tone: "#94a3b8" },
+                  { label: `Always say "Moving"`, v: evalInfo ? Math.max(...Object.values(evalInfo.class_share)) : null, tone: "#94a3b8" },
+                ].filter((r) => r.v != null).map((r) => (
+                  <div key={r.label} style={{ display: "grid", gridTemplateColumns: "minmax(0,1fr) 44px", alignItems: "center", gap: 10 }}>
+                    <div style={{ minWidth: 0 }}>
+                      <div style={{ fontSize: "0.72rem", color: r.bold ? "#0f172a" : "#64748b", fontWeight: r.bold ? 700 : 500, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{r.label}</div>
+                      <div style={{ height: 6, borderRadius: 3, background: "#eef2f7", overflow: "hidden", marginTop: 3 }}>
+                        <div style={{ width: `${Math.round((r.v as number) * 100)}%`, height: "100%", background: r.tone, borderRadius: 3 }} />
+                      </div>
+                    </div>
+                    <span style={{ fontWeight: r.bold ? 800 : 600, color: r.bold ? "#0f172a" : "#64748b", fontVariantNumeric: "tabular-nums", textAlign: "right" }}>{pct(r.v as number)}</span>
+                  </div>
+                ))}
+              </div>
+            </EvBlock>
+
+            {/* 3. Per state: how much to trust each colour. */}
+            {evalInfo && (
+              <EvBlock n={3} title="How much to trust each colour">
+                <div style={{ overflowX: "auto" }}>
+                  <table style={{ borderCollapse: "collapse", width: "100%", fontSize: "0.74rem", fontVariantNumeric: "tabular-nums" }}>
+                    <thead>
+                      <tr style={{ color: "#64748b", textAlign: "left" }}>
+                        <th style={{ padding: "4px 6px 6px 0", fontWeight: 600 }}>State</th>
+                        <th style={{ padding: "4px 6px 6px", fontWeight: 600 }}>Share of real hours</th>
+                        <th style={{ padding: "4px 6px 6px", fontWeight: 600 }}>When the card shows it, it is right</th>
+                        <th style={{ padding: "4px 0 6px 6px", fontWeight: 600 }}>Of the real hours, it catches</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {(["Low", "Med", "High"] as State[]).map((st) => {
+                        const meta = STATE_META[st];
+                        const pc = evalInfo.per_class[st];
+                        const share = evalInfo.class_share[st];
+                        if (!pc) return null;
+                        return (
+                          <tr key={st} style={{ borderTop: "1px solid #eef2f7" }}>
+                            <td style={{ padding: "6px 6px 6px 0", whiteSpace: "nowrap" }}>
+                              <span style={{ display: "inline-block", width: 10, height: 10, borderRadius: 3, background: meta.color, marginRight: 6, verticalAlign: -1 }} />
+                              <b style={{ color: "#0f172a" }}>{meta.label}</b>
+                            </td>
+                            <td style={{ padding: "6px" }}>{share != null ? pct(share) : "—"}</td>
+                            <td style={{ padding: "6px", fontWeight: 700, color: pc.precision >= 0.6 ? "#15803d" : pc.precision >= 0.4 ? "#b45309" : "#b91c1c" }}>{pct(pc.precision)}</td>
+                            <td style={{ padding: "6px 0 6px 6px", fontWeight: 700, color: pc.recall >= 0.6 ? "#15803d" : pc.recall >= 0.4 ? "#b45309" : "#b91c1c" }}>{pct(pc.recall)}</td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+                {evalInfo.per_class.High && evalInfo.per_class.High.recall < 0.3 && (
+                  <p style={{ margin: "8px 0 0", fontSize: "0.72rem", color: "#b45309" }}>
+                    Severe hours are {Math.round((evalInfo.class_share.High ?? 0) * 100)}% of reality but the model names only{" "}
+                    {Math.round(evalInfo.per_class.High.recall * 100)}% of them, so the fill colour under-reports the hazard. That is why cells
+                    at or above a {Math.round(SEVERE_RISK * 100)}% chance of severe carry a <b>red dot</b> on the grid even when the label says
+                    otherwise — read the dots, not the absence of red fill.
+                  </p>
+                )}
+              </EvBlock>
+            )}
+
+            {/* 4. The chance is a real chance. This is the one that makes the
+                   card a forecast rather than a colour. */}
+            {evalInfo && evalInfo.calibration.length > 0 && (
+              <EvBlock n={4} title="Is a 60% chance really 60%?">
+                <p style={{ margin: "0 0 8px" }}>
+                  Yes — the probabilities are calibrated on held-back hours, like a rain forecast. Each chip below is a group of unseen hours where the card would have shown roughly that chance of congestion, next to how often congestion actually happened:
+                </p>
+                <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+                  {evalInfo.calibration.filter((c) => c.n >= 200).map((c) => {
+                    const gap = Math.abs(c.predicted - c.observed);
+                    return (
+                      <span key={c.lo} title={`${c.n.toLocaleString()} unseen exit-hours`} style={{
+                        display: "inline-flex", alignItems: "baseline", gap: 4, padding: "3px 8px", borderRadius: 6,
+                        background: gap <= 0.05 ? "#f0fdf4" : gap <= 0.1 ? "#fffbeb" : "#fef2f2",
+                        border: `1px solid ${gap <= 0.05 ? "#bbf7d0" : gap <= 0.1 ? "#fde68a" : "#fecaca"}`,
+                        fontSize: "0.72rem", fontVariantNumeric: "tabular-nums",
+                      }}>
+                        <span style={{ color: "#64748b" }}>said</span> <b>{Math.round(c.predicted * 100)}%</b>
+                        <span style={{ color: "#94a3b8" }}>→</span>
+                        <span style={{ color: "#64748b" }}>happened</span> <b>{Math.round(c.observed * 100)}%</b>
+                      </span>
+                    );
+                  })}
+                </div>
+                <p style={{ margin: "8px 0 0", fontSize: "0.72rem", color: "#64748b" }}>
+                  Green: within 5 points. Brier score {evalInfo.brier.toFixed(3)} — the average squared error of the probabilities, where 0 is perfect and 0.667 is a coin toss between the three states.
+                </p>
+              </EvBlock>
+            )}
+
+            {/* 5. Accuracy by hour ahead (the original bars). */}
+            <EvBlock n={evalInfo ? 5 : 3} title="Does it hold up 12 hours out?">
+              <div style={{ display: "flex", alignItems: "flex-end", gap: 4, height: 34 }}>
+                {hzAcc.map((a) => {
+                  const beats = a.accuracy != null && a.persistenceAccuracy != null && a.accuracy > a.persistenceAccuracy;
+                  return (
+                    <span key={a.horizon} title={`+${a.horizon}h — model ${pct(a.accuracy)}, "nothing changes" ${pct(a.persistenceAccuracy)}`}
+                          style={{ width: 14, borderRadius: 2, background: beats ? "#16a34a" : "#cbd5e1", height: `${Math.max(4, ((a.accuracy ?? 0) - 0.5) * 110)}px` }} />
+                  );
+                })}
+              </div>
+              <p style={{ margin: "6px 0 0", fontSize: "0.72rem", color: "#64748b" }}>
+                  {pct(hzFirst.accuracy)} at +1h → {pct(hzLast.accuracy)} at +{hzLast.horizon}h · green where it beats assuming nothing changes
+                  {hzLast.persistenceAccuracy != null && <>, which falls to {pct(hzLast.persistenceAccuracy)} by +{hzLast.horizon}h</>}
+              </p>
+            </EvBlock>
+
+            <p style={{ margin: 0, fontSize: "0.72rem", color: "#94a3b8" }}>
+              States are cut from Waze jam speeds at this corridor&apos;s own distribution — Severe under {evalInfo?.thresholds_kmh.severe_below ?? 10} km/h, Heavy {evalInfo?.thresholds_kmh.severe_below ?? 10}–{evalInfo?.thresholds_kmh.heavy_below ?? 20} km/h, Moving above that or no jam reported.
+              {!model.everHeavy && <> The current forecast has no Heavy hour.</>}
+            </p>
+          </div>
+        </details>
+      )}
 
       {/* Full list in a dialog — the inline expander pushed the rest of the
           page down and trapped 29 cards in a small scroll box. */}
       {alertsOpen && (
-        <div
-          role="dialog"
-          aria-modal="true"
-          aria-label="All predicted congestion episodes"
-          onClick={() => setAlertsOpen(false)}
-          style={{
-            position: "fixed", inset: 0, zIndex: 200,
-            background: "rgba(15, 23, 42, 0.55)",
-            display: "grid", placeItems: "center", padding: "24px",
-          }}
-        >
-          <div
-            onClick={(e) => e.stopPropagation()}
-            style={{
-              width: "min(980px, 100%)", maxHeight: "84vh",
-              display: "flex", flexDirection: "column",
-              background: "#fff", borderRadius: "14px",
-              boxShadow: "0 24px 60px rgba(15,23,42,0.3)", overflow: "hidden",
-            }}
-          >
-            <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: "16px", padding: "18px 22px", borderBottom: "1px solid #e2e8f0" }}>
+        <div role="dialog" aria-modal="true" aria-label="All predicted congestion episodes" onClick={() => setAlertsOpen(false)}
+             style={{ position: "fixed", inset: 0, zIndex: 200, background: "rgba(15, 23, 42, 0.55)", display: "grid", placeItems: "center", padding: 24 }}>
+          <div onClick={(e) => e.stopPropagation()}
+               style={{ width: "min(980px, 100%)", maxHeight: "84vh", display: "flex", flexDirection: "column", background: "#fff", borderRadius: 14, boxShadow: "0 24px 60px rgba(15,23,42,0.3)", overflow: "hidden" }}>
+            <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 16, padding: "18px 22px", borderBottom: "1px solid #e2e8f0" }}>
               <div>
-                <h3 style={{ margin: 0, fontSize: "1.05rem", fontWeight: 700, color: "#0f172a" }}>
-                  Predicted congestion · next {hourLabels.length} hours
-                </h3>
+                <h3 style={{ margin: 0, fontSize: "1.05rem", fontWeight: 700, color: "#0f172a" }}>Predicted congestion · next {hourLabels.length} hours</h3>
                 <p style={{ margin: "4px 0 0 0", fontSize: "0.8rem", color: "#64748b" }}>
-                  {alerts.length} episodes across {bySegment.length} segments ·{" "}
-                  <b style={{ color: "#b91c1c" }}>{model.severeCount} severe</b>,{" "}
-                  <b style={{ color: "#b45309" }}>{alerts.length - model.severeCount} heavy</b> · grouped by location
+                  {alerts.length} episodes across {bySegment.length} segments · <b style={{ color: "#b91c1c" }}>{model.severeCount} severe</b>, <b style={{ color: "#b45309" }}>{alerts.length - model.severeCount} heavy</b> · grouped by location
                 </p>
               </div>
-              <button
-                onClick={() => setAlertsOpen(false)}
-                aria-label="Close"
-                style={{
-                  flex: "none", width: 32, height: 32, borderRadius: "8px",
-                  border: "1px solid #e2e8f0", background: "#fff", color: "#475569",
-                  cursor: "pointer", display: "grid", placeItems: "center", fontSize: "1rem", lineHeight: 1,
-                }}
-              >
+              <button onClick={() => setAlertsOpen(false)} aria-label="Close"
+                      style={{ flex: "none", width: 32, height: 32, borderRadius: 8, border: "1px solid #e2e8f0", background: "#fff", color: "#475569", cursor: "pointer", display: "grid", placeItems: "center", fontSize: "1rem", lineHeight: 1 }}>
                 ✕
               </button>
             </div>
-
-            <div style={{ overflowY: "auto", padding: "18px 22px", display: "flex", flexDirection: "column", gap: "18px" }}>
+            <div style={{ overflowY: "auto", padding: "18px 22px", display: "flex", flexDirection: "column", gap: 16 }}>
               {bySegment.map(({ seg, runs }) => (
                 <div key={seg}>
-                  <div style={{ display: "flex", alignItems: "baseline", gap: "8px", marginBottom: "8px" }}>
+                  <div style={{ display: "flex", alignItems: "baseline", gap: 8, marginBottom: 6 }}>
                     <span style={{ fontSize: "0.88rem", fontWeight: 700, color: "#0f172a" }}>{seg}</span>
                     <span style={{ fontSize: "0.74rem", color: "#94a3b8" }}>km {kmLabel(KMI.get(seg))}</span>
                     <span style={{ flex: 1, borderBottom: "1px solid #eef2f7" }} />
-                    <span style={{ fontSize: "0.74rem", color: "#94a3b8" }}>
-                      {runs.length} {runs.length === 1 ? "episode" : "episodes"}
-                    </span>
+                    <span style={{ fontSize: "0.74rem", color: "#94a3b8" }}>{runs.length} {runs.length === 1 ? "episode" : "episodes"}</span>
                   </div>
-                  <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(290px, 1fr))", gap: "8px" }}>
-                    {runs.map((a, i) => alertCard(a, `modal-${seg}-${a.from}-${i}`))}
+                  <div style={{ display: "grid", gap: 6 }}>
+                    {runs.map((a, i) => alertRow(a, `modal-${seg}-${a.from}-${i}`))}
                   </div>
                 </div>
               ))}
             </div>
-
             <div style={{ padding: "12px 22px", borderTop: "1px solid #e2e8f0", background: "#f8fafc", fontSize: "0.75rem", color: "#94a3b8" }}>
               Confidence is the model&apos;s certainty in its classification, not the probability of congestion. Press Esc to close.
             </div>

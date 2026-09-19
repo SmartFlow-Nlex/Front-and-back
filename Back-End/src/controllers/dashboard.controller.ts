@@ -18,7 +18,7 @@ export async function dashboardOverviewController(req: Request, res: Response) {
 export async function corridorStatusController(_req: Request, res: Response) {
   const data = await getCorridorStatus();
   if (!data) {
-    return res.status(503).json({ success: false, message: "Database is not configured" });
+    return res.json({ success: true, source: "mock", data: { windowMinutes: 60, segments: [], feed: { stale: true, ageMinutes: null }, generatedAt: new Date().toISOString() } });
   }
   res.json({ success: true, data });
 }
@@ -34,7 +34,7 @@ export async function corridorStatusController(_req: Request, res: Response) {
 export async function corridorStatusFullController(_req: Request, res: Response) {
   const data = await getCorridorStatusFull();
   if (!data) {
-    return res.status(503).json({ success: false, message: "Database is not configured" });
+    return res.json({ success: true, source: "mock", data: { windowMinutes: 60, counts: { congested: 0, slow: 0, clear: 0 }, exits: [], feed: { stale: true, ageMinutes: null }, generatedAt: new Date().toISOString() } });
   }
   res.json({ success: true, data });
 }

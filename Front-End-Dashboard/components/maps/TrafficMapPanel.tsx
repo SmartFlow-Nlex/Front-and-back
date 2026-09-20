@@ -182,6 +182,18 @@ export default function TrafficMapPanel({ title, subtitle, badge, endpoint, laye
     setStatus("ok");
     mapRef.current = map;
 
+    /* A handle for debugging, in development only.
+       Layer problems on this map are invisible from the outside: a filter that
+       matches nothing and a layer that was never added look identical in a
+       screenshot, and neither prints anything. Being able to ask the live style
+       what it is holding turns that into one question. */
+    if (process.env.NODE_ENV !== "production") {
+      (window as unknown as Record<string, unknown>).__nlexMaps ??= {};
+      ((window as unknown as Record<string, Record<string, unknown>>).__nlexMaps)[
+        endpoint.includes("real-time") ? "live" : "forecast"
+      ] = map;
+    }
+
     // A syntactically valid but rejected token (revoked, wrong account, URL
     // restriction not matching) only shows up here, as a 401 on the first tile
     // or style request. Without this the panel would stay blank and silent.
@@ -674,62 +686,68 @@ export default function TrafficMapPanel({ title, subtitle, badge, endpoint, laye
 
       const flowImageId = (dir: string, tier: string) => `flow-${dir.toLowerCase()}-${tier}`;
 
+      /* Registers one animated pulse image and hands back its id.
+         An animated StyleImage is how Mapbox actually drives a moving pattern:
+         it calls render() once per frame for every image a visible layer is
+         using, and repaints when render() returns true. Rewriting the bytes
+         with map.updateImage() from our own animation frame did nothing --
+         the data changed but nothing asked the map to redraw.
+
+         Call this IMMEDIATELY BEFORE the layer that uses it. An animated image
+         registered while no layer references it is never staged into a pattern
+         atlas, and adding the layer later does not stage it: the layer then
+         draws nothing at all, silently. That is exactly why the queue flow was
+         invisible while the ribbon's worked -- the mid and slow images were
+         built up here and first referenced a hundred lines further down. The
+         proof was a plain non-animated image added at that later point, which
+         painted immediately, and flow-nb-fast moved onto the queue layer,
+         which did not. */
+      const addFlowImage = (
+        id: string,
+        dir: "NB" | "SB",
+        cycleMs: number,
+        opacity: number,
+      ) => {
+        if (map.hasImage(id)) return id;
+        // Northbound scrolls one way and southbound the other, so each ribbon
+        // reads as travelling in its own direction.
+        const sign = dir === "NB" ? -1 : 1;
+        const data = new Uint8Array(PW * PH * 4);
+        writePulse(data, 0, opacity);
+        let lastWrite = 0;
+        map.addImage(id, {
+          width: PW,
+          height: PH,
+          data,
+          render() {
+            // Behind the maximised view there is nothing to see. Returning
+            // without asking for another frame lets the map go idle; the
+            // paused effect below kicks it again on the way back.
+            if (pausedRef.current) return false;
+            // render() only runs as part of a repaint, so an animated image has
+            // to ask for the next one or the map settles and never calls it
+            // again.
+            map.triggerRepaint();
+            const now = performance.now();
+            // 30fps is indistinguishable here and halves the texture uploads.
+            if (now - lastWrite < 33) return false;
+            lastWrite = now;
+            writePulse(data, sign * ((now % cycleMs) / cycleMs), opacity);
+            return true;
+          },
+        } as unknown as Parameters<typeof map.addImage>[1]);
+        return id;
+      };
+
       for (const dir of ["NB", "SB"] as const) {
         for (const tier of FLOW_TIERS) {
-          const id = flowImageId(dir, tier.id);
-
-          /* An animated StyleImage, which is how Mapbox actually drives a
-             moving pattern: it calls render() once per frame for every image a
-             visible layer is using, and repaints when render() returns true.
-
-             Rewriting the bytes with map.updateImage() from our own animation
-             frame did nothing at all — the data changed but nothing asked the
-             map to redraw, so the pulses sat frozen on the ribbons. Owning the
-             clock here also means Mapbox skips the work when no layer is using
-             the image, which is most of them for most of the day: almost every
-             segment sits at level 0, so the mid and slow images back nothing. */
-          const sign = dir === "NB" ? -1 : 1;
-          const data = new Uint8Array(PW * PH * 4);
-          writePulse(data, 0, tier.opacity);
-          let lastWrite = 0;
-
-          const image = {
-            width: PW,
-            height: PH,
-            data,
-            render() {
-              // Behind the maximised view there is nothing to see. Returning
-              // without asking for another frame lets the map go idle; the
-              // paused effect below kicks it again on the way back.
-              if (pausedRef.current) return false;
-
-              /* render() only runs as part of a repaint, so an animated image
-                 has to ask for the next one or the map settles and never calls
-                 it again. This is why the pulses sat frozen: the bytes were
-                 being rewritten, but nothing was drawing them. */
-              map.triggerRepaint();
-
-              const now = performance.now();
-              // 30fps is indistinguishable here and halves the texture uploads.
-              // Returning false only says the pixels are unchanged; the repaint
-              // above keeps the loop alive.
-              if (now - lastWrite < 33) return false;
-              lastWrite = now;
-              writePulse(data, sign * ((now % tier.cycleMs) / tier.cycleMs), tier.opacity);
-              return true;
-            },
-          };
-
-          if (!map.hasImage(id)) {
-            map.addImage(id, image as unknown as Parameters<typeof map.addImage>[1]);
-          }
-
-          /* Every image is built either way, because the queue layers below
-             borrow the mid and slow ones. Only the ribbon's own layer is
-             skipped: on the live map it pulses at a single speed, so the other
-             two tiers would just stack a second and third pattern on the same
-             green line. */
+          /* Live: the ribbon pulses at a single speed, so the other two tiers
+             get no layer -- and therefore no image, since an image nothing
+             references is wasted work and, worse, cannot be staged later. The
+             queues below build their own. */
           if (isRealtimeEndpoint && tier.id !== "fast") continue;
+
+          const id = addFlowImage(flowImageId(dir, tier.id), dir, tier.cycleMs, tier.opacity);
 
           map.addLayer({
             id: `carriageway-flow-${dir.toLowerCase()}-${tier.id}`,
@@ -855,15 +873,21 @@ export default function TrafficMapPanel({ title, subtitle, badge, endpoint, laye
 
          Inserted beneath jam-mark so the dots stay on top. */
       const JAM_FLOW = [
-        { levels: [1, 2], image: "mid" },
-        { levels: [3, 4], image: "slow" },
+        // Higher opacity than the ribbon's: white at half strength reads over
+        // green, but amber and red are darker and swallow it.
+        { levels: [1, 2], key: "queue-slow", cycleMs: 2600, opacity: 0.7 },
+        { levels: [3, 4], key: "queue-heavy", cycleMs: 6000, opacity: 0.62 },
       ] as const;
 
       for (const dir of ["NB", "SB"] as const) {
         for (const t of JAM_FLOW) {
+          // Built here, not in the loop above: see addFlowImage.
+          const img = addFlowImage(
+            `flow-${dir.toLowerCase()}-${t.key}`, dir, t.cycleMs, t.opacity,
+          );
           map.addLayer(
             {
-              id: `jam-flow-${dir.toLowerCase()}-${t.image}`,
+              id: `jam-flow-${dir.toLowerCase()}-${t.key}`,
               type: "line",
               source: "traffic",
               layout: { "line-join": "round", "line-cap": "butt" },
@@ -875,7 +899,7 @@ export default function TrafficMapPanel({ title, subtitle, badge, endpoint, laye
                 ["in", ["get", "level"], ["literal", [...t.levels]]],
               ],
               paint: {
-                "line-pattern": flowImageId(dir, t.image),
+                "line-pattern": img,
                 "line-width": ["interpolate", ["linear"], ["zoom"], 8, 2.5, 12, 4.5, 16, 5.5, 18, 9],
                 "line-offset": OFFSET,
               },

@@ -796,6 +796,32 @@ export default function TrafficMapPanel({ title, subtitle, badge, endpoint, laye
          the snapper resolved are drawn -- one it could not keeps its raw Waze
          geometry, and direction_source is absent, so it is filtered out here
          rather than drawn off-road. */
+      /* A casing under every queue.
+         A 200 m queue is two pixels of road at corridor zoom, and amber on
+         green at two pixels is a colour change the eye skims over -- the thing
+         that made short congestion hard to find even once it was drawn in the
+         right place. An outline gives it an edge, and an edge is what makes a
+         small mark register as an object rather than as noise on the ribbon.
+         Cheap, and it never overstates: the casing is centred on the queue, so
+         it grows the mark sideways, never along the road. */
+      map.addLayer({
+        id: "jam-casing",
+        type: "line",
+        source: "traffic",
+        filter: [
+          "all",
+          ["==", ["get", "feature_type"], "jam"],
+          ["has", "direction_source"],
+        ],
+        layout: { "line-join": "round", "line-cap": "round" },
+        paint: {
+          "line-color": PALETTE.casing,
+          "line-width": ["interpolate", ["linear"], ["zoom"], 8, 11, 12, 17, 16, 20, 18, 30],
+          "line-opacity": 0.9,
+          "line-offset": OFFSET,
+        },
+      });
+
       map.addLayer({
         id: "jam-extent",
         type: "line",
@@ -818,9 +844,12 @@ export default function TrafficMapPanel({ title, subtitle, badge, endpoint, laye
             [3, 4, 5], PALETTE.status.congested,
             PALETTE.noData,
           ],
-          // Matched to the ribbon's width, so a queue reads as part of the road
-          // being coloured in rather than as a second line lying on top of it.
-          "line-width": ["interpolate", ["linear"], ["zoom"], 8, 5, 12, 9, 16, 11, 18, 18],
+          /* A little wider than the ribbon's 5/9/11/18, so a queue stands
+             proud of the road instead of sitting flush in it. Width is the one
+             dimension that can be exaggerated honestly here: it says nothing
+             about how much road is queued, which is the length, and that stays
+             exactly what Waze measured. */
+          "line-width": ["interpolate", ["linear"], ["zoom"], 8, 7, 12, 12, 16, 14, 18, 23],
           "line-offset": OFFSET,
         },
       });
@@ -850,11 +879,11 @@ export default function TrafficMapPanel({ title, subtitle, badge, endpoint, laye
             [3, 4, 5], PALETTE.status.congested,
             PALETTE.noData,
           ],
-          "circle-radius": ["interpolate", ["linear"], ["zoom"], 8, 4.5, 11, 6, 14, 5, 17, 0],
-          "circle-stroke-width": ["interpolate", ["linear"], ["zoom"], 8, 1.5, 14, 2, 17, 0],
+          "circle-radius": ["interpolate", ["linear"], ["zoom"], 8, 5.5, 11, 7.5, 14, 6, 17.5, 0],
+          "circle-stroke-width": ["interpolate", ["linear"], ["zoom"], 8, 2, 14, 2.5, 17.5, 0],
           "circle-stroke-color": PALETTE.casing,
-          "circle-opacity": ["interpolate", ["linear"], ["zoom"], 14, 1, 16.5, 0],
-          "circle-stroke-opacity": ["interpolate", ["linear"], ["zoom"], 14, 1, 16.5, 0],
+          "circle-opacity": ["interpolate", ["linear"], ["zoom"], 15, 1, 17.5, 0],
+          "circle-stroke-opacity": ["interpolate", ["linear"], ["zoom"], 15, 1, 17.5, 0],
         },
       });
 

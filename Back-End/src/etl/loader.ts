@@ -15,9 +15,26 @@ export interface LoadResult {
 const BATCH_SIZE = 1000;
 
 /**
+ * Natural-key upsert config for tables where a re-run of the same source file
+ * should replace the existing row rather than pile up beside it. "update" is
+ * chosen over "nothing" for accident_data/breakdown_data specifically: these
+ * are operational logs that get corrected after first capture (a status
+ * moving from AVAILABLE to FINALIZED, a clearance timestamp filled in later,
+ * a deployment record added retroactively) — DO NOTHING would permanently
+ * lock in whatever was captured on the first load and silently drop any
+ * later correction.
+ */
+export type LoadConflict = { column: string; action: "update" | "nothing" };
+
+/**
  * Build a parameterized INSERT query for a batch of rows
  */
-function buildBatchInsert(tableName: string, columns: string[], rows: any[][]): { text: string; values: any[] } {
+function buildBatchInsert(
+  tableName: string,
+  columns: string[],
+  rows: any[][],
+  conflict?: LoadConflict
+): { text: string; values: any[] } {
   const values: any[] = [];
   const valueClauses: string[] = [];
 
@@ -31,7 +48,20 @@ function buildBatchInsert(tableName: string, columns: string[], rows: any[][]): 
   }
 
   const colList = columns.map((c) => `"${c}"`).join(", ");
-  const text = `INSERT INTO ${tableName} (${colList}) VALUES ${valueClauses.join(", ")}`;
+  let text = `INSERT INTO ${tableName} (${colList}) VALUES ${valueClauses.join(", ")}`;
+
+  if (conflict) {
+    if (conflict.action === "nothing") {
+      text += ` ON CONFLICT ("${conflict.column}") DO NOTHING`;
+    } else {
+      // loaded_at is set explicitly here because it only defaults on a fresh
+      // INSERT — the UPDATE branch of an upsert doesn't see that default, and
+      // without this the row's freshness would stop advancing on repeat loads.
+      const updateCols = columns.filter((c) => c !== conflict.column);
+      const setClause = updateCols.map((c) => `"${c}" = EXCLUDED."${c}"`).join(", ");
+      text += ` ON CONFLICT ("${conflict.column}") DO UPDATE SET ${setClause}, loaded_at = now()`;
+    }
+  }
 
   return { text, values };
 }
@@ -64,21 +94,25 @@ export async function loadData(transformResult: TransformResult): Promise<LoadRe
     };
   }
 
-  const { tableName, columns, rows } = transformResult;
+  const { tableName, columns, rows, conflict } = transformResult;
 
   // Process in batches
   for (let i = 0; i < rows.length; i += BATCH_SIZE) {
     const batch = rows.slice(i, i + BATCH_SIZE);
     try {
-      const query = buildBatchInsert(tableName, columns, batch);
+      const query = buildBatchInsert(tableName, columns, batch, conflict);
       const result = await db.query(query.text, query.values);
       totalInserted += result.rowCount ?? batch.length;
     } catch (err: any) {
       errors.push(`Batch ${Math.floor(i / BATCH_SIZE) + 1} error: ${err.message}`);
-      // Try individual row inserts as fallback
+      // Try individual row inserts as fallback. Also covers the one case a
+      // DO UPDATE conflict can't handle within a single batch statement — two
+      // rows in the same batch sharing a conflict key ("ON CONFLICT DO UPDATE
+      // command cannot affect row a second time") — since each row here is
+      // its own statement, the second one just upserts against the first.
       for (const row of batch) {
         try {
-          const singleQuery = buildBatchInsert(tableName, columns, [row]);
+          const singleQuery = buildBatchInsert(tableName, columns, [row], conflict);
           const sResult = await db.query(singleQuery.text, singleQuery.values);
           totalInserted += sResult.rowCount ?? 1;
         } catch (singleErr: any) {

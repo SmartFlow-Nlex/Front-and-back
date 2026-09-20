@@ -22,13 +22,42 @@
 --
 -- StartKM in both source CSVs is in METERS, snapped to 100m posts (e.g.
 -- 82500 = Km 82+500) — bronze keeps it raw and unconverted (a faithful copy
--- of what was received); silver derives km_value = start_km / 1000.0 to
--- match every other table's km convention.
+-- of what was received); silver derives km_value = start_km / 1000.0.
 --
--- Bronze: CREATE TABLE IF NOT EXISTS (append-only inserts from the ETL
--- loader, same as bronze.nlex_incidents — never dropped by this file).
+-- km_value is NOT the same scale as every other table's km convention,
+-- despite the name. The rest of this warehouse measures km as distance from
+-- Balintawak (km 0) to Sta. Ines (km 76.25) — see map-comparison.service.ts's
+-- searchExitsInDb, which derives that scale from dim_location's
+-- segment_order/length_meters. accident_data/breakdown_data's StartKM instead
+-- follows the Philippine DPWH national-highway km-post convention (measured
+-- from Manila), under which Balintawak itself sits at km ~12. Verified by
+-- matching 15 exit names against their sub_location clusters in this data:
+-- offset holds at 12.0km (+-0.25km) across the full 71km corridor, from
+-- Balintawak to Dau — a constant additive shift, not a drift. silver adds
+-- corridor_km = km_value - 12.0 so consumers that compare against the
+-- dashboard's exit list (or bin incidents by corridor position) read
+-- Balintawak-relative like everything else; km_value itself is left
+-- unchanged since the ML severity model (train_incident_severity_models.py)
+-- was trained on it directly as a plain numeric feature, not exit-relative,
+-- so retraining it on a shifted value would be pure churn for no benefit
+-- (see the incident-severity km-offset investigation for the full trace).
+-- 12.0 is hardcoded at both silver CREATE TABLE AS statements below rather
+-- than named once, since this is plain SQL with no shared-constant mechanism
+-- — update both together if a wider matched-exit set ever refines the value.
+--
+-- Bronze: CREATE TABLE IF NOT EXISTS, never dropped by this file.
+-- event_number is UNIQUE and the ETL loader (loader.ts) upserts against it
+-- with ON CONFLICT DO UPDATE — added after a script re-run with no conflict
+-- handling doubled both tables' row counts (42,890 / 310,830) with zero
+-- actual change to the data. Before that fix, this really was "append-only";
+-- now a re-run of the same or corrected export replaces matching rows
+-- in place instead of piling up beside them.
 -- Silver: DROP + CREATE TABLE AS, idempotent and safe to re-run after every
--- bulk load, same idiom as 06-silver-remaining.sql.
+-- bulk load, same idiom as 06-silver-remaining.sql. Its own DISTINCT ON
+-- (event_number) dedup is now a second line of defense rather than the only
+-- one — kept as-is since it costs nothing and still protects against
+-- whatever bronze duplication route isn't the loader (a manual INSERT, a
+-- restored backup, etc).
 
 BEGIN;
 
@@ -37,7 +66,7 @@ BEGIN;
 -- ---------------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS bronze.nlex_accident_data (
   id                    SERIAL PRIMARY KEY,
-  event_number          INT,
+  event_number          INT CONSTRAINT uq_bronze_accident_event_number UNIQUE,
   event_start_date      TIMESTAMP,
   event_type            TEXT,
   event_status          TEXT,
@@ -63,7 +92,6 @@ CREATE TABLE IF NOT EXISTS bronze.nlex_accident_data (
   loaded_at             TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
-CREATE INDEX IF NOT EXISTS ix_bronze_accident_event_number ON bronze.nlex_accident_data (event_number);
 CREATE INDEX IF NOT EXISTS ix_bronze_accident_start_date   ON bronze.nlex_accident_data (event_start_date);
 
 -- ---------------------------------------------------------------------------
@@ -72,7 +100,7 @@ CREATE INDEX IF NOT EXISTS ix_bronze_accident_start_date   ON bronze.nlex_accide
 -- ---------------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS bronze.nlex_breakdown_data (
   id                    SERIAL PRIMARY KEY,
-  event_number          INT,
+  event_number          INT CONSTRAINT uq_bronze_breakdown_event_number UNIQUE,
   event_encoded_date    TIMESTAMP,
   event_type            TEXT,
   event_status          TEXT,
@@ -97,7 +125,6 @@ CREATE TABLE IF NOT EXISTS bronze.nlex_breakdown_data (
   loaded_at             TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
-CREATE INDEX IF NOT EXISTS ix_bronze_breakdown_event_number ON bronze.nlex_breakdown_data (event_number);
 CREATE INDEX IF NOT EXISTS ix_bronze_breakdown_encoded_date ON bronze.nlex_breakdown_data (event_encoded_date);
 
 -- ---------------------------------------------------------------------------
@@ -115,6 +142,10 @@ DROP TABLE IF EXISTS silver.nlex_accident_events_clean;
 CREATE TABLE silver.nlex_accident_events_clean AS
 SELECT event_number, event_start_date, event_status, direction, location, sub_location,
        start_km / 1000.0 AS km_value,
+       -- Balintawak-relative, matching the dashboard's exit-derived scale —
+       -- see the km_value comment above. Use this, not km_value, for anything
+       -- compared against nlex_exits/searchExitsInDb positions.
+       (start_km / 1000.0) - 12.0 AS corridor_km,
        type_of_event, main_cause, sub_cause, detection, weather_condition, damage_to_property,
        property,
        GREATEST(COALESCE(number_of_vehicles, 0), 0) AS number_of_vehicles,
@@ -135,8 +166,8 @@ FROM (
   ORDER BY event_number, loaded_at DESC
 ) q;
 
-CREATE INDEX ix_silver_accident_start_date ON silver.nlex_accident_events_clean (event_start_date);
-CREATE INDEX ix_silver_accident_km         ON silver.nlex_accident_events_clean (km_value);
+CREATE INDEX ix_silver_accident_start_date  ON silver.nlex_accident_events_clean (event_start_date);
+CREATE INDEX ix_silver_accident_corridor_km ON silver.nlex_accident_events_clean (corridor_km);
 
 -- ---------------------------------------------------------------------------
 -- silver.nlex_breakdown_events_clean
@@ -148,6 +179,10 @@ DROP TABLE IF EXISTS silver.nlex_breakdown_events_clean;
 CREATE TABLE silver.nlex_breakdown_events_clean AS
 SELECT event_number, event_encoded_date, event_status, direction, location, sub_location,
        start_km / 1000.0 AS km_value,
+       -- Balintawak-relative, matching the dashboard's exit-derived scale —
+       -- see the km_value comment above. Use this, not km_value, for anything
+       -- compared against nlex_exits/searchExitsInDb positions.
+       (start_km / 1000.0) - 12.0 AS corridor_km,
        sloop, vehicle, vehicle_number, type_of_vehicle, vehicle_class, plate_number, driver,
        main_cause, sub_cause, detection, trouble_description, detail_entry_count,
        deployment_count, deployments
@@ -163,6 +198,7 @@ FROM (
 
 CREATE INDEX ix_silver_breakdown_encoded_date ON silver.nlex_breakdown_events_clean (event_encoded_date);
 CREATE INDEX ix_silver_breakdown_main_cause   ON silver.nlex_breakdown_events_clean (main_cause);
+CREATE INDEX ix_silver_breakdown_corridor_km  ON silver.nlex_breakdown_events_clean (corridor_km);
 
 COMMIT;
 

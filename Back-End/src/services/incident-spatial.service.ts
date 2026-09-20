@@ -1,4 +1,5 @@
 import { db } from "../config/db.js";
+import { buildExitToExitSegments } from "../lib/exit-segments.js";
 
 // Reads for gold.ml_incident_spatial_coefficients / ml_incident_segment_risk /
 // ml_incident_spatial_metadata — written by
@@ -37,9 +38,27 @@ export type SegmentRisk = {
   rank: number;
 };
 
+// Same shape family as SecondaryIncidentRiskPanel's "By Km" view, but derived
+// rather than independently binned: the Spatial LSTM forecasts one value per
+// EXIT (20 units), not per arbitrary km position, so there is no finer
+// resolution to bin into — a segment's value is the average of the two exits
+// that bound it (buildExitToExitSegments' own "exit to next exit" cut, shared
+// with every other By-Km view on this tab so the segments themselves can't
+// drift). This is a genuine reflection of what the model actually knows
+// (risk at 20 discrete points along the corridor), not a finer-grained
+// prediction manufactured to fill the toggle.
+export type SegmentRiskByKm = {
+  label: string;
+  kmStart: number;
+  kmEnd: number;
+  predictedIncidents: number;
+  rank: number;
+};
+
 export type IncidentSpatialData = {
   coefficients: GwrCoefficient[];
   segmentRisk: SegmentRisk[];
+  segmentRiskByKm: SegmentRiskByKm[];
   metadata: Record<string, unknown> | null;
   trainedAt: string | null;
 };
@@ -83,6 +102,19 @@ export async function getIncidentSpatialFromDb(): Promise<IncidentSpatialData | 
 
     const trainedAt = coefRes.rows[0]?.trained_at ?? riskRes.rows[0]?.trained_at ?? null;
 
+    const exitsForSegments = riskRes.rows.map((r) => ({ exit_id: r.exit_id, exit_name: r.exit_name, km: Number(r.km) }));
+    const predictedByExit = new Map(riskRes.rows.map((r) => [r.exit_id, Number(r.predicted_incidents)]));
+    const segmentRiskByKm = buildExitToExitSegments(exitsForSegments)
+      .map((seg) => {
+        const fromVal = predictedByExit.get(seg.fromExitId);
+        const toVal = predictedByExit.get(seg.toExitId);
+        if (fromVal == null || toVal == null) return null;
+        return { label: seg.label, kmStart: seg.segmentStart, kmEnd: seg.segmentEnd, predictedIncidents: (fromVal + toVal) / 2 };
+      })
+      .filter((x): x is { label: string; kmStart: number; kmEnd: number; predictedIncidents: number } => x != null)
+      .sort((a, b) => b.predictedIncidents - a.predictedIncidents)
+      .map((seg, i) => ({ ...seg, rank: i + 1 }));
+
     return {
       coefficients: coefRes.rows.map((r) => ({
         exitId: r.exit_id,
@@ -107,6 +139,7 @@ export async function getIncidentSpatialFromDb(): Promise<IncidentSpatialData | 
         lastObservedCount: r.last_observed_count == null ? null : Number(r.last_observed_count),
         rank: r.risk_rank,
       })),
+      segmentRiskByKm,
       metadata: metaRes.rows[0]?.metadata_json ?? null,
       trainedAt: trainedAt ? new Date(trainedAt).toISOString() : null,
     };

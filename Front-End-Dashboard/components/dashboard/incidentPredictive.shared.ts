@@ -158,6 +158,18 @@ export type PredictiveData = {
   corridorForecastDays: number;
   /** Which model corridorForecast was apportioned from (toolbar pick, or the champion as a fallback). */
   corridorForecastModel: string | null;
+  /**
+   * Dedicated accident-only forecast, alongside the blended one (see
+   * train_incident_models.py --series accident). Null until trained or on any
+   * read failure. There is deliberately no breakdown series: it is derived as
+   * blended total minus this accident forecast.
+   */
+  accidentSplit: {
+    championModel: string | null;
+    trainedAt: string | null;
+    metrics: Record<string, unknown> | null;
+    daily: { date: string; actual: number | null; predicted: number | null }[];
+  } | null;
   scoringWindow: { start: string; end: string; n: number } | null;
   appliedFilters: {
     months: "3" | "12" | "all";

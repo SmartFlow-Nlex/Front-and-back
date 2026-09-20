@@ -161,23 +161,64 @@ HOLIDAY_DATES: set = set()
 VOLUME_BY_DATE: dict = {}
 MODEL_NAMES = ["XGBoost", "RandomForest", "Poisson_GLM", "NegBinomial_GLM", "SARIMAX", "LSTM", "GRU"]
 
-# Daily incident counts from the three operations logs, matching INCIDENTS_CTE in
-# src/services/incident.service.ts so the forecast counts the same incidents the
-# rest of the incident dashboard shows. `date` is TEXT in two formats.
-_D = "CASE WHEN date LIKE '%/%' THEN to_date(date, 'MM/DD/YYYY') ELSE date::date END"
-DAILY_COUNTS_SQL = f"""
+# Daily incident counts from the client's own accident/breakdown event
+# exports, matching EVENTS_CTE in src/services/incident.service.ts so this
+# forecast counts the same incidents the descriptive dashboard and the
+# severity/clearance models (train_incident_severity_models.py) now do.
+#
+# Migrated off nlex_road_crashes/nlex_motorcycle_crashes (views over silver.
+# nlex_incidents_clean/bronze.nlex_incidents, 9,718 rows combined — see
+# scripts/medallion/07-repoint-views.sql) and nlex_stalled_vehicles (its own
+# separate, never-deduplicated legacy table, 54,990 rows) — this pipeline was
+# the one piece of the incident stack the accident_data/breakdown_data
+# rewrite hadn't reached yet, so its published accuracy metrics were being
+# measured against a smaller, older population (~64,708 rows total through
+# the old three-table source) than the one the rest of the dashboard already
+# reports against (~176,819 accident+breakdown events — 21,428 + 155,391). No
+# _D date-format branch needed here, unlike the old source: both new tables'
+# timestamp columns are already TIMESTAMP, not TEXT in two formats.
+DAILY_COUNTS_SQL = """
     WITH all_incidents AS (
-        SELECT {_D} AS d FROM nlex_road_crashes        WHERE date IS NOT NULL
+        SELECT event_start_date::date AS d FROM silver.nlex_accident_events_clean
+        WHERE event_start_date IS NOT NULL
         UNION ALL
-        SELECT {_D} AS d FROM nlex_motorcycle_crashes  WHERE date IS NOT NULL
-        UNION ALL
-        SELECT {_D} AS d FROM nlex_stalled_vehicles    WHERE date IS NOT NULL
+        SELECT event_encoded_date::date AS d FROM silver.nlex_breakdown_events_clean
+        WHERE event_encoded_date IS NOT NULL
     )
     SELECT d, COUNT(*)::float AS total
     FROM all_incidents
     GROUP BY 1
     ORDER BY 1
 """
+
+# --series accident: the same forecast, fitted on accidents alone. Added
+# because blending hurts the minority series: measured on the same 90-day
+# holdout, an accident-only model reaches R2 0.38 (MAE 5.3), but the accident
+# share read out of the blended fit only reaches R2 0.12 (MAE 6.3) — accidents
+# are ~12% of daily volume, so a fit optimised for the combined count is
+# optimised for breakdowns. Breakdowns showed no such gain from their own
+# model (blended-implied R2 0.30 vs 0.26 dedicated), so there is no
+# breakdown series: the dashboard derives it as blended total - accident.
+ACCIDENT_DAILY_COUNTS_SQL = """
+    SELECT event_start_date::date AS d, COUNT(*)::float AS total
+    FROM silver.nlex_accident_events_clean
+    WHERE event_start_date IS NOT NULL
+    GROUP BY 1
+    ORDER BY 1
+"""
+
+# Output-table suffix: "" for the blended series (the original tables, which
+# every existing reader uses), "_accident" for --series accident so it writes
+# ALONGSIDE them rather than over them.
+TABLE_SUFFIX = ""
+SERIES_LABEL = "blended"
+
+
+def _t(sql: str) -> str:
+    """Point a statement's ml_* table names at the active series' tables."""
+    for name in ("ml_daily_actuals", "ml_predictive_incidents", "ml_training_metadata"):
+        sql = sql.replace(name, name + TABLE_SUFFIX)
+    return sql
 
 # Local-day rainfall total, bucketed the same way src/services/incident.service.ts
 # buckets hourly_weather for the descriptive dashboard's wet/dry split (UTC+8).
@@ -483,16 +524,39 @@ def mase_of(y_true: np.ndarray, y_pred: np.ndarray, y_naive: np.ndarray) -> floa
 
 # Gap above which train/validation divergence is called overfitting. Matches the
 # threshold implied by the project's earlier reporting, where a 0.0932 gap read
-# JUST RIGHT and 0.1360 read OVERFITTING.
+# JUST RIGHT and 0.1360 read OVERFITTING. Left as-is (see the module-level CV=32%
+# note near VALIDATION_DAYS for why even this is a soft call on a noisy series) --
+# the taxonomy bug this replaces was in what train_r2 alone could and couldn't
+# gate, not in this number itself.
 OVERFIT_GAP = 0.10
-UNDERFIT_TRAIN_R2 = 0.05
+# Raised from 0.05. The old floor only caught a model that learned essentially
+# nothing (R2 near zero), so a model with a genuinely weak-but-nonzero fit --
+# LSTM measured at Train_R2=0.118, GRU at 0.199, on the 2025-10-03..2025-12-31
+# holdout -- fell through to the gap check below and got labeled OVERFITTING
+# purely because its (even lower) Val_R2 produced a >0.10 gap. That is
+# backwards: "overfitting" implies a strong fit that didn't transfer, and
+# these never fit the TRAINING data well to begin with -- that is
+# underfitting, full stop, regardless of the gap. 0.25 sits above both RNNs'
+# worst observed Train_R2 (0.199) and below every GLM/tree/SARIMAX
+# candidate's (>=0.406 in the same run), so it separates "didn't learn much"
+# from "learned the training set" cleanly on this series without hardcoding
+# model names.
+UNDERFIT_TRAIN_R2 = 0.25
+# Second gate on the overfitting branch, not just the gap: a model can only
+# be diagnosed OVERFITTING if it fit the training data reasonably well to
+# start with. Without this, a model sitting just above UNDERFIT_TRAIN_R2
+# with a wide gap could be called both "barely fit" and "overfitting" at
+# once, which is incoherent -- a fit that never really landed on the
+# training data isn't "fitting noise", it's failing to fit, same conclusion
+# as the underfit branch above.
+OVERFIT_MIN_TRAIN_R2 = 0.30
 
 
 def diagnose(train_r2: float, val_r2: float) -> str:
     gap = train_r2 - val_r2
     if train_r2 < UNDERFIT_TRAIN_R2:
         return "UNDERFITTING"
-    if gap > OVERFIT_GAP:
+    if gap > OVERFIT_GAP and train_r2 >= OVERFIT_MIN_TRAIN_R2:
         return "OVERFITTING"
     return "JUST RIGHT"
 
@@ -765,7 +829,8 @@ def format_report(comparison: list[dict], champion: str, degraded: bool, evaluat
     L.append("  (target: incident_count)")
     L.append("=" * 80)
     L.append("")
-    L.append(f"  Source        : nlex_road_crashes + nlex_motorcycle_crashes + nlex_stalled_vehicles")
+    L.append("  Source        : " + ("silver.nlex_accident_events_clean (accident-only series)" if SERIES_LABEL == "accident"
+                                          else "silver.nlex_accident_events_clean + silver.nlex_breakdown_events_clean"))
     L.append(f"  Protocol      : {evaluation['protocol']} ({evaluation['holdout_days']}-day window)")
     L.append(f"  Holdout window: {evaluation['holdout_window'][0]} .. {evaluation['holdout_window'][1]}")
     L.append(f"  Train rows    : {evaluation['train_rows']}")
@@ -1057,7 +1122,7 @@ def build_all_final_predictions(feat: pd.DataFrame, rain_by_date: dict) -> tuple
 def ensure_schema(conn, commit: bool = True) -> None:
     with conn.cursor() as cur:
         cur.execute(
-            """
+            _t("""
             CREATE TABLE IF NOT EXISTS ml_daily_actuals (
                 d DATE PRIMARY KEY,
                 total DOUBLE PRECISION NOT NULL
@@ -1131,7 +1196,7 @@ def ensure_schema(conn, commit: bool = True) -> None:
             -- importance.
             ALTER TABLE ml_predictive_incidents
                 ADD COLUMN IF NOT EXISTS rainfall_mm DOUBLE PRECISION;
-            """
+            """)
         )
     if commit:
         conn.commit()
@@ -1204,12 +1269,12 @@ def write_to_db(conn, daily: pd.DataFrame, feat: pd.DataFrame, champion: str,
         # nothing left to race against. Old dates that legitimately fall out
         # of range (the source data's start date moving forward) are swept
         # up by the WHERE NOT IN below rather than a blanket DELETE first.
-        cur.execute("SELECT d FROM ml_daily_actuals")
+        cur.execute(_t("SELECT d FROM ml_daily_actuals"))
         existing_dates = {row[0] for row in cur.fetchall()}
         new_dates = {row.d.date() for row in daily.itertuples()}
         stale_dates = existing_dates - new_dates
         if stale_dates:
-            cur.execute("DELETE FROM ml_daily_actuals WHERE d = ANY(%s)", (list(stale_dates),))
+            cur.execute(_t("DELETE FROM ml_daily_actuals WHERE d = ANY(%s)"), (list(stale_dates),))
         # Deduplicated defensively, keeping the LAST occurrence of any
         # repeated date: `daily` is built by reindexing onto a unique
         # DatetimeIndex so it should never carry a duplicate `d`, but a
@@ -1221,12 +1286,12 @@ def write_to_db(conn, daily: pd.DataFrame, feat: pd.DataFrame, champion: str,
             print(f"  WARNING: daily had {len(daily)} rows but only {len(actuals_by_date)} distinct dates — deduplicated (kept last)")
         psycopg2.extras.execute_values(
             cur,
-            "INSERT INTO ml_daily_actuals (d, total) VALUES %s "
-            "ON CONFLICT (d) DO UPDATE SET total = EXCLUDED.total",
+            _t("INSERT INTO ml_daily_actuals (d, total) VALUES %s "
+               "ON CONFLICT (d) DO UPDATE SET total = EXCLUDED.total"),
             list(actuals_by_date.items()),
         )
 
-        cur.execute("DELETE FROM ml_predictive_incidents WHERE forecast_date < %s OR forecast_date > %s",
+        cur.execute(_t("DELETE FROM ml_predictive_incidents WHERE forecast_date < %s OR forecast_date > %s"),
                      (min(val_dates + future_dates), max(val_dates + future_dates)))
         pred_rows = [row_for(d, "validation") for d in val_dates]
         pred_rows += [row_for(d, "future") for d in future_dates]
@@ -1236,16 +1301,16 @@ def write_to_db(conn, daily: pd.DataFrame, feat: pd.DataFrame, champion: str,
         )
         psycopg2.extras.execute_values(
             cur,
-            "INSERT INTO ml_predictive_incidents (forecast_date, prediction_type, "
-            "predicted_incident_count, champion_model, same_day_last_year, "
-            + ", ".join(model_cols) + ", rainfall_mm, " + ", ".join(nv_cols) + ", " + ", ".join(nw_cols) + ") VALUES %s "
-            "ON CONFLICT (forecast_date, prediction_type) DO UPDATE SET "
-            + ", ".join(f"{c} = EXCLUDED.{c}" for c in update_cols),
+            _t("INSERT INTO ml_predictive_incidents (forecast_date, prediction_type, "
+               "predicted_incident_count, champion_model, same_day_last_year, "
+               + ", ".join(model_cols) + ", rainfall_mm, " + ", ".join(nv_cols) + ", " + ", ".join(nw_cols) + ") VALUES %s "
+               "ON CONFLICT (forecast_date, prediction_type) DO UPDATE SET "
+               + ", ".join(f"{c} = EXCLUDED.{c}" for c in update_cols)),
             pred_rows,
         )
 
-        cur.execute("DELETE FROM ml_training_metadata")
-        cur.execute("INSERT INTO ml_training_metadata (metadata_json) VALUES (%s)", [json.dumps(metadata)])
+        cur.execute(_t("DELETE FROM ml_training_metadata"))
+        cur.execute(_t("INSERT INTO ml_training_metadata (metadata_json) VALUES (%s)"), [json.dumps(metadata)])
     if dry:
         conn.rollback()
         print("DRY WRITE: every query ran, transaction rolled back — the shared table is unchanged")
@@ -1255,9 +1320,16 @@ def write_to_db(conn, daily: pd.DataFrame, feat: pd.DataFrame, champion: str,
 
 def main() -> None:
     global HOLIDAY_DATES, VALIDATION_DAYS, VOLUME_BY_DATE, FEATURE_COLS, EXOG_COLS
+    global DAILY_COUNTS_SQL, TABLE_SUFFIX, SERIES_LABEL
 
     parser = argparse.ArgumentParser()
     parser.add_argument("--write-db", action="store_true", help="Also write the champion's predictions/metadata to the database")
+    parser.add_argument(
+        "--series", choices=["blended", "accident"], default="blended",
+        help="blended (default): accidents + breakdowns as one daily count, into the "
+             "original ml_* tables. accident: accidents alone, into ml_*_accident "
+             "alongside them (see ACCIDENT_DAILY_COUNTS_SQL for why).",
+    )
     parser.add_argument(
         "--dry-write", action="store_true",
         help="Run the entire write path — both model passes, the schema migration "
@@ -1315,6 +1387,10 @@ def main() -> None:
              "before volume was, so isolating it takes removing it.",
     )
     args = parser.parse_args()
+    if args.series == "accident":
+        DAILY_COUNTS_SQL = ACCIDENT_DAILY_COUNTS_SQL
+        TABLE_SUFFIX = "_accident"
+        SERIES_LABEL = "accident"
     VALIDATION_DAYS = args.holdout_days
     if args.no_volume:
         FEATURE_COLS = [c for c in FEATURE_COLS if c not in VOLUME_COLS]
@@ -1334,7 +1410,7 @@ def main() -> None:
     set_all_seeds()
     conn = get_conn()
     try:
-        print("Loading daily incident counts (road + motorcycle crashes + stalled vehicles)...")
+        print(f"Loading daily incident counts ({'accident_data only' if SERIES_LABEL == 'accident' else 'accident_data + breakdown_data'})...")
         daily = load_daily_counts(conn)
         print(f"  {len(daily)} calendar days, {int(daily['total'].sum())} total incidents")
 
@@ -1401,7 +1477,7 @@ def main() -> None:
         }
 
         report = format_report(comparison, champion, degraded, evaluation)
-        report_path = Path(__file__).resolve().parent / "model_results.txt"
+        report_path = Path(__file__).resolve().parent / ("model_results_accident.txt" if SERIES_LABEL == "accident" else "model_results.txt")
         report_path.write_text(report, encoding="utf-8")
         print(f"Full per-model report written to {report_path}\n")
 
@@ -1463,7 +1539,26 @@ def main() -> None:
 
         metadata = {
             "champion_model": champion,
+            # Provenance for whoever next investigates a "does this number
+            # look right" report on this panel — states which source table
+            # generation trained it without requiring a re-derivation from
+            # the training script's own SQL.
+            "series": SERIES_LABEL,
+            "data_source": (
+                "silver.nlex_accident_events_clean"
+                if SERIES_LABEL == "accident"
+                else "silver.nlex_accident_events_clean + silver.nlex_breakdown_events_clean"
+            ),
             "model_comparison": comparison,
+            # Caveats on the per-model Diagnosis column above that don't fit in a
+            # single word — kept here, alongside the numbers they qualify, rather
+            # than only in code comments or a chat transcript neither of which
+            # travels with the data.
+            "diagnosis_notes": [
+                "OVERFITTING label for Poisson_GLM/NegBinomial_GLM is window-dependent "
+                "(confirmed via Spring/Summer holdout test: gap ranges 0.064-0.297 across "
+                "quarters) and should not be read as a stable model property.",
+            ],
             "metrics": {"MAE": champion_row["MAE"], "RMSE": champion_row["RMSE"],
                         "R2": champion_row["R2"], "MASE": champion_row["MASE"]},
             "feature_importance": feature_importance,
@@ -1491,7 +1586,7 @@ def main() -> None:
         if degraded:
             metadata["warning"] = "No model beat the naive seasonal (MASE<=1.0) baseline; champion is a fallback pick."
 
-        print("Writing ml_daily_actuals, ml_predictive_incidents, ml_training_metadata (one transaction)...")
+        print(_t("Writing ml_daily_actuals, ml_predictive_incidents, ml_training_metadata (one transaction)..."))
         conn = ensure_live_conn(conn)
         write_to_db(conn, daily, feat, champion, by_model, metadata, rain_by_date, by_model_nv,
                     by_model_nw, dry=args.dry_write and not args.write_db)

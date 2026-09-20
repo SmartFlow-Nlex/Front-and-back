@@ -65,7 +65,15 @@ export const getIncidentPredictive = async (req: Request, res: Response) => {
   // Anchors are three cheap reads that every call repeated; ten minutes.
   const anchors = await cached("incident:anchors", 10 * 60_000, getIncidentPredictiveAnchors);
   if (!anchors) {
-    return res.status(503).json({ success: false, message: "Predictive analytics unavailable: database not reachable" });
+    // Matches getIncidentSpatial/getIncidentSeverity's phrasing below rather
+    // than asserting "not reachable" outright -- the service's own console.warn/
+    // error (see getIncidentPredictiveAnchors) already distinguishes the two
+    // causes for whoever is diagnosing this; this message just stops
+    // overclaiming to the client which one it was.
+    return res.status(503).json({
+      success: false,
+      message: "Predictive analytics unavailable: database not reachable or the pipeline hasn't written yet",
+    });
   }
 
   const query = buildIncidentPredictiveQuerySchema({
@@ -79,7 +87,10 @@ export const getIncidentPredictive = async (req: Request, res: Response) => {
   const data = await cached(`incident:predictive:${JSON.stringify(query)}`, 10 * 60_000, () =>
     getIncidentPredictiveFromDb(query, anchors));
   if (!data) {
-    return res.status(503).json({ success: false, message: "Predictive analytics unavailable: database not reachable" });
+    return res.status(503).json({
+      success: false,
+      message: "Predictive analytics unavailable: database not reachable or the pipeline hasn't written yet",
+    });
   }
 
   // A malformed response here is a server-side bug, not a bad request from the

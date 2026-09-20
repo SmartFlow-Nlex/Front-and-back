@@ -16,7 +16,18 @@
  */
 import { AsyncLocalStorage } from "node:async_hooks";
 
-type Entry<T> = { at: number; value: T };
+type Entry<T> = { at: number; value: T; ttlMs: number };
+
+/* A resolved null is how every service in this codebase reports "couldn't
+ * get an answer" — a thrown error and a legitimate "no data yet" both
+ * collapse to it (see the individual services' own try/catch). Caching that
+ * null for the same TTL as a real answer turns one transient failure (a
+ * slow connection, a query racing a concurrent migration) into a frozen
+ * outage for the whole window: every request in that window replays the
+ * same failure instead of getting a fresh try. A short TTL here still
+ * protects a genuinely-down database from being hammered every request, but
+ * lets a one-off hiccup self-heal within seconds instead of minutes. */
+const NULL_RESULT_TTL_MS = 20_000;
 
 /* Request-scoped bypass. The route cache honours x-cache-bypass, but the
  * controllers behind it keep their own entries here, so a refresh request
@@ -42,7 +53,12 @@ const inflight = new Map<string, Promise<unknown>>();
 export async function cached<T>(key: string, ttlMs: number, produce: () => Promise<T>): Promise<T> {
   const bypass = bypassScope.getStore()?.bypass === true;
   const hit = bypass ? undefined : (store.get(key) as Entry<T> | undefined);
-  const fresh = hit != null && Date.now() - hit.at < ttlMs;
+  // Freshness is judged against the TTL the entry was actually stored with,
+  // not the ttlMs this particular call passed in -- a null result stores
+  // itself with NULL_RESULT_TTL_MS regardless of the caller's usual window,
+  // so a later call with the caller's normal (longer) ttlMs still expires it
+  // on schedule instead of extending a failure's lifetime.
+  const fresh = hit != null && Date.now() - hit.at < hit.ttlMs;
   if (fresh) return hit!.value;
 
   const running = inflight.get(key) as Promise<T> | undefined;
@@ -50,7 +66,8 @@ export async function cached<T>(key: string, ttlMs: number, produce: () => Promi
 
   const p = produce()
     .then((value) => {
-      store.set(key, { at: Date.now(), value });
+      const effectiveTtl = value == null ? NULL_RESULT_TTL_MS : ttlMs;
+      store.set(key, { at: Date.now(), value, ttlMs: effectiveTtl });
       return value;
     })
     .finally(() => inflight.delete(key));

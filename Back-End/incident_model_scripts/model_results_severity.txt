@@ -9,6 +9,8 @@
   Cox PH — clearance-time survival (site_cleared - event_start_date; see module docstring)
     concordance index = 0.624
     MAE (minutes)     = 16.51
+    median-based avg  = 6.85 min (mean of per-row predict_median)
+    mean-based avg    = 20.15 min (mean of per-row predict_expectation)
     n (holdout)       = 4286
     trained+scored on = 18393 incidents with known daily volume (85.8% of all incidents — volume now a real covariate, alongside weather, cause, type, and corridor position)
 

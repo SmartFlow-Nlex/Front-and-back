@@ -422,10 +422,23 @@ def fit_cox_ph(train: pd.DataFrame, holdout: pd.DataFrame) -> dict:
     # land as NaN here and become a null predicted_clearance_min there.
     pred_clearance = pred_clearance_covered.reindex(holdout.index)
 
+    # A second per-row statistic alongside the median-based predicted_clearance
+    # above: the model's own expected value (restricted mean survival time),
+    # which integrates the whole fitted survival curve including its long
+    # right tail instead of just locating the 50%-survival crossing point.
+    # duration_min is heavily right-skewed (median ~4-5min, mean ~19-23min —
+    # see the dashboard's clearance-panel reconciliation), so a median-based
+    # per-row prediction and a mean-based one diverge sharply even though
+    # both come from the exact same fitted cph. Reindexed the same way
+    # pred_clearance is, so both land on the full holdout, covered rows or not.
+    pred_mean_clearance = pred_expectation_covered.reindex(holdout.index)
+
     finite_mask = np.isfinite(pred_clearance.values)
     mae = float(mean_absolute_error(
         holdout["duration_min"].values[finite_mask], pred_clearance.values[finite_mask]
     )) if finite_mask.any() else None
+    mean_finite_mask = np.isfinite(pred_mean_clearance.values)
+    mean_clearance_minutes = float(np.mean(pred_mean_clearance.values[mean_finite_mask])) if mean_finite_mask.any() else None
     cox_n = int(len(train_covered)) + int(len(holdout_covered))
 
     # Representative survival curves for the clearance-survival-curve
@@ -511,6 +524,21 @@ def fit_cox_ph(train: pd.DataFrame, holdout: pd.DataFrame) -> dict:
     # overlaid survival curves (six "both" lines is already close to the
     # limit of what one chart can show).
     #
+    # corridor_km, not raw km_value: km_value follows the Philippine DPWH
+    # km-post convention (Balintawak ~ km 12), not this dashboard's
+    # Balintawak-as-km-0 scale — see silver.nlex_accident_events_clean's own
+    # corridor_km derivation (scripts/medallion/10-bronze-accident-breakdown.sql)
+    # and the km-offset investigation that found this. Quantiling/labeling on
+    # raw km_value here (the bug this replaces) produced "Km 12-34"-style
+    # labels sitting ~12km off the exit list every other by-Km view on this
+    # tab already reads from (SecondaryIncidentRiskPanel's By Exit/By Km,
+    # corrected at read time in incident-severity.service.ts). This one can't
+    # be corrected at read time the same way: the label is a formatted string
+    # baked in at training time, not a live numeric column — so it's fixed
+    # here instead, and the raw km_lo/km_hi bounds are now stored alongside
+    # the label (see write_to_db) so a future convention change only needs a
+    # read-time reformat, not another retrain.
+    #
     # km_value is now near-continuous (946 distinct values across ~21K
     # accidents, verified — StartKM is recorded to the nearest 100m, not
     # snapped to coarse waypoints the way the old crash tables were), so
@@ -519,18 +547,20 @@ def fit_cox_ph(train: pd.DataFrame, holdout: pd.DataFrame) -> dict:
     # — equal INCIDENT COUNT per segment, unequal km width — so every segment
     # has comparable statistical power, and the label states the actual km
     # range each one covers so the unequal width is never hidden.
+    KM_OFFSET = 12.0
     KM_QUANTILE_GROUPS = 4
-    sorted_train = train.sort_values("km_value")
-    n_train = len(sorted_train)
+    train_by_corridor_km = train.assign(corridor_km=train["km_value"] - KM_OFFSET).sort_values("corridor_km")
+    n_train = len(train_by_corridor_km)
     group_size = n_train // KM_QUANTILE_GROUPS
     for i in range(KM_QUANTILE_GROUPS):
         lo = i * group_size
         hi = (i + 1) * group_size if i < KM_QUANTILE_GROUPS - 1 else n_train
-        chunk = sorted_train.iloc[lo:hi]
-        km_lo, km_hi = float(chunk["km_value"].min()), float(chunk["km_value"].max())
+        chunk = train_by_corridor_km.iloc[lo:hi]
+        km_lo, km_hi = float(chunk["corridor_km"].min()), float(chunk["corridor_km"].max())
         mask = pd.Series(train.index.isin(chunk.index), index=train.index)
         c = group_curve(mask, f"Km {km_lo:.0f}–{km_hi:.0f}", "km")
         if c:
+            c["km_lo"], c["km_hi"] = km_lo, km_hi
             curves.append(c)
 
     return {
@@ -544,6 +574,8 @@ def fit_cox_ph(train: pd.DataFrame, holdout: pd.DataFrame) -> dict:
         "cox_n": cox_n,
         "cox_coverage_pct": float(cox_n / (len(train) + len(holdout)) * 100),
         "pred_clearance": pred_clearance,
+        "pred_mean_clearance": pred_mean_clearance,
+        "mean_clearance_minutes": mean_clearance_minutes,
         "curves": curves,
         "coefficients": cph.summary.reset_index().rename(columns={"index": "variable"}).to_dict("records"),
     }
@@ -596,6 +628,14 @@ def ensure_schema(conn, commit: bool = True) -> None:
                 trained_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
             );
 
+            -- The model's expected-value (restricted mean survival time)
+            -- prediction, alongside predicted_clearance_min's median-based
+            -- one — the dashboard's clearance panel shows both rather than
+            -- letting one stand in for "the" predicted clearance time on a
+            -- distribution where median and mean diverge sharply.
+            ALTER TABLE gold.ml_incident_severity_predictions
+                ADD COLUMN IF NOT EXISTS predicted_clearance_mean_min DOUBLE PRECISION;
+
             CREATE TABLE IF NOT EXISTS gold.ml_incident_survival_curve (
                 id SERIAL PRIMARY KEY,
                 group_label TEXT NOT NULL,
@@ -622,6 +662,17 @@ def ensure_schema(conn, commit: bool = True) -> None:
             ALTER TABLE gold.ml_incident_survival_curve
                 ADD COLUMN IF NOT EXISTS n INT;
 
+            -- Raw numeric bounds for the 'km' dimension's quantile segments,
+            -- alongside the formatted "Km {lo}-{hi}" group_label — so a future
+            -- km-convention change (like the corridor_km fix this migration
+            -- itself is) can be corrected by reformatting these numbers at
+            -- read time instead of requiring another retrain. NULL for every
+            -- non-'km' curve.
+            ALTER TABLE gold.ml_incident_survival_curve
+                ADD COLUMN IF NOT EXISTS km_lo DOUBLE PRECISION;
+            ALTER TABLE gold.ml_incident_survival_curve
+                ADD COLUMN IF NOT EXISTS km_hi DOUBLE PRECISION;
+
             CREATE TABLE IF NOT EXISTS gold.ml_incident_severity_metadata (
                 id SERIAL PRIMARY KEY,
                 metadata_json JSONB NOT NULL,
@@ -639,6 +690,7 @@ def write_to_db(conn, holdout: pd.DataFrame, severity_out: dict, cox_out: dict,
 
     preds = severity_out["holdout_predictions"].reset_index(drop=True)
     clearance = cox_out["pred_clearance"].reset_index(drop=True)
+    mean_clearance = cox_out["pred_mean_clearance"].reset_index(drop=True)
     secondary_scores = secondary_out["holdout_scores"]
     actual_secondary = holdout["had_secondary"].reset_index(drop=True)
 
@@ -651,6 +703,7 @@ def write_to_db(conn, holdout: pd.DataFrame, severity_out: dict, cox_out: dict,
             preds.loc[i, "d"].date(), preds.loc[i, "event_start_date"], float(preds.loc[i, "km_value"]),
             preds.loc[i, "source"], int(preds.loc[i, "severity_code"]), int(preds.loc[i, "pred_champion"]),
             severity_out["champion"], num(clearance.iloc[i]), num(secondary_scores[i]), bool(actual_secondary.iloc[i]),
+            num(mean_clearance.iloc[i]),
         ))
 
     with conn.cursor() as cur:
@@ -660,19 +713,19 @@ def write_to_db(conn, holdout: pd.DataFrame, severity_out: dict, cox_out: dict,
             """INSERT INTO gold.ml_incident_severity_predictions
                (incident_date, reported_at, km_value, source, actual_severity_code,
                 predicted_severity_code, severity_model, predicted_clearance_min,
-                secondary_incident_risk, actual_had_secondary) VALUES %s""",
+                secondary_incident_risk, actual_had_secondary, predicted_clearance_mean_min) VALUES %s""",
             rows,
         )
 
         cur.execute("DELETE FROM gold.ml_incident_survival_curve")
         curve_rows = [
-            (c["group"], c["dimension"], t, s, c["n"])
+            (c["group"], c["dimension"], t, s, c["n"], c.get("km_lo"), c.get("km_hi"))
             for c in cox_out["curves"]
             for t, s in zip(c["times"], c["survival"])
         ]
         psycopg2.extras.execute_values(
             cur,
-            "INSERT INTO gold.ml_incident_survival_curve (group_label, dimension, time_min, survival_probability, n) VALUES %s",
+            "INSERT INTO gold.ml_incident_survival_curve (group_label, dimension, time_min, survival_probability, n, km_lo, km_hi) VALUES %s",
             curve_rows,
         )
 
@@ -701,6 +754,9 @@ def print_report(severity_out: dict, cox_out: dict, secondary_out: dict) -> str:
     L.append("  Cox PH — clearance-time survival (site_cleared - event_start_date; see module docstring)")
     L.append(f"    concordance index = {cox_out['concordance_index']:.3f}")
     L.append(f"    MAE (minutes)     = {cox_out['mae_minutes']:.2f}" if cox_out["mae_minutes"] is not None else "    MAE (minutes)     = n/a")
+    L.append(f"    median-based avg  = {np.nanmean(cox_out['pred_clearance'].values):.2f} min (mean of per-row predict_median)")
+    L.append(f"    mean-based avg    = {cox_out['mean_clearance_minutes']:.2f} min (mean of per-row predict_expectation)"
+              if cox_out["mean_clearance_minutes"] is not None else "    mean-based avg    = n/a")
     L.append(f"    n (holdout)       = {cox_out['n']}")
     L.append(f"    trained+scored on = {cox_out['cox_n']} incidents with known daily volume "
               f"({cox_out['cox_coverage_pct']:.1f}% of all incidents — volume now a real covariate, "
@@ -769,6 +825,7 @@ def main() -> None:
             "severity": {"champion": severity_out["champion"], "metrics": severity_out["metrics"],
                          "feature_columns": severity_out["feature_columns"]},
             "cox_ph": {"concordance_index": cox_out["concordance_index"], "mae_minutes": cox_out["mae_minutes"],
+                       "mean_clearance_minutes": cox_out["mean_clearance_minutes"],
                        "n": cox_out["n"], "cox_n": cox_out["cox_n"], "cox_coverage_pct": cox_out["cox_coverage_pct"],
                        "coefficients": cox_out["coefficients"]},
             "secondary_risk": {"auc": secondary_out["auc"], "base_rate": secondary_out["base_rate"], "n": secondary_out["n"]},

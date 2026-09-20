@@ -3,24 +3,25 @@
 ================================================================================
 
   GWR — cross-section over 20 exits, IN-SAMPLE fit (see fit_gwr docstring)
-    bandwidth (fixed, degrees) = 0.6800
-    MAE              = 0.786
-    Poisson_Deviance = 0.920
+    bandwidth (fixed, degrees) = 0.4100
+    MAE              = 1.936
+    Poisson_Deviance = 0.938
     n                = 20
-    Leave-one-exit-out MAE = 2.024  (n=20 folds) — the honest generalization estimate; compare against the in-sample MAE above
+    Leave-one-exit-out MAE = 3.647  (n=20 folds) — the honest generalization estimate; compare against the in-sample MAE above
 
     9 of 60 non-intercept (exit, variable) coefficients are locally significant (|t| > 1.96)
 
   Spatial LSTM — pooled across exits, genuine temporal holdout
-    MAE              = 1.201
-    Poisson_Deviance = 1.896
+    MAE              = 2.063
+    Poisson_Deviance = 1.148
+    baseline MAE     = 2.231 (per-exit train mean)  6.461 (predict zero)
     holdout n        = 1220
-    epochs trained   = 60
+    epochs trained   = 41
 
   Next-24h high-risk segments (top 5):
-    #1  exit_id=12  predicted=1.760  last_observed=8
-    #2  exit_id=11  predicted=1.636  last_observed=1
-    #3  exit_id=4   predicted=1.552  last_observed=5
-    #4  exit_id=10  predicted=1.551  last_observed=3
-    #5  exit_id=13  predicted=1.338  last_observed=1
+    #1  exit_id=3   predicted=12.658  last_observed=13
+    #2  exit_id=14  predicted=12.229  last_observed=9
+    #3  exit_id=13  predicted=11.938  last_observed=10
+    #4  exit_id=1   predicted=11.546  last_observed=14
+    #5  exit_id=4   predicted=11.472  last_observed=12
 ================================================================================

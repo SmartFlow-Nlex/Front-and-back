@@ -15,6 +15,7 @@
 import type { RawRow } from "./parser.js";
 import type { DatasetType } from "./classifier.js";
 import { extractKmPost } from "./cleaner.js";
+import type { LoadConflict } from "./loader.js";
 
 export interface TransformResult {
   tableName: string;
@@ -23,6 +24,8 @@ export interface TransformResult {
   skipped: number;
   /** Set when a materialized view must be refreshed for the load to become visible. */
   refreshMaterializedView?: string;
+  /** Set when the target table has a natural-key UNIQUE constraint the load should upsert against. */
+  conflict?: LoadConflict;
 }
 
 const DAY_NAMES = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
@@ -315,7 +318,13 @@ function transformAccidentData(rows: RawRow[]): TransformResult {
     ]);
   }
 
-  return { tableName: "bronze.nlex_accident_data", columns, rows: transformed, skipped };
+  return {
+    tableName: "bronze.nlex_accident_data",
+    columns,
+    rows: transformed,
+    skipped,
+    conflict: { column: "event_number", action: "update" },
+  };
 }
 
 /**
@@ -366,7 +375,13 @@ function transformBreakdownData(rows: RawRow[]): TransformResult {
     ]);
   }
 
-  return { tableName: "bronze.nlex_breakdown_data", columns, rows: transformed, skipped };
+  return {
+    tableName: "bronze.nlex_breakdown_data",
+    columns,
+    rows: transformed,
+    skipped,
+    conflict: { column: "event_number", action: "update" },
+  };
 }
 
 function transformEmissions(rows: RawRow[]): TransformResult {

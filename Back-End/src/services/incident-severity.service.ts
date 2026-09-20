@@ -32,7 +32,16 @@ const SEVERITY_LABEL: Record<number, string> = { 0: "Property Damage Only", 1: "
 // fit_cox_ph for why these are separate toggled views rather than every
 // curve on one chart, and for n: sample size behind this one curve, as low
 // as 15 for the thinnest "both" cells.
-export type SurvivalCurvePoint = { group: string; dimension: string; timeMin: number; survivalProbability: number; n: number };
+// kmLo/kmHi: the 'km' dimension's raw corridor-relative segment bounds,
+// alongside the formatted "Km {lo}-{hi}" group label -- null for every other
+// dimension. Carried through so a future km-convention change can reformat
+// these numbers at read time instead of requiring a retrain, the same
+// reason train_incident_severity_models.py now stores them (see its
+// fit_cox_ph doc comment for the corridor_km fix this was added for).
+export type SurvivalCurvePoint = {
+  group: string; dimension: string; timeMin: number; survivalProbability: number; n: number;
+  kmLo: number | null; kmHi: number | null;
+};
 
 export type SeverityBreakdownRow = {
   severityCode: number;
@@ -80,7 +89,24 @@ export type SecondaryRiskByKmSegment = {
 export type IncidentSeverityData = {
   survivalCurve: SurvivalCurvePoint[];
   severityBreakdown: SeverityBreakdownRow[];
+  // Median-based: the mean of each row's Cox PH predict_median (site_cleared
+  // - event_start_date's 50%-survival crossing point). Tracks the accident
+  // population's own median (~4-5min) far more closely than its mean
+  // (~22.7min, see meanPredictedClearanceMin) because duration_min is
+  // heavily right-skewed — most accidents clear in minutes, a minority take
+  // hours. Neither figure is wrong; they answer different questions ("what
+  // does a typical incident look like" vs "what should I budget for on
+  // average"), which is why the panel shows both rather than one labeled
+  // ambiguously as "avg".
   avgPredictedClearanceMin: number | null;
+  // Mean-based: the mean of each row's Cox PH predict_expectation (the
+  // model's restricted mean survival time), which integrates the whole
+  // fitted survival curve including its long right tail instead of only
+  // locating the median crossing. This is the figure comparable to the
+  // Descriptive tab's mean MTTC -- both are means over (nearly) the same
+  // accident population, computed two different ways (one from real
+  // clearance times, one from the model's own tail-aware prediction).
+  meanPredictedClearanceMin: number | null;
   avgSecondaryRisk: number | null;
   secondaryRiskByExit: SecondaryRiskByExit[];
   secondaryRiskByKmSegment: SecondaryRiskByKmSegment[];
@@ -92,8 +118,8 @@ export async function getIncidentSeverityFromDb(): Promise<IncidentSeverityData 
   if (!db) return null;
   try {
     const [curveRes, actualRes, predRes, avgRes, metaRes, riskRowsRes, exitRows] = await Promise.all([
-      db.query<{ group_label: string; dimension: string; time_min: number; survival_probability: number; n: number }>(
-        `SELECT group_label, dimension, time_min, survival_probability, n
+      db.query<{ group_label: string; dimension: string; time_min: number; survival_probability: number; n: number; km_lo: number | null; km_hi: number | null }>(
+        `SELECT group_label, dimension, time_min, survival_probability, n, km_lo, km_hi
          FROM gold.ml_incident_survival_curve
          ORDER BY group_label, time_min`
       ),
@@ -107,8 +133,9 @@ export async function getIncidentSeverityFromDb(): Promise<IncidentSeverityData 
          FROM gold.ml_incident_severity_predictions
          GROUP BY predicted_severity_code`
       ),
-      db.query<{ avg_clearance: number | null; avg_risk: number | null; trained_at: string | null }>(
+      db.query<{ avg_clearance: number | null; avg_clearance_mean: number | null; avg_risk: number | null; trained_at: string | null }>(
         `SELECT AVG(predicted_clearance_min) AS avg_clearance,
+                AVG(predicted_clearance_mean_min) AS avg_clearance_mean,
                 AVG(secondary_incident_risk) AS avg_risk,
                 MAX(trained_at)::text AS trained_at
          FROM gold.ml_incident_severity_predictions`
@@ -118,10 +145,19 @@ export async function getIncidentSeverityFromDb(): Promise<IncidentSeverityData 
          ORDER BY created_at DESC LIMIT 1`
       ),
       db.query<{
-        km_value: number; secondary_incident_risk: number | null; actual_had_secondary: boolean | null;
+        corridor_km: number; secondary_incident_risk: number | null; actual_had_secondary: boolean | null;
         predicted_clearance_min: number | null;
       }>(
-        `SELECT km_value, secondary_incident_risk, actual_had_secondary, predicted_clearance_min
+        // km_value here is the model's own training feature (DPWH km-post
+        // convention, per train_incident_severity_models.py) — NOT the same
+        // scale as nlex_exits' Balintawak-as-km-0 positions this gets
+        // compared against below. Corrected to corridor_km at read time with
+        // the same -12.0 offset silver.nlex_accident_events_clean applies,
+        // rather than re-exporting the gold table (see the km-offset
+        // investigation this fix came out of). The model itself doesn't need
+        // retraining: km_value was only ever a plain numeric feature there,
+        // never joined against the exit list.
+        `SELECT km_value - 12.0 AS corridor_km, secondary_incident_risk, actual_had_secondary, predicted_clearance_min
          FROM gold.ml_incident_severity_predictions
          WHERE secondary_incident_risk IS NOT NULL`
       ),
@@ -145,10 +181,10 @@ export async function getIncidentSeverityFromDb(): Promise<IncidentSeverityData 
         predictedCount: predByCode.get(code) ?? 0,
       }));
 
-    // Nearest exit per prediction, by km_value — the same "closest post"
+    // Nearest exit per prediction, by corridor_km — the same "closest post"
     // rule resolveExitForLocation's km branch uses in incident.service.ts,
-    // just against a numeric km_value directly rather than a regex-matched
-    // one, since these rows already carry it.
+    // just against a numeric value directly rather than a regex-matched one,
+    // since these rows already carry it.
     const exits = (exitRows ?? []) as { exit_id: number; exit_name: string; km: number }[];
     const byExit = new Map<
       number,
@@ -157,7 +193,7 @@ export async function getIncidentSeverityFromDb(): Promise<IncidentSeverityData 
     if (exits.length > 0) {
       for (const row of riskRowsRes.rows) {
         const nearest = exits.reduce((best, x) =>
-          Math.abs(x.km - row.km_value) < Math.abs(best.km - row.km_value) ? x : best
+          Math.abs(x.km - row.corridor_km) < Math.abs(best.km - row.corridor_km) ? x : best
         );
         const entry = byExit.get(nearest.exit_id) ?? {
           exitName: nearest.exit_name, km: nearest.km, n: 0, sumRisk: 0, secondaryCount: 0, sumClearance: 0, clearanceN: 0,
@@ -200,7 +236,7 @@ export async function getIncidentSeverityFromDb(): Promise<IncidentSeverityData 
       { n: number; sumRisk: number; secondaryCount: number; sumClearance: number; clearanceN: number }
     >();
     for (const row of riskRowsRes.rows) {
-      const idx = segmentIndexForKm(row.km_value, segments);
+      const idx = segmentIndexForKm(row.corridor_km, segments);
       if (idx < 0) continue;
       const entry = bySegmentIdx.get(idx) ?? { n: 0, sumRisk: 0, secondaryCount: 0, sumClearance: 0, clearanceN: 0 };
       entry.n += 1;
@@ -236,9 +272,12 @@ export async function getIncidentSeverityFromDb(): Promise<IncidentSeverityData 
         timeMin: Number(r.time_min),
         survivalProbability: Number(r.survival_probability),
         n: r.n,
+        kmLo: r.km_lo == null ? null : Number(r.km_lo),
+        kmHi: r.km_hi == null ? null : Number(r.km_hi),
       })),
       severityBreakdown,
       avgPredictedClearanceMin: avg?.avg_clearance == null ? null : Number(avg.avg_clearance),
+      meanPredictedClearanceMin: avg?.avg_clearance_mean == null ? null : Number(avg.avg_clearance_mean),
       avgSecondaryRisk: avg?.avg_risk == null ? null : Number(avg.avg_risk),
       secondaryRiskByExit,
       secondaryRiskByKmSegment,

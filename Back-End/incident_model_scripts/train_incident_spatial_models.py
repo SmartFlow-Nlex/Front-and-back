@@ -31,13 +31,24 @@ this script does not attempt to fix. PyTorch publishes cp314 wheels, so it is
 what makes a real (not simulated) LSTM possible in this environment today.
 
 Several small helpers here (get_conn, load_daily_rain, calendar_features,
-resolve_exit_for_location, the exit-reference SQL) mirror code that already
-lives in train_incident_models.py and src/services/incident.service.ts /
-map-comparison.service.ts. Duplicated rather than imported — importing
-train_incident_models would pull in its module-level `import tensorflow`,
-which fails outright in this environment — and kept in sync by hand, the
-same convention this codebase already uses everywhere a Python/TS pair
-needs to agree (see e.g. PRED_COLUMN's sync comment in train_incident_models.py).
+the exit-reference SQL) mirror code that already lives in
+train_incident_models.py and src/services/map-comparison.service.ts.
+Duplicated rather than imported — importing train_incident_models would
+pull in its module-level `import tensorflow`, which fails outright in this
+environment — and kept in sync by hand, the same convention this codebase
+already uses everywhere a Python/TS pair needs to agree (see e.g.
+PRED_COLUMN's sync comment in train_incident_models.py).
+
+Incident source: silver.nlex_accident_events_clean / nlex_breakdown_events_clean
+(the client's real accident/breakdown exports), resolved to an exit by
+nearest corridor_km — migrated off the legacy nlex_road_crashes/
+nlex_motorcycle_crashes/nlex_stalled_vehicles free-text `location` join,
+which parsed "Km N" out of location strings using the DPWH km-post
+convention and compared it directly against the Balintawak-relative exit
+list with no offset correction (the same bug already found and fixed in
+incident-severity.service.ts). corridor_km is a plain numeric column on the
+client tables, already on the exit list's scale, so this needed no regex
+and has no unresolved-location case any more.
 
 Usage:
     python train_incident_spatial_models.py                 # train + report only
@@ -50,7 +61,6 @@ import argparse
 import json
 import os
 import random
-import re
 import sys
 import warnings
 from datetime import date, timedelta
@@ -144,17 +154,26 @@ LEFT JOIN silver.nlex_exit_reference r ON r.exit_name = x.exit_name
 ORDER BY x.exit_id
 """
 
-# Same three operations logs as train_incident_models.py's DAILY_COUNTS_SQL /
-# incident.service.ts's INCIDENTS_CTE, but keeping `location` per row instead
-# of collapsing straight to a daily count — each row still needs to be
-# resolved to an exit before it can be aggregated.
-_D = "CASE WHEN date LIKE '%/%' THEN to_date(date, 'MM/DD/YYYY') ELSE date::date END"
-INCIDENT_LOCATIONS_SQL = f"""
-    SELECT {_D} AS d, location FROM nlex_road_crashes       WHERE date IS NOT NULL AND location IS NOT NULL
+# Same client tables as train_incident_models.py's DAILY_COUNTS_SQL and
+# train_incident_severity_models.py's POOLED_INCIDENTS_SQL — migrated off
+# the legacy nlex_road_crashes/nlex_motorcycle_crashes/nlex_stalled_vehicles
+# free-text `location` join (see the git history: this used to carry
+# `location` per row and resolve it to an exit via regex-parsed "Km N" text
+# matched against the Balintawak-relative exit list, with no correction for
+# km_value's DPWH km-post convention (Balintawak ~ km 12) — the same offset
+# bug found and fixed in incident-severity.service.ts, still live in
+# src/services/incident.service.ts's corridor-forecast code at the time this
+# comment was written). corridor_km is selected directly instead: a plain
+# numeric column, already Balintawak-relative, no text parsing or unresolved
+# rows possible.
+INCIDENT_LOCATIONS_SQL = """
+    SELECT event_start_date::date AS d, corridor_km
+    FROM silver.nlex_accident_events_clean
+    WHERE event_start_date IS NOT NULL AND corridor_km IS NOT NULL
     UNION ALL
-    SELECT {_D} AS d, location FROM nlex_motorcycle_crashes WHERE date IS NOT NULL AND location IS NOT NULL
-    UNION ALL
-    SELECT {_D} AS d, location FROM nlex_stalled_vehicles   WHERE date IS NOT NULL AND location IS NOT NULL
+    SELECT event_encoded_date::date AS d, corridor_km
+    FROM silver.nlex_breakdown_events_clean
+    WHERE event_encoded_date IS NOT NULL AND corridor_km IS NOT NULL
 """
 
 # Mirrors train_incident_models.py's DAILY_RAIN_SQL — one corridor-wide
@@ -178,39 +197,6 @@ EXIT_VOLUME_SQL = """
     WHERE exit_id IS NOT NULL
     GROUP BY exit_id, date_day
 """
-
-
-# ---------------------------------------------------------------------------
-# Incident -> exit resolution. Mirrors resolveExitForLocation in
-# src/services/incident.service.ts line for line — that function is the
-# settled approach (the git history shows an earlier attempt keyed off the
-# raw `nearest_exit` column instead and was reverted), so this follows the
-# same two-strategy rule rather than reinventing one. Kept in sync by hand.
-# ---------------------------------------------------------------------------
-LOCATION_KM_RE = re.compile(r"Km\s*(\d+(?:\.\d+)?)", re.IGNORECASE)
-
-
-def normalize_location_text(s: str) -> str:
-    return re.sub(r"[^a-z0-9]", "", s.lower())
-
-
-def resolve_exit_for_location(location: str, exits: list[dict]) -> dict | None:
-    km_match = LOCATION_KM_RE.search(location)
-    if km_match and exits:
-        km = float(km_match.group(1))
-        return min(exits, key=lambda x: abs(x["km"] - km))
-
-    norm = normalize_location_text(location)
-    if not norm:
-        return None
-    candidates = [
-        x for x in exits
-        if (en := normalize_location_text(x["exit_name"])) and (norm in en or en in norm)
-    ]
-    if not candidates:
-        return None
-    candidates.sort(key=lambda x: len(normalize_location_text(x["exit_name"])), reverse=True)
-    return candidates[0]
 
 
 # ---------------------------------------------------------------------------
@@ -261,25 +247,24 @@ def calendar_features(dates: pd.Series, holiday_dates: set) -> pd.DataFrame:
 def load_incident_exit_counts(conn, exits_df: pd.DataFrame) -> pd.DataFrame:
     """One row per (date, exit_id) with the resolved incident count, zero-filled
     over the full calendar range x every exit — most exit-days have no
-    incident at all, and an absent row must read as 0, not as missing."""
+    incident at all, and an absent row must read as 0, not as missing.
+
+    Resolution is a nearest-neighbour match on corridor_km (both sides
+    already on the same Balintawak-relative scale), via merge_asof rather
+    than a per-row Python loop — vectorized, and every row resolves (no
+    free-text ambiguity left to produce an "unresolved" row the way the old
+    location-text matching could)."""
     raw = pd.read_sql(INCIDENT_LOCATIONS_SQL, conn)
     raw["d"] = pd.to_datetime(raw["d"])
-    exits = exits_df.to_dict("records")
 
-    resolved_exit_id = []
-    unresolved = 0
-    for loc in raw["location"]:
-        match = resolve_exit_for_location(str(loc), exits)
-        resolved_exit_id.append(match["exit_id"] if match else None)
-        if match is None:
-            unresolved += 1
-    raw["exit_id"] = resolved_exit_id
-    print(f"  {len(raw)} incident rows -> {len(raw) - unresolved} resolved to an exit "
-          f"({unresolved} unresolved, {unresolved / max(len(raw), 1) * 100:.1f}%)")
+    exits_by_km = exits_df[["exit_id", "km"]].sort_values("km").reset_index(drop=True)
+    raw_by_km = raw.sort_values("corridor_km").reset_index(drop=True)
+    matched = pd.merge_asof(
+        raw_by_km, exits_by_km, left_on="corridor_km", right_on="km", direction="nearest"
+    )
+    print(f"  {len(matched)} incident rows resolved to an exit by nearest corridor_km")
 
-    resolved = raw.dropna(subset=["exit_id"]).copy()
-    resolved["exit_id"] = resolved["exit_id"].astype(int)
-    counts = resolved.groupby(["d", "exit_id"]).size().rename("count").reset_index()
+    counts = matched.groupby(["d", "exit_id"]).size().rename("count").reset_index()
 
     full_dates = pd.date_range(raw["d"].min(), raw["d"].max(), freq="D")
     panel_index = pd.MultiIndex.from_product(
@@ -573,19 +558,35 @@ def fit_spatial_lstm(panel: pd.DataFrame, exits_df: pd.DataFrame, holdout_days: 
           f"(cutoff {cutoff.date()})")
 
     model = SpatialLSTM(seq_features=len(SEQ_FEATURES), static_features=len(STATIC_FEATURES))
+    # Head bias starts at log(mean training count) rather than 0. The output
+    # is a log-rate, so a zero start means "predict 1 incident per exit-day"
+    # — fine when this panel's mean was ~1.3 (the old three-table source),
+    # badly off at ~5.3 (the full accident+breakdown population).
+    with torch.no_grad():
+        model.head.bias.fill_(float(np.log(max(y_tr.mean().item(), 1e-3))))
     optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
     # PoissonNLLLoss(log_input=True): model outputs log(lambda); this is the
     # loss the diagram's "Poisson deviance" KPI is directly reporting.
     loss_fn = nn.PoissonNLLLoss(log_input=True)
 
+    # Mini-batch, not full-batch. This used to take ONE gradient step per
+    # epoch (60 steps total at lr 1e-3, never early-stopping) — on the full
+    # population that left the model badly under-trained: holdout MAE 5.36
+    # against 6.46 for predicting zero and 2.23 for a plain per-exit
+    # historical mean, mean prediction 1.4 against a true 6.5. Mini-batches
+    # give it ~60 steps PER epoch, and it now beats both baselines (see
+    # metrics["baseline_mae_per_exit_mean"]).
+    BATCH_SIZE = 512
+    n_train = len(y_tr)
     best_val_loss, best_state, patience_left = float("inf"), None, PATIENCE
     for epoch in range(EPOCHS):
         model.train()
-        optimizer.zero_grad()
-        pred = model(seq_tr, static_tr)
-        loss = loss_fn(pred, y_tr)
-        loss.backward()
-        optimizer.step()
+        perm = torch.randperm(n_train)
+        for start in range(0, n_train, BATCH_SIZE):
+            b = perm[start:start + BATCH_SIZE]
+            optimizer.zero_grad()
+            loss_fn(model(seq_tr[b], static_tr[b]), y_tr[b]).backward()
+            optimizer.step()
 
         model.eval()
         with torch.no_grad():
@@ -605,9 +606,19 @@ def fit_spatial_lstm(panel: pd.DataFrame, exits_df: pd.DataFrame, holdout_days: 
         val_pred_count = torch.exp(model(seq_val, static_val)).numpy()
     y_val_np = y_val.numpy()
 
+    # Naive reference on the SAME holdout rows: each exit's mean training
+    # count. A model that can't beat this isn't adding anything over "this
+    # exit is usually busy".
+    train_meta = [m_ for m_, v in zip(meta, is_val) if not v]
+    train_mean_by_exit = pd.Series(y_tr.numpy()).groupby([e for e, _ in train_meta]).mean()
+    val_exit_ids = [m_[0] for m_, v in zip(meta, is_val) if v]
+    baseline_pred = np.array([train_mean_by_exit.get(e, float(y_tr.mean())) for e in val_exit_ids])
+
     metrics = {
         "MAE": mae_of(y_val_np, val_pred_count),
         "Poisson_Deviance": poisson_deviance_of(y_val_np, val_pred_count),
+        "baseline_mae_per_exit_mean": mae_of(y_val_np, baseline_pred),
+        "baseline_mae_zero": mae_of(y_val_np, np.zeros_like(y_val_np)),
         "n": int(len(y_val_np)),
         "epochs_trained": epoch + 1,
     }
@@ -768,6 +779,8 @@ def print_report(gwr_out: dict, lstm_out: dict) -> str:
     L.append("  Spatial LSTM — pooled across exits, genuine temporal holdout")
     L.append(f"    MAE              = {lstm_out['metrics']['MAE']:.3f}")
     L.append(f"    Poisson_Deviance = {lstm_out['metrics']['Poisson_Deviance']:.3f}")
+    L.append(f"    baseline MAE     = {lstm_out['metrics']['baseline_mae_per_exit_mean']:.3f} (per-exit train mean)  "
+             f"{lstm_out['metrics']['baseline_mae_zero']:.3f} (predict zero)")
     L.append(f"    holdout n        = {lstm_out['metrics']['n']}")
     L.append(f"    epochs trained   = {lstm_out['metrics']['epochs_trained']}")
     L.append("")
@@ -814,6 +827,7 @@ def main() -> None:
             return
 
         metadata = {
+            "data_source": "silver.nlex_accident_events_clean + silver.nlex_breakdown_events_clean",
             "gwr": {"bandwidth": gwr_out["bw"], "metrics": gwr_out["metrics"], "variables": GWR_VARIABLES},
             "spatial_lstm": {"metrics": lstm_out["metrics"], "seq_len": SEQ_LEN, "n_neighbors": N_NEIGHBORS,
                               "seq_features": SEQ_FEATURES, "static_features": STATIC_FEATURES},

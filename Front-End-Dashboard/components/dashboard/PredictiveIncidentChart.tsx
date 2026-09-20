@@ -44,27 +44,6 @@ type Props = {
   // weatherApplicable, so the page can disable the Weather chips when the
   // current Range has nothing for them to filter.
   onWeatherApplicableChange?: (applicable: boolean) => void;
-  // Fired alongside the others with the response's corridor breakdown, so the
-  // page can render PredictiveCorridorChart as its own card without this
-  // component fetching /api/incident/predictive a second time for the same
-  // Range/Weather-scoped data.
-  onCorridorForecastChange?: (corridor: {
-    corridorForecast: PredictiveData["corridorForecast"];
-    kmSegmentForecast: PredictiveData["kmSegmentForecast"];
-    unclassifiedLocationShare: number | null;
-    forecastHorizon: number;
-    // Pretty label of whichever model corridorForecast was apportioned from
-    // (the Models toolbar's active pick, or the champion as a fallback) —
-    // null only alongside a null corridorForecast.
-    forecastModelLabel: string | null;
-    // The Volume/Weather toggle state this corridorForecast was apportioned
-    // under (the backend re-derives its total from the corresponding
-    // volume-free/weather-free series when either is off) — carried along so
-    // the corridor card can disclose which basis it's showing rather than
-    // silently agreeing or disagreeing with the chart above it.
-    showVolume: boolean;
-    showWeather: boolean;
-  }) => void;
 };
 
 const zoneLabel = (text: string, show: boolean) => ({
@@ -108,7 +87,6 @@ export default function PredictiveIncidentChart({
   weather,
   onDataBoundsChange,
   onWeatherApplicableChange,
-  onCorridorForecastChange,
 }: Props = {}) {
   const [data, setData] = useState<PredictiveData | null>(null);
   const [loading, setLoading] = useState(true);
@@ -138,14 +116,12 @@ export default function PredictiveIncidentChart({
   // point, so an Hourly granularity would offer nothing an Hourly button on
   // the traffic chart's own (decorative, always-disabled) control does either.
   const [granularity, setGranularity] = useState<"Daily" | "Weekly" | "Monthly">("Daily");
+  // Accident/breakdown split view. Only offered when the dedicated accident
+  // forecast exists (data.accidentSplit); off by default so the chart opens on
+  // the same total-count view it always has.
+  const [splitView, setSplitView] = useState(false);
   // Guards the one-time "open on the champion" default against filter refetches.
   const seededRef = useRef(false);
-  // `selected` is now a fetch dependency (below) so a user's model pick
-  // resyncs the corridor card. But the one-time champion seed also writes to
-  // `selected`, which would otherwise trigger a second, redundant fetch of
-  // the exact same data right after the first — this flags that specific
-  // transition so the effect can skip it without skipping a real user pick.
-  const skipNextFetchRef = useRef(false);
   const router = useRouter();
 
   const toggleModel = useCallback((key: ModelKey) => {
@@ -157,11 +133,6 @@ export default function PredictiveIncidentChart({
   }, []);
 
   useEffect(() => {
-    if (skipNextFetchRef.current) {
-      skipNextFetchRef.current = false;
-      return;
-    }
-
     // A half-filled custom range would query a nonsense window — wait until
     // both dates are picked. Mirrors the same gate on the traffic chart
     // (PredictiveVolumeChart): `from` only ever arrives set once Custom is
@@ -184,16 +155,6 @@ export default function PredictiveIncidentChart({
     // default ("on") so an unrelated caller's URL doesn't grow for no reason.
     if (!showVolume) qs.set("volumeToggle", "off");
     if (!showWeather) qs.set("weatherToggle", "off");
-    // Syncs the corridor card's total to the same Future window (1wk/2wk/1mo)
-    // this chart is currently drawing — null means "the whole published
-    // horizon", the same default the FUTURE_PRESETS control itself starts on.
-    if (futureDays != null) qs.set("futureDays", String(futureDays));
-    // Syncs the corridor card to the Models toolbar's active pick, the same
-    // way it already syncs to Volume/Weather/Future. `selected` starts empty
-    // (seeded to the champion only after the first response lands), so the
-    // very first request correctly sends nothing and the backend's own
-    // champion fallback applies.
-    if (selected.length > 0) qs.set("forecastModel", selected[0]);
     const url = qs.size > 0
       ? `${BACKEND}/api/incident/predictive?${qs}`
       : `${BACKEND}/api/incident/predictive`;
@@ -210,36 +171,12 @@ export default function PredictiveIncidentChart({
         setData(payload);
         onDataBoundsChange?.(payload.dataBounds);
         onWeatherApplicableChange?.(payload.weatherApplicable);
-        onCorridorForecastChange?.({
-          corridorForecast: payload.corridorForecast,
-          kmSegmentForecast: payload.kmSegmentForecast,
-          unclassifiedLocationShare: payload.unclassifiedLocationShare,
-          // The window corridorForecast was actually apportioned over — NOT
-          // modelInfo.forecastHorizon (the pipeline's full published horizon),
-          // so the card's "(next Nd)" label stays honest once Future is
-          // trimmed to less than that.
-          forecastHorizon: payload.corridorForecastDays,
-          // Pretty label for whichever model corridorForecast actually used
-          // (the toolbar's pick, or the champion as a fallback) — resolved
-          // here since this component already owns META/MODELS, rather than
-          // handing PredictiveCorridorChart a raw key to look up itself.
-          forecastModelLabel: payload.corridorForecastModel
-            ? (META[payload.corridorForecastModel as ModelKey]?.label ?? payload.corridorForecastModel)
-            : null,
-          showVolume,
-          showWeather,
-        });
         // Open on the champion so the default view matches the headline metrics,
         // but only on first load — re-seeding on every filter change would throw
-        // away a model comparison the user had set up.
+        // away a model comparison the user had set up. `selected` isn't a fetch
+        // dependency (below), so this can't trigger a redundant refetch.
         if (!seededRef.current) {
           const champ = MODELS.find((m) => m.key === payload.summary.championModel)?.key;
-          // This response was already fetched without forecastModel, which
-          // the backend resolves to the champion anyway — so the fetch this
-          // seed is about to trigger (selected is now a dependency) would
-          // return identical data. Skip it rather than round-tripping for a
-          // response that can't have changed.
-          skipNextFetchRef.current = true;
           setSelected([champ ?? MODELS[0].key]);
           seededRef.current = true;
         }
@@ -254,7 +191,7 @@ export default function PredictiveIncidentChart({
     return () => {
       cancelled = true;
     };
-  }, [months, from, to, weather, showVolume, showWeather, futureDays, selected, onDataBoundsChange, onWeatherApplicableChange, onCorridorForecastChange]);
+  }, [months, from, to, weather, showVolume, showWeather, onDataBoundsChange, onWeatherApplicableChange]);
 
   // Only blank the card on the very first load. Changing Range or Weather
   // refetches, and swapping the whole chart out for a spinner each time made the
@@ -388,7 +325,7 @@ export default function PredictiveIncidentChart({
   // it and cannot change what was scored or forecast. Volume rides along as
   // an extra "model" column so it gets the same mean-and-majority-zone
   // treatment as everything else without a second aggregation pass.
-  type AggKey = ModelKey | "__volume";
+  type AggKey = ModelKey | "__volume" | "__accA" | "__accP" | "__bdA" | "__bdP";
   const modelsFlat = Object.fromEntries(
     availableModels.map((m) => [
       m.key,
@@ -407,6 +344,23 @@ export default function PredictiveIncidentChart({
     ])
   ) as Record<ModelKey, (number | null)[]>;
 
+  // Accident/breakdown split. Accidents come from their own trained model.
+  // Breakdowns are NOT a second model: a dedicated breakdown model measured no
+  // better than the blended fit, so they are derived as (blended champion
+  // forecast - accident forecast) and (actual total - actual accidents), which
+  // reconstructs the total exactly. Forecasts use the champion's PRIMARY
+  // series; the Volume/Weather twins only switch the overlay in this view.
+  const split = data.accidentSplit;
+  const splitOn = splitView && split != null;
+  const accByDate = new Map((split?.daily ?? []).map((r) => [r.date, r]));
+  const isForecastRow = (d: (typeof daily)[number]) => d.predictionType === "validation" || d.predictionType === "future";
+  const accA = daily.map((d) => accByDate.get(d.date)?.actual ?? null);
+  const accP = daily.map((d) => (isForecastRow(d) ? accByDate.get(d.date)?.predicted ?? null : null));
+  const bdA = daily.map((d, i) => (d.actual != null && accA[i] != null ? d.actual - (accA[i] as number) : null));
+  const bdP = daily.map((d, i) =>
+    isForecastRow(d) && d.predicted != null && accP[i] != null ? Math.max(d.predicted - (accP[i] as number), 0) : null
+  );
+
   const agg =
     granularity === "Daily"
       ? null
@@ -414,7 +368,7 @@ export default function PredictiveIncidentChart({
           granularity,
           isoDates: daily.map((d) => d.date),
           baseActual: actualData,
-          models: { ...modelsFlat, __volume: daily.map((d) => d.volume ?? null) },
+          models: { ...modelsFlat, __volume: daily.map((d) => d.volume ?? null), __accA: accA, __accP: accP, __bdA: bdA, __bdP: bdP },
           rainfall: daily.map((d) => d.rainfallMm),
           holdoutStart: validationStart,
           futureStart,
@@ -427,6 +381,10 @@ export default function PredictiveIncidentChart({
   const effRainfall = agg ? agg.rainfall : daily.map((d) => d.rainfallMm);
   const effModels: Record<AggKey, (number | null)[]> = agg ? agg.models : (modelsFlat as Record<AggKey, (number | null)[]>);
   const effVolume = effModels.__volume ?? daily.map((d) => d.volume ?? null);
+  const effAccA = agg ? agg.models.__accA : accA;
+  const effAccP = agg ? agg.models.__accP : accP;
+  const effBdA = agg ? agg.models.__bdA : bdA;
+  const effBdP = agg ? agg.models.__bdP : bdP;
   const effHoldoutStart = agg ? agg.holdoutStart : validationStart;
   const effFutureStart = agg ? agg.futureStart : futureStart;
   const effLastIndex = effDates.length - 1;
@@ -519,6 +477,43 @@ export default function PredictiveIncidentChart({
   ];
   const rainBand = (mm: number) => RAIN_BANDS.find((b) => mm < b.max) ?? RAIN_BANDS[RAIN_BANDS.length - 1];
 
+  // Zone bands + dividers, attached to whichever series is the ground truth.
+  const bandProps =
+    markAreaData.length > 0
+      ? {
+          markArea: { silent: true, data: markAreaData },
+          markLine: {
+            silent: true,
+            symbol: "none" as const,
+            label: { show: false },
+            lineStyle: { type: "dashed" as const, color: "#94a3b8" },
+            data: markLineData,
+          },
+        }
+      : {};
+
+  const ACCIDENT_COLOR = "#dc2626";
+  const BREAKDOWN_COLOR = "#0f766e";
+  const splitLine = (name: string, data: (number | null)[], color: string, forecast: boolean) => ({
+    name,
+    type: "line" as const,
+    data,
+    smooth: true,
+    connectNulls: true,
+    symbol: "circle" as const,
+    symbolSize: 5,
+    z: forecast ? 3 : 4,
+    lineStyle: { width: forecast ? 2.2 : 2.5, color, type: forecast ? ("dashed" as const) : ("solid" as const) },
+    itemStyle: { color },
+    emphasis: { scale: 2.2 },
+  });
+  const SPLIT_SERIES = [
+    { ...splitLine("Actual Accidents", effAccA, ACCIDENT_COLOR, false), ...bandProps },
+    splitLine("Accident forecast", effAccP, ACCIDENT_COLOR, true),
+    splitLine("Actual Breakdowns", effBdA, BREAKDOWN_COLOR, false),
+    splitLine("Breakdown forecast (derived)", effBdP, BREAKDOWN_COLOR, true),
+  ];
+
   const option: EChartsOption = {
     grid: { left: 60, right: 24, top: 28, bottom: 96 },
     // A scrub/zoom bar under the chart, same as PredictiveVolumeChart's —
@@ -564,8 +559,9 @@ export default function PredictiveIncidentChart({
     },
     legend: {
       data: [
-        "Actual Count",
-        ...activeModels.map((k) => `${META[k].label} Prediction`),
+        ...(splitOn
+          ? ["Actual Accidents", "Accident forecast", "Actual Breakdowns", "Breakdown forecast (derived)"]
+          : ["Actual Count", ...activeModels.map((k) => `${META[k].label} Prediction`)]),
         ...(showWeather ? ["Rainfall"] : []),
         ...(showVolume ? ["Vehicle Volume"] : []),
       ],
@@ -670,9 +666,10 @@ export default function PredictiveIncidentChart({
             },
           ]
         : []),
-      {
+      ...(splitOn ? SPLIT_SERIES : []),
+      ...(splitOn ? [] : [{
         name: "Actual Count",
-        type: "line",
+        type: "line" as const,
         data: effActual,
         smooth: true,
         symbol: "circle",
@@ -688,20 +685,9 @@ export default function PredictiveIncidentChart({
         // narrower than the holdout should still show Present+Future even
         // though Past has nothing to show. Coordinates are plain indices, not
         // dates[i] label strings — see the comment above showPast/etc. for why.
-        ...(markAreaData.length > 0
-          ? {
-              markArea: { silent: true, data: markAreaData },
-              markLine: {
-                silent: true,
-                symbol: "none",
-                label: { show: false },
-                lineStyle: { type: "dashed", color: "#94a3b8" },
-                data: markLineData,
-              },
-            }
-          : {}),
-      },
-      ...activeModels.map((key) => ({
+        ...bandProps,
+      }]),
+      ...(splitOn ? [] : activeModels).map((key) => ({
         name: `${META[key].label} Prediction`,
         type: "line" as const,
         // Model curves are drawn only across Present (validation) and Future —
@@ -938,7 +924,29 @@ export default function PredictiveIncidentChart({
           </p>
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: "12px", flexWrap: "wrap" }}>
-          {modelToolbar}
+          {data.accidentSplit && (
+            <div
+              style={{ display: "inline-flex", gap: "2px", padding: "3px", background: "var(--bg-surface, #fff)", border: "1px solid #dce2ef", borderRadius: "999px" }}
+              title="Total: the blended forecast with every candidate model. Split: a dedicated accident forecast, with breakdowns derived as blended total minus accidents."
+            >
+              {([false, true] as const).map((on) => (
+                <button
+                  key={String(on)}
+                  onClick={() => setSplitView(on)}
+                  aria-pressed={splitView === on}
+                  style={{
+                    padding: "4px 12px", borderRadius: "999px", border: "none", cursor: "pointer",
+                    background: splitView === on ? "#4f46e5" : "transparent",
+                    color: splitView === on ? "#fff" : "#4b5e7d",
+                    fontWeight: 600, fontSize: "0.72rem", whiteSpace: "nowrap",
+                  }}
+                >
+                  {on ? "Accident / Breakdown" : "Total"}
+                </button>
+              ))}
+            </div>
+          )}
+          {splitOn ? null : modelToolbar}
           {/* Exposure overlay toggle — same pill the traffic forecast uses for
               its Weather overlay, so the two charts are operated the same way. */}
           <button
@@ -1177,6 +1185,19 @@ export default function PredictiveIncidentChart({
         </div>
       )}
 
+      {splitOn && split && (
+        <div style={{ padding: "12px 16px", borderRadius: "10px", background: "#fef2f2", border: "1px solid #fecaca", fontSize: "0.82rem", color: "#7f1d1d", lineHeight: 1.55 }}>
+          <strong>Accident forecast</strong> — {split.championModel ? (META[split.championModel as ModelKey]?.label ?? split.championModel) : "champion"},
+          fitted on accidents alone (last trained {fmtTrainedAt(split.trainedAt)}).
+          {typeof split.metrics?.MAE === "number" && typeof split.metrics?.R2 === "number" && (
+            <> Held-out MAE <strong>{fmtNum(split.metrics.MAE as number)}</strong> incidents/day, R² <strong>{fmtNum(split.metrics.R2 as number, 3)}</strong>.</>
+          )}{" "}
+          Accidents are only ~12% of daily volume, so in the blended fit they are outweighed by breakdowns; giving them their own
+          model is what recovers their signal. <strong>Breakdowns are derived, not separately modeled</strong> (blended forecast minus
+          accident forecast): a dedicated breakdown model was tested and did no better than the blended fit. Metrics below describe the
+          blended forecast.
+        </div>
+      )}
       {metricsTable}
       {weatherPanel}
 

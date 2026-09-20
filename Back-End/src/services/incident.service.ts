@@ -75,14 +75,18 @@ const KM_OF = `(regexp_match(location, 'Km\\s*(\\d+)'))[1]::int`;
 // main_cause/sub_cause/type_of_event straight off each source table instead,
 // because the two tables' cause vocabularies don't share a domain (mechanical
 // fault vs. driver behavior) and the previous single ranked list conflated
-// them (see the earlier audit). km_value is used directly — both tables carry
-// it as a clean numeric column, so the old regexp_match on a free-text
-// location field is gone entirely.
+// them (see the earlier audit). corridor_km, not km_value: the source
+// tables' raw km_value follows the Philippine DPWH km-post convention
+// (Balintawak ~ km 12), not this dashboard's Balintawak-as-km-0 scale —
+// corridor_km (= km_value - 12.0, added in scripts/medallion/
+// 10-bronze-accident-breakdown.sql) is already on the same scale as
+// nlex_exits, so hotspot bins line up with the exit list instead of sitting
+// ~12km off it.
 const EVENTS_CTE = `
   events AS (
     SELECT event_start_date::date AS d,
            EXTRACT(hour FROM event_start_date)::int AS h,
-           km_value, weather_condition,
+           corridor_km, weather_condition,
            COALESCE(number_of_injured, 0) AS inj,
            COALESCE(number_of_fatality, 0) AS fat,
            'accident' AS src
@@ -91,7 +95,7 @@ const EVENTS_CTE = `
     UNION ALL
     SELECT event_encoded_date::date,
            EXTRACT(hour FROM event_encoded_date)::int,
-           km_value, NULL,
+           corridor_km, NULL,
            0, 0,
            'breakdown'
     FROM silver.nlex_breakdown_events_clean
@@ -207,16 +211,17 @@ export async function getIncidentAnalyticsFromDb(filters: IncidentAnalyticsFilte
          FROM events WHERE ${WHERE} GROUP BY 1 ORDER BY 1`,
         params
       ),
-      // Hotspots: 5-km bins straight from km_value — both tables carry it
+      // Hotspots: 5-km bins on corridor_km (Balintawak-relative), not the
+      // source tables' raw km_value (DPWH-relative) — both tables carry it
       // natively, so there's no location text to regex-parse anymore.
       db.query(
         `WITH ${EVENTS_CTE}, ${WXALL_CTE}
-         SELECT (FLOOR(km_value / 5) * 5)::int AS km_bin, COUNT(*)::int AS total,
+         SELECT (FLOOR(corridor_km / 5) * 5)::int AS km_bin, COUNT(*)::int AS total,
                 COUNT(*) FILTER (WHERE src = 'accident')::int AS accident,
                 COUNT(*) FILTER (WHERE src = 'breakdown')::int AS breakdown,
                 SUM(inj)::int AS injuries, SUM(fat)::int AS fatalities
          FROM events
-         WHERE ${WHERE} AND km_value IS NOT NULL
+         WHERE ${WHERE} AND corridor_km IS NOT NULL
          GROUP BY 1 ORDER BY 2 DESC`,
         params
       ),
@@ -896,24 +901,7 @@ export type IncidentPredictiveFilters = {
   // both-features series) so a caller that omits them gets today's behavior.
   volumeToggle?: "on" | "off";
   weatherToggle?: "on" | "off";
-  // The chart's Future control (1wk/2wk/1mo) — how many of the published
-  // future days corridorForecast apportions its total over. Absent means
-  // "the whole stored horizon", matching the chart's own default before the
-  // control is touched. Distinct from purely client-side trimming: the
-  // corridor total needs the actual per-day predictions for just this many
-  // days, not a scaled-down guess.
-  futureDays?: number;
-  // The Models toolbar's active selection — which model corridorForecast
-  // apportions. Falls back to the champion when absent or when the named
-  // model has no stored data for this table.
-  forecastModel?: ModelKeyString;
 };
-
-// Matches ModelKey in the frontend's incidentPredictive.shared.ts / MODEL_NAMES
-// in train_incident_models.py — kept as a plain union (not imported from the
-// Zod schema) since this service has no other dependency on the validator's
-// types beyond IncidentPredictiveResult.
-type ModelKeyString = (typeof INCIDENT_MODELS)[number]["key"];
 
 // The response shape is now the source of truth in incident.validator.ts
 // (IncidentPredictiveResponseSchema) and this type is inferred from it, so the
@@ -1064,7 +1052,18 @@ export async function getIncidentPredictiveAnchors(): Promise<IncidentPredictive
       FROM pred_anchors, actual_bounds, seasonal
     `);
     const r = rows[0];
-    if (!r || !r.min_actual_date || !r.max_forecast_date) return null;
+    if (!r || !r.min_actual_date || !r.max_forecast_date) {
+      // A real error would have thrown into the catch below -- this is the
+      // OTHER null cause, the query ran fine but ml_predictive_incidents/
+      // ml_daily_actuals are empty (the pipeline hasn't written yet). Logged
+      // distinctly so a "database not reachable" report doesn't require
+      // re-deriving which of the two this was from scratch.
+      console.warn(
+        "ML incident forecast anchors: query succeeded but returned no usable rows " +
+          "(ml_predictive_incidents/ml_daily_actuals empty or pipeline hasn't written yet) -- not a connectivity failure."
+      );
+      return null;
+    }
     return {
       validationStart: r.validation_start,
       futureStart: r.future_start,
@@ -1073,7 +1072,7 @@ export async function getIncidentPredictiveAnchors(): Promise<IncidentPredictive
       seasonalNaiveMae: r.seasonal_naive_mae != null ? Number(r.seasonal_naive_mae) : null,
     };
   } catch (error) {
-    console.error("Failed to fetch ML incident forecast anchors:", error);
+    console.error("ML incident forecast anchors: query threw (connectivity or SQL error):", error);
     return null;
   }
 }
@@ -1205,19 +1204,45 @@ function pickPrediction(
 }
 
 // ---------------------------------------------------------------------------
-// Corridor/exit breakdown for the predictive tab's "predicted incidents per
-// exit" card.
-//
-// There is no per-exit trained model — ml_predictive_incidents holds one
-// daily total for the whole corridor. So this apportions that total using
-// each exit's HISTORICAL SHARE of incidents, the same kind of derivation the
-// hourly drill-down already does (a daily total spread across hours by a
-// weekday profile — see getIncidentHourlyFromDb's own doc comment). It is
-// disclosed as an apportionment, not presented as a separately modeled
-// per-location forecast.
+// Corridor/exit breakdown — NOT used by the Predictive tab's own Corridor
+// forecast card any more (that now reads /api/incident/spatial, a genuinely
+// trained per-exit model; see incident-spatial.service.ts and
+// PredictiveCorridorChart.tsx). Still exported on this response because two
+// Prescriptive-tab panels (VmsAdvisoryPanel, PrescriptiveDeploymentPanel)
+// independently fetch /api/incident/predictive and read corridorForecast/
+// kmSegmentForecast straight off it — removing the fields here would break
+// those two without touching them at all. There is no per-exit trained model
+// behind THIS version — ml_predictive_incidents holds one daily total for the
+// whole corridor, apportioned by each exit's HISTORICAL SHARE of incidents,
+// the same kind of derivation the hourly drill-down already does (a daily
+// total spread across hours by a weekday profile — see
+// getIncidentHourlyFromDb's own doc comment). Disclosed as an apportionment,
+// not presented as a separately modeled per-location forecast.
 // ---------------------------------------------------------------------------
 
 const LOCATION_KM_RE = /Km\s*(\d+(?:\.\d+)?)/i;
+
+// Km figures in the legacy crash tables (nlex_road_crashes/nlex_motorcycle_crashes)
+// follow the Philippine DPWH km-post convention
+// (Balintawak ~ km 12), not this dashboard's Balintawak-as-km-0 scale — the
+// same offset already found and fixed in incident-severity.service.ts and in
+// train_incident_spatial_models.py. A literal "Km N" figure parsed out of
+// these tables' free-text `location` therefore needs the same -12.0
+// correction before it's compared against the exit list's own (Balintawak-
+// relative) km. Without it, "Km 16+800" (4.8km past Balintawak) was being
+// matched against whichever exit sits nearest RAW km 16.8 instead — off by
+// roughly one 12km stretch, 2-4 exits down the corridor, on every row.
+const LOCATION_KM_OFFSET = 12.0;
+
+// Applied per SOURCE, not blanket: verified against the data, nlex_road_crashes
+// spans km 14-79 and nlex_motorcycle_crashes sits in the same band (a fit for
+// DPWH's Balintawak-at-12 through ~88), but nlex_stalled_vehicles — 85% of
+// these legacy rows — spans only km 4-30, and 30% of it would go negative
+// under a -12 shift. That table is the generated one and doesn't follow the
+// DPWH scale, so it is left as it was rather than shifted on a guess.
+function kmOffsetForSource(src: string | null | undefined): number {
+  return src === "stalled" ? 0 : LOCATION_KM_OFFSET;
+}
 
 // Strip to lowercase alphanumerics so punctuation/spacing differences
 // ("Bocaue Interchange" vs "bocaue-interchange") can't cause a false miss —
@@ -1229,10 +1254,9 @@ function normalizeLocationText(s: string): string {
 
 // Maps one incident's free-text `location` to the exit it most likely
 // happened near. Two strategies, tried in order:
-//   1. A literal "Km N" figure — snapped to the exit whose own km-post is
-//      closest, the same nearest-km rule the frontend's exitNearestKm()
-//      already uses to label a position on the corridor (kept in sync by
-//      hand since one runs in SQL/Node and the other in the browser).
+//   1. A literal "Km N" figure — corrected to corridor-relative (see
+//      LOCATION_KM_OFFSET above), then snapped to the exit whose own km-post
+//      is closest.
 //   2. A plaza/exit name written directly ("Balintawak", "Bocaue Barrier") —
 //      the ETL cleaner validates incoming locations against exactly this kind
 //      of name (see NLEX_PLAZAS in src/etl/cleaner.ts), so many rows carry a
@@ -1243,11 +1267,12 @@ function normalizeLocationText(s: string): string {
 // "unclassified" and discloses the share rather than guessing.
 function resolveExitForLocation(
   location: string,
-  exits: { exit_id: number; exit_name: string; km: number }[]
+  exits: { exit_id: number; exit_name: string; km: number }[],
+  kmOffset: number
 ): { exit_id: number; exit_name: string; km: number } | null {
   const kmMatch = location.match(LOCATION_KM_RE);
   if (kmMatch) {
-    const km = Number(kmMatch[1]);
+    const km = Number(kmMatch[1]) - kmOffset;
     if (Number.isFinite(km) && exits.length > 0) {
       return exits.reduce((best, x) => (Math.abs(x.km - km) < Math.abs(best.km - km) ? x : best));
     }
@@ -1273,7 +1298,7 @@ export type CorridorForecastPoint = {
 };
 
 function buildCorridorForecast(
-  locationRows: { location: string | null }[],
+  locationRows: { location: string | null; src?: string | null }[],
   exitRows: { exit_id: number; exit_name: string; km: number }[],
   totalPredicted: number
 ): { corridorForecast: CorridorForecastPoint[] | null; unclassifiedLocationShare: number | null } {
@@ -1285,7 +1310,7 @@ function buildCorridorForecast(
   let unclassified = 0;
   for (const row of locationRows) {
     if (!row.location) continue;
-    const exit = resolveExitForLocation(row.location, exitRows);
+    const exit = resolveExitForLocation(row.location, exitRows, kmOffsetForSource(row.src));
     if (exit) counts.set(exit.exit_id, (counts.get(exit.exit_id) ?? 0) + 1);
     else unclassified++;
   }
@@ -1324,26 +1349,27 @@ export type KmSegmentForecastPoint = {
   predictedIncidents: number;
 };
 
-// Prefers a literal "Km N" figure in the location text over the resolved
-// exit's own km — that reading is more precise (an exact position, not
-// "nearest interchange"), and it's exactly what resolveExitForLocation
-// itself discards once it has picked a nearest exit. Falls back to the
-// matched exit's km for a name-only location ("Balintawak"), same source of
-// truth corridorForecast uses for the same rows.
+// Prefers a literal "Km N" figure in the location text (corridor-corrected,
+// same as resolveExitForLocation) over the resolved exit's own km — that
+// reading is more precise (an exact position, not "nearest interchange").
+// Falls back to the matched exit's km for a name-only location
+// ("Balintawak"), same source of truth corridorForecast uses for the same
+// rows.
 function resolveKmForLocation(
   location: string,
-  exits: { exit_id: number; exit_name: string; km: number }[]
+  exits: { exit_id: number; exit_name: string; km: number }[],
+  kmOffset: number
 ): number | null {
   const kmMatch = location.match(LOCATION_KM_RE);
   if (kmMatch) {
-    const km = Number(kmMatch[1]);
+    const km = Number(kmMatch[1]) - kmOffset;
     if (Number.isFinite(km)) return km;
   }
-  return resolveExitForLocation(location, exits)?.km ?? null;
+  return resolveExitForLocation(location, exits, kmOffset)?.km ?? null;
 }
 
 function buildKmSegmentForecast(
-  locationRows: { location: string | null }[],
+  locationRows: { location: string | null; src?: string | null }[],
   exitRows: { exit_id: number; exit_name: string; km: number }[],
   totalPredicted: number
 ): { kmSegmentForecast: KmSegmentForecastPoint[] | null; unclassifiedLocationShare: number | null } {
@@ -1356,7 +1382,7 @@ function buildKmSegmentForecast(
   let unclassified = 0;
   for (const row of locationRows) {
     if (!row.location) continue;
-    const km = resolveKmForLocation(row.location, exitRows);
+    const km = resolveKmForLocation(row.location, exitRows, kmOffsetForSource(row.src));
     if (km == null || km < 0) {
       unclassified++;
       continue;
@@ -1438,10 +1464,12 @@ export function buildIncidentPredictiveResponse(
   // forecast beyond that (see DAILY_VOLUME_SQL). Optional so existing callers
   // and tests keep working — an absent map simply draws no exposure overlay.
   volumeByDate: Map<string, number> = new Map(),
-  // Raw `location` text for every incident in the resolved Range — feeds
-  // corridorForecast below. Optional for the same reason volumeByDate is: an
-  // absent array just means the corridor card can't be built.
-  locationRows: { location: string | null }[] = [],
+  // Raw `location` text for every incident in the resolved Range — feeds the
+  // legacy-source corridorForecast/kmSegmentForecast below, still consumed by
+  // VmsAdvisoryPanel/PrescriptiveDeploymentPanel on the Prescriptive tab.
+  // Optional for the same reason volumeByDate is: an absent array just means
+  // those two fields come back null.
+  locationRows: { location: string | null; src?: string | null }[] = [],
   // The corridor's authoritative exit list (see searchExitsInDb). Optional
   // for the same reason.
   exitRows: { exit_id: number; exit_name: string; km: number }[] = []
@@ -1536,48 +1564,24 @@ export function buildIncidentPredictiveResponse(
   );
   const championModel = predictions.find((p) => p.champion_model)?.champion_model ?? (metadata.champion_model as string | undefined) ?? null;
 
-  // Which trained variant modelMetrics/weatherMetrics/corridorForecast are
-  // scored/apportioned against — must match the chart's own choice of series
-  // so nothing on this response ever describes a different model than the one
-  // whose line is on screen.
+  // Which trained variant modelMetrics/weatherMetrics are scored against —
+  // must match the chart's own choice of series so nothing on this response
+  // ever describes a different model than the one whose line is on screen.
   const includeVolume = filters.volumeToggle !== "off";
   const includeWeather = filters.weatherToggle !== "off";
 
-  // Which model corridorForecast apportions: the Models toolbar's active
-  // selection when one was sent and it actually has stored data on this
-  // table, else the champion — the same fallback the frontend's own model
-  // toolbar uses when a Range change leaves a previously-selected model
-  // without data. predicted_incident_count is a fixed column that's always
-  // the champion's PRIMARY (volume+weather-aware) series and has no _nv/_nw
-  // twin of its own, so either way this reads pickPrediction off the
-  // resolved model's OWN column (pred_xgboost/_nv/_nw etc.) for the same
-  // toggle-aware total the chart and modelMetrics already use, rather than
-  // the corridor card silently staying pinned to one fixed series.
-  const corridorModelKey =
-    filters.forecastModel && availableModels.some((m) => m.key === filters.forecastModel)
-      ? filters.forecastModel
-      : championModel;
-  const corridorModelEntry = INCIDENT_MODELS.find((m) => m.key === corridorModelKey);
-  // futurePreds is ordered by forecast_date ASC (see the SQL in
-  // getIncidentPredictiveFromDb), so slicing the first N rows takes the
-  // NEAREST N future days — the same window the chart's own Future control
-  // (1wk/2wk/1mo) trims to on screen, per PredictiveIncidentChart's
-  // effectiveFutureDays. Clamped so a stale futureDays wider than what's
-  // actually published can't slice past the array's end.
-  const corridorFutureDays =
-    filters.futureDays != null ? Math.max(0, Math.min(filters.futureDays, futurePreds.length)) : futurePreds.length;
-  const corridorFuturePreds = futurePreds.slice(0, corridorFutureDays);
-  const totalPredictedForCorridor = corridorModelEntry
-    ? corridorFuturePreds.reduce(
-        (sum, p) => sum + (pickPrediction(p, corridorModelEntry, includeVolume, includeWeather) ?? Number(p.predicted_incident_count)),
-        0
-      )
-    : corridorFuturePreds.reduce((sum, p) => sum + Number(p.predicted_incident_count), 0);
-
+  // Legacy-source apportionment, kept only for VmsAdvisoryPanel/
+  // PrescriptiveDeploymentPanel on the Prescriptive tab (see the doc comment
+  // on buildCorridorForecast) — the Predictive tab's own Corridor forecast
+  // card no longer reads this. totalPredictedNext7Days is reused rather than
+  // a second toolbar-aware total: neither Prescriptive panel sends a
+  // forecastModel/futureDays override, so this was always going to resolve
+  // to the same "full published horizon, champion's primary series" number
+  // the summary card already computed.
   const { corridorForecast, unclassifiedLocationShare } = buildCorridorForecast(
     locationRows,
     exitRows,
-    totalPredictedForCorridor
+    totalPredictedNext7Days
   );
   // Same rows, same total, grouped by fixed km buckets instead of nearest
   // exit — see buildKmSegmentForecast's own doc comment for why that's a
@@ -1585,7 +1589,7 @@ export function buildIncidentPredictiveResponse(
   // exit one. unclassifiedLocationShare comes out numerically identical to
   // the exit version (same "did this location resolve at all" test), so
   // only one is kept on the response rather than two names for one number.
-  const { kmSegmentForecast } = buildKmSegmentForecast(locationRows, exitRows, totalPredictedForCorridor);
+  const { kmSegmentForecast } = buildKmSegmentForecast(locationRows, exitRows, totalPredictedNext7Days);
 
   // The pipeline's own comparison table — now used only as a fallback for a
   // model whose Range+Weather slice has zero scored rows (e.g. a 3-month
@@ -1729,28 +1733,25 @@ export function buildIncidentPredictiveResponse(
         (metadata.evaluation as { train_rows?: number } | undefined)?.train_rows ?? null,
     },
     weatherMetrics,
-    // Predicted incidents per exit/corridor — an apportionment of
-    // totalPredictedForCorridor (corridorModelEntry's toggle-aware forecast
-    // summed over corridorForecastDays days, NOT summary.totalPredictedNext7Days)
-    // by each exit's historical share of incidents in the current Range, not a
-    // separately trained per-location model. Null when the exit list or the
-    // location data needed to build it wasn't available.
+    // Legacy-source apportionment of totalPredictedNext7Days by each exit's
+    // historical share of incidents in the current Range — NOT a trained
+    // per-location model, and no longer what the Predictive tab's Corridor
+    // forecast card shows (that reads /api/incident/spatial). Kept because
+    // VmsAdvisoryPanel/PrescriptiveDeploymentPanel read it. Null when the
+    // exit list or usable location data wasn't available.
     corridorForecast,
-    // Same apportionment, grouped by fixed 5km corridor segments instead of
-    // nearest exit — see buildKmSegmentForecast's doc comment. Null under
-    // the identical conditions corridorForecast is (no exit list, or no
-    // usable location rows in the current Range).
+    // Same apportionment grouped by exit-to-exit segments; null under the
+    // identical conditions corridorForecast is.
     kmSegmentForecast,
     unclassifiedLocationShare,
-    // How many of the published future days corridorForecast was actually
-    // apportioned over — echoes filters.futureDays (clamped to what's
-    // published) so the card's axis/caption can say "next Nd" honestly
-    // instead of assuming the chart's Future control and this total agree.
-    corridorForecastDays: corridorFutureDays,
-    // Which model corridorForecast was actually apportioned from — echoes
-    // filters.forecastModel when it was valid and had data, else the
-    // champion. Null only alongside corridorForecast: null.
-    corridorForecastModel: corridorForecast ? corridorModelKey : null,
+    // Always the full published horizon now (no per-request Future override),
+    // but still echoed so the Prescriptive panels' "N-day forecast" captions
+    // keep reading a real number rather than assuming one.
+    corridorForecastDays: futurePreds.length,
+    // Always the champion now (no per-request model override). Null only
+    // alongside corridorForecast: null.
+    corridorForecastModel: corridorForecast ? championModel : null,
+    accidentSplit: null,
     scoringWindow,
     // Whether the Weather control means anything for the current Range: with
     // zero scored rows (scoringWindow === null) every model has already
@@ -1789,6 +1790,59 @@ export function buildIncidentPredictiveResponse(
 
 const INCIDENT_MODEL_COLUMNS_SQL = INCIDENT_MODELS.map((m) => m.column).join(", ");
 
+// The dedicated accident-only forecast written by `train_incident_models.py
+// --series accident` into ml_*_accident. Its own try/catch and a null return
+// on ANY failure (table not created yet, empty, query error): the blended
+// chart is the primary payload and must never be taken down by this optional
+// overlay, which is exactly the failure mode the null-collapsing 503 path
+// above is prone to.
+async function getAccidentSplit(
+  historicalStart: string,
+  historicalEnd: string | null
+): Promise<IncidentPredictiveResult["accidentSplit"]> {
+  if (!db) return null;
+  try {
+    const [metaRes, actualsRes, predsRes] = await Promise.all([
+      db.query<{ metadata_json: Record<string, unknown>; created_at: string }>(
+        `SELECT metadata_json, created_at FROM ml_training_metadata_accident ORDER BY created_at DESC LIMIT 1`
+      ),
+      db.query<{ date: string; total: string | number }>(
+        `SELECT d::text AS date, total FROM ml_daily_actuals_accident
+         WHERE d >= $1::date AND ($2::date IS NULL OR d <= $2::date) ORDER BY d ASC`,
+        [historicalStart, historicalEnd]
+      ),
+      db.query<{ date: string; predicted_incident_count: string | number }>(
+        `SELECT forecast_date::text AS date, predicted_incident_count FROM ml_predictive_incidents_accident
+         WHERE prediction_type = 'future'
+            OR (forecast_date >= $1::date AND ($2::date IS NULL OR forecast_date <= $2::date))
+         ORDER BY forecast_date ASC`,
+        [historicalStart, historicalEnd]
+      ),
+    ]);
+    if (metaRes.rows.length === 0 || actualsRes.rows.length === 0) return null;
+
+    const byDate = new Map<string, { actual: number | null; predicted: number | null }>();
+    for (const r of actualsRes.rows) byDate.set(r.date, { actual: Number(r.total), predicted: null });
+    for (const r of predsRes.rows) {
+      const cur = byDate.get(r.date) ?? { actual: null, predicted: null };
+      cur.predicted = Number(r.predicted_incident_count);
+      byDate.set(r.date, cur);
+    }
+    const meta = metaRes.rows[0].metadata_json;
+    return {
+      championModel: (meta.champion_model as string | undefined) ?? null,
+      trainedAt: metaRes.rows[0].created_at ? new Date(metaRes.rows[0].created_at).toISOString() : null,
+      metrics: (meta.metrics as Record<string, unknown> | undefined) ?? null,
+      daily: Array.from(byDate.entries())
+        .sort(([a], [b]) => (a < b ? -1 : 1))
+        .map(([date, v]) => ({ date, actual: v.actual, predicted: v.predicted })),
+    };
+  } catch (error) {
+    console.warn("Accident-only forecast unavailable (optional overlay, main chart unaffected):", (error as Error).message);
+    return null;
+  }
+}
+
 export async function getIncidentPredictiveFromDb(
   filters: IncidentPredictiveFilters = DEFAULT_PREDICTIVE_FILTERS,
   anchors: IncidentPredictiveAnchors
@@ -1798,7 +1852,13 @@ export async function getIncidentPredictiveFromDb(
     const metaRes = await db.query(
       `SELECT metadata_json, created_at FROM ml_training_metadata ORDER BY created_at DESC LIMIT 1`
     );
-    if (metaRes.rows.length === 0) return null;
+    if (metaRes.rows.length === 0) {
+      // Same distinction as getIncidentPredictiveAnchors: a thrown error
+      // lands in the catch below, this is the "query ran, table's empty"
+      // case -- ml_training_metadata hasn't been written by a training run.
+      console.warn("ML incident forecast: ml_training_metadata is empty (pipeline hasn't written yet) -- not a connectivity failure.");
+      return null;
+    }
 
     const { historicalStart, historicalEnd } = resolveIncidentHistoricalWindow(filters, anchors);
 
@@ -1890,12 +1950,12 @@ export async function getIncidentPredictiveFromDb(
          ORDER BY forecast_date ASC`
       ),
       // Raw location text for every incident in the resolved Range — feeds the
-      // per-exit/corridor breakdown card. Bounded the same way `actuals` is so
-      // the corridor split answers to the same Range control as the rest of
-      // the tab, rather than always describing the whole corpus.
-      db.query<{ location: string | null }>(
+      // legacy-source corridorForecast still read by the Prescriptive tab's
+      // VmsAdvisoryPanel/PrescriptiveDeploymentPanel. Bounded the same way
+      // `actuals` is so it answers to the same Range control.
+      db.query<{ location: string | null; src: string | null }>(
         `WITH ${INCIDENTS_CTE}
-         SELECT location FROM incidents WHERE d >= $1::date AND ($2::date IS NULL OR d <= $2::date) AND location IS NOT NULL`,
+         SELECT location, src FROM incidents WHERE d >= $1::date AND ($2::date IS NULL OR d <= $2::date) AND location IS NOT NULL`,
         [historicalStart, historicalEnd]
       ),
       // The corridor's one authoritative exit list (see the import above) —
@@ -1915,7 +1975,8 @@ export async function getIncidentPredictiveFromDb(
         .filter((r) => r.volume != null)
         .map((r) => [r.date, Number(r.volume)])
     );
-    return buildIncidentPredictiveResponse(
+    const accidentSplit = await getAccidentSplit(historicalStart, historicalEnd);
+    const response = buildIncidentPredictiveResponse(
       actualsRes.rows,
       predsRes.rows,
       metaRes.rows[0].metadata_json ?? {},
@@ -1931,8 +1992,9 @@ export async function getIncidentPredictiveFromDb(
       locationsRes.rows,
       exitRows ?? []
     );
+    return { ...response, accidentSplit };
   } catch (error) {
-    console.error("Failed to fetch ML incident forecast:", error);
+    console.error("ML incident forecast: query threw (connectivity or SQL error):", error);
     return null;
   }
 }

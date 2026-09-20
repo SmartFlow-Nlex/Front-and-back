@@ -1,5 +1,5 @@
 import { db } from "../config/db.js";
-import { nlexStreetSql } from "../utils/nlex-street.js";
+import { liveNlexJamsCte, nlexStreetSql } from "../utils/nlex-street.js";
 import { isNlexCorridorStreet, isWazeReportType } from "../lib/nlex-corridor.js";
 
 /**
@@ -62,28 +62,26 @@ export async function getLiveCorridorOverview() {
       jams: number; avg_speed: number | null; min_speed: number | null;
       jam_metres: number | null; delay_seconds: number | null; worst_level: number | null;
     }>(
-      `SELECT COUNT(*)::int                                   AS jams,
+      `${liveNlexJamsCte(WINDOW_MINUTES)}
+       SELECT COUNT(*)::int                                   AS jams,
               ROUND(AVG(speed_kmh)::numeric, 1)::float        AS avg_speed,
               ROUND(MIN(speed_kmh)::numeric, 1)::float        AS min_speed,
               SUM(length_meters)::int                         AS jam_metres,
               SUM(delay_seconds)::int                         AS delay_seconds,
               MAX(level)::int                                 AS worst_level
-       FROM silver.fact_waze_jams
-       WHERE ${ON_CORRIDOR} AND ${WINDOW} AND ${ON_NLEX}`,
+       FROM live_jams`,
     ),
 
     // Per-exit, for the density strip and the slowest-stretch callout.
     db.query<{ exit_name: string; avg_speed: number; worst_level: number; jams: number; delay_seconds: number | null }>(
-      `SELECT e.exit_name,
+      `${liveNlexJamsCte(60)}
+       SELECT e.exit_name,
               ROUND(AVG(j.speed_kmh)::numeric, 1)::float AS avg_speed,
               MAX(j.level)::int                          AS worst_level,
               COUNT(*)::int                              AS jams,
               SUM(j.delay_seconds)::int                  AS delay_seconds
-       FROM silver.fact_waze_jams j
+       FROM live_jams j
        JOIN nlex_exits e ON e.id = j.nlex_exit_id
-       WHERE j.corridor_match IN ('ON_CORRIDOR', 'NEAR_CORRIDOR')
-         AND j.last_seen_at > NOW() - interval '60 minutes'
-         AND ${nlexStreetSql("j.street")}
        GROUP BY e.exit_name
        ORDER BY avg_speed ASC`,
     ),
@@ -155,13 +153,12 @@ export async function getLiveCorridorOverview() {
 
     // Speed over the last few hours, bucketed, for the timeline scrubber.
     db.query<{ bucket: Date; avg_speed: number; jams: number }>(
-      `SELECT date_trunc('hour', last_seen_at)
+      `${liveNlexJamsCte(180)}
+       SELECT date_trunc('hour', last_seen_at)
                 + (floor(EXTRACT(minute FROM last_seen_at) / 15) * interval '15 minutes') AS bucket,
               ROUND(AVG(speed_kmh)::numeric, 1)::float AS avg_speed,
               COUNT(*)::int                            AS jams
-       FROM silver.fact_waze_jams
-       WHERE ${ON_CORRIDOR} AND last_seen_at > NOW() - interval '3 hours'
-         AND ${ON_NLEX}
+       FROM live_jams
        GROUP BY 1 ORDER BY 1`,
     ),
 
@@ -336,7 +333,8 @@ export async function getLiveMapGeoJson() {
 
   const [jams, alerts] = await Promise.all([
     db.query<{ geojson: string; speed: number | null; level: number | null; street: string | null; city: string | null; delay: number | null; exit_name: string | null; length_m: number | null; running_min: number | null; starts_at: string | null; starts_m: number | null }>(
-      `SELECT ST_AsGeoJSON(j.geom) AS geojson,
+      `${liveNlexJamsCte(WINDOW_MINUTES)}
+       SELECT ST_AsGeoJSON(j.geom) AS geojson,
               ROUND(j.speed_kmh::numeric, 1)::float AS speed,
               j.level::int                          AS level,
               NULLIF(j.street, '')                  AS street,
@@ -374,7 +372,7 @@ export async function getLiveMapGeoJson() {
               -- which had one 8.2 km jam reporting "6581 m from Marilao".
               s.exit_name AS starts_at,
               s.d         AS starts_m
-       FROM silver.fact_waze_jams j
+       FROM live_jams j
        LEFT JOIN nlex_exits e ON e.id = j.nlex_exit_id
        LEFT JOIN LATERAL (
          SELECT x.exit_name,
@@ -388,10 +386,7 @@ export async function getLiveMapGeoJson() {
                     ST_MakePoint(x.longitude, x.latitude)) ASC
          LIMIT 1
        ) s ON TRUE
-       WHERE j.corridor_match IN ('ON_CORRIDOR', 'NEAR_CORRIDOR')
-         AND j.last_seen_at > NOW() - interval '${WINDOW_MINUTES} minutes'
-         AND j.geom IS NOT NULL
-         AND ${nlexStreetSql("j.street")}`,
+      `,
     ),
     db.query<{
       lon: number; lat: number; type: string; street: string | null; city: string | null;

@@ -1,5 +1,5 @@
 import { db } from "../config/db.js";
-import { nlexStreetSql } from "../utils/nlex-street.js";
+import { liveNlexJamsCte } from "../utils/nlex-street.js";
 import { searchExitsInDb } from "./map-comparison.service.js";
 
 /**
@@ -96,7 +96,8 @@ export async function getCorridorStatus() {
     delay_s: number | null;
     newest: Date | null;
   }>(
-    `WITH recent AS (
+    `${liveNlexJamsCte(WINDOW_MINUTES)},
+     recent AS (
        SELECT j.nlex_exit_id,
               j.level,
               j.speed_kmh,
@@ -104,23 +105,7 @@ export async function getCorridorStatus() {
               j.delay_seconds,
               j.length_meters,
               ST_LineMerge(j.geom) AS g
-       FROM silver.fact_waze_jams j
-       WHERE j.corridor_match IN ('ON_CORRIDOR', 'NEAR_CORRIDOR')
-         AND j.last_seen_at > NOW() - ($1 || ' minutes')::interval
-         AND j.geom IS NOT NULL
-         /* On NLEX by name, not merely near it.
-
-            corridor_match alone admits anything the matcher put within reach of
-            an exit, and the local road network runs right alongside: a live
-            sample had this panel reporting jams on Gen. T. De Leon, Governor
-            Padilla Road, M. Villarica Road, Tullahan and Maysan Road as exit
-            conditions, 172 jams where the map drew 21. It coloured nearly every
-            exit on the panel amber or red while the map showed a mostly clear
-            corridor.
-
-            Shared with getLiveCorridorOverview and the map feed now, so the
-            three cannot drift -- see utils/nlex-street. */
-         AND ${nlexStreetSql("j.street")}
+       FROM live_jams j
      ),
      bearing AS (
        SELECT nlex_exit_id, level, speed_kmh, last_seen_at, delay_seconds, length_meters, g,
@@ -142,7 +127,6 @@ export async function getCorridorStatus() {
      JOIN nlex_exits e ON e.id = b.nlex_exit_id
      WHERE b.az IS NOT NULL
      GROUP BY e.exit_name, 2`,
-    [WINDOW_MINUTES],
   );
 
   const segments: ExitStatus[] = rows.map((r) => ({

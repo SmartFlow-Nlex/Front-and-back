@@ -284,6 +284,12 @@ export default function TrafficMapPanel({ title, subtitle, badge, endpoint, laye
     // counts as a report about NLEX. See lib/corridor-shape.ts.
     const isRealtimeEndpoint = endpoint.includes("real-time");
 
+    /* Where each queue begins, for the plaza declutter further down. Queues
+       start at interchanges, so their markers land under the exit pins almost
+       by definition -- which is why congestion only appeared once the reader
+       had zoomed in far enough to separate them. */
+    const queuePins: [number, number][] = [];
+
     /* map.on("load") is asynchronous, so a theme switch or an unmount can tear
        the effect down before it fires. Everything started in there — the
        animation frame and the poll — has to check this, or it runs on a map
@@ -312,6 +318,7 @@ export default function TrafficMapPanel({ title, subtitle, badge, endpoint, laye
          at every zoom. Both carry the same properties, so hovering either one
          opens the same card. */
       const marks: GeoJSON.Feature[] = [];
+      queuePins.length = 0;
 
       const out = {
         ...kept,
@@ -344,6 +351,7 @@ export default function TrafficMapPanel({ title, subtitle, badge, endpoint, laye
              direction it puts in the street name on 40 of 40 live jams. */
           const head = snapped.coords[0];
           if (head) {
+            queuePins.push(head as [number, number]);
             marks.push({
               type: "Feature",
               properties: { ...properties, feature_type: "jam_mark" },
@@ -862,6 +870,39 @@ export default function TrafficMapPanel({ title, subtitle, badge, endpoint, laye
          the answer and the dot is only in the way. Collision is left ON -- the
          default -- so a cluster of overlapping reports at one interchange
          resolves to a single dot rather than a pile of them. */
+      /* A soft halo under each marker.
+         Zoomed out to the whole corridor a pixel is about 90 m, so a 200 m
+         queue is two pixels of road and its marker is a six-pixel dot sitting
+         ON the line -- a red dot on an orange road, which reads as nothing.
+         Congestion then only appeared once the reader had zoomed in, which is
+         the opposite of what a corridor view is for.
+         A wash of the queue's own colour, wider than the road and softer than
+         anything else on it, is what makes the eye land there first. It carries
+         no extra claim: it marks the same point the dot does, and both fade out
+         once the queue is big enough to speak for itself. */
+      map.addLayer({
+        id: "jam-mark-halo",
+        type: "circle",
+        source: "traffic",
+        filter: [
+          "all",
+          ["==", ["get", "feature_type"], "jam_mark"],
+          ["has", "direction_source"],
+        ],
+        paint: {
+          "circle-color": [
+            "match", ["get", "level"],
+            0, PALETTE.status.clear,
+            [1, 2], PALETTE.status.slow,
+            [3, 4, 5], PALETTE.status.congested,
+            PALETTE.noData,
+          ],
+          "circle-radius": ["interpolate", ["linear"], ["zoom"], 8, 13, 11, 16, 14, 12, 16, 0],
+          "circle-opacity": ["interpolate", ["linear"], ["zoom"], 8, 0.3, 13, 0.26, 16, 0],
+          "circle-blur": 0.55,
+        },
+      });
+
       map.addLayer({
         id: "jam-mark",
         type: "circle",
@@ -879,8 +920,10 @@ export default function TrafficMapPanel({ title, subtitle, badge, endpoint, laye
             [3, 4, 5], PALETTE.status.congested,
             PALETTE.noData,
           ],
-          "circle-radius": ["interpolate", ["linear"], ["zoom"], 8, 5.5, 11, 7.5, 14, 6, 17.5, 0],
-          "circle-stroke-width": ["interpolate", ["linear"], ["zoom"], 8, 2, 14, 2.5, 17.5, 0],
+          // A red dot on an orange road needs the ring more than the fill: the
+          // white edge is what separates it from whatever it is standing on.
+          "circle-radius": ["interpolate", ["linear"], ["zoom"], 8, 7, 11, 8.5, 14, 6.5, 17.5, 0],
+          "circle-stroke-width": ["interpolate", ["linear"], ["zoom"], 8, 2.5, 14, 3, 17.5, 0],
           "circle-stroke-color": PALETTE.casing,
           "circle-opacity": ["interpolate", ["linear"], ["zoom"], 15, 1, 17.5, 0],
           "circle-stroke-opacity": ["interpolate", ["linear"], ["zoom"], 15, 1, 17.5, 0],
@@ -1403,7 +1446,13 @@ export default function TrafficMapPanel({ title, subtitle, badge, endpoint, laye
              stay hoverable, which meant an exit pin could completely cover an
              accident sitting next to it. Zooming in separated them, which is
              why reports seemed to appear only when zoomed. */
-          const kept = reportPins.map((c) => map.project(c));
+          /* Queues win too, for the same reason reports do. A 213 m queue is a
+             marker a few pixels across sitting exactly where a 28 px exit pin
+             is, because a queue starts at an interchange -- so the congestion
+             was underneath the landmark at every zoom the corridor is read at,
+             and only surfaced once the reader zoomed far enough in to pull the
+             two apart. The pin comes back on its own when they separate. */
+          const kept = [...reportPins, ...queuePins].map((c) => map.project(c));
 
           for (const pin of plazaPins) {
             const q = map.project(pin.lngLat);

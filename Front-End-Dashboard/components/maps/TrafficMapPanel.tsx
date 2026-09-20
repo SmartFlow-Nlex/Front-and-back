@@ -1437,9 +1437,23 @@ export default function TrafficMapPanel({ title, subtitle, badge, endpoint, laye
            spreads them out and the hidden ones come back on their own. Nothing
            is removed from the map — only hidden — so this never changes what
            the corridor contains, just how much of it is legible at once. */
-        const PIN_GAP_PX = 26;
+        /* An exit is drawn at the weight the zoom can carry.
+           A 26 px badge is right when the reader is looking at one interchange
+           and far too heavy across 78 km of corridor: twenty of them dominated
+           the road, and any of them landed on top of the congestion beside it.
+           So the badge becomes a node -- a small ringed dot, the way a transit
+           map marks a station -- and grows back into the full pin on the way
+           in. At the smaller sizes it no longer swallows what it sits next to,
+           so it is hidden far less often. */
+        const plazaTier = (z: number) => (z < 11.5 ? "far" : z < 13.5 ? "mid" : "near");
+        // Kept in step with the rendered sizes in globals.css.
+        const TIER_GAP_PX = { far: 13, mid: 18, near: 26 } as const;
 
         const declutterPlazas = () => {
+          const tier = plazaTier(map.getZoom());
+          for (const pin of plazaPins) pin.el.dataset.tier = tier;
+          const gap = TIER_GAP_PX[tier];
+
           /* Reports win. A plaza is a fixed landmark the reader can find again
              by zooming; a report is the thing they came to see, and it was
              being hidden underneath — plazas draw above reports so that they
@@ -1457,7 +1471,7 @@ export default function TrafficMapPanel({ title, subtitle, badge, endpoint, laye
           for (const pin of plazaPins) {
             const q = map.project(pin.lngLat);
             const clash = kept.some(
-              (k) => Math.abs(k.x - q.x) < PIN_GAP_PX && Math.abs(k.y - q.y) < PIN_GAP_PX,
+              (k) => Math.abs(k.x - q.x) < gap && Math.abs(k.y - q.y) < gap,
             );
             pin.el.style.display = clash ? "none" : "";
             if (!clash) kept.push(q);

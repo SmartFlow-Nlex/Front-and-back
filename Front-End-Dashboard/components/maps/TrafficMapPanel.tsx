@@ -816,6 +816,23 @@ export default function TrafficMapPanel({ title, subtitle, badge, endpoint, laye
         0: "Clear", 1: "Slow", 2: "Slow", 3: "Congested", 4: "Congested", 5: "Standstill",
       };
 
+      /* Street names arrive from Waze, so they are outside data going into
+         innerHTML. Escaped rather than trusted. */
+      const esc = (v: unknown) =>
+        String(v ?? "").replace(/[&<>"']/g, (ch) =>
+          ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[ch] as string,
+        );
+
+      /* Where the queue begins, the way a driver would say it. Under 100 m the
+         distance is noise against an interchange's own footprint, so it reads
+         as "at" rather than claiming a precision the match does not have. */
+      const startsLine = (exit: unknown, metres: number | null) => {
+        if (!exit) return null;
+        if (metres == null) return `Starts near ${esc(exit)}`;
+        if (metres < 100) return `Starts at ${esc(exit)}`;
+        return `Starts ${km(metres)} from ${esc(exit)}`;
+      };
+
       map.on("mousemove", "jam-extent", (e) => {
         const f = e.features?.[0];
         if (!f) return;
@@ -826,6 +843,8 @@ export default function TrafficMapPanel({ title, subtitle, badge, endpoint, laye
         const delay = p.delay_seconds == null ? null : Number(p.delay_seconds);
         const running = p.running_min == null ? null : Number(p.running_min);
         const speed = p.speed == null ? null : Number(p.speed);
+        const startsM = p.starts_m == null ? null : Number(p.starts_m);
+        const where = startsLine(p.starts_at, startsM);
 
         const row = (label: string, value: string) =>
           `<div class="mjp-row"><span>${label}</span><b>${value}</b></div>`;
@@ -838,7 +857,7 @@ export default function TrafficMapPanel({ title, subtitle, badge, endpoint, laye
                  ${LEVEL_WORD[lvl] ?? "Reported"}
                  <span>${String(p.direction ?? "")}</span>
                </div>
-               <div class="mjp-where">${String(p.street ?? p.nearest_exit ?? "NLEX")}</div>
+               <div class="mjp-where">${where ?? esc(p.street ?? p.nearest_exit ?? "NLEX")}</div>
                ${len != null ? row("Queue length", km(len)) : ""}
                ${delay != null && delay > 0 ? row("Est. delay", mins(delay)) : ""}
                ${speed != null && speed > 0 ? row("Speed", `${speed} km/h`) : ""}

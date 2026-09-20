@@ -328,7 +328,7 @@ export async function getLiveMapGeoJson() {
   if (!db) return { type: "FeatureCollection" as const, features: [] };
 
   const [jams, alerts] = await Promise.all([
-    db.query<{ geojson: string; speed: number | null; level: number | null; street: string | null; city: string | null; delay: number | null; exit_name: string | null; length_m: number | null; running_min: number | null }>(
+    db.query<{ geojson: string; speed: number | null; level: number | null; street: string | null; city: string | null; delay: number | null; exit_name: string | null; length_m: number | null; running_min: number | null; starts_at: string | null; starts_m: number | null }>(
       `SELECT ST_AsGeoJSON(j.geom) AS geojson,
               ROUND(j.speed_kmh::numeric, 1)::float AS speed,
               j.level::int                          AS level,
@@ -349,9 +349,38 @@ export async function getLiveMapGeoJson() {
                 ROUND(j.duration_minutes)::int,
                 GREATEST(0, ROUND(EXTRACT(EPOCH FROM (NOW() - j.first_seen_at)) / 60)::int)
               )                                     AS running_min,
-              e.exit_name
+              e.exit_name,
+              -- Where the queue BEGINS, and how far that is from the nearest
+              -- exit: "starts 390 m from Marilao" is what a driver needs, and
+              -- it is what the alerts panel already says about reports.
+              --
+              -- The start point is Waze's first vertex, which is only the
+              -- upstream end if the line runs with the traffic. It does:
+              -- checked against the direction Waze puts in the street name
+              -- itself (" N" / " S"), the start-to-end bearing agreed on 40 of
+              -- 40 live jams.
+              --
+              -- Nearest to the START, not to the whole line, and not the
+              -- matched exit. Shortest distance to the line is meaningless
+              -- here -- a long queue runs right past an exit, so it reads 2 m
+              -- -- and the matched exit can sit in the MIDDLE of the queue,
+              -- which had one 8.2 km jam reporting "6581 m from Marilao".
+              s.exit_name AS starts_at,
+              s.d         AS starts_m
        FROM silver.fact_waze_jams j
        LEFT JOIN nlex_exits e ON e.id = j.nlex_exit_id
+       LEFT JOIN LATERAL (
+         SELECT x.exit_name,
+                ROUND(ST_DistanceSphere(
+                  ST_StartPoint(ST_LineMerge(j.geom)),
+                  ST_MakePoint(x.longitude, x.latitude)))::int AS d
+         FROM nlex_exits x
+         WHERE GeometryType(ST_LineMerge(j.geom)) = 'LINESTRING'
+         ORDER BY ST_DistanceSphere(
+                    ST_StartPoint(ST_LineMerge(j.geom)),
+                    ST_MakePoint(x.longitude, x.latitude)) ASC
+         LIMIT 1
+       ) s ON TRUE
        WHERE j.corridor_match IN ('ON_CORRIDOR', 'NEAR_CORRIDOR')
          AND j.last_seen_at > NOW() - interval '${WINDOW_MINUTES} minutes'
          AND j.geom IS NOT NULL`,
@@ -444,6 +473,8 @@ export async function getLiveMapGeoJson() {
         // omit the row instead of showing a zero that reads as a measurement.
         length_m: r.length_m ?? null,
         running_min: r.running_min ?? null,
+        starts_at: r.starts_at ?? null,
+        starts_m: r.starts_m ?? null,
         nearest_exit: r.exit_name ?? "",
       },
     })),

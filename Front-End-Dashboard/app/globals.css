@@ -6044,6 +6044,15 @@ body {
   color: var(--text-primary);
 }
 
+/* The break between the road's three states and the report icons.
+   .wz-legend-gap carries a margin-top for this, but it is one class against
+   `.map-legend h4`, which is a class and an element -- so the shorthand above
+   reset it to zero and the two sections have been running together. Matching
+   that specificity is what makes the gap apply. */
+.map-legend h4.wz-legend-gap {
+  margin-top: 15px;
+}
+
 /* ---------------------------------------------------------------------------
    Reports nobody has corroborated yet.
 
@@ -9345,12 +9354,12 @@ details[open] > .evidence-summary .evidence-close-label { display: inline; }
 
 .fc-head .mc-horizon-pick option { color: #0f172a; background: #fff; }
 
-/* ── Queue hover card on the live map ───────────────────────────────────────
+/* ── Hover cards on the live map ───────────────────────────────────────
    Mapbox draws its popup chrome with its own classes, so the surface is
    restyled here rather than in the component: .mapboxgl-popup-content carries
    the default white box and padding, and the tip is a bordered triangle that
    has to be recoloured separately or it stays white on a dark card. */
-.map-jam-popup .mapboxgl-popup-content {
+.map-card .mapboxgl-popup-content {
   padding: 0;
   border-radius: 10px;
   overflow: hidden;
@@ -9358,7 +9367,7 @@ details[open] > .evidence-summary .evidence-close-label { display: inline; }
   border: 1px solid var(--border-default);
   box-shadow: 0 10px 28px rgb(0 0 0 / 0.22);
 }
-.map-jam-popup .mapboxgl-popup-tip {
+.map-card .mapboxgl-popup-tip {
   border-top-color: var(--bg-surface);
   border-bottom-color: var(--bg-surface);
 }
@@ -9389,6 +9398,21 @@ details[open] > .evidence-summary .evidence-close-label { display: inline; }
 .mjp-head.is-clear { background: #23a55a; }
 .mjp-head.is-slow { background: #e08a2e; }
 .mjp-head.is-congested { background: #e04434; }
+/* An exit is not a traffic state, so it takes the plaza colour rather than one
+   of the three. Same card, same header, different subject. */
+.mjp-head.is-exit { background: #0e7490; }
+
+/* Only shown where the description says something the name and the town do
+   not, so it is a footnote rather than a third restatement. */
+.mjp-note {
+  margin: 1px 10px 9px;
+  padding-top: 7px;
+  border-top: 1px solid var(--border-default);
+  font-size: 11px;
+  line-height: 1.4;
+  color: var(--text-secondary);
+  max-width: 230px;
+}
 
 .mjp-where {
   padding: 7px 10px 4px;

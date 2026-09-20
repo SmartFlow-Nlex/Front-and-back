@@ -7,7 +7,7 @@ import { useEffect, useRef, useState } from "react";
 import nlexGeometry from "./nlex-geometry.json";
 import { corridorGuard, directionLabel, sliceCorridor, type LngLat } from "../../lib/corridor-shape";
 import { corridorSegmentLevels } from "../../lib/corridor-status";
-import { FALLBACK_EXITS, displayExitName } from "../../lib/nlex-exits";
+import { FALLBACK_EXITS, accessLabel, displayExitName } from "../../lib/nlex-exits";
 import { useChartTheme } from "../../lib/chart-theme";
 import { mapPalette } from "../../lib/map-palette";
 import { isDisputedReport, isReportType, isUnconfirmedReport } from "../../lib/waze-reports";
@@ -1061,15 +1061,15 @@ export default function TrafficMapPanel({ title, subtitle, badge, endpoint, laye
         };
       };
 
-      const jamCard = sideCard("map-jam-popup");
+      const jamCard = sideCard("map-card");
       /* Declared here rather than beside the plaza markers below, because the
          queue handler closes it: whichever is declared second would otherwise
          be out of scope for the other. */
-      const plazaCard = sideCard();
+      const plazaCard = sideCard("map-card");
       /* One card for every report rather than one per marker: they are only
          ever shown one at a time, and sharing it means a report's summary is
          placed by the same rule as everything else on this map. */
-      const reportCard = sideCard();
+      const reportCard = sideCard("map-card");
 
       const km = (m: number) =>
         m >= 1000 ? `${(m / 1000).toFixed(m >= 10000 ? 0 : 1)} km` : `${Math.round(m)} m`;
@@ -1410,28 +1410,60 @@ export default function TrafficMapPanel({ title, subtitle, badge, endpoint, laye
           });
 
           el.addEventListener("mouseenter", () => {
-            /* No inline chrome: the container is styled in globals.css, so
-               this is only content. The road mark replaces an emoji, matching
-               the pin the reader just hovered. */
+            /* The same card the queues use, in the exit's own colour, because
+               the two are read one after the other on the same map and were
+               built as different objects: one a tight table of measurements,
+               the other three stacked paragraphs.
+
+               It also said less than it looked like it did. "Angeles / Angeles
+               City, Pampanga / Exit to Angeles City, Pampanga. / Toll system ·
+               Closed system toll" is the location twice and the word toll three
+               times. The place is stated once now, and the room that frees goes
+               to things the reader cannot see on the map: how far along the
+               corridor this is, and which directions it can be used from. */
+            const stat = FALLBACK_EXITS.find(
+              (x) => x.exit_name.toLowerCase().trim() === toll.name.toLowerCase().trim(),
+            );
+
+            const nb = stat ? accessLabel(stat, "NB") : null;
+            const sb = stat ? accessLabel(stat, "SB") : null;
+            const access =
+              nb && sb && nb === sb ? `${nb}, both ways`
+              : nb && sb ? `NB ${nb} · SB ${sb}`
+              : nb ? `NB ${nb}`
+              : sb ? `SB ${sb}`
+              : null;
+
+            /* The description is kept only where it says something the two
+               lines above do not. Half of them are the name and the town again
+               in a full sentence -- "Interchange for Meycauayan, Bulacan." --
+               and half carry something real, like which system the toll changes
+               to at Bocaue Barrier. Comparing the words rather than listing the
+               entries by hand means a new plaza is judged on what it says. */
+            const STOP = new Set([
+              "exit", "entry", "to", "for", "the", "and", "of", "at", "a", "an",
+              "interchange", "point", "toll", "plaza", "nlex", "city",
+            ]);
+            const words = (v: string) =>
+              v.toLowerCase().replace(/[^a-z0-9\s]/g, " ").split(/\s+/).filter(Boolean);
+            const known = new Set([...words(toll.name), ...words(toll.location)]);
+            const adds = words(toll.description).some((w) => !STOP.has(w) && !known.has(w));
+
+            const row = (label: string, value: string) =>
+              `<div class="mjp-row"><span>${label}</span><b>${value}</b></div>`;
+
             const description = `
-              <div class="nlex-pop" style="--pop-accent:#0e7490">
-                <div class="nlex-pop-head">
-                  <span class="nlex-pop-mark">
-                    <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor"
-                         stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round">
-                      <path d="M4 20V9.5a1 1 0 0 1 .55-.9l7-3.5a1 1 0 0 1 .9 0l7 3.5a1 1 0 0 1 .55.9V20" />
-                      <path d="M2 20h20M9 20v-5h6v5" />
-                    </svg>
-                  </span>
-                  <span class="nlex-pop-name">
-                    <span class="nlex-pop-title">${displayExitName(toll.name)}</span>
-                    <span class="nlex-pop-sub">${toll.location}</span>
-                  </span>
+              <div class="mjp">
+                <div class="mjp-head is-exit">
+                  ${esc(displayExitName(toll.name))}
+                  <!-- One decimal. The list carries two (69.15), which is a
+                       centimetre-accurate claim about a kilometre post. -->
+                  <span>${stat ? `km ${Math.round(stat.km * 10) / 10}` : esc(toll.type)}</span>
                 </div>
-                <div class="nlex-pop-body">
-                  <p class="nlex-pop-note">${toll.description}</p>
-                </div>
-                <div class="nlex-pop-foot">Toll system &middot; ${toll.rates}</div>
+                <div class="mjp-where">${esc(toll.location)}</div>
+                ${access ? row("Access", esc(access)) : ""}
+                ${row("Toll", esc(toll.rates.replace(/\s*toll\s*$/i, "")))}
+                ${adds ? `<p class="mjp-note">${esc(toll.description)}</p>` : ""}
               </div>
             `;
             plazaCard.show(toll.coordinates as [number, number], description);

@@ -288,7 +288,7 @@ export default function TrafficMapPanel({ title, subtitle, badge, endpoint, laye
        start at interchanges, so their markers land under the exit pins almost
        by definition -- which is why congestion only appeared once the reader
        had zoomed in far enough to separate them. */
-    const queuePins: [number, number][] = [];
+    const queuePins: { at: [number, number]; level: number }[] = [];
 
     /* map.on("load") is asynchronous, so a theme switch or an unmount can tear
        the effect down before it fires. Everything started in there — the
@@ -351,7 +351,10 @@ export default function TrafficMapPanel({ title, subtitle, badge, endpoint, laye
              direction it puts in the street name on 40 of 40 live jams. */
           const head = snapped.coords[0];
           if (head) {
-            queuePins.push(head as [number, number]);
+            queuePins.push({
+              at: head as [number, number],
+              level: Number((f.properties as { level?: unknown })?.level ?? 0),
+            });
             marks.push({
               type: "Feature",
               properties: { ...properties, feature_type: "jam_mark" },
@@ -1465,35 +1468,54 @@ export default function TrafficMapPanel({ title, subtitle, badge, endpoint, laye
           for (const pin of plazaPins) pin.el.dataset.tier = tier;
           const gap = TIER_GAP_PX[tier];
 
-          /* Reports win. A plaza is a fixed landmark the reader can find again
-             by zooming; a report is the thing they came to see, and it was
-             being hidden underneath — plazas draw above reports so that they
-             stay hoverable, which meant an exit pin could completely cover an
-             accident sitting next to it. Zooming in separated them, which is
-             why reports seemed to appear only when zoomed. */
-          /* Queues win too, for the same reason reports do. A 213 m queue is a
-             marker a few pixels across sitting exactly where a 28 px exit pin
-             is, because a queue starts at an interchange -- so the congestion
-             was underneath the landmark at every zoom the corridor is read at,
-             and only surfaced once the reader zoomed far enough in to pull the
-             two apart. The pin comes back on its own when they separate. */
-          const kept = [...reportPins, ...queuePins].map((c) => map.project(c));
+          const near = (a: { x: number; y: number }, b: { x: number; y: number }, g: number) =>
+            Math.abs(a.x - b.x) < g && Math.abs(a.y - b.y) < g;
 
-          /* A callout opening east runs off a panel that is only a few hundred
-             pixels wide, and the name is the half that gets cut. Near the right
-             edge it opens west instead, leader and all. The width is the widest
-             name on the corridor plus its leader, measured rather than guessed:
-             "Paso de Blas Valenzuela" at 10.5px. */
-          const flipAt = map.getCanvas().clientWidth - 150;
+          const queuePts = queuePins.map((q) => ({ p: map.project(q.at), level: q.level }));
 
-          for (const pin of plazaPins) {
-            const q = map.project(pin.lngLat);
-            pin.el.dataset.side = q.x > flipAt ? "west" : "east";
-            const clash = kept.some(
-              (k) => Math.abs(k.x - q.x) < gap && Math.abs(k.y - q.y) < gap,
-            );
-            pin.el.style.display = clash ? "none" : "";
-            if (!clash) kept.push(q);
+          /* An exit with a queue on it keeps its RING hidden and its NAME.
+             The two occupy the same point -- a queue starts at an interchange
+             -- and hiding the whole marker to let the congestion through threw
+             away the one label the reader most wants: the exit where something
+             is happening. The callout already sets the name off the road, so
+             only the ring is in the way. What is left is the red dot, and the
+             leader running from it to the name of the exit it is at. */
+          /* The worst queue standing on this exit, or -1 for none. Worst
+             rather than nearest: if two are on one interchange, the name should
+             carry the one that matters. */
+          const queueLevelAt = (q: { x: number; y: number }) =>
+            queuePts.reduce((worst, k) => (near(k.p, q, gap) ? Math.max(worst, k.level) : worst), -1);
+          const onQueue = (q: { x: number; y: number }) => queueLevelAt(q) >= 0;
+
+          /* And those exits are considered first. Keeping them in corridor
+             order meant a name survived or was dropped according to where it
+             happened to fall in the list, so the exits worth naming were as
+             likely to go as any other. */
+          const ordered = [...plazaPins]
+            .map((pin) => ({ pin, q: map.project(pin.lngLat) }))
+            .sort((a, b) => Number(onQueue(b.q)) - Number(onQueue(a.q)));
+
+          /* Reports still win outright: a plaza is a landmark the reader can
+             find again by zooming, a report is the thing they came to see, and
+             plazas draw above reports so an exit pin could cover one entirely. */
+          const kept = reportPins.map((c) => map.project(c));
+
+          for (const { pin, q } of ordered) {
+            if (kept.some((k) => near(k, q, gap))) {
+              pin.el.style.display = "none";
+              continue;
+            }
+            pin.el.style.display = "";
+            const level = queueLevelAt(q);
+            pin.el.dataset.ring = level >= 0 ? "off" : "on";
+            /* The name carries the condition, in the same three words and the
+               same three colours the legend uses. An exit standing on a queue
+               is the one the reader is looking for, and it was reading exactly
+               like the eleven that are clear. */
+            if (level >= 3) pin.el.dataset.queue = "congested";
+            else if (level >= 1) pin.el.dataset.queue = "slow";
+            else delete pin.el.dataset.queue;
+            kept.push(q);
           }
         };
 

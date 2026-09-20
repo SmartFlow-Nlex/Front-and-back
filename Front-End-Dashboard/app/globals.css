@@ -9534,3 +9534,30 @@ details[open] > .evidence-summary .evidence-close-label { display: inline; }
   border-bottom-left-radius: 0;
   border-bottom-right-radius: 5px;
 }
+
+/* An exit standing on a queue keeps its name and gives up its ring: the queue's
+   own marker is already at that point, and two marks on one spot is what forced
+   the choice between showing the congestion and naming where it is.
+   Faded rather than removed, so the flex box keeps its size and the callout
+   stays where it was; pointer-events go with it so the hover underneath reaches
+   the queue, whose card names the exit anyway. */
+.custom-toll-marker[data-ring="off"] .toll-pin-dot {
+  opacity: 0;
+  pointer-events: none;
+}
+
+/* An exit standing on a queue says so. Same three colours the legend and the
+   road itself use, so the name and the mark beside it cannot describe the
+   stretch differently. The leader takes the colour too, which is what ties the
+   word to the dot it is pointing at. */
+.custom-toll-marker[data-queue="slow"] .toll-pin-name { color: #b45309; font-weight: 750; }
+.custom-toll-marker[data-queue="congested"] .toll-pin-name { color: #b91c1c; font-weight: 750; }
+.custom-toll-marker[data-queue="slow"] .toll-pin-name::before { border-color: #e08a2e; opacity: 1; }
+.custom-toll-marker[data-queue="congested"] .toll-pin-name::before { border-color: #e04434; opacity: 1; }
+
+:root[data-theme="dark"] .custom-toll-marker[data-queue="slow"] .toll-pin-name { color: #fbbf24; }
+:root[data-theme="dark"] .custom-toll-marker[data-queue="congested"] .toll-pin-name { color: #f87171; }
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .custom-toll-marker[data-queue="slow"] .toll-pin-name { color: #fbbf24; }
+  :root:not([data-theme="light"]) .custom-toll-marker[data-queue="congested"] .toll-pin-name { color: #f87171; }
+}

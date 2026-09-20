@@ -984,12 +984,46 @@ export default function TrafficMapPanel({ title, subtitle, badge, endpoint, laye
          speed_kmh -- so the card reports measurements rather than anything
          derived. A field Waze did not send is omitted rather than shown as a
          zero, which would read as "no delay" instead of "not reported". */
-      const jamPopup = new mapboxgl.Popup({
-        closeButton: false,
-        closeOnClick: false,
-        offset: 12,
-        className: "map-jam-popup",
-      });
+      /* A hover card that opens ACROSS the corridor rather than along it.
+         Left to itself Mapbox picks whichever side has room in the viewport,
+         and that is regularly the side the road runs down, so the card covered
+         the very thing under the cursor. NLEX runs roughly north-north-west to
+         south-south-east for its whole length, so east and west are both
+         broadly across it: opening horizontally clears the road, and the only
+         question left is which side has space.
+         Two instances per card, because a Popup fixes its anchor at
+         construction and there is no public way to change it afterwards.
+         Anchor "left" puts the card's left edge on the point, so it opens to
+         the east; "right" opens to the west. */
+      const sideCard = (className?: string) => {
+        const make = (anchor: "left" | "right") =>
+          new mapboxgl.Popup({ closeButton: false, closeOnClick: false, anchor, offset: 18, className });
+        const pair = { left: make("left"), right: make("right") };
+        return {
+          show(lngLat: mapboxgl.LngLatLike, html: string) {
+            // Open away from the panel edge: anchored east near the right edge
+            // the card runs off the map, and a fixed anchor will not flip back.
+            const px = map.project(lngLat);
+            const side: "left" | "right" = px.x < map.getCanvas().clientWidth / 2 ? "left" : "right";
+            pair[side === "left" ? "right" : "left"].remove();
+            pair[side].setLngLat(lngLat).setHTML(html).addTo(map);
+          },
+          remove() {
+            pair.left.remove();
+            pair.right.remove();
+          },
+        };
+      };
+
+      const jamCard = sideCard("map-jam-popup");
+      /* Declared here rather than beside the plaza markers below, because the
+         queue handler closes it: whichever is declared second would otherwise
+         be out of scope for the other. */
+      const plazaCard = sideCard();
+      /* One card for every report rather than one per marker: they are only
+         ever shown one at a time, and sharing it means a report's summary is
+         placed by the same rule as everything else on this map. */
+      const reportCard = sideCard();
 
       const km = (m: number) =>
         m >= 1000 ? `${(m / 1000).toFixed(m >= 10000 ? 0 : 1)} km` : `${Math.round(m)} m`;
@@ -1040,9 +1074,14 @@ export default function TrafficMapPanel({ title, subtitle, badge, endpoint, laye
         const row = (label: string, value: string) =>
           `<div class="mjp-row"><span>${label}</span><b>${value}</b></div>`;
 
-        jamPopup
-          .setLngLat(e.lngLat)
-          .setHTML(
+        /* The queue wins over the plaza beneath it. Hovering a queue that
+           starts at an interchange put both cards up at once, overlapping;
+           a plaza is a fixed landmark the reader can find again, the queue is
+           what they were pointing at. Same order the pin declutter uses. */
+        plazaCard.remove();
+
+        jamCard.show(
+          e.lngLat,
             `<div class="mjp">
                <div class="mjp-head is-${lvl >= 3 ? "congested" : lvl >= 1 ? "slow" : "clear"}">
                  ${LEVEL_WORD[lvl] ?? "Reported"}
@@ -1054,30 +1093,18 @@ export default function TrafficMapPanel({ title, subtitle, badge, endpoint, laye
                ${speed != null && speed > 0 ? row("Speed", `${speed} km/h`) : ""}
                ${running != null && running > 0 ? row("Going on for", mins(running * 60)) : ""}
              </div>`,
-          )
-          .addTo(map);
+        );
       };
 
       const onJamLeave = () => {
         map.getCanvas().style.cursor = "";
-        jamPopup.remove();
+        jamCard.remove();
       };
 
       for (const id of ["jam-extent", "jam-mark"] as const) {
         map.on("mousemove", id, onJamMove);
         map.on("mouseleave", id, onJamLeave);
       }
-
-      /* The plaza hover card. Offset and anchored below the pin so the card
-         opens clear of it — it used to open centred on the marker, so the pin
-         and its label sat on top of the card and covered the location line. */
-      const popup = new mapboxgl.Popup({
-        closeButton: false,
-        closeOnClick: false,
-        // Offset only: letting Mapbox choose the side means the card flips
-        // rather than running off the top of the panel near Sta. Ines.
-        offset: 20,
-      });
 
       // Point Hover
 
@@ -1345,11 +1372,11 @@ export default function TrafficMapPanel({ title, subtitle, badge, endpoint, laye
                 <div class="nlex-pop-foot">Toll system &middot; ${toll.rates}</div>
               </div>
             `;
-            popup.setLngLat(toll.coordinates as [number, number]).setHTML(description).addTo(map);
+            plazaCard.show(toll.coordinates as [number, number], description);
           });
 
           el.addEventListener("mouseleave", () => {
-            popup.remove();
+            plazaCard.remove();
           });
 
           activeMarkers.current.push(marker);
@@ -1487,7 +1514,7 @@ export default function TrafficMapPanel({ title, subtitle, badge, endpoint, laye
               : `near ${props.nearest_exit}`
             : (props.street ?? "On the corridor");
 
-          const popup = new mapboxgl.Popup({ offset: 15, closeButton: false, closeOnClick: false }).setHTML(`
+          const summary = `
             <div class="nlex-pop" style="--pop-accent:${color}">
               <div class="nlex-pop-head">
                 <span class="nlex-pop-mark">${look.svg}</span>
@@ -1498,7 +1525,7 @@ export default function TrafficMapPanel({ title, subtitle, badge, endpoint, laye
               </div>
               <div class="nlex-pop-foot">Click for the full report</div>
             </div>
-          `);
+          `;
 
           /* Centred on the report's own position. Bottom-anchoring and lifting
              it put the pin's centre about 20 px above the coordinates Waze gave
@@ -1512,13 +1539,13 @@ export default function TrafficMapPanel({ title, subtitle, badge, endpoint, laye
           // Hover shows the summary; click opens the detail panel. setPopup is
           // deliberately not used — it binds the popup to click, which would put
           // the summary and the panel on the same gesture.
-          el.addEventListener("mouseenter", () => popup.setLngLat(coords as [number, number]).addTo(map));
-          el.addEventListener("mouseleave", () => popup.remove());
+          el.addEventListener("mouseenter", () => reportCard.show(coords as [number, number], summary));
+          el.addEventListener("mouseleave", () => reportCard.remove());
           el.addEventListener("click", (ev) => {
             // Without this the map's own click handler runs too and closes the
             // panel in the same gesture that opened it.
             ev.stopPropagation();
-            popup.remove();
+            reportCard.remove();
             setSelectedReport({
               type: props.type ?? "ALERT",
               subtype: props.subtype ?? null,

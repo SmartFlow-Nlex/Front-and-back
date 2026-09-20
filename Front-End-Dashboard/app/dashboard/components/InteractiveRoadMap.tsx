@@ -255,6 +255,18 @@ export default function InteractiveRoadMap() {
 
   const [scaleOpen, setScaleOpen] = useState(false);
 
+  /* What the reader is pointing at on the road itself, as opposed to which
+     exit they are near. A band is a queue on one carriageway, so it can say
+     things the exit rail cannot: how much road it covers and what it costs. */
+  const [hoveredJam, setHoveredJam] = useState<{
+    exit: string;
+    dir: "NB" | "SB";
+    status: string;
+    queue: string | null;
+    delay: string | null;
+    level: number | null;
+  } | null>(null);
+
   const rows = useMemo(
     () =>
       exits.map((x, i) => ({
@@ -340,19 +352,10 @@ export default function InteractiveRoadMap() {
                 ? "No active jams"
                 : `${data.jamCount} active jam${data.jamCount === 1 ? "" : "s"}`}
             </span>
-            {/* The longest queue, not the total. Waze re-describes the same
-                queue across successive reports, so adding their lengths
-                overstated the road by up to six times. */}
-            {data.queue && (
-              <span title="The longest single queue Waze reported here. Reports overlap, so they are not added together.">
-                {data.queue}
-              </span>
-            )}
-            {data.delay && (
-              <span title="Waze's own estimate of the time lost to the worst queue here, against free-flow speed.">
-                {data.delay}
-              </span>
-            )}
+            {/* Queue length and delay are not here. They describe one stretch
+                of road, and this rail describes an exit in both directions --
+                so they belonged to the coloured band, which is the thing on
+                screen that IS that stretch. Hovering it fills this same rail. */}
           </>
         )}
       </span>
@@ -444,7 +447,26 @@ export default function InteractiveRoadMap() {
                 <i
                   className={`ds-rd-jam ${data.colorClass}`}
                   style={{ width: `${bandPct}%`, [dir === "NB" ? "left" : "right"]: 0 }}
-                  aria-hidden="true"
+                  /* Focusable as well as hoverable: the detail is only
+                     reachable by pointer otherwise, and it is the one place
+                     the queue's length and cost are stated. */
+                  tabIndex={0}
+                  role="button"
+                  aria-label={`${displayExitName(r.exit.exit_name)} ${dir}, ${data.status.toLowerCase()}${data.queue ? `, ${data.queue}` : ""}${data.delay ? `, ${data.delay}` : ""}`}
+                  onMouseEnter={() =>
+                    setHoveredJam({
+                      exit: r.exit.exit_name, dir, status: data.status,
+                      queue: data.queue, delay: data.delay, level: data.level,
+                    })
+                  }
+                  onFocus={() =>
+                    setHoveredJam({
+                      exit: r.exit.exit_name, dir, status: data.status,
+                      queue: data.queue, delay: data.delay, level: data.level,
+                    })
+                  }
+                  onMouseLeave={() => setHoveredJam(null)}
+                  onBlur={() => setHoveredJam(null)}
                 />
               )}
             </span>
@@ -483,7 +505,39 @@ export default function InteractiveRoadMap() {
 
       {/* Detail rail — reserved, so it never overlaps the road or the labels. */}
       <div className="ds-rd-rail" aria-live="polite">
-        {focused ? (
+        {hoveredJam ? (
+          /* The queue wins the rail while it is pointed at. It is the more
+             specific thing -- one carriageway, one stretch -- and the reader
+             had to be over it deliberately to ask. */
+          <>
+            <span className="ds-rd-rail-name">
+              {displayExitName(hoveredJam.exit)}
+              <em>{hoveredJam.dir}</em>
+            </span>
+            <span className="ds-rd-rail-facts">
+              <span className="ds-rd-rail-dir">
+                <span className="ds-rd-facts">
+                  <b className={COLOR_CLASS[hoveredJam.status.toLowerCase() as SegmentStatus] ?? ""}>
+                    {hoveredJam.status}
+                  </b>
+                  {hoveredJam.queue && (
+                    <span title="The longest single queue Waze reported here. Reports overlap, so they are not added together.">
+                      {hoveredJam.queue}
+                    </span>
+                  )}
+                  {hoveredJam.delay && (
+                    <span title="Waze's own estimate of the time lost to this queue, against free-flow speed.">
+                      {hoveredJam.delay}
+                    </span>
+                  )}
+                  {hoveredJam.level != null && (
+                    <span>Jam level {hoveredJam.level} of 5</span>
+                  )}
+                </span>
+              </span>
+            </span>
+          </>
+        ) : focused ? (
           <>
             <span className="ds-rd-rail-name">
               {displayExitName(focused.exit.exit_name)}
@@ -496,7 +550,7 @@ export default function InteractiveRoadMap() {
           </>
         ) : (
           <span className="ds-rd-rail-hint">
-            Hover or focus an exit for its access, speed and jam detail in both directions.
+            Hover an exit for its access and speed, or a coloured stretch for how long that queue is.
           </span>
         )}
       </div>

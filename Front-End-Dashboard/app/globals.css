@@ -3800,7 +3800,20 @@ body {
   /* Bright against the green beneath, and edged so a narrow band on a busy
      stretch still reads as an object rather than a shade of the road. */
   box-shadow: inset 0 0 0 1px rgb(255 255 255 / 0.55);
-  transition: width 220ms ease;
+  transition: width 220ms ease, box-shadow 140ms ease;
+  /* Pointable, because the queue's length and what it costs are stated here
+     and nowhere else on this panel -- the exit rail describes an exit in both
+     directions, which is a different question. */
+  pointer-events: auto;
+  cursor: help;
+}
+
+.ds-rd-jam:hover,
+.ds-rd-jam:focus-visible {
+  box-shadow:
+    inset 0 0 0 1px rgb(255 255 255 / 0.9),
+    0 0 0 2px rgb(255 255 255 / 0.5);
+  outline: none;
 }
 @media (prefers-reduced-motion: reduce) {
   .ds-rd-jam { transition: none; }

@@ -56,23 +56,19 @@ export default function MapLegend({ variant = "live" }: { variant?: "live" | "fo
 
   return (
     <div className="map-legend">
-      {/* The live map colours the QUEUES, not the road.
-          Each coloured stretch is one Waze jam drawn over the length it
-          actually covers, so green never appears here: Waze emits a record
-          only where there is congestion, and a stretch with no record is left
-          as plain roadway. Listing "Clear" in green would be promising a
-          colour this map cannot draw, so the third row is the roadway itself
-          and says what its absence of colour means. */}
+      {/* All three appear on the live map, so all three are named.
+          Green is the corridor itself: Waze files a record only where there is
+          a jam, so a stretch it says nothing about is flowing. Amber and red
+          are the queues drawn over it, each covering the length it actually
+          occupies rather than the whole segment it falls in. Same three hexes
+          the map paints with, from the same palette. */}
       <h4>Traffic</h4>
-      <div className="wz-legend-row">
-        <span className="wz-line" style={{ background: palette.status.congested }} /> Congested
-      </div>
-      <div className="wz-legend-row">
-        <span className="wz-line" style={{ background: palette.status.slow }} /> Slow
-      </div>
-      <div className="wz-legend-row">
-        <span className="wz-line" style={{ background: palette.roadway }} /> No queue reported
-      </div>
+      {(["clear", "slow", "congested"] as const).map((k) => (
+        <div key={k} className="wz-legend-row">
+          <span className="wz-line" style={{ background: palette.status[k] }} />
+          {{ clear: "Clear", slow: "Slow", congested: "Congested" }[k]}
+        </div>
+      ))}
 
       <h4 className="wz-legend-gap">Waze reports</h4>
       {WAZE_REPORT_TYPES.map((k) => {

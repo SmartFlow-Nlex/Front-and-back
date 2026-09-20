@@ -1,4 +1,5 @@
 import { db } from "../config/db.js";
+import { nlexStreetSql } from "../utils/nlex-street.js";
 import { searchExitsInDb } from "./map-comparison.service.js";
 
 /**
@@ -117,22 +118,9 @@ export async function getCorridorStatus() {
             exit on the panel amber or red while the map showed a mostly clear
             corridor.
 
-            This is isNlexCorridorStreet from lib/nlex-corridor.ts written as
-            SQL, because the aggregation happens in the query. Keep the two in
-            step: the map applies the same test to the jams it paints with. */
-         AND (LOWER(j.street) LIKE '%nlex%' OR LOWER(j.street) LIKE '%north luzon%')
-         AND LOWER(j.street) NOT LIKE '%service%'
-         AND LOWER(j.street) NOT LIKE '%crossing%'
-         AND LOWER(j.street) NOT LIKE '%exit rd%'
-         AND LOWER(j.street) NOT LIKE '%halili%'
-         AND LOWER(j.street) NOT LIKE '%dulalia%'
-         AND LOWER(j.street) NOT LIKE '%tullahan%'
-         AND LOWER(j.street) NOT LIKE '%libtong%'
-         AND LOWER(j.street) NOT LIKE '%slex%'
-         AND LOWER(j.street) NOT LIKE '%skyway%'
-         AND LOWER(j.street) NOT LIKE '%sctex%'
-         AND LOWER(j.street) NOT LIKE '%tplex%'
-         AND LOWER(j.street) NOT LIKE '%cavitex%'
+            Shared with getLiveCorridorOverview and the map feed now, so the
+            three cannot drift -- see utils/nlex-street. */
+         AND ${nlexStreetSql("j.street")}
      ),
      bearing AS (
        SELECT nlex_exit_id, level, speed_kmh, last_seen_at, delay_seconds, length_meters, g,

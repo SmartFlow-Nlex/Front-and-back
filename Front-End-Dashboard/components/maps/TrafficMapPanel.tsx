@@ -581,7 +581,20 @@ export default function TrafficMapPanel({ title, subtitle, badge, endpoint, laye
              honest rendering there, and narrowing it to part of the road would
              be inventing a boundary the forecast never drew. */
           "line-color": isRealtimeEndpoint
-            ? PALETTE.roadway
+            ? /* Green, and flat green, on the live map.
+                 Not a neutral roadbed: Waze emits a record only where there IS
+                 a jam, so a stretch it says nothing about is one that is
+                 flowing, and green states that. Grey would have claimed the
+                 feed had no opinion, which is a weaker thing than the feed
+                 actually says.
+                 Flat, because the congestion lives on jam-extent above, over
+                 the length each queue actually covers. Banding this ribbon by
+                 its segment's worst jam is what turned a 400 m queue into
+                 nine kilometres of red.
+                 It also carries the flow pulse, which is drawn in white at
+                 about half opacity: over green it reads, over a grey roadbed it
+                 washed out and the corridor looked static. */
+              PALETTE.status.clear
             : [
                 "match", ["get", "level"],
                 0, PALETTE.status.clear,

@@ -1,4 +1,5 @@
 import { db } from "../config/db.js";
+import { nlexStreetSql } from "../utils/nlex-street.js";
 import { isNlexCorridorStreet, isWazeReportType } from "../lib/nlex-corridor.js";
 
 /**
@@ -48,6 +49,10 @@ export async function getLiveCorridorOverview() {
 
   const WINDOW = `last_seen_at > NOW() - interval '${WINDOW_MINUTES} minutes'`;
   const ON_CORRIDOR = `corridor_match IN ('ON_CORRIDOR', 'NEAR_CORRIDOR')`;
+  /* Near an exit is not the same as on the expressway -- see utils/nlex-street.
+     Without this the overview counted a dead-stopped barangay road as the
+     corridor's slowest stretch while the map drew that exit green. */
+  const ON_NLEX = nlexStreetSql("street");
 
   const [totals, byExit, alerts, timeline, feed] = await Promise.all([
     // Corridor-wide state. delay_seconds is Waze's own estimate of how much
@@ -64,7 +69,7 @@ export async function getLiveCorridorOverview() {
               SUM(delay_seconds)::int                         AS delay_seconds,
               MAX(level)::int                                 AS worst_level
        FROM silver.fact_waze_jams
-       WHERE ${ON_CORRIDOR} AND ${WINDOW}`,
+       WHERE ${ON_CORRIDOR} AND ${WINDOW} AND ${ON_NLEX}`,
     ),
 
     // Per-exit, for the density strip and the slowest-stretch callout.
@@ -78,6 +83,7 @@ export async function getLiveCorridorOverview() {
        JOIN nlex_exits e ON e.id = j.nlex_exit_id
        WHERE j.corridor_match IN ('ON_CORRIDOR', 'NEAR_CORRIDOR')
          AND j.last_seen_at > NOW() - interval '60 minutes'
+         AND ${nlexStreetSql("j.street")}
        GROUP BY e.exit_name
        ORDER BY avg_speed ASC`,
     ),
@@ -155,6 +161,7 @@ export async function getLiveCorridorOverview() {
               COUNT(*)::int                            AS jams
        FROM silver.fact_waze_jams
        WHERE ${ON_CORRIDOR} AND last_seen_at > NOW() - interval '3 hours'
+         AND ${ON_NLEX}
        GROUP BY 1 ORDER BY 1`,
     ),
 
@@ -383,7 +390,8 @@ export async function getLiveMapGeoJson() {
        ) s ON TRUE
        WHERE j.corridor_match IN ('ON_CORRIDOR', 'NEAR_CORRIDOR')
          AND j.last_seen_at > NOW() - interval '${WINDOW_MINUTES} minutes'
-         AND j.geom IS NOT NULL`,
+         AND j.geom IS NOT NULL
+         AND ${nlexStreetSql("j.street")}`,
     ),
     db.query<{
       lon: number; lat: number; type: string; street: string | null; city: string | null;

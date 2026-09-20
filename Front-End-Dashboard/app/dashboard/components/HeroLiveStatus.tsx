@@ -9,7 +9,7 @@ import {
   tallyExitStatuses,
   type CorridorTally,
 } from "../../../lib/corridor-status";
-import { useNlexExits } from "../../../lib/nlex-exits";
+import { displayExitName, useNlexExits } from "../../../lib/nlex-exits";
 
 const BACKEND = process.env.NEXT_PUBLIC_BACKEND_URL ?? "http://localhost:4000";
 
@@ -141,7 +141,11 @@ export default function HeroLiveStatus() {
         </span>
         {s.slowest && (
           <span className="ds-hero-stat is-worst" title="The slowest reading anywhere on the corridor right now">
-            slowest <b>{s.slowest.exit}</b> {s.slowest.speedKmh.toFixed(0)} km/h
+            {/* The name here is derived client-side from the exit list, whose
+                stored spelling title-cases the initialisms -- so without this
+                the corridor's worst reading could be attributed to "Cdv/Ph
+                Arena". */}
+            slowest <b>{displayExitName(s.slowest.exit)}</b> {s.slowest.speedKmh.toFixed(0)} km/h
           </span>
         )}
       </div>

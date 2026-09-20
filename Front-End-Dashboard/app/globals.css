@@ -9419,49 +9419,63 @@ details[open] > .evidence-summary .evidence-close-label { display: inline; }
 
 /* ── Exit markers ──────────────────────────────────────────────────────────
    Two kinds of thing sit on this corridor and they should not look alike. An
-   exit is a fixed place ON the road; a queue is a condition of it. So exits
-   are hollow rings and congestion is a solid dot, which reads before either
-   colour is decoded — and a ring cannot be mistaken for a jam at a glance, the
-   way a small teal disc could.
+   exit is a fixed place ON the road; a queue is a condition of it. So exits are
+   hollow rings and congestion is a solid dot, which reads before either colour
+   is decoded.
 
-   The badge with the building glyph is right when the reader is looking at one
-   interchange and far too heavy across 78 km: twenty of them dominated the
-   road and buried whatever sat beside them. So the marker is drawn at the
-   weight the zoom can carry, and the name joins it once there is room. */
+   The name is a callout, not a label pressed against the marker: a leader runs
+   up and out to text set clear of the carriageway. That is what lets it be
+   shown at every zoom. Text laid beside the ring had to sit on the road or on
+   the basemap's own labels, so it was held back until there was room; on a
+   leader there is always room, because the text is placed where the map is
+   empty rather than where the marker happens to be. */
 
 .custom-toll-marker .toll-pin-name {
   position: absolute;
-  left: calc(100% + 6px);
-  top: 50%;
-  transform: translateY(-50%);
+  /* Up and to the right of the ring, at the end of the leader below. */
+  left: 21px;
+  bottom: 13px;
   font-size: 10.5px;
   font-weight: 650;
   letter-spacing: 0.01em;
   color: var(--text-primary);
   white-space: nowrap;
   pointer-events: none;
-  /* Legible over the basemap without a filled chip, which at twenty exits
-     would read as a row of buttons down the road. */
+  /* Legible over the basemap without a filled chip: twenty chips down the road
+     would read as a row of buttons. */
   text-shadow:
     0 1px 2px var(--bg-body),
     0 0 3px var(--bg-body),
     0 0 6px var(--bg-body);
-  opacity: 0;
-  transition: opacity 0.16s ease;
 }
 
-/* ---- far: a quiet ring, no glyph, no name ---- */
+/* The leader. An elbow rather than a diagonal, which stays crisp at 1.5px and
+   echoes the way the corridor itself is drawn in straight runs. */
+.custom-toll-marker .toll-pin-name::before {
+  content: "";
+  position: absolute;
+  right: 100%;
+  bottom: 1px;
+  width: 13px;
+  height: 11px;
+  border-left: 1.5px solid #0e7490;
+  border-bottom: 1.5px solid #0e7490;
+  border-bottom-left-radius: 5px;
+  opacity: 0.85;
+}
+
+/* ---- far: a quiet ring ---- */
 .custom-toll-marker[data-tier="far"] .toll-pin-dot {
   width: 13px;
   height: 13px;
-  /* Hollow: the ring is the mark. Filled teal at this size looked like one
-     more traffic dot among the red and amber ones. */
+  /* Hollow: the ring is the mark. Filled teal at this size looked like one more
+     traffic dot among the red and amber ones. */
   background: var(--bg-surface);
   border: 3px solid #0e7490;
   box-shadow: 0 1px 3px rgb(15 23 42 / 0.28);
 }
 
-/* ---- mid: a larger ring, and the name ---- */
+/* ---- mid ---- */
 .custom-toll-marker[data-tier="mid"] .toll-pin-dot {
   width: 17px;
   height: 17px;
@@ -9469,7 +9483,6 @@ details[open] > .evidence-summary .evidence-close-label { display: inline; }
   border: 3.5px solid #0e7490;
   box-shadow: 0 1px 5px rgb(15 23 42 / 0.3);
 }
-.custom-toll-marker[data-tier="mid"] .toll-pin-name { opacity: 1; }
 
 /* The glyph needs about 20px to read as a building rather than a smudge, so
    below that the ring carries the meaning on its own. */
@@ -9478,8 +9491,11 @@ details[open] > .evidence-summary .evidence-close-label { display: inline; }
   display: none;
 }
 
-/* ---- near: the full badge, and the name ---- */
-.custom-toll-marker[data-tier="near"] .toll-pin-name { opacity: 1; }
+/* ---- near: the full badge, so the leader starts further out ---- */
+.custom-toll-marker[data-tier="near"] .toll-pin-name {
+  left: 26px;
+  bottom: 16px;
+}
 
 /* Proportional, so a ring does not leap to badge size under the cursor. */
 .custom-toll-marker[data-tier="far"] .toll-pin:hover .toll-pin-dot,
@@ -9495,6 +9511,26 @@ details[open] > .evidence-summary .evidence-close-label { display: inline; }
     background-color 0.16s ease, transform 0.14s ease, box-shadow 0.14s ease;
 }
 @media (prefers-reduced-motion: reduce) {
-  .toll-pin-dot,
-  .custom-toll-marker .toll-pin-name { transition: none; }
+  .toll-pin-dot { transition: none; }
+}
+
+/* A callout near the right edge opens west instead, so the name is not the
+   half that gets clipped. Mirrored outright -- text, leader and elbow -- so a
+   flipped one reads as the same object pointing the other way rather than as a
+   different kind of label. */
+.custom-toll-marker[data-side="west"] .toll-pin-name {
+  left: auto;
+  right: 21px;
+}
+.custom-toll-marker[data-side="west"][data-tier="near"] .toll-pin-name {
+  left: auto;
+  right: 26px;
+}
+.custom-toll-marker[data-side="west"] .toll-pin-name::before {
+  right: auto;
+  left: 100%;
+  border-left: none;
+  border-right: 1.5px solid #0e7490;
+  border-bottom-left-radius: 0;
+  border-bottom-right-radius: 5px;
 }

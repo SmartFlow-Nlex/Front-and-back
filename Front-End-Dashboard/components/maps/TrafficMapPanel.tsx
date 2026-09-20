@@ -1458,7 +1458,7 @@ export default function TrafficMapPanel({ title, subtitle, badge, endpoint, laye
            measured vertically, which is where these labels stack: they sit on
            one line each, so the height that matters is the text, not its
            length. */
-        const TIER_GAP_PX = { far: 13, mid: 26, near: 30 } as const;
+        const TIER_GAP_PX = { far: 26, mid: 30, near: 34 } as const;
 
         const declutterPlazas = () => {
           const tier = plazaTier(map.getZoom());
@@ -1479,8 +1479,16 @@ export default function TrafficMapPanel({ title, subtitle, badge, endpoint, laye
              two apart. The pin comes back on its own when they separate. */
           const kept = [...reportPins, ...queuePins].map((c) => map.project(c));
 
+          /* A callout opening east runs off a panel that is only a few hundred
+             pixels wide, and the name is the half that gets cut. Near the right
+             edge it opens west instead, leader and all. The width is the widest
+             name on the corridor plus its leader, measured rather than guessed:
+             "Paso de Blas Valenzuela" at 10.5px. */
+          const flipAt = map.getCanvas().clientWidth - 150;
+
           for (const pin of plazaPins) {
             const q = map.project(pin.lngLat);
+            pin.el.dataset.side = q.x > flipAt ? "west" : "east";
             const clash = kept.some(
               (k) => Math.abs(k.x - q.x) < gap && Math.abs(k.y - q.y) < gap,
             );

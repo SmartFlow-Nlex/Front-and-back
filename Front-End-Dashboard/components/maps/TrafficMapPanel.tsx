@@ -724,18 +724,36 @@ export default function TrafficMapPanel({ title, subtitle, badge, endpoint, laye
             map.addImage(id, image as unknown as Parameters<typeof map.addImage>[1]);
           }
 
+          /* Every image is built either way, because the queue layers below
+             borrow the mid and slow ones. Only the ribbon's own layer is
+             skipped: on the live map it pulses at a single speed, so the other
+             two tiers would just stack a second and third pattern on the same
+             green line. */
+          if (isRealtimeEndpoint && tier.id !== "fast") continue;
+
           map.addLayer({
             id: `carriageway-flow-${dir.toLowerCase()}-${tier.id}`,
             type: "line",
             source: "nlex-corridor",
             layout: { "line-join": "round", "line-cap": "butt" },
-            // NO_READING (-1) matches no tier, so an unreported stretch stays
-            // still rather than claiming a flow nothing measured.
-            filter: [
-              "all",
-              ["==", ["get", "direction"], dir],
-              ["in", ["get", "level"], ["literal", tier.levels]],
-            ],
+            /* Live: one speed for the whole ribbon, because the ribbon is flat
+               green and the queues above it carry the state. Picking the tier
+               from the segment's worst jam would crawl nine kilometres of
+               clear road for one 400 m queue -- the same overreach that
+               flattening the colour was meant to end. The queues get their own
+               flow below, at a speed that does follow severity.
+
+               Forecast: no queue overlay exists, so there the tier still
+               follows the predicted level, and NO_READING (-1) matches no tier
+               so an unforecast stretch stays still rather than claiming a flow
+               nothing measured. */
+            filter: isRealtimeEndpoint
+              ? ["all", ["==", ["get", "direction"], dir]]
+              : [
+                  "all",
+                  ["==", ["get", "direction"], dir],
+                  ["in", ["get", "level"], ["literal", tier.levels]],
+                ],
             paint: {
               "line-pattern": id,
               "line-width": ["interpolate", ["linear"], ["zoom"], 8, 2.5, 12, 4.5, 16, 5.5, 18, 9],
@@ -821,6 +839,51 @@ export default function TrafficMapPanel({ title, subtitle, badge, endpoint, laye
           "circle-stroke-opacity": ["interpolate", ["linear"], ["zoom"], 14, 1, 16.5, 0],
         },
       });
+
+      /* The queues move too, and slower than the road around them.
+         That contrast is the point: the green ribbon runs at the clear pace
+         and a queue laid over it crawls, so which stretch is struggling reads
+         before any colour is decoded.
+
+         Borrowed from the images the ribbon already built -- mid for the slow
+         band, slow for the congested one -- rather than new ones, so there are
+         still six animated textures on the map and not twelve.
+
+         Level 5 gets no layer at all. A blocked road is not moving, and a
+         pulse travelling along it would say it is; leaving it static is the
+         honest rendering and it makes a standstill stand out from a crawl.
+
+         Inserted beneath jam-mark so the dots stay on top. */
+      const JAM_FLOW = [
+        { levels: [1, 2], image: "mid" },
+        { levels: [3, 4], image: "slow" },
+      ] as const;
+
+      for (const dir of ["NB", "SB"] as const) {
+        for (const t of JAM_FLOW) {
+          map.addLayer(
+            {
+              id: `jam-flow-${dir.toLowerCase()}-${t.image}`,
+              type: "line",
+              source: "traffic",
+              layout: { "line-join": "round", "line-cap": "butt" },
+              filter: [
+                "all",
+                ["==", ["get", "feature_type"], "jam"],
+                ["has", "direction_source"],
+                ["==", ["get", "direction"], dir],
+                ["in", ["get", "level"], ["literal", [...t.levels]]],
+              ],
+              paint: {
+                "line-pattern": flowImageId(dir, t.image),
+                "line-width": ["interpolate", ["linear"], ["zoom"], 8, 2.5, 12, 4.5, 16, 5.5, 18, 9],
+                "line-offset": OFFSET,
+              },
+            },
+            "jam-mark",
+          );
+        }
+      }
 
       /* Direction of travel. Chevrons rather than triangles: under line
          placement they rotate with the road, so each ribbon reads as flowing

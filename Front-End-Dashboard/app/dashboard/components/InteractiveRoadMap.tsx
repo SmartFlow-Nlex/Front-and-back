@@ -56,6 +56,11 @@ type TrafficRecord = {
   speed: string;
   level: number | null;
   jamCount: number;
+  /** How far the worst queue here stretches, already formatted. Null when Waze
+   *  reported nothing, so the row is left out rather than showing a zero. */
+  queue: string | null;
+  /** What that queue is costing, already formatted. Null when not reported. */
+  delay: string | null;
 };
 
 /**
@@ -86,6 +91,8 @@ const CLEAR: TrafficRecord = {
   speed: "Free flowing",
   level: null,
   jamCount: 0,
+  queue: null,
+  delay: null,
 };
 
 /* Waze's six levels are six colours, and they are the map's.
@@ -112,6 +119,20 @@ const COLOR_CLASS: Record<SegmentStatus, string> = {
 };
 
 /** Matches on name because the feed keys by exit name, as the shared list does. */
+/* Metres under a kilometre, kilometres above it: "1430 m" is a number to
+   convert in your head, "1.4 km" is a distance. */
+const queueLabel = (m: number | null) =>
+  m == null || m <= 0 ? null : m >= 1000 ? `${(m / 1000).toFixed(1)} km queued` : `${m} m queued`;
+
+/* Seconds are how Waze ships it and minutes are how a delay is discussed. */
+const delayLabel = (sec: number | null) => {
+  if (sec == null || sec <= 0) return null;
+  const mins = Math.round(sec / 60);
+  if (mins < 1) return "under a minute lost";
+  if (mins < 60) return `~${mins} min lost`;
+  return `~${Math.floor(mins / 60)} h ${mins % 60} min lost`;
+};
+
 function statusKey(name: string, dir: string) {
   return `${name.toLowerCase().trim()}-${dir}`;
 }
@@ -126,6 +147,8 @@ function buildLookup(data: CorridorStatus | null): Map<string, TrafficRecord> {
       speed: s.speedKmh != null ? `${s.speedKmh} km/h` : "—",
       level: s.level,
       jamCount: s.jamCount,
+      queue: queueLabel(s.longestQueueMeters),
+      delay: delayLabel(s.delaySeconds),
     });
   }
   return map;
@@ -305,6 +328,19 @@ export default function InteractiveRoadMap() {
                 ? "No active jams"
                 : `${data.jamCount} active jam${data.jamCount === 1 ? "" : "s"}`}
             </span>
+            {/* The longest queue, not the total. Waze re-describes the same
+                queue across successive reports, so adding their lengths
+                overstated the road by up to six times. */}
+            {data.queue && (
+              <span title="The longest single queue Waze reported here. Reports overlap, so they are not added together.">
+                {data.queue}
+              </span>
+            )}
+            {data.delay && (
+              <span title="Waze's own estimate of the time lost to the worst queue here, against free-flow speed.">
+                {data.delay}
+              </span>
+            )}
           </>
         )}
       </span>

@@ -9344,3 +9344,75 @@ details[open] > .evidence-summary .evidence-close-label { display: inline; }
 }
 
 .fc-head .mc-horizon-pick option { color: #0f172a; background: #fff; }
+
+/* ── Queue hover card on the live map ───────────────────────────────────────
+   Mapbox draws its popup chrome with its own classes, so the surface is
+   restyled here rather than in the component: .mapboxgl-popup-content carries
+   the default white box and padding, and the tip is a bordered triangle that
+   has to be recoloured separately or it stays white on a dark card. */
+.map-jam-popup .mapboxgl-popup-content {
+  padding: 0;
+  border-radius: 10px;
+  overflow: hidden;
+  background: var(--bg-surface);
+  border: 1px solid var(--border-default);
+  box-shadow: 0 10px 28px rgb(0 0 0 / 0.22);
+}
+.map-jam-popup .mapboxgl-popup-tip {
+  border-top-color: var(--bg-surface);
+  border-bottom-color: var(--bg-surface);
+}
+
+.mjp {
+  min-width: 172px;
+  font-size: 12px;
+  color: var(--text-primary);
+}
+
+/* The state, in the same three words and the same three colours the legend
+   and the corridor panel use, so a red queue here is "Congested" there. */
+.mjp-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 7px 10px;
+  font-weight: 650;
+  letter-spacing: 0.01em;
+  color: #fff;
+}
+.mjp-head span {
+  font-weight: 500;
+  opacity: 0.85;
+  font-size: 11px;
+}
+.mjp-head.is-clear { background: #23a55a; }
+.mjp-head.is-slow { background: #e08a2e; }
+.mjp-head.is-congested { background: #e04434; }
+
+.mjp-where {
+  padding: 7px 10px 4px;
+  font-weight: 600;
+  color: var(--text-primary);
+  /* Waze street names run long ("NLEX Northbound after Bocaue Toll Plaza"),
+     and a popup that grows to fit one covers the road it describes. */
+  max-width: 230px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mjp-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 3px 10px;
+}
+.mjp-row:last-child { padding-bottom: 9px; }
+.mjp-row span { color: var(--text-secondary); }
+.mjp-row b {
+  font-variant-numeric: tabular-nums;
+  font-weight: 650;
+  color: var(--text-primary);
+}

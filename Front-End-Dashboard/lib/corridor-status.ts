@@ -31,6 +31,19 @@ export type ExitStatus = {
   speedKmh: number | null;
   jamCount: number;
   observedAt: string | null;
+  /** The longest single queue at this exit, in metres.
+   *
+   *  Deliberately the longest and not the total. Waze's reports overlap
+   *  heavily here -- measured against the length of their geometric union,
+   *  summing them overstated by 49% to 520% across the corridor, and at Tabang
+   *  Guiguinto by six times -- because successive reports re-describe the same
+   *  queue. Adding them up would invent road that is not queued. The longest
+   *  one is a figure Waze actually measured, and it never overstates. */
+  longestQueueMeters: number | null;
+  /** The worst single queue's delay, in seconds. Not a sum either, and for the
+   *  same reason: these reports overlap, so adding their delays would claim a
+   *  wait nobody was measured making. */
+  delaySeconds: number | null;
 };
 
 /* Waze's own bands, unchanged from the server-side version this replaces, so
@@ -89,7 +102,8 @@ export function corridorStatusFromFeed(
   const ordered = orderedExits(exits);
   const kept = guard.filter(fc as { features?: unknown[] }) as { features?: Feature[] };
 
-  type Acc = { level: number | null; speed: number | null; count: number; observedAt: string | null };
+  type Acc = { level: number | null; speed: number | null; count: number; observedAt: string | null;
+               meters: number | null; delay: number | null };
   const byKey = new Map<string, Acc>();
 
   for (const f of kept.features ?? []) {
@@ -117,15 +131,20 @@ export function corridorStatusFromFeed(
     const level = Number.isFinite(Number(p.level)) ? Number(p.level) : null;
     const speed = Number.isFinite(Number(p.speed)) ? Number(p.speed) : null;
     const at = typeof p.observed_at === "string" ? p.observed_at : null;
+    const meters = Number.isFinite(Number(p.length_m)) ? Number(p.length_m) : null;
+    const delay = Number.isFinite(Number(p.delay_seconds)) ? Number(p.delay_seconds) : null;
 
     const acc = byKey.get(key);
     if (!acc) {
-      byKey.set(key, { level, speed, count: 1, observedAt: at });
+      byKey.set(key, { level, speed, count: 1, observedAt: at, meters, delay });
     } else {
       // Worst level and slowest speed seen, matching the SQL this replaces.
       acc.level = acc.level == null ? level : level == null ? acc.level : Math.max(acc.level, level);
       acc.speed = acc.speed == null ? speed : speed == null ? acc.speed : Math.min(acc.speed, speed);
       acc.count += 1;
+      // Worst of each, never a total — see the field comments on ExitStatus.
+      acc.meters = acc.meters == null ? meters : meters == null ? acc.meters : Math.max(acc.meters, meters);
+      acc.delay = acc.delay == null ? delay : delay == null ? acc.delay : Math.max(acc.delay, delay);
       if (at && (!acc.observedAt || at > acc.observedAt)) acc.observedAt = at;
     }
   }
@@ -140,6 +159,8 @@ export function corridorStatusFromFeed(
       speedKmh: a.speed,
       jamCount: a.count,
       observedAt: a.observedAt,
+      longestQueueMeters: a.meters,
+      delaySeconds: a.delay,
     };
   });
 }

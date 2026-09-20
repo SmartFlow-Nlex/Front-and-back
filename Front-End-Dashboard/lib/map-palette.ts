@@ -35,6 +35,18 @@ export function mapPalette(isDark: boolean) {
     /* The roadway. White in light, near-black in dark: in both it separates
        the two ribbons and holds them against the base map. */
     casing: isDark ? "#0f172a" : "#ffffff",
+    /* The carriageway itself, carrying no claim about congestion.
+     *
+     * The ribbon used to be painted with the worst jam anywhere in its
+     * exit-to-exit segment, so one 300 m queue turned nine kilometres of road
+     * red. The colour now belongs to the jam geometry drawn on top, and this
+     * is just the asphalt under it: a queue covers the length it actually
+     * covers, and the rest of the ribbon stays plain.
+     *
+     * Plain therefore MEANS clear here. Waze emits a record only where there is
+     * a jam, so a stretch with no coloured overlay is one nothing was reported
+     * on -- which on this feed is the same statement as flowing. */
+    roadway: isDark ? "#334155" : "#9aa8ba",
     arrow: isDark ? "#e2e8f0" : "#ffffff",
     alert: isDark ? "#f87171" : "#dc2626",
     alertRing: isDark ? "#0b1220" : "#ffffff",

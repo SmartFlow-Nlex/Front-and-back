@@ -328,13 +328,27 @@ export async function getLiveMapGeoJson() {
   if (!db) return { type: "FeatureCollection" as const, features: [] };
 
   const [jams, alerts] = await Promise.all([
-    db.query<{ geojson: string; speed: number | null; level: number | null; street: string | null; city: string | null; delay: number | null; exit_name: string | null }>(
+    db.query<{ geojson: string; speed: number | null; level: number | null; street: string | null; city: string | null; delay: number | null; exit_name: string | null; length_m: number | null; running_min: number | null }>(
       `SELECT ST_AsGeoJSON(j.geom) AS geojson,
               ROUND(j.speed_kmh::numeric, 1)::float AS speed,
               j.level::int                          AS level,
               NULLIF(j.street, '')                  AS street,
               NULLIF(j.city, '')                    AS city,
               j.delay_seconds::int                  AS delay,
+              -- How far the queue stretches and how long it has been there.
+              -- Both are Waze's own fields, populated on every row in the feed,
+              -- so the hover card states measurements rather than estimates of
+              -- its own. length_meters agrees with ST_Length(geom) to the metre,
+              -- which is the check that the drawn line IS the queue.
+              j.length_meters::int                  AS length_m,
+              -- duration_minutes is only filled in once a jam clears (11 of 63
+              -- live rows had it), and "going on for" is a live question, so
+              -- fall back to how long this jam has actually been observed.
+              -- first_seen_at is set on insert and present on every row.
+              COALESCE(
+                ROUND(j.duration_minutes)::int,
+                GREATEST(0, ROUND(EXTRACT(EPOCH FROM (NOW() - j.first_seen_at)) / 60)::int)
+              )                                     AS running_min,
               e.exit_name
        FROM silver.fact_waze_jams j
        LEFT JOIN nlex_exits e ON e.id = j.nlex_exit_id
@@ -426,6 +440,10 @@ export async function getLiveMapGeoJson() {
         street: r.street ?? r.exit_name ?? "NLEX",
         city: r.city ?? "",
         delay_seconds: r.delay ?? 0,
+        // Null rather than 0 where Waze did not report one, so the card can
+        // omit the row instead of showing a zero that reads as a measurement.
+        length_m: r.length_m ?? null,
+        running_min: r.running_min ?? null,
         nearest_exit: r.exit_name ?? "",
       },
     })),

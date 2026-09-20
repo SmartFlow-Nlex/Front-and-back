@@ -535,20 +535,35 @@ export default function TrafficMapPanel({ title, subtitle, badge, endpoint, laye
         source: "nlex-corridor",
         layout: { "line-join": "round", "line-cap": "round" },
         paint: {
-          // Three colours, banded exactly as classify() bands them: 0 clear,
-          // 1-2 slow, 3 and above congested. The ramp used to paint a shade per
-          // level, which meant a reader matching four reds on the road against
-          // "4 congested" in the panel had to decide for themselves whether
-          // salmon counted.
-          "line-color": [
-            "match", ["get", "level"],
-            0, PALETTE.status.clear,
-            [1, 2], PALETTE.status.slow,
-            [3, 4, 5], PALETTE.status.congested,
-            // Falls through for NO_READING. Grey says the feed reported
-            // nothing here, rather than implying a free flow it never saw.
-            PALETTE.noData,
-          ],
+          /* Live: plain asphalt. Forecast: coloured by the predicted state.
+             The difference is not cosmetic -- the two maps know different
+             things about where congestion is.
+
+             Waze gives every jam its own LINESTRING and its own length_meters,
+             and the two agree to the metre, so on the live map the exact extent
+             of each queue is known. Painting this ribbon with the worst jam
+             ANYWHERE in its exit-to-exit segment threw that away: the segments
+             run several kilometres, so a 300 m queue at one end turned the whole
+             span red and the map showed far more congestion than the feed
+             contained. The colour now lives on jam-extent below, over the length
+             each queue actually occupies, and this is the road under it.
+
+             The model has no such extent. It predicts ONE state per
+             exit-to-exit segment -- that is its unit of prediction, not a
+             summary of something finer -- so colouring the whole segment is the
+             honest rendering there, and narrowing it to part of the road would
+             be inventing a boundary the forecast never drew. */
+          "line-color": isRealtimeEndpoint
+            ? PALETTE.roadway
+            : [
+                "match", ["get", "level"],
+                0, PALETTE.status.clear,
+                [1, 2], PALETTE.status.slow,
+                [3, 4, 5], PALETTE.status.congested,
+                // NO_READING: nobody forecast this stretch. Grey says so rather
+                // than implying a free flow the model never claimed.
+                PALETTE.noData,
+              ],
           "line-width": ["interpolate", ["linear"], ["zoom"], 8, 5, 12, 9, 16, 11, 18, 18],
           "line-opacity": 1,
           "line-offset": OFFSET,
@@ -690,6 +705,50 @@ export default function TrafficMapPanel({ title, subtitle, badge, endpoint, laye
         }
       }
 
+      /* The queues themselves, each over the length it actually covers. This
+         is now the only layer on the map that states congestion.
+
+         An earlier build drew Waze's jam lines raw and they landed beside and
+         across the corridor rather than on it -- the geometry follows Waze's
+         own road graph, not ours. They were dropped for that reason and the
+         colour folded into the ribbon instead, which is what spread one short
+         queue across a whole segment.
+
+         What makes them drawable now is the snap in the loader above: each jam
+         is projected onto the corridor centreline and given the direction it
+         belongs to, so it rides the same ribbon at the same offset. Only jams
+         the snapper resolved are drawn -- one it could not keeps its raw Waze
+         geometry, and direction_source is absent, so it is filtered out here
+         rather than drawn off-road. */
+      map.addLayer({
+        id: "jam-extent",
+        type: "line",
+        // "traffic", not "nlex-corridor": the corridor source carries only the
+        // 38 carriageway ribbons. The jams arrive on the feed and live here,
+        // already snapped onto the centreline by the loader above.
+        source: "traffic",
+        filter: [
+          "all",
+          ["==", ["get", "feature_type"], "jam"],
+          ["has", "direction_source"],
+        ],
+        layout: { "line-join": "round", "line-cap": "round" },
+        paint: {
+          // The same three bands, and the same hexes, the legend names.
+          "line-color": [
+            "match", ["get", "level"],
+            0, PALETTE.status.clear,
+            [1, 2], PALETTE.status.slow,
+            [3, 4, 5], PALETTE.status.congested,
+            PALETTE.noData,
+          ],
+          // Matched to the ribbon's width, so a queue reads as part of the road
+          // being coloured in rather than as a second line lying on top of it.
+          "line-width": ["interpolate", ["linear"], ["zoom"], 8, 5, 12, 9, 16, 11, 18, 18],
+          "line-offset": OFFSET,
+        },
+      });
+
       /* Direction of travel. Chevrons rather than triangles: under line
          placement they rotate with the road, so each ribbon reads as flowing
          even where the corridor bends. */
@@ -719,21 +778,80 @@ export default function TrafficMapPanel({ title, subtitle, badge, endpoint, laye
         },
       });
 
-      /* The jam overlay and the alert circle layer are both gone.
+      /* The alert circle layer is gone. Reports are drawn as HTML markers
+         further down, which carry the icons and the click-through, so every
+         report had a plain dot sitting under its own pin.
 
-         Waze's jam lines were drawn over the corridor as separate coloured
-         fragments with their own hover card. They were the loose lines lying
-         beside and across the road: the same congestion the ribbon already
-         shows, drawn a second time from geometry that is not quite the
-         corridor's, so the two disagreed wherever they overlapped. The ribbon's
-         colour is derived from exactly these jams -- filtered to the corridor,
-         snapped onto it, and given the direction Waze names -- so dropping the
-         overlay loses no information. It leaves one statement about congestion
-         rather than two competing ones.
+         The jam overlay came back, as jam-extent above. It had been removed
+         because Waze's raw lines landed beside and across the corridor and
+         disagreed with the ribbon wherever they overlapped -- but the fix for
+         that was the snapper, not deleting the layer. Folding the colour into
+         the ribbon instead meant a segment-wide maximum: one short queue
+         painted kilometres of road. The overlay carries the extent, so the
+         ribbon no longer has to. */
 
-         The circle layer under the reports went with it. Reports are drawn as
-         HTML markers further down, which carry the icons and the click-through,
-         so every report had a plain dot sitting under its own pin. */
+      /* What a queue is, on hover. Every figure here is a Waze field carried
+         straight through -- length_meters, delay_seconds, duration_minutes and
+         speed_kmh -- so the card reports measurements rather than anything
+         derived. A field Waze did not send is omitted rather than shown as a
+         zero, which would read as "no delay" instead of "not reported". */
+      const jamPopup = new mapboxgl.Popup({
+        closeButton: false,
+        closeOnClick: false,
+        offset: 12,
+        className: "map-jam-popup",
+      });
+
+      const km = (m: number) =>
+        m >= 1000 ? `${(m / 1000).toFixed(m >= 10000 ? 0 : 1)} km` : `${Math.round(m)} m`;
+      const mins = (sec: number) => {
+        const m = Math.round(sec / 60);
+        if (m < 1) return "under a minute";
+        if (m < 60) return `${m} min`;
+        const h = Math.floor(m / 60);
+        return `${h} h ${m % 60} min`;
+      };
+
+      const LEVEL_WORD: Record<number, string> = {
+        0: "Clear", 1: "Slow", 2: "Slow", 3: "Congested", 4: "Congested", 5: "Standstill",
+      };
+
+      map.on("mousemove", "jam-extent", (e) => {
+        const f = e.features?.[0];
+        if (!f) return;
+        map.getCanvas().style.cursor = "pointer";
+        const p = (f.properties ?? {}) as Record<string, unknown>;
+        const lvl = Number(p.level ?? 0);
+        const len = p.length_m == null ? null : Number(p.length_m);
+        const delay = p.delay_seconds == null ? null : Number(p.delay_seconds);
+        const running = p.running_min == null ? null : Number(p.running_min);
+        const speed = p.speed == null ? null : Number(p.speed);
+
+        const row = (label: string, value: string) =>
+          `<div class="mjp-row"><span>${label}</span><b>${value}</b></div>`;
+
+        jamPopup
+          .setLngLat(e.lngLat)
+          .setHTML(
+            `<div class="mjp">
+               <div class="mjp-head is-${lvl >= 3 ? "congested" : lvl >= 1 ? "slow" : "clear"}">
+                 ${LEVEL_WORD[lvl] ?? "Reported"}
+                 <span>${String(p.direction ?? "")}</span>
+               </div>
+               <div class="mjp-where">${String(p.street ?? p.nearest_exit ?? "NLEX")}</div>
+               ${len != null ? row("Queue length", km(len)) : ""}
+               ${delay != null && delay > 0 ? row("Est. delay", mins(delay)) : ""}
+               ${speed != null && speed > 0 ? row("Speed", `${speed} km/h`) : ""}
+               ${running != null && running > 0 ? row("Going on for", mins(running * 60)) : ""}
+             </div>`,
+          )
+          .addTo(map);
+      });
+
+      map.on("mouseleave", "jam-extent", () => {
+        map.getCanvas().style.cursor = "";
+        jamPopup.remove();
+      });
 
       /* The plaza hover card. Offset and anchored below the pin so the card
          opens clear of it — it used to open centred on the marker, so the pin

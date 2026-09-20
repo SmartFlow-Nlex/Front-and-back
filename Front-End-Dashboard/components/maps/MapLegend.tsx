@@ -21,15 +21,9 @@ import { WAZE_REPORT_TYPES } from "../../lib/waze-reports";
  * map other than the one beside it.
  */
 
-/** The three states the corridor is ever in, in the colours it is drawn in. */
-const STATUS_KEY = ["clear", "slow", "congested"] as const;
-
-const STATUS_LABEL: Record<(typeof STATUS_KEY)[number], string> = {
-  clear: "Clear",
-  slow: "Slow",
-  congested: "Congested",
-};
-
+/* The forecast's three states, in the colours the forecast map draws them.
+   The live map has its own rows below: it colours queues rather than segments,
+   so the two keys genuinely differ and a shared list would misdescribe one. */
 export const FORECAST_KEY = [
   { state: "Low", label: "Clear", status: "clear" as const },
   { state: "Med", label: "Slow", status: "slow" as const },
@@ -62,16 +56,24 @@ export default function MapLegend({ variant = "live" }: { variant?: "live" | "fo
 
   return (
     <div className="map-legend">
+      {/* The live map colours the QUEUES, not the road.
+          Each coloured stretch is one Waze jam drawn over the length it
+          actually covers, so green never appears here: Waze emits a record
+          only where there is congestion, and a stretch with no record is left
+          as plain roadway. Listing "Clear" in green would be promising a
+          colour this map cannot draw, so the third row is the roadway itself
+          and says what its absence of colour means. */}
       <h4>Traffic</h4>
-      {STATUS_KEY.map((k) => (
-        <div key={k} className="wz-legend-row">
-          <span className="wz-line" style={{ background: palette.status[k] }} /> {STATUS_LABEL[k]}
-        </div>
-      ))}
+      <div className="wz-legend-row">
+        <span className="wz-line" style={{ background: palette.status.congested }} /> Congested
+      </div>
+      <div className="wz-legend-row">
+        <span className="wz-line" style={{ background: palette.status.slow }} /> Slow
+      </div>
+      <div className="wz-legend-row">
+        <span className="wz-line" style={{ background: palette.roadway }} /> No queue reported
+      </div>
 
-      {/* Only where it can appear. On the live map an unreported stretch is
-          drawn as free flow, so grey never shows; on the forecast, which covers
-          seven segments of nineteen, it is most of the road. */}
       <h4 className="wz-legend-gap">Waze reports</h4>
       {WAZE_REPORT_TYPES.map((k) => {
         const v = lookOf(k);

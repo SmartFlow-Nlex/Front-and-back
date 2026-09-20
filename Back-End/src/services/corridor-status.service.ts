@@ -42,6 +42,19 @@ export type ExitStatus = {
   speedKmh: number | null;
   jamCount: number;
   observedAt: string | null;
+  /** The longest single queue at this exit, in metres.
+   *
+   *  The longest, not the total. Waze re-describes the same queue across
+   *  successive reports, so summing length_meters overstated the queued road by
+   *  49% to 520% when checked against the length of their geometric union, and
+   *  at Tabang Guiguinto by six times. The longest report is a figure Waze
+   *  measured and cannot overstate. The same statistic, by the same name, backs
+   *  the dashboard panel in lib/corridor-status.ts. */
+  longestQueueMeters: number | null;
+  /** The worst single jam's delay, in seconds. Not a sum: the reports here are
+   *  not known to be sequential, so adding them would claim a total wait no
+   *  driver was measured making. Null when nothing was seen. */
+  delaySeconds: number | null;
 };
 
 /**
@@ -78,6 +91,8 @@ export async function getCorridorStatus() {
     worst_level: number | null;
     min_speed: number | null;
     jam_count: number;
+    longest_m: number | null;
+    delay_s: number | null;
     newest: Date | null;
   }>(
     `WITH recent AS (
@@ -85,6 +100,8 @@ export async function getCorridorStatus() {
               j.level,
               j.speed_kmh,
               j.last_seen_at,
+              j.delay_seconds,
+              j.length_meters,
               ST_LineMerge(j.geom) AS g
        FROM silver.fact_waze_jams j
        WHERE j.corridor_match IN ('ON_CORRIDOR', 'NEAR_CORRIDOR')
@@ -118,7 +135,7 @@ export async function getCorridorStatus() {
          AND LOWER(j.street) NOT LIKE '%cavitex%'
      ),
      bearing AS (
-       SELECT nlex_exit_id, level, speed_kmh, last_seen_at,
+       SELECT nlex_exit_id, level, speed_kmh, last_seen_at, delay_seconds, length_meters, g,
               DEGREES(ST_Azimuth(ST_StartPoint(g), ST_EndPoint(g))) AS az
        FROM recent
        WHERE GeometryType(g) = 'LINESTRING'
@@ -128,6 +145,10 @@ export async function getCorridorStatus() {
             MAX(b.level)::int                      AS worst_level,
             ROUND(MIN(b.speed_kmh)::numeric, 1)::float AS min_speed,
             COUNT(*)::int                          AS jam_count,
+            -- The longest single queue. Overlapping reports make a sum
+            -- meaningless here; see the field comment on ExitStatus.
+            MAX(b.length_meters)::int              AS longest_m,
+            MAX(b.delay_seconds)::int              AS delay_s,
             MAX(b.last_seen_at)                    AS newest
      FROM bearing b
      JOIN nlex_exits e ON e.id = b.nlex_exit_id
@@ -144,6 +165,8 @@ export async function getCorridorStatus() {
     speedKmh: r.min_speed,
     jamCount: r.jam_count,
     observedAt: r.newest ? new Date(r.newest).toISOString() : null,
+    longestQueueMeters: r.longest_m ?? null,
+    delaySeconds: r.delay_s ?? null,
   }));
 
   // How current the feed itself is, separate from the query time. If the

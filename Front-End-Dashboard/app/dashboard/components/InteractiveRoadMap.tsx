@@ -61,6 +61,9 @@ type TrafficRecord = {
   queue: string | null;
   /** What that queue is costing, already formatted. Null when not reported. */
   delay: string | null;
+  /** The same queue in metres, for drawing it against the stretch it sits in.
+   *  The formatted strings above are for reading; this is for measuring. */
+  queueMeters: number | null;
 };
 
 /**
@@ -93,6 +96,7 @@ const CLEAR: TrafficRecord = {
   jamCount: 0,
   queue: null,
   delay: null,
+  queueMeters: null,
 };
 
 /* Waze's six levels are six colours, and they are the map's.
@@ -149,6 +153,7 @@ function buildLookup(data: CorridorStatus | null): Map<string, TrafficRecord> {
       jamCount: s.jamCount,
       queue: queueLabel(s.longestQueueMeters),
       delay: delayLabel(s.delaySeconds),
+      queueMeters: s.longestQueueMeters,
     });
   }
   return map;
@@ -261,6 +266,13 @@ export default function InteractiveRoadMap() {
            they stay clear. Segment orders are 1-based. */
         nbSegment: i + 1 <= exits.length - 1 ? `${i + 1}:NB` : null,
         sbSegment: i >= 1 ? `${i}:SB` : null,
+        /* How long that stretch is on the ground. The blocks are drawn at even
+           width because several exits sit within a kilometre of each other, so
+           a queue can only be shown against the stretch it is IN -- a fifth of
+           this block means a fifth of this stretch, not a fifth of the
+           corridor. */
+        nbStretchM: i + 1 <= exits.length - 1 ? (exits[i + 1].km - x.km) * 1000 : null,
+        sbStretchM: i >= 1 ? (x.km - exits[i - 1].km) * 1000 : null,
         nb: statusByExit.get(statusKey(x.exit_name, "NB")) ?? CLEAR,
         sb: statusByExit.get(statusKey(x.exit_name, "SB")) ?? CLEAR,
         nbAccess: accessLabel(x, "NB"),
@@ -380,6 +392,24 @@ export default function InteractiveRoadMap() {
              so a level-4 jam is deeper than a level-3 and nothing classed
              slow can ever render green. */
           const noRamp = access === "No Access";
+
+          /* The queue drawn over the length it occupies, the way the Live Map
+             draws it, instead of the whole block taking the colour. A 213 m
+             queue in an 8 km stretch was turning the entire stretch red.
+             The block keeps the road; this is what is happening on it. */
+          const stretchM = dir === "NB" ? r.nbStretchM : r.sbStretchM;
+          const queueM = noRamp ? null : data.queueMeters;
+          const share =
+            queueM != null && stretchM != null && stretchM > 0
+              ? Math.min(1, queueM / stretchM)
+              : null;
+          /* A floor of 9%, because these blocks are not to scale -- they are
+             even width for uneven stretches -- so an exact share was never on
+             offer here. What the band promises is that a queue is on this
+             stretch and roughly how much of it; the metres and the delay are
+             in the rail above, which does not round anything. */
+          const bandPct = share == null ? null : Math.max(9, Math.round(share * 100));
+
           return (
             <span
               key={`${dir}-${r.exit.exit_name}`}
@@ -397,10 +427,27 @@ export default function InteractiveRoadMap() {
                  palette, which put five shades on a road whose legend offers
                  three, and overrode these rules while doing it. The level is
                  not lost - the hover rail still reports "jam level 4 of 5". */
-              className={`ds-rd-seg ${noRamp ? "no-ramp" : data.colorClass} ${
+              className={`ds-rd-seg ${noRamp ? "no-ramp" : "seg-green"} ${
                 activeStation === r.exit.exit_name ? "is-active" : ""
               }`}
-            />
+              title={
+                data.queue
+                  ? `${displayExitName(r.exit.exit_name)} ${dir} — ${data.queue}${data.delay ? `, ${data.delay}` : ""}`
+                  : undefined
+              }
+            >
+              {bandPct != null && (
+                /* Anchored at the exit this queue belongs to: northbound that
+                   is the block's left edge, southbound its right, because the
+                   block for an exit is the road ahead of it in that direction
+                   and the two run opposite ways along one shared axis. */
+                <i
+                  className={`ds-rd-jam ${data.colorClass}`}
+                  style={{ width: `${bandPct}%`, [dir === "NB" ? "left" : "right"]: 0 }}
+                  aria-hidden="true"
+                />
+              )}
+            </span>
           );
         })}
       </div>

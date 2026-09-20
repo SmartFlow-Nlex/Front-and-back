@@ -3783,6 +3783,27 @@ body {
   flex: 1 1 0;
   opacity: 0.85;
   transition: opacity 140ms ease, filter 140ms ease;
+  /* The band inside is absolutely placed against this block. */
+  position: relative;
+}
+
+/* The queue, over the part of the stretch it occupies.
+   The block used to take the colour whole, so a 213 m queue turned an eight
+   kilometre stretch red -- the same overreach the Live Map had before the
+   extent was drawn. The block is the road now and this is what is on it, which
+   also makes the two views of the same jam agree. */
+.ds-rd-jam {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  border-radius: 2px;
+  /* Bright against the green beneath, and edged so a narrow band on a busy
+     stretch still reads as an object rather than a shade of the road. */
+  box-shadow: inset 0 0 0 1px rgb(255 255 255 / 0.55);
+  transition: width 220ms ease;
+}
+@media (prefers-reduced-motion: reduce) {
+  .ds-rd-jam { transition: none; }
 }
 
 /* Colour comes from lib/map-palette via an inline style, so the road here and
@@ -3974,6 +3995,14 @@ body {
 .ds-rd-legend i.seg-red    { background: #e04434; }
 .ds-rd-legend i.seg-orange { background: #e08a2e; }
 .ds-rd-legend i.seg-green  { background: #23a55a; }
+
+/* The road, and the queues on it, in the legend's own three colours -- declared
+   here beside the key so the swatch and the thing it describes cannot drift.
+   These are the hexes the Live Map paints with too, from lib/map-palette. */
+.ds-rd-seg.seg-green   { background: #23a55a; }
+.ds-rd-jam.seg-red     { background: #e04434; }
+.ds-rd-jam.seg-orange  { background: #e08a2e; }
+.ds-rd-jam.seg-green   { background: #23a55a; }
 
 .ds-rd-foot p {
   margin: 0;

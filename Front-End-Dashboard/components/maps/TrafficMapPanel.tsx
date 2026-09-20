@@ -7,7 +7,7 @@ import { useEffect, useRef, useState } from "react";
 import nlexGeometry from "./nlex-geometry.json";
 import { corridorGuard, directionLabel, sliceCorridor, type LngLat } from "../../lib/corridor-shape";
 import { corridorSegmentLevels } from "../../lib/corridor-status";
-import { FALLBACK_EXITS } from "../../lib/nlex-exits";
+import { FALLBACK_EXITS, displayExitName } from "../../lib/nlex-exits";
 import { useChartTheme } from "../../lib/chart-theme";
 import { mapPalette } from "../../lib/map-palette";
 import { isDisputedReport, isReportType, isUnconfirmedReport } from "../../lib/waze-reports";
@@ -1175,6 +1175,14 @@ export default function TrafficMapPanel({ title, subtitle, badge, endpoint, laye
       // next Tuesday — and without them the forecast was a coloured line with
       // no way to tell which exit any stretch of it belonged to.
       {
+        /* Names here are written as they are stored, and restored to their
+           proper casing at the point of display by displayExitName -- the same
+           function the rest of the dashboard uses. The stored spelling is
+           title-cased, which mangles the initialisms ("Cdv/Ph Arena" for
+           CDV/PH), and it cannot simply be corrected: exit_name is a match key
+           as well as a label, joining the live feed, the volume rows and the
+           ETL's canonical plaza list. Fixing the caption in place here would
+           have left this one list disagreeing with all of them. */
         const tollPlazas = [
           {
             name: "Balintawak",
@@ -1382,7 +1390,7 @@ export default function TrafficMapPanel({ title, subtitle, badge, endpoint, laye
                   <path d="M2 20h20M9 20v-5h6v5" />
                 </svg>
               </div>
-              <span class="toll-pin-name">${toll.shortName}</span>
+              <span class="toll-pin-name">${displayExitName(toll.shortName)}</span>
             </div>
           `;
 
@@ -1395,7 +1403,11 @@ export default function TrafficMapPanel({ title, subtitle, badge, endpoint, laye
             .setLngLat(toll.coordinates as [number, number])
             .addTo(map);
 
-          plazaPins.push({ el, lngLat: toll.coordinates as [number, number], name: toll.shortName });
+          plazaPins.push({
+            el,
+            lngLat: toll.coordinates as [number, number],
+            name: displayExitName(toll.shortName),
+          });
 
           el.addEventListener("mouseenter", () => {
             /* No inline chrome: the container is styled in globals.css, so
@@ -1412,7 +1424,7 @@ export default function TrafficMapPanel({ title, subtitle, badge, endpoint, laye
                     </svg>
                   </span>
                   <span class="nlex-pop-name">
-                    <span class="nlex-pop-title">${toll.name}</span>
+                    <span class="nlex-pop-title">${displayExitName(toll.name)}</span>
                     <span class="nlex-pop-sub">${toll.location}</span>
                   </span>
                 </div>

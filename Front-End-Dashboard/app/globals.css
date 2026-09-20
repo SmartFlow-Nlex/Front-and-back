@@ -3623,9 +3623,14 @@ body {
   align-items: flex-start;
   justify-content: center;
   gap: 6px;
-  /* Holds two lines, so the road below does not jump as the pointer moves
-     between exits with and without a reading. */
-  min-height: 62px;
+  /* FIXED, not a minimum. The road sits directly under this rail, so any
+     change in its height moves the road out from under the pointer -- which
+     fires mouseleave, empties the rail, shrinks it, puts the road back and
+     starts again. That loop is what made the detail flicker on and off while
+     hovering near the edge of a band.
+     A minimum was not enough: the fact rows wrap, so the height still grew
+     with the content and the width. */
+  height: 68px;
   padding: 11px 22px;
   background: var(--bg-surface-hover);
   border-bottom: 1px solid var(--border-default);
@@ -3650,10 +3655,16 @@ body {
 
 .ds-rd-rail-facts {
   display: inline-flex;
-  flex-wrap: wrap;
+  /* One line, always. Wrapping is what let the height vary -- see the note on
+     .ds-rd-rail. Too narrow to fit, it scrolls sideways instead of growing. */
+  flex-wrap: nowrap;
   align-items: baseline;
   gap: 8px 22px;
+  max-width: 100%;
+  overflow-x: auto;
+  scrollbar-width: none;
 }
+.ds-rd-rail-facts::-webkit-scrollbar { display: none; }
 
 .ds-rd-rail-dir {
   display: inline-flex;
@@ -3669,7 +3680,9 @@ body {
 .ds-rd-facts {
   display: inline-flex;
   align-items: baseline;
-  flex-wrap: wrap;
+  /* Same reason: a wrapped reading would make the rail taller. */
+  flex-wrap: nowrap;
+  white-space: nowrap;
   gap: 0;
 }
 

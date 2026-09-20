@@ -9434,34 +9434,57 @@ details[open] > .evidence-summary .evidence-close-label { display: inline; }
   position: absolute;
   /* Up and to the right of the ring, at the end of the leader below. */
   left: 21px;
-  bottom: 13px;
-  font-size: 10.5px;
-  font-weight: 650;
-  letter-spacing: 0.01em;
-  color: var(--text-primary);
+  bottom: 12px;
+  padding: 2.5px 7px 3px;
+  border-radius: 7px;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.015em;
+  line-height: 1.25;
   white-space: nowrap;
   pointer-events: none;
-  /* Legible over the basemap without a filled chip: twenty chips down the road
-     would read as a row of buttons. */
-  text-shadow:
-    0 1px 2px var(--bg-body),
-    0 0 3px var(--bg-body),
-    0 0 6px var(--bg-body);
+  color: var(--text-primary);
+  /* A plate rather than a text shadow. The shadow had to be stacked three deep
+     to survive the basemap, which thickened the letterforms and left a grey
+     smear around every name; over the corridor's own green it read as grime.
+     A plate carries the text at one weight wherever it lands, and the blur
+     keeps whatever is under it legible as context instead of blanking it. */
+  background: color-mix(in srgb, var(--bg-surface) 82%, transparent);
+  backdrop-filter: blur(7px) saturate(1.2);
+  -webkit-backdrop-filter: blur(7px) saturate(1.2);
+  border: 1px solid color-mix(in srgb, var(--border-default) 70%, transparent);
+  box-shadow:
+    0 1px 2px rgb(15 23 42 / 0.08),
+    0 2px 8px rgb(15 23 42 / 0.06);
 }
 
-/* The leader. An elbow rather than a diagonal, which stays crisp at 1.5px and
-   echoes the way the corridor itself is drawn in straight runs. */
+/* The leader. An elbow rather than a diagonal, which stays crisp at these
+   weights and echoes the way the corridor itself is drawn in straight runs. */
 .custom-toll-marker .toll-pin-name::before {
   content: "";
   position: absolute;
   right: 100%;
-  bottom: 1px;
+  bottom: 3px;
   width: 13px;
   height: 11px;
   border-left: 1.5px solid #0e7490;
   border-bottom: 1.5px solid #0e7490;
-  border-bottom-left-radius: 5px;
-  opacity: 0.85;
+  border-bottom-left-radius: 6px;
+  opacity: 0.8;
+}
+
+/* A cap where the leader meets the plate, so the line resolves into the label
+   instead of stopping against its edge. */
+.custom-toll-marker .toll-pin-name::after {
+  content: "";
+  position: absolute;
+  right: calc(100% - 1px);
+  bottom: 1px;
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: #0e7490;
+  opacity: 0.8;
 }
 
 /* ---- far: a quiet ring ---- */
@@ -9546,18 +9569,32 @@ details[open] > .evidence-summary .evidence-close-label { display: inline; }
   pointer-events: none;
 }
 
-/* An exit standing on a queue says so. Same three colours the legend and the
-   road itself use, so the name and the mark beside it cannot describe the
-   stretch differently. The leader takes the colour too, which is what ties the
-   word to the dot it is pointing at. */
-.custom-toll-marker[data-queue="slow"] .toll-pin-name { color: #b45309; font-weight: 750; }
-.custom-toll-marker[data-queue="congested"] .toll-pin-name { color: #b91c1c; font-weight: 750; }
-.custom-toll-marker[data-queue="slow"] .toll-pin-name::before { border-color: #e08a2e; opacity: 1; }
-.custom-toll-marker[data-queue="congested"] .toll-pin-name::before { border-color: #e04434; opacity: 1; }
+/* An exit standing on a queue says so, in the same three colours the legend
+   and the road use -- so the name, the dot beside it and the stretch itself
+   cannot describe the same place differently. The plate carries the tint and
+   the leader carries the colour, which is what ties the word to the mark it is
+   pointing at. */
+.custom-toll-marker[data-queue="slow"] .toll-pin-name {
+  color: #9a5b12;
+  border-color: color-mix(in srgb, #e08a2e 55%, transparent);
+  background: color-mix(in srgb, #e08a2e 14%, var(--bg-surface));
+  font-weight: 700;
+}
+.custom-toll-marker[data-queue="congested"] .toll-pin-name {
+  color: #a51d1d;
+  border-color: color-mix(in srgb, #e04434 55%, transparent);
+  background: color-mix(in srgb, #e04434 13%, var(--bg-surface));
+  font-weight: 700;
+}
+.custom-toll-marker[data-queue="slow"] .toll-pin-name::before,
+.custom-toll-marker[data-queue="slow"] .toll-pin-name::after { border-color: #e08a2e; background: #e08a2e; opacity: 1; }
+.custom-toll-marker[data-queue="congested"] .toll-pin-name::before,
+.custom-toll-marker[data-queue="congested"] .toll-pin-name::after { border-color: #e04434; background: #e04434; opacity: 1; }
+.custom-toll-marker[data-queue] .toll-pin-name::before { background: none; }
 
 :root[data-theme="dark"] .custom-toll-marker[data-queue="slow"] .toll-pin-name { color: #fbbf24; }
-:root[data-theme="dark"] .custom-toll-marker[data-queue="congested"] .toll-pin-name { color: #f87171; }
+:root[data-theme="dark"] .custom-toll-marker[data-queue="congested"] .toll-pin-name { color: #fca5a5; }
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) .custom-toll-marker[data-queue="slow"] .toll-pin-name { color: #fbbf24; }
-  :root:not([data-theme="light"]) .custom-toll-marker[data-queue="congested"] .toll-pin-name { color: #f87171; }
+  :root:not([data-theme="light"]) .custom-toll-marker[data-queue="congested"] .toll-pin-name { color: #fca5a5; }
 }

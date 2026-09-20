@@ -288,7 +288,20 @@ export default function TrafficMapPanel({ title, subtitle, badge, endpoint, laye
        lib/corridor-shape.ts for why. */
     const onlyOnCorridor = (fc: GeoJSON.FeatureCollection): GeoJSON.FeatureCollection => {
       const kept = guard.filter(fc);
-      return {
+
+      /* A marker per queue, at the point it starts.
+         Drawn because the true extent is often too small to find. The corridor
+         is 85 km and the panel is about 950 px wide, so a pixel is roughly 90 m
+         and the 228 m queue at Pulilan is two and a half pixels of road -- there,
+         correct, and invisible. Zoomed out, most of the feed looks like an empty
+         expressway.
+         The line still carries the extent and is still the thing that says how
+         much road is queued; this only says "a queue begins here", which is true
+         at every zoom. Both carry the same properties, so hovering either one
+         opens the same card. */
+      const marks: GeoJSON.Feature[] = [];
+
+      const out = {
         ...kept,
         features: (kept.features ?? [])
           /* Alerts are shown only for the categories the legend names, so the
@@ -309,17 +322,31 @@ export default function TrafficMapPanel({ title, subtitle, badge, endpoint, laye
             (f.properties as { street?: string })?.street,
           );
           if (!snapped) return f;
+          const properties = {
+            ...f.properties,
+            direction: snapped.direction,
+            direction_source: snapped.directionSource,
+          };
+          /* The head of the snapped line, which is the queue's upstream end --
+             Waze orders its vertices with the traffic, checked against the
+             direction it puts in the street name on 40 of 40 live jams. */
+          const head = snapped.coords[0];
+          if (head) {
+            marks.push({
+              type: "Feature",
+              properties: { ...properties, feature_type: "jam_mark" },
+              geometry: { type: "Point", coordinates: head },
+            });
+          }
           return {
             ...f,
-            properties: {
-              ...f.properties,
-              direction: snapped.direction,
-              direction_source: snapped.directionSource,
-            },
+            properties,
             geometry: { type: "LineString", coordinates: snapped.coords } as GeoJSON.Geometry,
           };
         }),
       };
+
+      return { ...out, features: [...out.features, ...marks] };
     };
 
     /** Stands in for "the feed said nothing about this stretch". */
@@ -749,6 +776,39 @@ export default function TrafficMapPanel({ title, subtitle, badge, endpoint, laye
         },
       });
 
+      /* Where each queue starts. See the marker note in onlyOnCorridor: at
+         corridor zoom a 228 m queue is under three pixels of road, so the
+         extent alone leaves most of the feed looking like an empty expressway.
+
+         It shrinks as the map zooms in, because by then the line itself carries
+         the answer and the dot is only in the way. Collision is left ON -- the
+         default -- so a cluster of overlapping reports at one interchange
+         resolves to a single dot rather than a pile of them. */
+      map.addLayer({
+        id: "jam-mark",
+        type: "circle",
+        source: "traffic",
+        filter: [
+          "all",
+          ["==", ["get", "feature_type"], "jam_mark"],
+          ["has", "direction_source"],
+        ],
+        paint: {
+          "circle-color": [
+            "match", ["get", "level"],
+            0, PALETTE.status.clear,
+            [1, 2], PALETTE.status.slow,
+            [3, 4, 5], PALETTE.status.congested,
+            PALETTE.noData,
+          ],
+          "circle-radius": ["interpolate", ["linear"], ["zoom"], 8, 4.5, 11, 6, 14, 5, 17, 0],
+          "circle-stroke-width": ["interpolate", ["linear"], ["zoom"], 8, 1.5, 14, 2, 17, 0],
+          "circle-stroke-color": PALETTE.casing,
+          "circle-opacity": ["interpolate", ["linear"], ["zoom"], 14, 1, 16.5, 0],
+          "circle-stroke-opacity": ["interpolate", ["linear"], ["zoom"], 14, 1, 16.5, 0],
+        },
+      });
+
       /* Direction of travel. Chevrons rather than triangles: under line
          placement they rotate with the road, so each ribbon reads as flowing
          even where the corridor bends. */
@@ -833,7 +893,9 @@ export default function TrafficMapPanel({ title, subtitle, badge, endpoint, laye
         return `Starts ${km(metres)} from ${esc(exit)}`;
       };
 
-      map.on("mousemove", "jam-extent", (e) => {
+      // The line and its marker carry identical properties, so both open the
+      // same card: whichever one the reader happens to find answers them.
+      const onJamMove = (e: mapboxgl.MapLayerMouseEvent) => {
         const f = e.features?.[0];
         if (!f) return;
         map.getCanvas().style.cursor = "pointer";
@@ -865,12 +927,17 @@ export default function TrafficMapPanel({ title, subtitle, badge, endpoint, laye
              </div>`,
           )
           .addTo(map);
-      });
+      };
 
-      map.on("mouseleave", "jam-extent", () => {
+      const onJamLeave = () => {
         map.getCanvas().style.cursor = "";
         jamPopup.remove();
-      });
+      };
+
+      for (const id of ["jam-extent", "jam-mark"] as const) {
+        map.on("mousemove", id, onJamMove);
+        map.on("mouseleave", id, onJamLeave);
+      }
 
       /* The plaza hover card. Offset and anchored below the pin so the card
          opens clear of it — it used to open centred on the marker, so the pin

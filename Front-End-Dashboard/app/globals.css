@@ -9394,12 +9394,12 @@ details[open] > .evidence-summary .evidence-close-label { display: inline; }
   padding: 7px 10px 4px;
   font-weight: 600;
   color: var(--text-primary);
-  /* Waze street names run long ("NLEX Northbound after Bocaue Toll Plaza"),
-     and a popup that grows to fit one covers the road it describes. */
-  max-width: 230px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  /* Wraps rather than truncating. This line is the answer to "where", and
+     "Starts 400 m from Bocaue Interch..." loses the exit at exactly the point
+     it starts to matter -- the corridor has both a Bocaue Interchange and a
+     Bocaue Barrier. Two lines of card cost less than the wrong plaza. */
+  max-width: 250px;
+  overflow-wrap: break-word;
 }
 
 .mjp-row {

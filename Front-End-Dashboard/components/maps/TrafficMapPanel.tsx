@@ -1367,6 +1367,9 @@ export default function TrafficMapPanel({ title, subtitle, badge, endpoint, laye
              hover — but hovering also opens the card, which names the plaza
              properly, so the label was a second copy of the name floating over
              the card that had just replaced it. */
+          /* The name rides alongside from the middle zooms on, where there is
+             room for it. Zoomed out it is left off: twenty names along the
+             corridor is soup, and the shape alone is enough to say "exit". */
           el.innerHTML = `
             <div class="toll-pin">
               <div class="toll-pin-dot">
@@ -1376,6 +1379,7 @@ export default function TrafficMapPanel({ title, subtitle, badge, endpoint, laye
                   <path d="M2 20h20M9 20v-5h6v5" />
                 </svg>
               </div>
+              <span class="toll-pin-name">${toll.shortName}</span>
             </div>
           `;
 
@@ -1446,8 +1450,15 @@ export default function TrafficMapPanel({ title, subtitle, badge, endpoint, laye
            in. At the smaller sizes it no longer swallows what it sits next to,
            so it is hidden far less often. */
         const plazaTier = (z: number) => (z < 11.5 ? "far" : z < 13.5 ? "mid" : "near");
-        // Kept in step with the rendered sizes in globals.css.
-        const TIER_GAP_PX = { far: 13, mid: 18, near: 26 } as const;
+        /* Kept in step with the rendered sizes in globals.css -- and with the
+           NAME, from the middle zooms on. Spacing on the marker alone let two
+           rings stand clear while their labels ran through each other, which
+           is how Balagtas and Tabang ended up overlapping. What has to be kept
+           apart is the whole mark, so the gap grows where the name does. It is
+           measured vertically, which is where these labels stack: they sit on
+           one line each, so the height that matters is the text, not its
+           length. */
+        const TIER_GAP_PX = { far: 13, mid: 26, near: 30 } as const;
 
         const declutterPlazas = () => {
           const tier = plazaTier(map.getZoom());

@@ -9417,53 +9417,84 @@ details[open] > .evidence-summary .evidence-close-label { display: inline; }
   color: var(--text-primary);
 }
 
-/* ── Exit markers, drawn at the weight the zoom can carry ───────────────────
-   The 26 px badge is right when the reader is looking at one interchange and
-   far too heavy across 78 km of corridor: twenty of them dominated the road
-   and buried the congestion sitting beside them. Zoomed out they become nodes
-   — small ringed dots, the way a transit map marks a station — and grow back
-   into the full pin on the way in. The tier is set on the element by the map;
-   these rules only say what each one looks like. */
-.custom-toll-marker[data-tier="far"] .toll-pin-dot,
-.custom-toll-marker[data-tier="mid"] .toll-pin-dot {
-  /* The icon needs about 20px to read at all. Below that it is a smudge, so
-     the node carries the colour and the ring instead and drops the glyph. */
-  color: transparent;
+/* ── Exit markers ──────────────────────────────────────────────────────────
+   Two kinds of thing sit on this corridor and they should not look alike. An
+   exit is a fixed place ON the road; a queue is a condition of it. So exits
+   are hollow rings and congestion is a solid dot, which reads before either
+   colour is decoded — and a ring cannot be mistaken for a jam at a glance, the
+   way a small teal disc could.
+
+   The badge with the building glyph is right when the reader is looking at one
+   interchange and far too heavy across 78 km: twenty of them dominated the
+   road and buried whatever sat beside them. So the marker is drawn at the
+   weight the zoom can carry, and the name joins it once there is room. */
+
+.custom-toll-marker .toll-pin-name {
+  position: absolute;
+  left: calc(100% + 6px);
+  top: 50%;
+  transform: translateY(-50%);
+  font-size: 10.5px;
+  font-weight: 650;
+  letter-spacing: 0.01em;
+  color: var(--text-primary);
+  white-space: nowrap;
+  pointer-events: none;
+  /* Legible over the basemap without a filled chip, which at twenty exits
+     would read as a row of buttons down the road. */
+  text-shadow:
+    0 1px 2px var(--bg-body),
+    0 0 3px var(--bg-body),
+    0 0 6px var(--bg-body);
+  opacity: 0;
+  transition: opacity 0.16s ease;
 }
+
+/* ---- far: a quiet ring, no glyph, no name ---- */
+.custom-toll-marker[data-tier="far"] .toll-pin-dot {
+  width: 13px;
+  height: 13px;
+  /* Hollow: the ring is the mark. Filled teal at this size looked like one
+     more traffic dot among the red and amber ones. */
+  background: var(--bg-surface);
+  border: 3px solid #0e7490;
+  box-shadow: 0 1px 3px rgb(15 23 42 / 0.28);
+}
+
+/* ---- mid: a larger ring, and the name ---- */
+.custom-toll-marker[data-tier="mid"] .toll-pin-dot {
+  width: 17px;
+  height: 17px;
+  background: var(--bg-surface);
+  border: 3.5px solid #0e7490;
+  box-shadow: 0 1px 5px rgb(15 23 42 / 0.3);
+}
+.custom-toll-marker[data-tier="mid"] .toll-pin-name { opacity: 1; }
+
+/* The glyph needs about 20px to read as a building rather than a smudge, so
+   below that the ring carries the meaning on its own. */
 .custom-toll-marker[data-tier="far"] .toll-pin-dot > svg,
 .custom-toll-marker[data-tier="mid"] .toll-pin-dot > svg {
   display: none;
 }
 
-.custom-toll-marker[data-tier="far"] .toll-pin-dot {
-  width: 11px;
-  height: 11px;
-  border-width: 2px;
-  /* Flatter than the badge: at this size a drop shadow reads as a blur rather
-     than as lift, and competes with the queue halos it sits among. */
-  box-shadow: 0 1px 3px rgb(15 23 42 / 0.3);
-}
+/* ---- near: the full badge, and the name ---- */
+.custom-toll-marker[data-tier="near"] .toll-pin-name { opacity: 1; }
 
-.custom-toll-marker[data-tier="mid"] .toll-pin-dot {
-  width: 16px;
-  height: 16px;
-  border-width: 2.5px;
-  box-shadow: 0 1px 5px rgb(15 23 42 / 0.34);
-}
-
-/* The hover lift is proportional, so a node does not jump to badge size under
-   the cursor — it only needs to acknowledge the pointer. */
+/* Proportional, so a ring does not leap to badge size under the cursor. */
 .custom-toll-marker[data-tier="far"] .toll-pin:hover .toll-pin-dot,
 .custom-toll-marker[data-tier="mid"] .toll-pin:hover .toll-pin-dot {
-  transform: scale(1.35);
+  transform: scale(1.3);
+  border-color: #155e75;
 }
 
-/* Motion between tiers, so a zoom reads as the pin growing rather than as pins
-   being swapped. Suppressed for anyone who asked for less movement. */
+/* Motion between tiers, so a zoom reads as the marker growing rather than as
+   markers being swapped. */
 .toll-pin-dot {
   transition: width 0.16s ease, height 0.16s ease, border-width 0.16s ease,
-    transform 0.14s ease, box-shadow 0.14s ease;
+    background-color 0.16s ease, transform 0.14s ease, box-shadow 0.14s ease;
 }
 @media (prefers-reduced-motion: reduce) {
-  .toll-pin-dot { transition: none; }
+  .toll-pin-dot,
+  .custom-toll-marker .toll-pin-name { transition: none; }
 }

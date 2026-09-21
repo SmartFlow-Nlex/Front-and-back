@@ -11,6 +11,42 @@ import { cachedJson } from "../../../lib/cached-json";
 
 import { useNlexExits, accessLabel, displayExitName, type NlexExit } from "../../../lib/nlex-exits";
 
+/* Traffic on the carriageway.
+ *
+ * Decoration, deliberately: both carriageways run this same set at this same
+ * pace, whatever the road is doing, so nothing about the cars can be read as a
+ * measurement. What is measured is the coloured band underneath them and the
+ * figures beside it. Their job is to make the strip read as a ROAD rather than
+ * a progress bar, and to say which way it runs without the reader having to
+ * decode an arrow.
+ *
+ * Fixed rather than generated, so a re-render cannot reshuffle them mid-drive,
+ * and so the two carriageways carry identical traffic -- anything else would
+ * invite a comparison that means nothing.
+ *
+ * The delays are NEGATIVE: a CSS animation given a negative delay starts part
+ * way through, so the road is already full of cars on the first frame instead
+ * of filling up from the left over ten seconds.
+ *
+ * The paints are all neutral greys and whites. Red, amber and green are spoken
+ * for by the status palette, and a yellow car on a green stretch would be the
+ * one thing on this panel that looks like a reading and is not.
+ */
+const CARS = [
+  { lane: 1, dur: 11.0, delay: -0.0, paint: "#eef2f7" },
+  { lane: 1, dur: 11.0, delay: -3.6, paint: "#c3cfdd" },
+  { lane: 1, dur: 11.0, delay: -7.4, paint: "#dfe7f0" },
+  { lane: 1, dur: 13.5, delay: -5.1, paint: "#aebdd0" },
+  { lane: 2, dur: 9.5, delay: -1.1, paint: "#dfe7f0" },
+  { lane: 2, dur: 9.5, delay: -4.3, paint: "#f4f7fb" },
+  { lane: 2, dur: 9.5, delay: -7.7, paint: "#b9c6d6" },
+  { lane: 2, dur: 12.0, delay: -2.6, paint: "#cdd8e5" },
+  { lane: 3, dur: 8.0, delay: -0.5, paint: "#f4f7fb" },
+  { lane: 3, dur: 8.0, delay: -3.1, paint: "#aebdd0" },
+  { lane: 3, dur: 8.0, delay: -5.7, paint: "#dfe7f0" },
+  { lane: 3, dur: 10.5, delay: -8.2, paint: "#c3cfdd" },
+] as const;
+
 
 
 /* ══════════════════════════════════════════════════════════════════════════════
@@ -475,6 +511,17 @@ export default function InteractiveRoadMap() {
       </div>
       <div className="ds-rd-lanes" />
       <div className="ds-rd-flow" />
+      <div className="ds-rd-cars" aria-hidden="true">
+        {CARS.map((c, i) => (
+          <i
+            key={i}
+            className={`ds-rd-car lane-${c.lane}`}
+            style={
+              { "--dur": `${c.dur}s`, "--delay": `${c.delay}s`, "--car": c.paint } as React.CSSProperties
+            }
+          />
+        ))}
+      </div>
     </div>
   );
 
@@ -558,10 +605,21 @@ export default function InteractiveRoadMap() {
       <div ref={containerRef} className={`ds-rd-body ${isVisible ? "is-visible" : ""}`}>
         <div className="ds-rd-scroll">
           <div className="ds-rd-track" style={{ "--lanes": rows.length } as React.CSSProperties}>
+            {/* Southbound on top, northbound underneath.
+
+                The corridor is drawn with km increasing to the right, so
+                northbound traffic runs left to right and southbound runs right
+                to left. Traffic in the Philippines keeps to the RIGHT of the
+                road, and the right-hand side of a driver heading right is the
+                near side of the page -- so northbound belongs at the bottom and
+                southbound at the top. Drawn the other way round, the diagram
+                showed the two streams passing each other on the wrong sides,
+                which is exactly the sort of detail a reader who drives this
+                road every day notices first. */}
             <p className="ds-rd-caption top">
-              <span aria-hidden="true">→</span> Northbound (NB) · to Central Luzon
+              <span aria-hidden="true">←</span> Southbound (SB) · to Metro Manila
             </p>
-            {carriageway("NB", (r) => ({ data: r.nb, access: r.nbAccess }))}
+            {carriageway("SB", (r) => ({ data: r.sb, access: r.sbAccess }))}
 
             {/* Median: one set of markers serving both carriageways, so an exit
                 is a single target rather than two that have to be kept in step. */}
@@ -594,9 +652,9 @@ export default function InteractiveRoadMap() {
               })}
             </ol>
 
-            {carriageway("SB", (r) => ({ data: r.sb, access: r.sbAccess }))}
+            {carriageway("NB", (r) => ({ data: r.nb, access: r.nbAccess }))}
             <p className="ds-rd-caption bottom">
-              <span aria-hidden="true">←</span> Southbound (SB) · to Metro Manila
+              <span aria-hidden="true">→</span> Northbound (NB) · to Central Luzon
             </p>
 
             {/* Names sit under the whole diagram, shared by both carriageways. */}

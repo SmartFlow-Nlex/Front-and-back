@@ -3766,9 +3766,10 @@ body {
 }
 
 /* Outer shoulder rounded, inner edge square: the two carriageways meet at the
-   median, so rounding both would read as two separate strips. */
-.ds-rd-way.dir-nb { border-radius: 8px 8px 0 0; }
-.ds-rd-way.dir-sb { border-radius: 0 0 8px 8px; }
+   median, so rounding both would read as two separate strips.
+   Southbound is the upper strip -- see the note beside the markup. */
+.ds-rd-way.dir-sb { border-radius: 8px 8px 0 0; }
+.ds-rd-way.dir-nb { border-radius: 0 0 8px 8px; }
 
 /* Shoulder lines along both edges. */
 .ds-rd-way::before,
@@ -3891,6 +3892,87 @@ body {
 
 @keyframes rdFlowRight { to { background-position:  220px 0; } }
 @keyframes rdFlowLeft  { to { background-position: -220px 0; } }
+
+/* --- Vehicles -------------------------------------------------------------- */
+
+/* Above the coloured band and the lane markings, because a car is ON the road.
+   See the CARS note in InteractiveRoadMap.tsx for why these carry no data. */
+.ds-rd-cars {
+  position: absolute;
+  inset: 7px 0;
+  z-index: 4;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+/* The element is a full-width CARRIER and the car itself is drawn at its
+   leading edge. The track is as wide as the corridor is long and changes with
+   the viewport, so a transform of 100% is the only way to cross it without
+   measuring it in JavaScript first -- and a transform is the one thing that
+   animates on the compositor, which matters with twenty-four of these running.
+   Animating `left` would lay out the panel on every frame. */
+.ds-rd-car {
+  position: absolute;
+  left: 0;
+  width: 100%;
+  height: 8px;
+  animation: rdCarRight var(--dur, 10s) linear infinite;
+  animation-delay: var(--delay, 0s);
+}
+
+/* Three lanes, matching the dashed dividers at 33% and 66% of the 32px
+   interior: centres land at about 5, 16 and 27, less half a car. */
+.ds-rd-car.lane-1 { top: 1px; }
+.ds-rd-car.lane-2 { top: 12px; }
+.ds-rd-car.lane-3 { top: 23px; }
+
+/* Seen from above: a body, a windscreen at the front and a smaller rear window,
+   a highlight along the roof. Without the windows this is a rounded rectangle,
+   and a rounded rectangle on a lane line is just a longer dash -- the two dark
+   bands are the whole difference between a car and a mark on the road. */
+.ds-rd-car::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 18px;
+  height: 100%;
+  border-radius: 2.5px;
+  background:
+    linear-gradient(
+      90deg,
+      transparent 0 2.5px,
+      rgb(20 25 33 / 0.42) 2.5px 5px,
+      transparent 5px 11.5px,
+      rgb(20 25 33 / 0.58) 11.5px 14.5px,
+      transparent 14.5px
+    ),
+    linear-gradient(to bottom, rgb(255 255 255 / 0.38), transparent 55%, rgb(0 0 0 / 0.2)),
+    var(--car, #eef2f7);
+  box-shadow:
+    0 0 0 0.5px rgb(10 14 20 / 0.5),
+    0 1px 2px rgb(0 0 0 / 0.45);
+}
+
+.ds-rd-way.dir-sb .ds-rd-car { animation-name: rdCarLeft; }
+/* Mirrored, so the windscreen leads in both directions. */
+.ds-rd-way.dir-sb .ds-rd-car::before { transform: scaleX(-1); }
+
+@keyframes rdCarRight {
+  from { transform: translateX(-24px); }
+  to   { transform: translateX(calc(100% + 24px)); }
+}
+@keyframes rdCarLeft {
+  from { transform: translateX(calc(100% + 24px)); }
+  to   { transform: translateX(-24px); }
+}
+
+/* Cars are the one purely decorative thing on the panel, so they are the first
+   thing to go: removed outright rather than frozen, since a row of stationary
+   cars on a clear road would be a claim the panel is not making. */
+@media (prefers-reduced-motion: reduce) {
+  .ds-rd-cars { display: none; }
+}
 
 /* --- Median: markers serving both carriageways ----------------------------- */
 

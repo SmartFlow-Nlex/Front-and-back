@@ -369,7 +369,34 @@ export default function TrafficMapPanel({ title, subtitle, badge, endpoint, laye
         }),
       };
 
-      return { ...out, features: [...out.features, ...marks] };
+      /* Worst last, so the worst is on top.
+         Everything in jam-extent is one layer, and Mapbox paints a layer's
+         features in the order the source lists them -- so a 4.9 km level-1
+         queue arriving after a 188 m level-3 one covered it completely. The
+         road read amber at Meycauayan while the card for the queue under the
+         cursor said Congested, which is two different answers about one point.
+         Waze reports overlap constantly here: that pair was the slow run up
+         from Paso de Blas lying across the standstill at Meycauayan, and both
+         were true.
+         Longer first within a severity, so a short queue is never buried by a
+         long one of its own colour either. The markers are ordered the same
+         way, for the same reason. */
+      const bySeverity = (a: GeoJSON.Feature, b: GeoJSON.Feature) => {
+        const lv = (f: GeoJSON.Feature) => Number((f.properties as { level?: unknown })?.level ?? 0);
+        const len = (f: GeoJSON.Feature) => Number((f.properties as { length_m?: unknown })?.length_m ?? 0);
+        return lv(a) - lv(b) || len(b) - len(a);
+      };
+      const isJam = (f: GeoJSON.Feature) =>
+        (f.properties as { feature_type?: string } | null)?.feature_type === "jam";
+
+      return {
+        ...out,
+        features: [
+          ...out.features.filter((f) => !isJam(f)),
+          ...out.features.filter(isJam).sort(bySeverity),
+          ...marks.sort(bySeverity),
+        ],
+      };
     };
 
     /** Stands in for "the feed said nothing about this stretch". */

@@ -220,13 +220,23 @@ export const ASSUMPTIONS = {
     },
   ),
 
-  SAMPLED_CAP: assume<"entry_p99">(
-    "entry_p99",
-    "A sampled duration is capped at its own calibration entry's p99 and reported as capped. The last 1% of the distribution runs from p99 out to the observed maximum (up to 24 h), which a sandbox run cannot usefully show; the cap is a project decision, not a statistical one. About 1% of draws are capped. Manual durations are never capped; p50 and p90 are below the cap by construction.",
+  SAMPLED_CAP: assume<"chain_p99">(
+    "chain_p99",
+    "A sampled duration is capped at the p99 of the first calibration level, taken from the one the quantiles came from down through the levels below it to the family, that has at least CAP_MIN_N usable events; the result reports the level and n the cap came from, and whether it applied. The quantiles themselves still come from the chosen level. The last 1% of the distribution runs from p99 out to the observed maximum (up to 24 h), which a sandbox run cannot usefully show; the cap is a project decision, not a statistical one. Manual durations are never capped; p50 and p90 are below the cap by construction. Where the cap comes from a broader level than the quantiles, it can sit above or below the chosen level's own p99, so the share of draws it clips is then not 1%.",
     {
       evidence:
-        "p99 caps: minor collision 127 min, multi-vehicle 157, self accident 535, in-lane breakdown 347, shoulder breakdown 251. A p99 estimated from about 200 events rests on two observations, so the cap is noisy for the smallest hierarchy entries.",
+        "Family p99 caps: minor collision 127 min, multi-vehicle 157, self accident 535, in-lane breakdown 347, shoulder breakdown 251. Which level supplies the cap for every calibrated cell is checked in verify.ts against an independent walk of the raw cell counts.",
       settledBy: "Operator preference: the sampler accepts a different cap, or none.",
+    },
+  ),
+
+  CAP_MIN_N: assume(
+    1000,
+    "The cap on a sampled duration is a p99, and a p99 is set by the top 1% of the events behind it, so it is only as stable as that tail is deep. Bootstrapping the real breakdown durations, a p99 estimated from 200 events has a relative standard deviation of about 35%, from 500 events 21-24%, from 1,000 events 13-16% and from 2,000 events 9-12%; at 1,000 events the tail holds about ten observations. So a cap is taken only from a level with at least this many usable events, and a thinner level inherits its cap from the next one down the fallback chain. This is a stability judgement, not a standard: 1,000 is where the estimate stops being dominated by a handful of tail events, not a threshold anything in the data marks. If no level in a chain reaches it the draw is uncapped; every shipped variant has one (checked in verify.ts).",
+    {
+      evidence:
+        "Bootstrap of the in-lane (n = 5,863) and shoulder (n = 5,690) event totals, 3,000 resamples per size, seed 2026, by tools/p99_stability.py. Relative standard deviation of the p99 estimate by sample size, in-lane / shoulder: n=100 45.6% / 44.6%, n=200 35.2% / 35.6%, n=500 23.7% / 20.8%, n=1000 16.4% / 13.0%, n=2000 11.9% / 9.2%. 90% of estimates from 200 in-lane events fall between 187 and 507 min (population p99 347); from 1,000 events, between 245 and 432.",
+      settledBy: "Operator preference: a different threshold; or NLEX-side guidance on how tight a duration cap needs to be.",
     },
   ),
 

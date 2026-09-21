@@ -29,7 +29,9 @@ import {
                (0,min) (.10,p10) (.25,p25) (.50,p50) (.75,p75) (.90,p90)
                (.99,p99) (1,max), where min and max are the observed extremes
                after exclusions. Seeded, so the same seed gives the same number.
-               Capped at the entry's own p99 by default; reported as `capped`.
+               Capped by default at the p99 of the first level in the fallback
+               chain with at least CAP_MIN_N events (not always the entry's own
+               p99: a thin cell would give a noisy cap); reported as `capped`.
      p50     - the median.
      p90     - the 90th percentile.
      manual  - the operator's own figure, validated, never capped.
@@ -392,12 +394,44 @@ export type SkippedLevel = {
   readonly reason: "below_min_n" | "no_cell";
 };
 
+/** One entry in a selection's chain, with the level it sits at. */
+export type ChainLink = {
+  readonly entry: CalibrationEntry;
+  readonly level: CalibrationLevel;
+};
+
+/** The entry a sampled duration's cap is taken from: its p99, and where that p99 comes from. */
+export type CapSource = {
+  readonly key: EntryKey;
+  readonly level: CalibrationLevel;
+  /** Usable events behind the entry. At least CAP_MIN_N. */
+  readonly n: number;
+  /** The entry's p99, in minutes. */
+  readonly minutes: number;
+};
+
 export type CalibrationSelection = {
   readonly entry: CalibrationEntry;
   readonly level: CalibrationLevel;
   /** Levels tried first and passed over, in order, with why. Empty when the first choice was used. */
   readonly skipped: readonly SkippedLevel[];
+  /**
+   * The chosen entry followed by every entry below it in the fallback order that
+   * exists, ending at the family. The quantiles come from the first link; the cap
+   * comes from the first link with enough events (see `cap`).
+   */
+  readonly chain: readonly ChainLink[];
+  /** The cap for a sampled draw: the first link of `chain` with n >= CAP_MIN_N. Null when no link has that many. */
+  readonly cap: CapSource | null;
 };
+
+/** The first link with at least `capMinN` usable events, as a cap source. Pure. */
+export function capFromChain(chain: readonly ChainLink[], capMinN: number): CapSource | null {
+  for (const link of chain) {
+    if (link.entry.n >= capMinN) return { key: link.entry.key, level: link.level, n: link.entry.n, minutes: link.entry.quantiles.p99 };
+  }
+  return null;
+}
 
 function cellN(cal: Calibration, family: BreakdownFamilyKey, cause: BreakdownCause | null, vehicle: VehicleKind | null): number | null {
   for (const c of cal.hierarchyCells) {
@@ -421,40 +455,57 @@ function cellN(cal: Calibration, family: BreakdownFamilyKey, cause: BreakdownCau
   return null;
 }
 
-function selectBreakdown(cal: Calibration, family: BreakdownFamilyKey, cause: BreakdownCause, vehicle: VehicleKind): CalibrationSelection {
+/** The chosen entry, everything below it in the chain, and the cap taken from that chain. */
+function withCap(chain: readonly ChainLink[], skipped: readonly SkippedLevel[], capMinN: number): CalibrationSelection {
+  const first = chain[0];
+  return { entry: first.entry, level: first.level, skipped, chain, cap: capFromChain(chain, capMinN) };
+}
+
+function selectBreakdown(cal: Calibration, family: BreakdownFamilyKey, cause: BreakdownCause, vehicle: VehicleKind, capMinN: number): CalibrationSelection {
   const tries: readonly { readonly level: SkippedLevel["level"]; readonly key: HierarchyKey; readonly n: number | null }[] = [
     { level: "cause_vehicle", key: causeVehicleKey(family, cause, vehicle), n: cellN(cal, family, cause, vehicle) },
     { level: "cause", key: causeKey(family, cause), n: cellN(cal, family, cause, null) },
     { level: "vehicle", key: vehicleKey(family, vehicle), n: cellN(cal, family, null, vehicle) },
   ];
+  // Levels with no entry are passed over: reported as skipped while nothing has been chosen yet, and simply absent from the chain after.
   const skipped: SkippedLevel[] = [];
+  const chain: ChainLink[] = [];
   for (const t of tries) {
     const entry = cal.hierarchy[t.key];
-    if (entry !== undefined) return { entry, level: t.level, skipped };
-    skipped.push({ level: t.level, key: t.key, n: t.n, reason: t.n === null ? "no_cell" : "below_min_n" });
+    if (entry !== undefined) chain.push({ entry, level: t.level });
+    else if (chain.length === 0) skipped.push({ level: t.level, key: t.key, n: t.n, reason: t.n === null ? "no_cell" : "below_min_n" });
   }
-  return { entry: cal.entries[family], level: "family", skipped };
+  chain.push({ entry: cal.entries[family], level: "family" });
+  return withCap(chain, skipped, capMinN);
 }
 
 /**
- * The calibration entry a variant draws from. Breakdowns use the first of
- * cause x vehicle, cause, vehicle, family that has at least hierarchyMinN usable
- * events. Every other family uses its own entry (a minor collision, its label's).
- * Pure: takes the calibration, so a test can hand it a modified one.
+ * The calibration entry a variant draws from, and the cap on a sampled draw.
+ *
+ * Breakdowns use the first of cause x vehicle, cause, vehicle, family that has at
+ * least hierarchyMinN usable events. Every other family uses its own entry (a minor
+ * collision, its label's). Quantiles always come from that entry.
+ *
+ * The CAP comes from the first entry in the chain (the chosen one, then the levels
+ * below it, ending at the family; a minor collision's chain is its label, then
+ * minor_collision) with at least capMinN usable events, because a p99 needs enough
+ * tail observations to be stable (ASSUMPTIONS.CAP_MIN_N).
+ *
+ * Pure: takes the calibration (and capMinN), so a test can hand it a modified one.
  */
-export function selectFromCalibration(cal: Calibration, variant: ScenarioVariant): CalibrationSelection {
+export function selectFromCalibration(cal: Calibration, variant: ScenarioVariant, capMinN: number = ASSUMPTIONS.CAP_MIN_N.value): CalibrationSelection {
   switch (variant.family) {
     case "breakdown_in_lane":
     case "breakdown_shoulder":
-      return selectBreakdown(cal, variant.family, variant.cause, variant.vehicle);
+      return selectBreakdown(cal, variant.family, variant.cause, variant.vehicle, capMinN);
     case "minor_collision": {
-      const entry = cal.entries[calibrationKeyFor(variant)];
-      return { entry, level: entry.level, skipped: [] };
+      const label = cal.entries[calibrationKeyFor(variant)];
+      return withCap([{ entry: label, level: label.level }, { entry: cal.entries.minor_collision, level: "family" }], [], capMinN);
     }
     case "multi_vehicle_collision":
     case "self_accident": {
       const entry = cal.entries[calibrationKeyFor(variant)];
-      return { entry, level: entry.level, skipped: [] };
+      return withCap([{ entry, level: entry.level }], [], capMinN);
     }
     default:
       return assertNever(variant);
@@ -533,7 +584,7 @@ export type DurationMode =
 export type SampleOptions = {
   /**
    * Cap on a SAMPLED duration, in minutes.
-   *   undefined - the entry's own p99 (the default)
+   *   undefined - the p99 of the first level in the fallback chain with at least CAP_MIN_N events (the default)
    *   a number  - that cap
    *   null      - no cap
    * Never applied to p50, p90 or manual, which are deliberate choices.
@@ -553,21 +604,21 @@ export type DrawnDuration = {
   readonly mode: DurationMode["kind"];
 };
 
-function resolveCap(entry: CalibrationEntry, options: SampleOptions | undefined): number | null {
-  const requested = options?.capMinutes;
-  if (requested === undefined) return entry.quantiles.p99;
-  if (requested === null) return null;
-  if (!Number.isFinite(requested) || requested <= 0) throw new RangeError(`capMinutes must be a positive number or null, got ${requested}`);
-  return requested;
+function checkCap(cap: number | null): number | null {
+  if (cap !== null && (!Number.isFinite(cap) || cap <= 0)) throw new RangeError(`capMinutes must be a positive number or null, got ${cap}`);
+  return cap;
 }
 
-/** One duration from one entry. */
-export function drawDuration(entry: CalibrationEntry, mode: DurationMode, options?: SampleOptions): DrawnDuration {
+/**
+ * One duration from one entry. The cap is explicit (null = none) and applies to a
+ * sampled draw only; `resolveDuration` is what picks it from the fallback chain.
+ */
+export function drawDuration(entry: CalibrationEntry, mode: DurationMode, capMinutes: number | null): DrawnDuration {
   const medianShare = entry.responseShare === null ? null : entry.responseShare.quantiles.p50;
   switch (mode.kind) {
     case "sampled": {
       const raw = inverseCdf(entry.quantiles, makeRng(mode.seed)());
-      const cap = resolveCap(entry, options);
+      const cap = checkCap(capMinutes);
       const minutes = cap !== null && raw > cap ? cap : raw;
       const responseShare =
         entry.responseShare === null ? null : inverseCdf(entry.responseShare.quantiles, makeRng(mode.seed ^ SHARE_SEED_SALT)());
@@ -592,19 +643,36 @@ export type ResolvedDuration = DrawnDuration & {
   readonly level: CalibrationLevel;
   /** Usable events behind the entry. */
   readonly n: number;
+  /** True when that entry has fewer usable events than ASSUMPTIONS.LOW_SAMPLE_N. */
+  readonly lowSample: boolean;
   /** Levels tried first and passed over, and why. */
   readonly skippedLevels: readonly SkippedLevel[];
+  /**
+   * Where the cap in force came from: the entry, its level and its n. All null when
+   * there is no cap in force (not a sampled draw, an explicit `capMinutes`, or no
+   * level in the chain has enough events).
+   */
+  readonly capKey: EntryKey | null;
+  readonly capLevel: CalibrationLevel | null;
+  readonly capN: number | null;
 };
 
-/** Resolve an event's duration: pick its entry through the hierarchy, then draw. */
+/** Resolve an event's duration: pick its entry through the hierarchy, take the cap from the chain, then draw. */
 export function resolveDuration(variant: ScenarioVariant, mode: DurationMode, options?: SampleOptions): ResolvedDuration {
   const selection = selectCalibration(variant);
+  const requested = options?.capMinutes;
+  const fromChain = requested === undefined && mode.kind === "sampled" ? selection.cap : null;
+  const capMinutes = requested === undefined ? (fromChain === null ? null : fromChain.minutes) : requested;
   return {
-    ...drawDuration(selection.entry, mode, options),
+    ...drawDuration(selection.entry, mode, capMinutes),
     calibrationKey: selection.entry.key,
     level: selection.level,
     n: selection.entry.n,
+    lowSample: isLowSample(selection.entry),
     skippedLevels: selection.skipped,
+    capKey: fromChain === null ? null : fromChain.key,
+    capLevel: fromChain === null ? null : fromChain.level,
+    capN: fromChain === null ? null : fromChain.n,
   };
 }
 

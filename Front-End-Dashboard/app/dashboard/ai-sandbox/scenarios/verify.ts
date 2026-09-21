@@ -5,8 +5,9 @@
  *
  * Read-only. Exits 1 on any failure. It guards:
  *   1. the sampler really reproduces the calibrated quantiles (durations AND response shares),
- *      is reproducible per seed, caps at the entry's own p99 and says so;
- *   2. the breakdown hierarchy falls back in the stated order and only uses cells with enough events;
+ *      is reproducible per seed, caps as told (explicitly, or from the fallback chain) and says so;
+ *   2. the breakdown hierarchy falls back in the stated order and only uses cells with enough events,
+ *      and the cap comes from the first level in the chain with at least CAP_MIN_N events;
  *   3. the catalogue and assumptions are internally consistent (phases, shares, lanes, lengths);
  *   4. the closure geometry (upstream buffer, wreck length, clamping) behaves as documented;
  *   5. values MIRRORED from elsewhere have not drifted (engine constants, chainage table, the
@@ -167,10 +168,10 @@ for (const e of allEntries) {
   check(`${name}: inverseCdf is non-decreasing`, monotone);
 
   const medianShare = e.responseShare === null ? null : e.responseShare.quantiles.p50;
-  const p50 = drawDuration(e, { kind: "p50" });
-  const p90 = drawDuration(e, { kind: "p90" });
-  const man = drawDuration(e, { kind: "manual", minutes: q.p99 * 3 });
-  check(`${name}: p50 / p90 modes are the quantiles, uncapped, with the median share`, p50.minutes === q.p50 && p90.minutes === q.p90 && !p50.capped && !p90.capped && p50.responseShare === medianShare && p90.responseShare === medianShare);
+  const p50 = drawDuration(e, { kind: "p50" }, q.p99);
+  const p90 = drawDuration(e, { kind: "p90" }, q.p99);
+  const man = drawDuration(e, { kind: "manual", minutes: q.p99 * 3 }, q.p99);
+  check(`${name}: p50 / p90 modes are the quantiles, uncapped even when a cap is passed, with the median share`, p50.minutes === q.p50 && p90.minutes === q.p90 && !p50.capped && !p90.capped && p50.responseShare === medianShare && p90.responseShare === medianShare);
   check(`${name}: manual is never capped, even far above p99`, man.minutes === q.p99 * 3 && !man.capped && man.capMinutes === null);
 
   // sampled: distribution, cap, share
@@ -184,7 +185,7 @@ for (const e of allEntries) {
   const uS: number[] = [];
   for (let s = 1; s <= N; s++) {
     const r = inverseCdf(q, makeRng(s)());
-    const d = drawDuration(e, { kind: "sampled", seed: s });
+    const d = drawDuration(e, { kind: "sampled", seed: s }, q.p99);
     raw.push(r);
     minutes.push(d.minutes);
     if (d.capped) cappedCount++;
@@ -200,10 +201,10 @@ for (const e of allEntries) {
     } else if (d.responseShare !== null) inRange = false;
   }
   cdfMatches(`${name} duration`, q, raw);
-  check(`${name}: sampled minutes = min(draw, own p99); capped iff the draw exceeded it; the cap in force is p99`, cappedRight);
-  check(`${name}: no sampled duration exceeds p99`, minutes.every((m) => m <= q.p99));
+  check(`${name}: sampled minutes = min(draw, the cap passed); capped iff the draw exceeded it; the cap in force is that cap`, cappedRight);
+  check(`${name}: no sampled duration exceeds the cap passed`, minutes.every((m) => m <= q.p99));
   const frac = cappedCount / N;
-  check(`${name}: about 1% of draws are capped`, near(frac, 0.01, 5 * Math.sqrt(0.01 * 0.99 / N) + 1e-3), `got ${frac.toFixed(4)}`);
+  check(`${name}: about 1% of draws are capped at its own p99`, near(frac, 0.01, 5 * Math.sqrt(0.01 * 0.99 / N) + 1e-3), `got ${frac.toFixed(4)}`);
   check(`${name}: response share is drawn for breakdowns only, within its range`, inRange);
   if (e.responseShare !== null) {
     cdfMatches(`${name} response share`, e.responseShare.quantiles, shares);
@@ -223,18 +224,18 @@ for (const e of allEntries) {
 
 // cap options
 const inLane = cal.entries.breakdown_in_lane;
-const unc = Array.from({ length: 20_000 }, (_, i) => drawDuration(inLane, { kind: "sampled", seed: i + 1 }, { capMinutes: null }));
-check("capMinutes null: no cap, nothing reported capped, some draws exceed p99", unc.every((d) => !d.capped && d.capMinutes === null) && unc.some((d) => d.minutes > inLane.quantiles.p99));
+const unc = Array.from({ length: 20_000 }, (_, i) => drawDuration(inLane, { kind: "sampled", seed: i + 1 }, null));
+check("drawDuration cap null: no cap, nothing reported capped, some draws exceed p99", unc.every((d) => !d.capped && d.capMinutes === null) && unc.some((d) => d.minutes > inLane.quantiles.p99));
 let cap30Ok = true;
 let cap30Hit = false;
 for (let s = 1; s <= 5_000; s++) {
-  const d = drawDuration(inLane, { kind: "sampled", seed: s }, { capMinutes: 30 });
+  const d = drawDuration(inLane, { kind: "sampled", seed: s }, 30);
   const r = inverseCdf(inLane.quantiles, makeRng(s)());
   if (d.minutes !== Math.min(r, 30) || d.capped !== r > 30 || d.capMinutes !== 30) cap30Ok = false;
   if (d.capped) cap30Hit = true;
 }
-check("capMinutes 30: clamps to min(draw, 30), reports capped exactly when the draw exceeded it", cap30Ok && cap30Hit);
-check("capMinutes rejects 0, negative and NaN", throws(() => drawDuration(inLane, { kind: "sampled", seed: 1 }, { capMinutes: 0 })) && throws(() => drawDuration(inLane, { kind: "sampled", seed: 1 }, { capMinutes: -5 })) && throws(() => drawDuration(inLane, { kind: "sampled", seed: 1 }, { capMinutes: Number.NaN })));
+check("drawDuration cap 30: clamps to min(draw, 30), reports capped exactly when the draw exceeded it", cap30Ok && cap30Hit);
+check("a cap of 0, a negative cap and NaN are rejected", throws(() => drawDuration(inLane, { kind: "sampled", seed: 1 }, 0)) && throws(() => drawDuration(inLane, { kind: "sampled", seed: 1 }, -5)) && throws(() => drawDuration(inLane, { kind: "sampled", seed: 1 }, Number.NaN)));
 
 // reproducibility and validation
 const v0: ScenarioVariant = { family: "self_accident" };
@@ -248,7 +249,7 @@ for (let i = 0; i < us.length - 1; i++) cov += (us[i] - meanU) * (us[i + 1] - me
 for (const v of us) varU += (v - meanU) ** 2;
 check("consecutive seeds: first draw is uniform (mean ~ 0.5)", near(meanU, 0.5, 0.01), `mean ${meanU.toFixed(4)}`);
 check("consecutive seeds: lag-1 correlation is negligible", Math.abs(cov / varU) < 0.03, `corr ${(cov / varU).toFixed(4)}`);
-check("manual returns the operator's figure; rejects 0, negative, NaN", drawDuration(inLane, { kind: "manual", minutes: 42.5 }).minutes === 42.5 && throws(() => drawDuration(inLane, { kind: "manual", minutes: 0 })) && throws(() => drawDuration(inLane, { kind: "manual", minutes: -3 })) && throws(() => drawDuration(inLane, { kind: "manual", minutes: Number.NaN })));
+check("manual returns the operator's figure; rejects 0, negative, NaN", drawDuration(inLane, { kind: "manual", minutes: 42.5 }, null).minutes === 42.5 && throws(() => drawDuration(inLane, { kind: "manual", minutes: 0 }, null)) && throws(() => drawDuration(inLane, { kind: "manual", minutes: -3 }, null)) && throws(() => drawDuration(inLane, { kind: "manual", minutes: Number.NaN }, null)));
 check("inverseCdf rejects u outside [0,1]", throws(() => inverseCdf(inLane.quantiles, -0.1)) && throws(() => inverseCdf(inLane.quantiles, 1.1)));
 check("makeRng rejects a non-integer seed", throws(() => makeRng(1.5)));
 check("low-sample flag: hit-and-run yes, self accident no", isLowSample(cal.entries.minor_collision_hit_and_run) && !isLowSample(cal.entries.self_accident));
@@ -302,6 +303,139 @@ check("a skipped level says why and how many events it had", busFuel.skipped.len
 check("accident families never use the hierarchy", (["self_accident", "multi_vehicle_collision"] as const).every((f) => { const s = selectCalibration({ family: f }); return s.skipped.length === 0 && s.entry.key === f; }) && selectCalibration({ family: "minor_collision", label: "hit_and_run" }).entry.key === "minor_collision_hit_and_run" && selectCalibration({ family: "minor_collision", label: "hit_and_run" }).level === "label");
 const hr = resolveDuration({ family: "breakdown_in_lane", vehicle: "truck", cause: "engine" }, { kind: "sampled", seed: 7 });
 check("resolveDuration reports the level used, n, capped and the share", hr.level === "cause_vehicle" && hr.n >= MIN_N && typeof hr.capped === "boolean" && hr.responseShare !== null && hr.calibrationKey === causeVehicleKey("breakdown_in_lane", "engine", "truck"));
+
+/* ───────────────────────────── 3b. the cap comes from the first level with enough events ───────────────────────────── */
+const CAP_MIN_N = ASSUMPTIONS.CAP_MIN_N.value;
+check(`CAP_MIN_N is ${CAP_MIN_N} and is stricter than the hierarchy minimum`, CAP_MIN_N === 1000 && CAP_MIN_N > MIN_N);
+
+// An independent oracle: it walks the RAW cell counts and the raw p99s in the JSON, never the sampler's chain.
+const rawCells = calibrationJson.provenance.hierarchy.cells;
+const rawStats = new Map<string, { n: number; p99: number }>(Object.entries(calibrationJson.families).map(([k, v]) => [k, { n: v.n, p99: v.p99 }]));
+function rawN(family: BreakdownFamilyKey, cause: BreakdownCause | null, vehicle: VehicleKind | null): number {
+  const c = rawCells.find((cell) => cell.family === family && cell.cause === cause && cell.vehicle === vehicle);
+  if (c === undefined) return 0;
+  return c.n;
+}
+type Expected = { key: string; level: string; n: number; p99: number };
+/** Expected cap source for a breakdown variant, from the raw file. */
+function expectedBreakdownCap(family: BreakdownFamilyKey, cause: BreakdownCause, vehicle: VehicleKind): Expected | null {
+  const order = [
+    { level: "cause_vehicle", key: causeVehicleKey(family, cause, vehicle), n: rawN(family, cause, vehicle) },
+    { level: "cause", key: causeKey(family, cause), n: rawN(family, cause, null) },
+    { level: "vehicle", key: vehicleKey(family, vehicle), n: rawN(family, null, vehicle) },
+    { level: "family", key: family, n: rawN(family, null, null) },
+  ];
+  const entryExists = order.map((o) => o.level === "family" || o.n >= MIN_N);
+  const resolvedAt = entryExists.indexOf(true);
+  for (let i = resolvedAt; i < order.length; i++) {
+    if (!entryExists[i] || order[i].n < CAP_MIN_N) continue;
+    const s = rawStats.get(order[i].key);
+    if (s === undefined) throw new Error(`no raw entry for ${order[i].key}`);
+    return { key: order[i].key, level: order[i].level, n: s.n, p99: s.p99 };
+  }
+  return null;
+}
+
+let capWalkOk = true;
+let capFromAncestor = 0;
+let capFromSelf = 0;
+let chainShapeOk = true;
+for (const family of BREAKDOWN_FAMILIES) {
+  for (const cause of BREAKDOWN_CAUSES) {
+    for (const vehicle of BREAKDOWN_VEHICLES) {
+      const variant: ScenarioVariant = { family, vehicle, cause };
+      const want = expectedBreakdownCap(family, cause, vehicle);
+      const sel = selectCalibration(variant);
+      const r = resolveDuration(variant, { kind: "sampled", seed: 99 });
+      if (want === null || sel.cap === null) { capWalkOk = false; continue; }
+      if (sel.cap.key !== want.key || sel.cap.level !== want.level || sel.cap.n !== want.n || sel.cap.minutes !== want.p99) capWalkOk = false;
+      if (r.capKey !== want.key || r.capLevel !== want.level || r.capN !== want.n || r.capMinutes !== want.p99) capWalkOk = false;
+      if (want.key === sel.entry.key) capFromSelf++;
+      else capFromAncestor++;
+      // the chain: starts at the entry the quantiles come from, ends at the family, only existing entries, no repeats
+      const keys = sel.chain.map((l) => l.entry.key);
+      if (keys[0] !== sel.entry.key || keys[keys.length - 1] !== family || new Set(keys).size !== keys.length || sel.chain[0].level !== sel.level) chainShapeOk = false;
+      if (sel.chain.some((l) => l.entry.n < MIN_N && l.level !== "family")) chainShapeOk = false;
+    }
+  }
+}
+check("cap: all 30 breakdown variants take their cap from the first chain level with n >= CAP_MIN_N (independent walk of the raw counts)", capWalkOk);
+check("cap: every breakdown chain runs from the chosen entry to the family, over existing entries only", chainShapeOk);
+check("cap: the real file has variants capped by their own level AND by an ancestor", capFromSelf > 0 && capFromAncestor > 0, `self ${capFromSelf}, ancestor ${capFromAncestor}`);
+
+// The named case: tire x truck (in-lane) has 456 events, so it is capped from its ancestor, not from its own p99.
+const ttOwn = cal.hierarchy[causeVehicleKey("breakdown_in_lane", "tire", "truck")];
+const tireCause = cal.hierarchy[causeKey("breakdown_in_lane", "tire")];
+const tt = resolveDuration(tireTruck, { kind: "sampled", seed: 1 });
+check("tire x truck (in-lane): quantiles from cause x vehicle (n < CAP_MIN_N)", ttOwn !== undefined && ttOwn.n < CAP_MIN_N && tt.level === "cause_vehicle" && tt.n === ttOwn.n);
+check(
+  "tire x truck (in-lane): the cap comes from the tire cause level, not its own p99",
+  ttOwn !== undefined && tireCause !== undefined && tireCause.n >= CAP_MIN_N &&
+    tt.capLevel === "cause" && tt.capKey === causeKey("breakdown_in_lane", "tire") && tt.capN === tireCause.n &&
+    tt.capMinutes === tireCause.quantiles.p99 && tt.capMinutes !== ttOwn.quantiles.p99,
+);
+if (ttOwn !== undefined && tireCause !== undefined) {
+  // Every sampled draw is min(raw draw from the tire x truck quantiles, the tire-cause p99); capped iff raw exceeded it.
+  // Some raw draws fall between the two p99s: capped here, and NOT capped under the old own-p99 rule when the own p99 is the higher.
+  let perSeedOk = true;
+  let cappedBetween = 0;
+  let cappedAll = 0;
+  const seeds = 20_000;
+  for (let s = 1; s <= seeds; s++) {
+    const raw = inverseCdf(ttOwn.quantiles, makeRng(s)());
+    const d = resolveDuration(tireTruck, { kind: "sampled", seed: s });
+    if (d.minutes !== Math.min(raw, tireCause.quantiles.p99) || d.capped !== raw > tireCause.quantiles.p99) perSeedOk = false;
+    if (d.capped) cappedAll++;
+    if (d.capped && raw <= ttOwn.quantiles.p99) cappedBetween++;
+  }
+  check("tire x truck (in-lane): every sampled draw is min(its own draw, the tire-cause p99), capped exactly above it", perSeedOk);
+  check(
+    "tire x truck (in-lane): the ancestor cap really differs from the own-p99 rule (draws below its own p99 are capped when the cause p99 is lower)",
+    tireCause.quantiles.p99 < ttOwn.quantiles.p99 ? cappedBetween > 0 : cappedBetween === 0,
+    `capped below own p99: ${cappedBetween} of ${seeds}, capped in all: ${cappedAll}`,
+  );
+}
+// Other modes report no cap in force; an explicit cap or none is honoured and names no source.
+const ttP50 = resolveDuration(tireTruck, { kind: "p50" });
+const ttMan = resolveDuration(tireTruck, { kind: "manual", minutes: 9999 });
+const ttNoCap = resolveDuration(tireTruck, { kind: "sampled", seed: 5 }, { capMinutes: null });
+const ttCap30 = resolveDuration(tireTruck, { kind: "sampled", seed: 5 }, { capMinutes: 30 });
+check("cap: p50 and manual report no cap in force (nothing to source)", [ttP50, ttMan].every((d) => d.capMinutes === null && d.capKey === null && d.capLevel === null && d.capN === null && !d.capped));
+check("cap: capMinutes null means no cap, and a number is used as given, with no source named", ttNoCap.capMinutes === null && ttNoCap.capKey === null && ttNoCap.capN === null && !ttNoCap.capped && ttCap30.capMinutes === 30 && ttCap30.capKey === null && ttCap30.capLevel === null && ttCap30.capN === null);
+check("cap: an explicit cap of 0, a negative cap and NaN are rejected by resolveDuration", throws(() => resolveDuration(tireTruck, { kind: "sampled", seed: 1 }, { capMinutes: 0 })) && throws(() => resolveDuration(tireTruck, { kind: "sampled", seed: 1 }, { capMinutes: -1 })) && throws(() => resolveDuration(tireTruck, { kind: "sampled", seed: 1 }, { capMinutes: Number.NaN })));
+
+// Accident families: minor collision's chain is label -> minor_collision; hit-and-run (n < CAP_MIN_N) inherits the family cap.
+const accidentVariants: readonly { v: ScenarioVariant; key: string; level: string }[] = [
+  { v: { family: "minor_collision", label: "rear_end" }, key: "minor_collision_rear_end", level: "label" },
+  { v: { family: "minor_collision", label: "sideswipe" }, key: "minor_collision_sideswipe", level: "label" },
+  { v: { family: "minor_collision", label: "hit_and_run" }, key: "minor_collision", level: "family" },
+  { v: { family: "multi_vehicle_collision" }, key: "multi_vehicle_collision", level: "family" },
+  { v: { family: "self_accident" }, key: "self_accident", level: "family" },
+];
+let accidentCapOk = true;
+for (const a of accidentVariants) {
+  const r = resolveDuration(a.v, { kind: "sampled", seed: 3 });
+  const want = rawStats.get(a.key);
+  if (want === undefined || r.capKey !== a.key || r.capLevel !== a.level || r.capN !== want.n || r.capMinutes !== want.p99 || want.n < CAP_MIN_N) accidentCapOk = false;
+}
+check("cap: rear-end, sideswipe, multi-vehicle and self-accident cap from their own entry; hit-and-run (n=129) from minor_collision", accidentCapOk);
+const hnr = resolveDuration({ family: "minor_collision", label: "hit_and_run" }, { kind: "p50" });
+check("resolveDuration carries the low-sample flag: hit-and-run yes, self accident and tire x truck no", hnr.lowSample && !resolveDuration({ family: "self_accident" }, { kind: "p50" }).lowSample && !tt.lowSample);
+check("selectCalibration chain for a minor collision is label then minor_collision", selectCalibration({ family: "minor_collision", label: "hit_and_run" }).chain.map((l) => l.entry.key).join() === "minor_collision_hit_and_run,minor_collision");
+
+// capMinN is a parameter of the pure selector: a synthetic threshold moves the cap source along the chain.
+const at400 = selectFromCalibration(cal, tireTruck, 400);
+const at1e6 = selectFromCalibration(cal, tireTruck, 1_000_000);
+const at1 = selectFromCalibration(cal, tireTruck, 1);
+check("capMinN 400: tire x truck (456 events) caps from its own level", at400.cap !== null && at400.cap.level === "cause_vehicle" && ttOwn !== undefined && at400.cap.minutes === ttOwn.quantiles.p99);
+const atExact = ttOwn === undefined ? null : selectFromCalibration(cal, tireTruck, ttOwn.n);
+const atExactPlus1 = ttOwn === undefined ? null : selectFromCalibration(cal, tireTruck, ttOwn.n + 1);
+check("capMinN exactly equal to a level's n includes that level (>=), one more excludes it", atExact !== null && atExact.cap !== null && atExact.cap.level === "cause_vehicle" && atExactPlus1 !== null && atExactPlus1.cap !== null && atExactPlus1.cap.level === "cause");
+check("capMinN 1: the chosen entry is always its own cap source", at1.cap !== null && at1.cap.key === at1.entry.key);
+check("capMinN above every level: no cap source, so a sampled draw is uncapped", at1e6.cap === null);
+const famOnly = selectFromCalibration(asCal({}), tireTruck);
+check("with no hierarchy entries the chain is the family alone, and it caps (n >= CAP_MIN_N)", famOnly.chain.length === 1 && famOnly.cap !== null && famOnly.cap.key === "breakdown_in_lane");
+check("every shipped variant has a cap source (so 'no level qualifies' is not reachable)", [...BREAKDOWN_FAMILIES.flatMap((family) => BREAKDOWN_CAUSES.flatMap((cause) => BREAKDOWN_VEHICLES.map((vehicle): ScenarioVariant => ({ family, cause, vehicle })))), ...accidentVariants.map((a) => a.v)].every((v) => selectCalibration(v).cap !== null));
 
 /* ───────────────────────────── 4. catalogue + assumptions ───────────────────────────── */
 const EXPECTED_RESOURCES: Record<FamilyKey, readonly EngineResource[]> = {
@@ -471,7 +605,7 @@ const listed = listAssumptions();
 check("every assumption is marked ASSUMPTION with a reason", listed.length > 0 && listed.every((a) => a.assumption.status === "ASSUMPTION" && a.assumption.reason.trim().length > 20));
 check("LANE1_IS_INNERMOST is recorded as pending confirmation", (ASSUMPTIONS.LANE1_IS_INNERMOST.settledBy ?? "").includes("PENDING"));
 check("BREAKDOWN_DURATION_SCOPE records the change to response + service", ASSUMPTIONS.BREAKDOWN_DURATION_SCOPE.value === "response_plus_service_per_event" && ASSUMPTIONS.BREAKDOWN_DURATION_SCOPE.reason.includes("AMENDED"));
-check("the multi-deployment rule, share model and cap rule are recorded", ASSUMPTIONS.MULTI_DEPLOYMENT_RULE.status === "ASSUMPTION" && ASSUMPTIONS.RESPONSE_SHARE_MODEL.status === "ASSUMPTION" && ASSUMPTIONS.SAMPLED_CAP.value === "entry_p99");
+check("the multi-deployment rule, share model and cap rule are recorded", ASSUMPTIONS.MULTI_DEPLOYMENT_RULE.status === "ASSUMPTION" && ASSUMPTIONS.RESPONSE_SHARE_MODEL.status === "ASSUMPTION" && ASSUMPTIONS.SAMPLED_CAP.value === "chain_p99" && ASSUMPTIONS.CAP_MIN_N.status === "ASSUMPTION" && ASSUMPTIONS.CAP_MIN_N.value === 1000);
 
 /* ───────────────────────────── report ───────────────────────────── */
 console.log(`verify: ${checks} checks, ${failures.length} failed  (${listed.length} assumptions, ${allEntries.length} calibration entries [${CALIBRATION_KEYS.length} base + ${allEntries.length - CALIBRATION_KEYS.length} hierarchy], ${SCENARIO_TEMPLATES.length} templates, ${N.toLocaleString("en-US")} draws per entry)`);

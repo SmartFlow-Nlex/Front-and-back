@@ -1600,7 +1600,29 @@ export default function TrafficMapPanel({ title, subtitle, badge, endpoint, laye
            minimum is what makes a screenful of them look deliberate. */
         const LEAD_BASE = { far: 32, mid: 32, near: 38 } as const;
         const LEAD_STEP = 14;
-        const LEAD_TRIES = 16;
+
+        /* How hard a name is allowed to work to find a place, and how much air
+           it has to leave around itself. Both are set by the zoom, and both
+           tighten as the view widens.
+
+           Zoomed out, twenty exits share a few hundred pixels and there is no
+           arrangement of twenty names that is worth reading. A name that can
+           only fit by reaching most of the way across the map is not being
+           placed, it is being crammed, and the map it leaves behind is a wall
+           of plates with the road somewhere underneath. So at the corridor view
+           a name gets three tries and stands down if none of them is clear --
+           the names that survive are the ones with room around them, which is
+           what makes the view calm.
+
+           Zoomed in the constraint disappears on its own, because the exits
+           have spread out, so the search is allowed to run and everything is
+           named. */
+        const LEAD_TRIES = { far: 3, mid: 7, near: 16 } as const;
+
+        /* Clearance around a placed plate. Air is what stops a group of names
+           reading as one block, and the less room there is the more of it each
+           name needs to stay separate. */
+        const PLATE_PAD = { far: 10, mid: 6, near: 3 } as const;
         const LABEL_H = 15;
         /* A leader passing under someone else's plate reads as a line struck
            through it, so leaders are collided with too -- as a thin band rather
@@ -1724,6 +1746,8 @@ export default function TrafficMapPanel({ title, subtitle, badge, endpoint, laye
           const width = map.getCanvas().clientWidth;
           const half = DOT_W[tier] / 2;
           const base = LEAD_BASE[tier];
+          const tries = LEAD_TRIES[tier];
+          const pad = PLATE_PAD[tier];
 
           /* What a callout has to stay clear of: the reports, every exit ring,
              and the callouts already placed. Reports are still the thing the
@@ -1779,7 +1803,7 @@ export default function TrafficMapPanel({ title, subtitle, badge, endpoint, laye
 
             let placed: { side: "east" | "west"; lead: number; plate: Box; rule: Box } | null = null;
             for (const side of sides) {
-              for (let i = 0; i < LEAD_TRIES; i++) {
+              for (let i = 0; i < tries; i++) {
                 const lead = base + i * LEAD_STEP;
                 const b = boxes(q, side, lead, w);
                 // Off the edge of the map: stop reaching that way, try the other side.
@@ -1802,7 +1826,16 @@ export default function TrafficMapPanel({ title, subtitle, badge, endpoint, laye
             pin.el.style.display = "";
             pin.el.dataset.side = placed.side;
             pin.el.style.setProperty("--lead", String(placed.lead) + "px");
-            obstacles.push(placed.plate, placed.rule);
+            /* Stored with its clearance built in, and tested without it, so the
+               gap between two plates comes out at exactly one pad rather than
+               two. */
+            obstacles.push(
+              {
+                x0: placed.plate.x0 - pad, x1: placed.plate.x1 + pad,
+                y0: placed.plate.y0 - pad, y1: placed.plate.y1 + pad,
+              },
+              placed.rule,
+            );
             pin.el.dataset.ring = coversPin(q) ? "off" : "on";
             /* The name carries the condition, in the same three words and the
                same three colours the legend uses. An exit standing on a queue

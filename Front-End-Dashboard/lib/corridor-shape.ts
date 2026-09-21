@@ -71,6 +71,7 @@ const M_PER_DEG_LON = 111320 * Math.cos((15 * Math.PI) / 180);
 
 type XY = [number, number];
 const toXY = (p: LngLat): XY => [p[0] * M_PER_DEG_LON, p[1] * M_PER_DEG_LAT];
+const fromXY = (p: XY): LngLat => [p[0] / M_PER_DEG_LON, p[1] / M_PER_DEG_LAT];
 
 /** A polyline with its cumulative lengths, ready to be projected onto. */
 function measured(line: LngLat[]) {
@@ -105,6 +106,57 @@ function projectOn(ref: Measured, p: LngLat): { s: number; off: number } {
 function median(values: number[]): number {
   const sorted = [...values].sort((a, b) => a - b);
   return sorted[sorted.length >> 1];
+}
+
+/**
+ * Pulls single-vertex spikes back onto the line.
+ *
+ * The binning leaves occasional vertices well off the run of the road -- at an
+ * interchange the ramp geometry sits inside the last pass's half-width, and a
+ * curving ramp carries far more OSM vertices than the straight mainline beside
+ * it, so that bin's median lands on the ramp. The result is a near right-angle
+ * turn over two short legs: the sharpest were 97 degrees over 31 and 29 metres
+ * at Pulilan, and 90 degrees over 36 and 17 at Dau.
+ *
+ * Those are invisible as geometry but not as drawing. The carriageways are
+ * rendered with line-offset, and an offset ribbon splays wide on the outside of
+ * a sharp turn and crosses itself on the inside, so a 30 m spike becomes a V
+ * tens of pixels across with the two directions pulling apart.
+ *
+ * A motorway does not turn like that. With vertices about 105 m apart, even a
+ * 700 m-radius curve lifts only 8 m off the chord between its neighbours, while
+ * a right angle over 30 m legs lifts 21 m. So 14 m separates the artefact from
+ * the road, and putting such a vertex back on the chord loses nothing real.
+ * Three passes, because flattening one spike can expose the next.
+ *
+ * It does NOT fix the broader case, where the median flips between the two
+ * carriageways across several bins and the line hooks out and back over a few
+ * hundred metres. That needs the binning to track one carriageway rather than
+ * take a median, and is a change to the fit rather than a clean-up after it.
+ */
+function despike(line: LngLat[], maxOffsetM = 14, passes = 3): LngLat[] {
+  if (line.length < 3) return line;
+  const out = line.slice();
+  for (let pass = 0; pass < passes; pass++) {
+    let moved = 0;
+    for (let i = 1; i < out.length - 1; i++) {
+      const [ax, ay] = toXY(out[i - 1]);
+      const [bx, by] = toXY(out[i]);
+      const [cx, cy] = toXY(out[i + 1]);
+      const dx = cx - ax;
+      const dy = cy - ay;
+      const len = dx * dx + dy * dy;
+      const t = len ? Math.max(0, Math.min(1, ((bx - ax) * dx + (by - ay) * dy) / len)) : 0;
+      const px = ax + t * dx;
+      const py = ay + t * dy;
+      if (Math.hypot(bx - px, by - py) > maxOffsetM) {
+        out[i] = fromXY([px, py]);
+        moved++;
+      }
+    }
+    if (moved === 0) break;
+  }
+  return out;
 }
 
 /** One resampling pass: raw points, measured against `reference`. */
@@ -151,6 +203,9 @@ function buildCentreline(raw: LngLat[], exits: LngLat[]) {
     line = next;
   }
   if (line === exits) return { line: exits, cuts: exits.map((_, i) => i) };
+
+  // The passes fit the road well on average and leave spikes at interchanges.
+  line = despike(line);
 
   // Where each exit sits on the finished line.
   const ref = measured(line);

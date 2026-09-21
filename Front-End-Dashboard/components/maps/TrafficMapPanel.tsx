@@ -939,26 +939,14 @@ export default function TrafficMapPanel({ title, subtitle, badge, endpoint, laye
       ] as unknown as mapboxgl.ExpressionSpecification;
 
       for (const dir of ["NB", "SB"] as const) {
-        /* A soft halo under each marker.
-           Zoomed out to the whole corridor a pixel is about 90 m, so a 200 m
-           queue is two pixels of road and its dot is six pixels sitting ON the
-           line -- a red dot on an orange road, which reads as nothing. A wash
-           of the queue's own colour, wider than the road and softer than
-           anything else on it, is what makes the eye land there first. */
-        map.addLayer({
-          id: `jam-mark-halo-${dir.toLowerCase()}`,
-          type: "circle",
-          source: "traffic",
-          filter: markFilter(dir),
-          paint: {
-            "circle-color": markColour,
-            "circle-radius": ["interpolate", ["linear"], ["zoom"], 8, 13, 11, 16, 14, 12, 16, 0],
-            "circle-opacity": ["interpolate", ["linear"], ["zoom"], 8, 0.3, 13, 0.26, 16, 0],
-            "circle-blur": 0.55,
-            "circle-translate": MARK_SHIFT(dir),
-          },
-        });
-
+        /* No halo. There was a soft wash of the queue's colour under each dot,
+           to make a short queue findable at corridor zoom -- but a 32-pixel
+           amber cloud reads as a length of amber ROAD, not as a marker. A
+           671 m queue at Dau looked like a long slow stretch zoomed out and
+           turned into a short hook zoomed in, which is the map telling two
+           different stories about one queue.
+           A ringed dot cannot be mistaken for road: it is a marker, it says
+           "a queue starts here", and the line says how far it runs. */
         map.addLayer({
           id: `jam-mark-${dir.toLowerCase()}`,
           type: "circle",
@@ -968,11 +956,13 @@ export default function TrafficMapPanel({ title, subtitle, badge, endpoint, laye
             "circle-color": markColour,
             // A red dot on an orange road needs the ring more than the fill:
             // the white edge is what separates it from what it stands on.
-            "circle-radius": ["interpolate", ["linear"], ["zoom"], 8, 7, 11, 8.5, 14, 6.5, 17.5, 0],
-            "circle-stroke-width": ["interpolate", ["linear"], ["zoom"], 8, 2.5, 14, 3, 17.5, 0],
+            "circle-radius": ["interpolate", ["linear"], ["zoom"], 8, 7, 11, 8.5, 13, 6.5, 14.2, 0],
+            "circle-stroke-width": ["interpolate", ["linear"], ["zoom"], 8, 2.5, 13, 3, 14.2, 0],
             "circle-stroke-color": PALETTE.casing,
-            "circle-opacity": ["interpolate", ["linear"], ["zoom"], 15, 1, 17.5, 0],
-            "circle-stroke-opacity": ["interpolate", ["linear"], ["zoom"], 15, 1, 17.5, 0],
+            // Handed over to the line by z14.2: at that zoom a 200 m queue is
+            // about thirty pixels, which needs no marker to be found.
+            "circle-opacity": ["interpolate", ["linear"], ["zoom"], 13, 1, 14.2, 0],
+            "circle-stroke-opacity": ["interpolate", ["linear"], ["zoom"], 13, 1, 14.2, 0],
             "circle-translate": MARK_SHIFT(dir),
           },
         });
@@ -1024,7 +1014,7 @@ export default function TrafficMapPanel({ title, subtitle, badge, endpoint, laye
                 "line-offset": OFFSET,
               },
             },
-            "jam-mark-halo-nb",
+            "jam-mark-nb",
           );
         }
       }

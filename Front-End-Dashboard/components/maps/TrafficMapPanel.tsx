@@ -900,65 +900,83 @@ export default function TrafficMapPanel({ title, subtitle, badge, endpoint, laye
          the answer and the dot is only in the way. Collision is left ON -- the
          default -- so a cluster of overlapping reports at one interchange
          resolves to a single dot rather than a pile of them. */
-      /* A soft halo under each marker.
-         Zoomed out to the whole corridor a pixel is about 90 m, so a 200 m
-         queue is two pixels of road and its marker is a six-pixel dot sitting
-         ON the line -- a red dot on an orange road, which reads as nothing.
-         Congestion then only appeared once the reader had zoomed in, which is
-         the opposite of what a corridor view is for.
-         A wash of the queue's own colour, wider than the road and softer than
-         anything else on it, is what makes the eye land there first. It carries
-         no extra claim: it marks the same point the dot does, and both fade out
-         once the queue is big enough to speak for itself. */
-      map.addLayer({
-        id: "jam-mark-halo",
-        type: "circle",
-        source: "traffic",
-        filter: [
-          "all",
-          ["==", ["get", "feature_type"], "jam_mark"],
-          ["has", "direction_source"],
-        ],
-        paint: {
-          "circle-color": [
-            "match", ["get", "level"],
-            0, PALETTE.status.clear,
-            [1, 2], PALETTE.status.slow,
-            [3, 4, 5], PALETTE.status.congested,
-            PALETTE.noData,
-          ],
-          "circle-radius": ["interpolate", ["linear"], ["zoom"], 8, 13, 11, 16, 14, 12, 16, 0],
-          "circle-opacity": ["interpolate", ["linear"], ["zoom"], 8, 0.3, 13, 0.26, 16, 0],
-          "circle-blur": 0.55,
-        },
-      });
+      /* The markers, translated onto the carriageway they belong to.
+         The ribbons are drawn with line-offset, which is in PIXELS, so they sit
+         to either side of the centreline by an amount that changes with zoom.
+         A circle is a plain point on the centreline, so the dots were landing
+         in the median between the two roads rather than on either of them.
+         circle-translate is the only offset a circle has, and it is in pixels
+         too -- so it can track the ribbon where a metres-based nudge to the
+         geometry could only ever match at one zoom.
+         It is a fixed screen direction rather than a normal to the road, which
+         is why there is one layer per carriageway: NLEX runs north-north-west
+         its whole length, so the ribbons sit almost due east and west of the
+         centreline, and east/west is within a few pixels of right across the
+         zooms these dots are visible at. */
+      const MARK_SHIFT = (dir: "NB" | "SB") => {
+        const px = dir === "NB" ? 1 : -1;
+        return [
+          "interpolate", ["exponential", 2], ["zoom"],
+          9, ["literal", [7 * px, 0]],
+          15, ["literal", [7 * px, 0]],
+          18, ["literal", [24 * px, 0]],
+        ] as unknown as mapboxgl.ExpressionSpecification;
+      };
 
-      map.addLayer({
-        id: "jam-mark",
-        type: "circle",
-        source: "traffic",
-        filter: [
-          "all",
-          ["==", ["get", "feature_type"], "jam_mark"],
-          ["has", "direction_source"],
-        ],
-        paint: {
-          "circle-color": [
-            "match", ["get", "level"],
-            0, PALETTE.status.clear,
-            [1, 2], PALETTE.status.slow,
-            [3, 4, 5], PALETTE.status.congested,
-            PALETTE.noData,
-          ],
-          // A red dot on an orange road needs the ring more than the fill: the
-          // white edge is what separates it from whatever it is standing on.
-          "circle-radius": ["interpolate", ["linear"], ["zoom"], 8, 7, 11, 8.5, 14, 6.5, 17.5, 0],
-          "circle-stroke-width": ["interpolate", ["linear"], ["zoom"], 8, 2.5, 14, 3, 17.5, 0],
-          "circle-stroke-color": PALETTE.casing,
-          "circle-opacity": ["interpolate", ["linear"], ["zoom"], 15, 1, 17.5, 0],
-          "circle-stroke-opacity": ["interpolate", ["linear"], ["zoom"], 15, 1, 17.5, 0],
-        },
-      });
+      const markFilter = (dir: "NB" | "SB") => [
+        "all",
+        ["==", ["get", "feature_type"], "jam_mark"],
+        ["has", "direction_source"],
+        ["==", ["get", "direction"], dir],
+      ] as unknown as mapboxgl.ExpressionSpecification;
+
+      const markColour = [
+        "match", ["get", "level"],
+        0, PALETTE.status.clear,
+        [1, 2], PALETTE.status.slow,
+        [3, 4, 5], PALETTE.status.congested,
+        PALETTE.noData,
+      ] as unknown as mapboxgl.ExpressionSpecification;
+
+      for (const dir of ["NB", "SB"] as const) {
+        /* A soft halo under each marker.
+           Zoomed out to the whole corridor a pixel is about 90 m, so a 200 m
+           queue is two pixels of road and its dot is six pixels sitting ON the
+           line -- a red dot on an orange road, which reads as nothing. A wash
+           of the queue's own colour, wider than the road and softer than
+           anything else on it, is what makes the eye land there first. */
+        map.addLayer({
+          id: `jam-mark-halo-${dir.toLowerCase()}`,
+          type: "circle",
+          source: "traffic",
+          filter: markFilter(dir),
+          paint: {
+            "circle-color": markColour,
+            "circle-radius": ["interpolate", ["linear"], ["zoom"], 8, 13, 11, 16, 14, 12, 16, 0],
+            "circle-opacity": ["interpolate", ["linear"], ["zoom"], 8, 0.3, 13, 0.26, 16, 0],
+            "circle-blur": 0.55,
+            "circle-translate": MARK_SHIFT(dir),
+          },
+        });
+
+        map.addLayer({
+          id: `jam-mark-${dir.toLowerCase()}`,
+          type: "circle",
+          source: "traffic",
+          filter: markFilter(dir),
+          paint: {
+            "circle-color": markColour,
+            // A red dot on an orange road needs the ring more than the fill:
+            // the white edge is what separates it from what it stands on.
+            "circle-radius": ["interpolate", ["linear"], ["zoom"], 8, 7, 11, 8.5, 14, 6.5, 17.5, 0],
+            "circle-stroke-width": ["interpolate", ["linear"], ["zoom"], 8, 2.5, 14, 3, 17.5, 0],
+            "circle-stroke-color": PALETTE.casing,
+            "circle-opacity": ["interpolate", ["linear"], ["zoom"], 15, 1, 17.5, 0],
+            "circle-stroke-opacity": ["interpolate", ["linear"], ["zoom"], 15, 1, 17.5, 0],
+            "circle-translate": MARK_SHIFT(dir),
+          },
+        });
+      }
 
       /* The queues move too, and slower than the road around them.
          That contrast is the point: the green ribbon runs at the clear pace
@@ -1006,7 +1024,7 @@ export default function TrafficMapPanel({ title, subtitle, badge, endpoint, laye
                 "line-offset": OFFSET,
               },
             },
-            "jam-mark",
+            "jam-mark-halo-nb",
           );
         }
       }
@@ -1174,7 +1192,7 @@ export default function TrafficMapPanel({ title, subtitle, badge, endpoint, laye
         jamCard.remove();
       };
 
-      for (const id of ["jam-extent", "jam-mark"] as const) {
+      for (const id of ["jam-extent", "jam-mark-nb", "jam-mark-sb"] as const) {
         map.on("mousemove", id, onJamMove);
         map.on("mouseleave", id, onJamLeave);
       }

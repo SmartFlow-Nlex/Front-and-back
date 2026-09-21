@@ -9660,12 +9660,16 @@ details[open] > .evidence-summary .evidence-close-label { display: inline; }
 
 .custom-toll-marker .toll-pin-name {
   position: absolute;
-  /* Level with the ring, not above it. The elbow existed to lift the name off
-     the carriageway, but the corridor runs north-north-west to south-south-east
-     for its whole length, so straight out to the side already clears it -- and
-     a single horizontal stub reads as a connector where a two-part elbow read
-     as a stray mark. */
-  left: 19px;
+  /* Level with the ring, always. The corridor runs north-north-west to
+     south-south-east for its whole length, so straight out to the side clears
+     the carriageway on its own -- and a level rule cannot cross another level
+     rule, which is what keeps a screenful of these legible.
+
+     --lead is how far out this one reaches, set per pin by declutterPlazas.
+     It is measured from the left edge of the dot, and its default is the
+     shortest reach: hard against the ring, the way it sat before there was
+     anything to reach past. */
+  left: var(--lead, 32px);
   top: 50%;
   transform: translateY(-50%);
   padding: 2px 6.5px 2.5px;
@@ -9688,19 +9692,38 @@ details[open] > .evidence-summary .evidence-close-label { display: inline; }
   box-shadow: 0 1px 3px rgb(15 23 42 / 0.07);
 }
 
-/* The stub, running from the ring into the plate with no gap at either end.
-   Level and short: a name only ever opens east or west of its own ring, so
-   the leader never has to reach. */
+/* The leader, running from the ring into the plate with no gap at either end.
+   It stretches to whatever --lead the placement chose, less the part that
+   would be under the dot, so the rule always starts at the edge of the ring
+   however far out the name has been set. */
 .custom-toll-marker .toll-pin-name::before {
   content: "";
   position: absolute;
   right: 100%;
   top: 50%;
-  width: 9px;
+  width: calc(var(--lead, 32px) - var(--lead-inset, 10px));
   height: 1.5px;
   transform: translateY(-50%);
-  background: #0e7490;
-  opacity: 0.75;
+  /* Solid rather than a tinted line. A rule at three-quarter opacity vanished
+     into a dark basemap at the very zooms where names are furthest from their
+     rings and the rule is the only thing joining them. */
+  background: #14899f;
+  opacity: 1;
+}
+
+/* A short tick where the rule meets the plate. A bare line ending at a box
+   reads as an underline that has slipped; a terminal says the two are one
+   object and gives the eye somewhere to land. */
+.custom-toll-marker .toll-pin-name::after {
+  content: "";
+  position: absolute;
+  right: 100%;
+  top: 50%;
+  width: 1.5px;
+  height: 7px;
+  transform: translateY(-50%);
+  background: #14899f;
+  opacity: 1;
 }
 
 /* ---- far: a quiet ring ---- */
@@ -9732,8 +9755,9 @@ details[open] > .evidence-summary .evidence-close-label { display: inline; }
 
 /* ---- near: the full badge, so the leader starts further out ---- */
 .custom-toll-marker[data-tier="near"] .toll-pin-name {
-  /* Clear of the full badge, which is twice the ring's width. */
-  left: 24px;
+  /* Clear of the full badge, which is twice the ring width. */
+  left: var(--lead, 38px);
+  --lead-inset: 15px;
 }
 
 /* Proportional, so a ring does not leap to badge size under the cursor. */
@@ -9759,13 +9783,14 @@ details[open] > .evidence-summary .evidence-close-label { display: inline; }
    the other way rather than as a different kind of label. */
 .custom-toll-marker[data-side="west"] .toll-pin-name {
   left: auto;
-  right: 19px;
+  right: var(--lead, 32px);
 }
 .custom-toll-marker[data-side="west"][data-tier="near"] .toll-pin-name {
   left: auto;
-  right: 24px;
+  right: var(--lead, 38px);
 }
-.custom-toll-marker[data-side="west"] .toll-pin-name::before {
+.custom-toll-marker[data-side="west"] .toll-pin-name::before,
+.custom-toll-marker[data-side="west"] .toll-pin-name::after {
   right: auto;
   left: 100%;
 }

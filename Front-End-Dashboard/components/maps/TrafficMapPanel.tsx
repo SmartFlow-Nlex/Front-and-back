@@ -1432,7 +1432,7 @@ export default function TrafficMapPanel({ title, subtitle, badge, endpoint, laye
 
         /* Kept so the pins can be thinned out when they overlap; see
            declutterPlazas below. */
-        const plazaPins: { el: HTMLElement; lngLat: [number, number]; name: string }[] = [];
+        const plazaPins: { el: HTMLElement; lngLat: [number, number]; name: string; index: number }[] = [];
 
         tollPlazas.forEach(toll => {
           const el = document.createElement("div");
@@ -1471,6 +1471,10 @@ export default function TrafficMapPanel({ title, subtitle, badge, endpoint, laye
             el,
             lngLat: toll.coordinates as [number, number],
             name: displayExitName(toll.shortName),
+            /* Position along the corridor, which is the order this list is
+               written in. The side a name opens on is derived from it, so the
+               side is a property of the EXIT rather than of the view. */
+            index: plazaPins.length,
           });
 
           el.addEventListener("mouseenter", () => {
@@ -1571,6 +1575,49 @@ export default function TrafficMapPanel({ title, subtitle, badge, endpoint, laye
            length. */
         const TIER_GAP_PX = { far: 26, mid: 30, near: 34 } as const;
 
+        /* Names are set out on LEADERS -- a rule running from the ring out to a
+           plate placed clear of the road -- rather than pressed against the
+           marker.
+
+           The leader is always HORIZONTAL, and that is the whole trick. Two
+           horizontal rules at different heights cannot cross, so however many
+           names are out at once none of them ever tangles, and a name is found
+           by running the eye straight out from its ring with nothing to follow.
+           An earlier attempt let names step up and down the corridor as well,
+           which crossed, and looked like a diagram of string.
+
+           Sides alternate by position along the corridor and do not depend on
+           the view, so a name stays on the side the reader last saw it on
+           however they pan. It flips only where the plate would otherwise run
+           off the edge of the map. Alternating also halves the crowding before
+           any search begins: neighbouring exits set out in opposite directions,
+           so their plates start nowhere near each other. */
+        const DOT_W = { far: 13, mid: 17, near: 26 } as const;
+        /* The shortest reach, and it is deliberately not the shortest that
+           fits. Hard against the ring, a plate sits on the carriageway it is
+           naming and the rule is too short to read as a rule -- the name looks
+           dropped there rather than placed. Setting every name out by the same
+           minimum is what makes a screenful of them look deliberate. */
+        const LEAD_BASE = { far: 32, mid: 32, near: 38 } as const;
+        const LEAD_STEP = 14;
+        const LEAD_TRIES = 16;
+        const LABEL_H = 15;
+        /* A leader passing under someone else's plate reads as a line struck
+           through it, so leaders are collided with too -- as a thin band rather
+           than at the plate's full height. */
+        const LEAD_H = 6;
+
+        type Box = { x0: number; x1: number; y0: number; y1: number };
+        const overlaps = (a: Box, b: Box) =>
+          a.x0 < b.x1 && b.x0 < a.x1 && a.y0 < b.y1 && b.y0 < a.y1;
+
+        /* Plate widths come from the DOM rather than from a guess at the
+           character count, and are cached per tier: they change with the type
+           size and with nothing else, so this is one layout per zoom band
+           rather than one per frame of a pan. */
+        const plateW = new Map<HTMLElement, number>();
+        let measuredTier: string | null = null;
+
         /* How far an exit is from a queue, on the GROUND, in metres.
 
            The colour on a plate used to come from the same pixel test that
@@ -1658,17 +1705,104 @@ export default function TrafficMapPanel({ title, subtitle, badge, endpoint, laye
             .map((pin) => ({ pin, q: map.project(pin.lngLat), level: queueLevelOn(pin.lngLat) }))
             .sort((a, b) => Number(b.level >= 0) - Number(a.level >= 0));
 
-          /* Reports still win outright: a plaza is a landmark the reader can
-             find again by zooming, a report is the thing they came to see, and
-             plazas draw above reports so an exit pin could cover one entirely. */
-          const kept = reportPins.map((c) => map.project(c));
+          if (measuredTier !== tier) {
+            /* Shown first, then measured. A hidden element measures zero, so a
+               name that stood down at the last tier came back with no width at
+               the next one and was placed against a guess -- and a name placed
+               against the wrong width is the one thing this whole arrangement
+               is supposed to rule out. Every pin is about to be re-decided
+               below, so nothing is lost by revealing them all here. */
+            for (const pin of plazaPins) pin.el.style.display = "";
+            for (const pin of plazaPins) {
+              const plate = pin.el.querySelector(".toll-pin-name") as HTMLElement | null;
+              const w = plate?.offsetWidth ?? 0;
+              if (w > 0) plateW.set(pin.el, w);
+            }
+            measuredTier = tier;
+          }
 
-          for (const { pin, q, level } of ordered) {
-            if (kept.some((k) => near(k, q, gap))) {
+          const width = map.getCanvas().clientWidth;
+          const half = DOT_W[tier] / 2;
+          const base = LEAD_BASE[tier];
+
+          /* What a callout has to stay clear of: the reports, every exit ring,
+             and the callouts already placed. Reports are still the thing the
+             reader came to see, so a name gives way to one -- it gives way by
+             reaching further out rather than by disappearing. */
+          const obstacles: Box[] = reportPins
+            .map((c) => map.project(c))
+            .map((c) => ({ x0: c.x - 13, x1: c.x + 13, y0: c.y - 13, y1: c.y + 13 }));
+
+          /* The rings are held separately because a callout starts AT its own
+             ring and so overlaps it by definition. Lumping them in with
+             everything else made every name collide with itself, and the whole
+             corridor went unlabelled. */
+          const rings: Box[] = ordered.map((o) => ({
+            x0: o.q.x - half - 3, x1: o.q.x + half + 3,
+            y0: o.q.y - half - 3, y1: o.q.y + half + 3,
+          }));
+
+          /* `lead` is measured the way the stylesheet measures it: from the
+             left edge of the dot, which is where `left` on .toll-pin-name
+             starts counting. */
+          const boxes = (q: { x: number; y: number }, side: "east" | "west", lead: number, w: number) => {
+            const plateX = side === "east" ? q.x - half + lead : q.x + half - lead - w;
+            return {
+              plate: { x0: plateX, x1: plateX + w, y0: q.y - LABEL_H / 2, y1: q.y + LABEL_H / 2 },
+              rule: {
+                x0: side === "east" ? q.x : plateX,
+                x1: side === "east" ? plateX + w : q.x,
+                y0: q.y - LEAD_H / 2,
+                y1: q.y + LEAD_H / 2,
+              },
+            };
+          };
+
+          for (let oi = 0; oi < ordered.length; oi++) {
+            const { pin, q, level } = ordered[oi];
+            const w = plateW.get(pin.el) ?? 60;
+            const home: "east" | "west" = pin.index % 2 === 0 ? "east" : "west";
+            const sides: ("east" | "west")[] = [home, home === "east" ? "west" : "east"];
+            /* A PLATE has to be clear of everything. A RULE only has to be
+               clear of the other plates and the reports.
+
+               The difference is what a reader loses. A rule crossing someone
+               else's name strikes it through and is unreadable; a rule passing
+               close to a bare ring is a line near a circle, which costs
+               nothing. Holding rules to the stricter test made every name in
+               the Bocaue cluster reach past four rings it was only grazing,
+               and most of them ran out of room and went unlabelled. */
+            const blockedPlate = (b: Box) =>
+              obstacles.some((o) => overlaps(b, o)) ||
+              rings.some((r, ri) => ri !== oi && overlaps(b, r));
+            const blockedRule = (b: Box) => obstacles.some((o) => overlaps(b, o));
+
+            let placed: { side: "east" | "west"; lead: number; plate: Box; rule: Box } | null = null;
+            for (const side of sides) {
+              for (let i = 0; i < LEAD_TRIES; i++) {
+                const lead = base + i * LEAD_STEP;
+                const b = boxes(q, side, lead, w);
+                // Off the edge of the map: stop reaching that way, try the other side.
+                if (b.plate.x0 < 4 || b.plate.x1 > width - 4) break;
+                if (blockedPlate(b.plate) || blockedRule(b.rule)) continue;
+                placed = { side, lead, plate: b.plate, rule: b.rule };
+                break;
+              }
+              if (placed) break;
+            }
+
+            /* Nowhere to put it on either side. It stands down until there is
+               room, and zooming in makes room on its own: the exits spread
+               apart on screen while the plates stay the same size. */
+            if (!placed) {
               pin.el.style.display = "none";
               continue;
             }
+
             pin.el.style.display = "";
+            pin.el.dataset.side = placed.side;
+            pin.el.style.setProperty("--lead", String(placed.lead) + "px");
+            obstacles.push(placed.plate, placed.rule);
             pin.el.dataset.ring = coversPin(q) ? "off" : "on";
             /* The name carries the condition, in the same three words and the
                same three colours the legend uses. An exit standing on a queue
@@ -1677,7 +1811,6 @@ export default function TrafficMapPanel({ title, subtitle, badge, endpoint, laye
             if (level >= 3) pin.el.dataset.queue = "congested";
             else if (level >= 1) pin.el.dataset.queue = "slow";
             else delete pin.el.dataset.queue;
-            kept.push(q);
           }
         };
 

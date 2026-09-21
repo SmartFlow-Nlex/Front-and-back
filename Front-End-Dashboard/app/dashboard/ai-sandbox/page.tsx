@@ -3,13 +3,14 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { displayExitName, useNlexExits, type NlexExit } from "../../../lib/nlex-exits";
 import { lanesForSegment, laneSources } from "../../../lib/nlex-lanes";
+import { placeFuelStations } from "../../../lib/nlex-fuel-stations";
+import { placeLaybys, laybyLabel } from "../../../lib/nlex-laybys";
 import { Car } from "lucide-react";
 import PageHeader from "../../../components/dashboard/PageHeader";
 import ScenarioForecastPanel from "../../../components/dashboard/ScenarioForecastPanel";
 import {
   TrafficSim, CLASS_META, mixHex, visualLane, replicate,
-  type Metrics, type Interventions, type ReplicationResult, type RepStat,
-} from "./simulation";
+  type Metrics, type Interventions, type ReplicationResult, type RepStat, RAIN, type RainLevel, type ServiceSpec, type TollSpec, B_COMF } from "./simulation";
 
 const BACKEND = process.env.NEXT_PUBLIC_BACKEND_URL ?? "http://localhost:4000";
 
@@ -87,7 +88,7 @@ function roadLayout(opts: {
   segLenM: number;
   exitCount: number;
   maxLaneH: number;
-  /** Northbound draws its ramps above the road, southbound below. */
+  /** Southbound draws its ramps above the road, northbound below. */
   rampsAbove: boolean;
 }) {
   const { cssW, cssH, lanes, segLenM, exitCount, maxLaneH, rampsAbove } = opts;
@@ -387,11 +388,72 @@ export default function AiSandboxPage() {
   maxLaneRef.current = expanded ? 240 : DOCKED_LANE_MAX;
   // Exits that fall inside the drawn span, so the road can name the places the
   // operator is looking at rather than only its km-posts.
-  const exitsRef = useRef<{ name: string; km: number }[]>([]);
+  const exitsRef = useRef<DrawnExit[]>([]);
   exitsRef.current = EXITS.filter((x) => x.km >= fromKm && x.km <= toKm).map((x) => ({
     name: displayExitName(x.exit_name),
     km: x.km,
+    // A toll barrier is a plaza every vehicle drives through, not a junction.
+    toll: x.node_type === "toll-barrier",
+    // Per-direction access from the data, so a junction with no entry on this
+    // carriageway is drawn without an on-ramp.
+    on: x.node_type !== "toll-barrier" && Boolean(direction === "NB" ? x.nb_entry : x.sb_entry),
+    off: x.node_type !== "toll-barrier" && Boolean(direction === "NB" ? x.nb_exit : x.sb_exit),
   }));
+
+  // Service-area fuel stations, placed on this page's km scale from their
+  // coordinates (see lib/nlex-fuel-stations). A service area serves one
+  // carriageway, so only the direction being simulated is shown.
+  const FUEL = useMemo(() => placeFuelStations(EXITS), [EXITS]);
+  const routeFuel = FUEL.filter((f) => f.direction === direction && f.km >= routeFromKm && f.km <= routeToKm);
+  const otherSideFuel = FUEL.filter((f) => f.direction !== direction && f.km >= routeFromKm && f.km <= routeToKm);
+  const stationsRef = useRef<{ name: string; brand: string; km: number }[]>([]);
+  stationsRef.current = routeFuel
+    .filter((f) => f.km >= fromKm && f.km <= toKm)
+    .map((f) => ({ name: f.name, brand: f.brand, km: f.km }));
+
+  // Lay-bys and emergency bays, from OpenStreetMap (see lib/nlex-laybys). Like
+  // a service area each serves one carriageway.
+  const LAYBYS = useMemo(() => placeLaybys(EXITS), [EXITS]);
+  const routeLaybys = LAYBYS.filter((l) => l.direction === direction && l.km >= routeFromKm && l.km <= routeToKm);
+  const otherSideLaybys = LAYBYS.filter((l) => l.direction !== direction && l.km >= routeFromKm && l.km <= routeToKm);
+  const laybysRef = useRef<{ km: number; kind: string }[]>([]);
+  laybysRef.current = routeLaybys
+    .filter((l) => l.km >= fromKm && l.km <= toKm)
+    .map((l) => ({ km: l.km, kind: l.kind }));
+
+  /* Service stops. NLEX publishes no count of how many drivers pull into a
+   * service area, so nobody stops unless the operator says so. The defaults
+   * the controls offer come from the one field study found that measured
+   * both: Yangli service area, Fujian — about 17% of passing traffic entered,
+   * staying about 30 minutes (PMC9497720). */
+  const [stopPct, setStopPct] = useState(0);
+  const [dwellMin, setDwellMin] = useState(30);
+  const [parkedNow, setParkedNow] = useState(0);
+  const services = useMemo<ServiceSpec[]>(
+    () =>
+      FUEL.filter((f) => f.direction === direction && f.km > fromKm && f.km < toKm).map((f) => ({
+        x: direction === "NB" ? (f.km - fromKm) * 1000 : (toKm - f.km) * 1000,
+        stopFraction: stopPct / 100,
+        dwellMeanS: dwellMin * 60,
+        name: f.name,
+      })),
+    [FUEL, direction, fromKm, toKm, stopPct, dwellMin],
+  );
+  const servicesRef = useRef(services);
+  servicesRef.current = services;
+
+  /* Mainline toll barriers inside the span. Every vehicle slows to the booth
+   * speed and away again. RFID lanes are signed for 15-20 km/h (maximum 30);
+   * the top of the recommended band is used. */
+  const tolls = useMemo<TollSpec[]>(
+    () =>
+      EXITS.filter((e) => e.node_type === "toll-barrier" && e.km > fromKm && e.km < toKm).map((e) => ({
+        x: direction === "NB" ? (e.km - fromKm) * 1000 : (toKm - e.km) * 1000,
+        boothKmh: TOLL_BOOTH_KMH,
+        name: displayExitName(e.exit_name),
+      })),
+    [EXITS, direction, fromKm, toKm],
+  );
 
   const [laneCount, setLaneCount] = useState(4);
 
@@ -421,6 +483,16 @@ export default function AiSandboxPage() {
 
   const [closedLanes, setClosedLanes] = useState<boolean[]>(Array(4).fill(false));
   const [speedLimit, setSpeedLimit] = useState<number | null>(null);
+  // Rain is a condition, not an intervention: it survives a rebuild of the
+  // road, so it reaches the new simulation through a ref.
+  const [rain, setRain] = useState<RainLevel>("dry");
+  const rainRef = useRef<RainLevel>("dry");
+  rainRef.current = rain;
+  // "recorded" follows the rain logged for the forecast day and hour being
+  // simulated; any click on a weather button makes it manual until the
+  // operator asks for the recorded value back.
+  const [rainMode, setRainMode] = useState<"recorded" | "manual">("recorded");
+  const [recordedRain, setRecordedRain] = useState<RecordedRain | null>(null);
   const [incidentCount, setIncidentCount] = useState(0);
   /**
    * Where on the corridor an intervention is applied, as km-posts.
@@ -533,6 +605,39 @@ export default function AiSandboxPage() {
       })
       .catch(() => setDemand(null));
   }, [nearestExit, direction]);
+
+  /* Recorded rain for the simulated hour — ERA5 / Open-Meteo, the same
+   * public.hourly_weather the predictive modules use — at the weather location
+   * nearest the stretch on screen. Only once a forecast day is loaded: with no
+   * date there is no hour on the calendar to look up. */
+  useEffect(() => {
+    if (!forecastDay || hourOfDay == null || !nearestExit) {
+      setRecordedRain(null);
+      return;
+    }
+    let cancelled = false;
+    const q = new URLSearchParams({
+      date: forecastDay,
+      hour: String(hourOfDay),
+      lat: String(nearestExit.latitude),
+      lon: String(nearestExit.longitude),
+    });
+    fetch(`${BACKEND}/api/ai-sandbox/weather?${q}`, { cache: "no-store" })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((j) => {
+        if (!cancelled) setRecordedRain(j?.success ? (j.data as RecordedRain) : null);
+      })
+      .catch(() => {
+        if (!cancelled) setRecordedRain(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [forecastDay, hourOfDay, nearestExit]);
+
+  useEffect(() => {
+    if (rainMode === "recorded" && recordedRain) setRain(recordedRain.simLevel);
+  }, [rainMode, recordedRain]);
 
   /** The hour currently being simulated, if observed demand is driving it. */
   const activeHour = useMemo(
@@ -731,6 +836,10 @@ export default function AiSandboxPage() {
       // Strictly inside: the endpoints are where the simulated road starts and
       // stops, not junctions traffic passes through.
       if (e.km <= lo + 0.02 || e.km >= hi - 0.02) continue;
+      // A toll barrier's "exit" transactions are drivers paying at the plaza,
+      // not leaving the road. Treating it as a ramp took that traffic off the
+      // mainline; it is modelled as a toll (see `tolls`) instead.
+      if (e.node_type === "toll-barrier") continue;
       const canJoin = nb ? e.nb_entry : e.sb_entry;
       const canLeave = nb ? e.nb_exit : e.sb_exit;
       if (!canJoin && !canLeave) continue;
@@ -788,10 +897,14 @@ export default function AiSandboxPage() {
         seed: 12345,
         classProfile: effectiveClassProfile,
         ramps,
+        tolls,
+        // A copy: the live-apply effect below swaps the array, never edits it.
+        services: servicesRef.current,
         warmupS: WARMUP_S,
       },
       buildInterventions(laneCount, segLengthM)
     );
+    simRef.current.interventions.weather = rainRef.current;
     setClosedLanes(Array(laneCount).fill(false));
     setSpeedLimit(null);
     setIncidentCount(0);
@@ -800,7 +913,7 @@ export default function AiSandboxPage() {
     // classProfile included so the run restarts once the warehouse values
     // land — otherwise the first simulation would keep emitting at the
     // bundled defaults for its whole life.
-  }, [laneCount, segLengthM, buildInterventions, effectiveClassProfile, ramps]);
+  }, [laneCount, segLengthM, buildInterventions, effectiveClassProfile, ramps, tolls]);
 
   useEffect(() => {
     rebuild();
@@ -878,6 +991,8 @@ export default function AiSandboxPage() {
         inflowVehPerHour: inflow,
         classProfile: effectiveClassProfile,
         ramps,
+        tolls,
+        services,
         warmupS: WARMUP_S,
       },
       // The interventions AS CURRENTLY SET, not a clean road: the operator is
@@ -889,6 +1004,7 @@ export default function AiSandboxPage() {
         incidents: simRef.current ? [...simRef.current.interventions.incidents] : [],
         speedLimitKmh: speedLimit,
         speedZone: zoneM,
+        weather: rain,
       },
       { runs: repRuns, secondsPerRun: 300 },
     );
@@ -910,9 +1026,15 @@ export default function AiSandboxPage() {
     setTimeout(pump, 0);
   }, [
     repProgress, repRuns, segLengthM, laneCount, inflow, effectiveClassProfile, ramps,
-    closedLanes, closureM, closureEndM, speedLimit, zoneM,
+    tolls, services, closedLanes, closureM, closureEndM, speedLimit, zoneM, rain,
   ]);
 
+
+  // Stop share and dwell apply to drivers entering from now on; anyone already
+  // parked keeps the dwell they drew.
+  useEffect(() => {
+    if (simRef.current) simRef.current.cfg.services = services;
+  }, [services]);
 
   // Live-apply interventions.
   useEffect(() => {
@@ -924,7 +1046,8 @@ export default function AiSandboxPage() {
     sim.interventions.closureEnd = closureEndM;
     sim.interventions.showClosurePreview = closureKm != null || closureEndKm != null || placingClosure;
     sim.interventions.speedZone = zoneM;
-  }, [closedLanes, speedLimit, closureM, closureEndM, zoneM, closureKm, closureEndKm, placingClosure]);
+    sim.interventions.weather = rain;
+  }, [closedLanes, speedLimit, closureM, closureEndM, zoneM, closureKm, closureEndKm, placingClosure, rain]);
 
   // Animation + physics loop.
   useEffect(() => {
@@ -958,9 +1081,10 @@ export default function AiSandboxPage() {
         if (metricAccRef.current >= 0.25) {
           metricAccRef.current = 0;
           setMetrics(sim.metrics());
+          setParkedNow(sim.parked.length);
         }
       }
-      render(ctx, canvas, sim, locationRef.current, marksRef.current, maxLaneRef.current, exitsRef.current);
+      render(ctx, canvas, sim, locationRef.current, marksRef.current, maxLaneRef.current, exitsRef.current, stationsRef.current, rainRef.current, laybysRef.current);
     };
     rafRef.current = requestAnimationFrame(loop);
     return () => cancelAnimationFrame(rafRef.current);
@@ -998,12 +1122,15 @@ export default function AiSandboxPage() {
       cssH,
       lanes,
       segLenM: L,
-      exitCount: exitsRef.current.length,
+      // Stations use the same gutter as ramps, so they count here too.
+      exitCount: exitsRef.current.length + stationsRef.current.length + laybysRef.current.length,
       maxLaneH: maxLaneRef.current,
-      rampsAbove: direction === "NB",
+      rampsAbove: direction === "SB",
     });
 
-    const lane = Math.max(0, Math.min(lanes - 1, Math.floor((cy - roadTop) / laneH)));
+    // Rows run median-to-kerb away from the median; southbound that is upward.
+    const row = Math.max(0, Math.min(lanes - 1, Math.floor((cy - roadTop) / laneH)));
+    const lane = direction === "SB" ? lanes - 1 - row : row;
     const alongFrac = direction === "SB" ? 1 - cx / cssW : cx / cssW;
     const x = Math.max(0, Math.min(L, alongFrac * L));
     if (placingClosure) {
@@ -1210,6 +1337,7 @@ export default function AiSandboxPage() {
           closed ? `${closed} closed` : null,
           speedLimit != null ? `${speedLimit} km/h zone` : null,
           incidentCount > 0 ? `${incidentCount} incident${incidentCount === 1 ? "" : "s"}` : null,
+          rain !== "dry" ? RAIN[rain].label.toLowerCase() : null,
         ]
           .filter(Boolean)
           .join(" · ") || "a clear road",
@@ -1228,10 +1356,13 @@ export default function AiSandboxPage() {
       closedLaneList ? `Km ${closureAtKm.toFixed(2)}–${closureEndAtKm.toFixed(2)}` : null,
       incidentCount > 0 ? `${incidentCount} incident${incidentCount === 1 ? "" : "s"}` : null,
       speedLimit != null ? `${speedLimit} km/h zone` : null,
+      rain !== "dry" ? RAIN[rain].label : null,
     ]
       .filter(Boolean)
       .join(" · ") || "none applied";
-  const anyIntervention = closedLanes.some(Boolean) || speedLimit != null || incidentCount > 0;
+  // Rain counts: capturing a dry baseline and then switching it on is exactly
+  // how an operator sees what the weather costs.
+  const anyIntervention = closedLanes.some(Boolean) || speedLimit != null || incidentCount > 0 || rain !== "dry";
 
   /* Baseline capture is a three-step procedure and the panel now says so.
    * Throughput is counted over the run so far, so a snapshot taken seconds
@@ -1246,7 +1377,7 @@ export default function AiSandboxPage() {
   const activeStep = stepDone.findIndex((d) => !d) + 1; // 0 once all are done
   const stepCls = (n: number) =>
     `sandbox-step${stepDone[n - 1] ? " is-done" : activeStep === n ? " is-now" : ""}`;
-  const recommendation = getRecommendation(metrics, baseline, closedLanes, incidentCount, speedLimit);
+  const recommendation = getRecommendation(metrics, baseline, closedLanes, incidentCount, speedLimit, rain);
 
   // How wide the selected stretch of road actually is. Null when the corridor
   // lane table does not cover it — see lib/nlex-lanes.ts, which is deliberately
@@ -1406,6 +1537,20 @@ export default function AiSandboxPage() {
               <button className="btn-muted" onClick={clearIncidents} disabled={incidentCount === 0}>
                 Clear ({incidentCount})
               </button>
+              <span className="k">Weather</span>
+              <div className="sandbox-lane-toggles">
+                {(Object.keys(RAIN) as RainLevel[]).map((lvl) => (
+                  <button
+                    key={lvl}
+                    className={rain === lvl ? "closed" : ""}
+                    style={rain === lvl ? { background: "rgba(2,132,199,0.45)", borderColor: "rgba(125,211,252,0.9)", color: "#fff" } : undefined}
+                    onClick={() => { setRain(lvl); setRainMode("manual"); }}
+                    title={lvl === "dry" ? "No rain" : `${RAIN[lvl].label}: ${RAIN[lvl].intensity}`}
+                  >
+                    {lvl === "dry" ? "Dry" : lvl[0].toUpperCase() + lvl.slice(1)}
+                  </button>
+                ))}
+              </div>
               <ClosureHint placing={placingClosure} draftKm={closureDraftKm} anyClosed={closedLanes.some(Boolean)} laneCount={laneCount} dark />
             </div>
           )}
@@ -1745,6 +1890,151 @@ export default function AiSandboxPage() {
             )}
           </div>
 
+          {/* Service areas on this carriageway. An operator planning a closure
+              needs to know where drivers can still refuel and stop, and a
+              service area inside a closed stretch is itself affected. */}
+          <div className="sandbox-slider-group">
+            <div className="sandbox-slider-header">
+              <span className="sandbox-slider-label">Fuel stops on route</span>
+              <span className="sandbox-slider-value" style={{ color: "#d97706" }}>
+                {routeFuel.length} {dirLabel.toLowerCase()}
+              </span>
+            </div>
+            {routeFuel.length === 0 ? (
+              <span className="sandbox-slider-hint">
+                No {dirLabel.toLowerCase()} service area lies on this route.
+              </span>
+            ) : (
+              <div style={{ display: "flex", flexWrap: "wrap", gap: 5 }}>
+                {routeFuel.map((f) => {
+                  const on = f.km >= fromKm && f.km <= toKm;
+                  return (
+                    <button
+                      key={f.id}
+                      onClick={() => focusExit(f.km)}
+                      title={`${f.name} (${f.brand}), ${f.town} — signed NLEX Km ${f.officialKm}, ${dirLabel.toLowerCase()} only. Click to frame it.`}
+                      style={{
+                        border: on ? "1px solid #f59e0b" : "1px solid var(--border-default)",
+                        background: on ? "rgba(245,158,11,0.14)" : "var(--bg-surface)",
+                        color: on ? "#92400e" : "var(--text-secondary)",
+                        borderRadius: 999,
+                        padding: "3px 9px",
+                        fontSize: "0.72rem",
+                        fontWeight: on ? 700 : 500,
+                        cursor: "pointer",
+                        whiteSpace: "nowrap",
+                      }}
+                    >
+                      {f.brand} · {f.town}
+                      <span style={{ opacity: 0.65, marginLeft: 4 }}>{f.km.toFixed(2)}</span>
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+            <span className="sandbox-slider-hint">
+              Service areas reachable without leaving NLEX. Each serves one carriageway
+              {otherSideFuel.length > 0
+                ? ` — ${otherSideFuel.length} more on this stretch serve ${dirLabel === "Northbound" ? "southbound" : "northbound"} traffic only.`
+                : "."}
+            </span>
+            {services.length > 0 && (
+              <>
+                <div className="sandbox-slider-header" style={{ marginTop: 8 }}>
+                  <span className="sandbox-slider-label">Drivers stopping</span>
+                  <span className="sandbox-slider-value" style={{ color: "#d97706" }}>
+                    {stopPct === 0 ? "none" : `${stopPct}% · ${parkedNow} parked`}
+                  </span>
+                </div>
+                <input
+                  type="range"
+                  min={0}
+                  max={25}
+                  step={1}
+                  value={stopPct}
+                  onChange={(e) => setStopPct(Number(e.target.value))}
+                  className="sandbox-slider"
+                  aria-label="Share of passing drivers who stop at each service area"
+                />
+                {stopPct > 0 && (
+                  <>
+                    <div className="sandbox-slider-header">
+                      <span className="sandbox-slider-label">Average stay</span>
+                      <span className="sandbox-slider-value" style={{ color: "#d97706" }}>{dwellMin} min</span>
+                    </div>
+                    <input
+                      type="range"
+                      min={5}
+                      max={60}
+                      step={5}
+                      value={dwellMin}
+                      onChange={(e) => setDwellMin(Number(e.target.value))}
+                      className="sandbox-slider"
+                      aria-label="Average time parked at a service area"
+                    />
+                  </>
+                )}
+                <span className="sandbox-slider-hint">
+                  NLEX publishes no service-area entry counts, so this is off unless you set it.
+                  For reference, a field study of the Yangli service area (Fujian, China) found about
+                  17% of passing traffic entering and staying about 30 minutes. Stops are drawn
+                  pulling into the bay, parking, and merging back.
+                </span>
+              </>
+            )}
+          </div>
+
+          {/* Lay-bys and emergency bays on this carriageway. Where a stalled
+              vehicle can get off the running lanes is part of planning around
+              an incident. */}
+          <div className="sandbox-slider-group">
+            <div className="sandbox-slider-header">
+              <span className="sandbox-slider-label">Lay-bys on route</span>
+              <span className="sandbox-slider-value" style={{ color: "#0d9488" }}>
+                {routeLaybys.length} {dirLabel.toLowerCase()}
+              </span>
+            </div>
+            {routeLaybys.length === 0 ? (
+              <span className="sandbox-slider-hint">
+                No mapped {dirLabel.toLowerCase()} lay-by on this route.
+              </span>
+            ) : (
+              <div style={{ display: "flex", flexWrap: "wrap", gap: 5 }}>
+                {routeLaybys.map((l) => {
+                  const on = l.km >= fromKm && l.km <= toKm;
+                  return (
+                    <button
+                      key={l.osm}
+                      onClick={() => focusExit(l.km)}
+                      title={`${l.name ?? laybyLabel(l)} — OpenStreetMap ${l.osm.startsWith("w") ? "way" : "node"} ${l.osm.slice(1)}, ${dirLabel.toLowerCase()} side. Click to frame it.`}
+                      style={{
+                        border: on ? "1px solid #14b8a6" : "1px solid var(--border-default)",
+                        background: on ? "rgba(20,184,166,0.14)" : "var(--bg-surface)",
+                        color: on ? "#115e59" : "var(--text-secondary)",
+                        borderRadius: 999,
+                        padding: "3px 9px",
+                        fontSize: "0.72rem",
+                        fontWeight: on ? 700 : 500,
+                        cursor: "pointer",
+                        whiteSpace: "nowrap",
+                      }}
+                    >
+                      {laybyLabel(l)}
+                      <span style={{ opacity: 0.65, marginLeft: 4 }}>{l.km.toFixed(2)}</span>
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+            <span className="sandbox-slider-hint">
+              Emergency bays, rest areas and roadside parking mapped on OpenStreetMap
+              {otherSideLaybys.length > 0
+                ? ` (${otherSideLaybys.length} more here serve ${dirLabel === "Northbound" ? "southbound" : "northbound"} traffic)`
+                : ""}
+              . NLEX publishes no list, so a bay nobody has mapped will be missing.
+            </span>
+          </div>
+
           <div className="sandbox-slider-group">
             <div className="sandbox-slider-header">
               <span className="sandbox-slider-label">Carriageway</span>
@@ -1912,6 +2202,51 @@ export default function AiSandboxPage() {
               Click a lane on the simulation to drop an incident · Esc to cancel
             </p>
           )}
+
+          {/* Weather. Levels are PAGASA's hourly rain classes; the effect on speed
+              and capacity is the published HCM / SHRP 2 figure — see RAIN in
+              simulation.ts. */}
+          <div className="sandbox-slider-group">
+            <div className="sandbox-slider-header">
+              <span className="sandbox-slider-label">Weather</span>
+              <span className="sandbox-slider-value" style={{ color: rain === "dry" ? "var(--text-muted)" : "#0284c7" }}>
+                {RAIN[rain].label}
+              </span>
+            </div>
+            <div style={{ display: "flex", gap: 5 }}>
+              {(Object.keys(RAIN) as RainLevel[]).map((lvl) => (
+                <button
+                  key={lvl}
+                  onClick={() => { setRain(lvl); setRainMode("manual"); }}
+                  title={lvl === "dry" ? "No rain" : `${RAIN[lvl].label}: ${RAIN[lvl].intensity} (PAGASA). Free-flow speed x${RAIN[lvl].speedFactor}, capacity -${RAIN[lvl].capacityLossPct}% (HCM).`}
+                  style={{
+                    flex: 1,
+                    padding: "5px 0",
+                    borderRadius: 8,
+                    border: rain === lvl ? "1px solid #0284c7" : "1px solid var(--border-default)",
+                    background: rain === lvl ? "rgba(2,132,199,0.12)" : "var(--bg-surface)",
+                    color: rain === lvl ? "#0369a1" : "var(--text-secondary)",
+                    fontSize: "0.74rem",
+                    fontWeight: rain === lvl ? 700 : 500,
+                    cursor: "pointer",
+                  }}
+                >
+                  {lvl === "dry" ? "Dry" : lvl[0].toUpperCase() + lvl.slice(1)}
+                </button>
+              ))}
+            </div>
+            <RecordedRainNote
+              recorded={recordedRain}
+              mode={rainMode}
+              hasDay={forecastDay != null}
+              onUseRecorded={() => setRainMode("recorded")}
+            />
+            <span className="sandbox-slider-hint">
+              {rain === "dry"
+                ? "Rain classes follow PAGASA: light < 2.5, moderate 2.5–7.5, heavy 7.5–15 mm/h."
+                : `${RAIN[rain].intensity} · drivers slow to ${Math.round(RAIN[rain].speedFactor * 100)}% of their dry speed and keep ${Math.round((RAIN[rain].headwayFactor - 1) * 100)}% longer gaps, so the road carries about ${RAIN[rain].capacityLossPct}% fewer vehicles (HCM 2010 / SHRP 2).`}
+            </span>
+          </div>
 
           <div className="sandbox-slider-group">
             <div className="sandbox-slider-header">
@@ -2272,7 +2607,8 @@ function getRecommendation(
   base: Baseline | null,
   closedLanes: boolean[],
   incidents: number,
-  speedLimit: number | null
+  speedLimit: number | null,
+  rain: RainLevel = "dry",
 ): { text: string; tone: "good" | "warn" | "bad" } {
   if (!m) return { text: "Warming up the simulation…", tone: "good" };
   const closed = closedLanes.filter(Boolean).length;
@@ -2288,6 +2624,25 @@ function getRecommendation(
     return {
       text: `With ${closed} lane${closed > 1 ? "s" : ""} closed, flow has collapsed to ${fmt(m.avgSpeedKmh)} km/h${base ? ` (${(speedDrop * 100).toFixed(0)}% below baseline` : ""}${base ? ")" : ""}. Reopen a lane or schedule this closure during off-peak demand.`,
       tone: "bad",
+    };
+  }
+  // Rain: say what the weather is doing to this stretch, from the run's own
+  // numbers, and tie the action to it. The HCM figure is stated as the
+  // expectation the model was calibrated to, not as a measured result.
+  if (rain !== "dry") {
+    const r = RAIN[rain];
+    const vsBase = base
+      ? ` (${speedDrop >= 0 ? "" : "+"}${Math.abs(speedDrop * 100).toFixed(0)}% ${speedDrop >= 0 ? "below" : "above"} baseline)`
+      : "";
+    if (m.stoppedCount > 6 || m.longestQueueM > 80) {
+      return {
+        text: `${r.label} (${r.intensity}) has cut this road's capacity by about ${r.capacityLossPct}% and a queue of ${fmt(m.longestQueueM)} m is forming at ${fmt(m.avgSpeedKmh)} km/h${vsBase}. Post a wet-road speed advisory on the VMS upstream and meter inflow until the rain eases.`,
+        tone: rain === "heavy" ? "bad" : "warn",
+      };
+    }
+    return {
+      text: `${r.label} (${r.intensity}): traffic holds at ${fmt(m.avgSpeedKmh)} km/h${vsBase}, ${fmt(m.throughputPerMin)} vehicles/min, with capacity about ${r.capacityLossPct}% lower than dry. ${rain === "heavy" ? "Keep a wet-road advisory on the VMS; the margin before queuing is thinner than it looks." : "No action needed yet."}`,
+      tone: rain === "heavy" ? "warn" : "good",
     };
   }
   if (m.stoppedCount > 6 || m.longestQueueM > 80) {
@@ -2409,6 +2764,115 @@ function ClosureHint({
   );
 }
 
+type RecordedRain = {
+  date: string;
+  hour: number;
+  location: string;
+  distanceKm: number;
+  rainfallMm: number;
+  source: string;
+  imputed: boolean;
+  pagasaClass: "none" | "light" | "moderate" | "heavy" | "intense" | "torrential";
+  simLevel: RainLevel;
+  capped: boolean;
+};
+
+/** Where the rain setting came from, in one line. */
+function RecordedRainNote({
+  recorded,
+  mode,
+  hasDay,
+  onUseRecorded,
+}: {
+  recorded: RecordedRain | null;
+  mode: "recorded" | "manual";
+  hasDay: boolean;
+  onUseRecorded: () => void;
+}) {
+  const box: React.CSSProperties = {
+    marginTop: 6,
+    fontSize: "0.72rem",
+    lineHeight: 1.45,
+    color: "var(--text-secondary)",
+    background: "var(--bg-surface-hover, #f1f5f9)",
+    borderRadius: 8,
+    padding: "6px 8px",
+  };
+  if (!hasDay) {
+    return <div style={box}>Load a forecast day to use the rain recorded for that day and hour.</div>;
+  }
+  if (!recorded) {
+    return <div style={box}>No recorded weather for this hour — set the rain by hand.</div>;
+  }
+  const when = `${new Date(`${recorded.date}T00:00:00`).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })} ${String(recorded.hour).padStart(2, "0")}:00`;
+  const what =
+    recorded.pagasaClass === "none"
+      ? "no rain"
+      : `${recorded.rainfallMm} mm/h (${recorded.pagasaClass})`;
+  return (
+    <div style={box} title="Recorded weather from public.hourly_weather. The traffic forecast for this day was made without it.">
+      <b style={{ color: "var(--text-primary)" }}>{mode === "recorded" ? "Recorded" : "Manual"}</b>
+      {mode === "recorded" ? " · " : " · recorded was "}
+      {what} at {recorded.location}, {when} · {recorded.source}
+      {recorded.imputed ? " (gap-filled)" : ""}
+      {recorded.capped && mode === "recorded" && (
+        <span style={{ display: "block", color: "#b45309", marginTop: 2 }}>
+          Above 15 mm/h — simulated as heavy, the heaviest the HCM data covers.
+        </span>
+      )}
+      {mode === "manual" && (
+        <button
+          onClick={onUseRecorded}
+          style={{ marginLeft: 6, border: 0, background: "none", padding: 0, color: "#0284c7", fontWeight: 700, cursor: "pointer", fontSize: "inherit" }}
+        >
+          Use recorded
+        </button>
+      )}
+    </div>
+  );
+}
+
+/** An exit as drawn: its access on the simulated carriageway, or a toll plaza. */
+type DrawnExit = { name: string; km: number; toll: boolean; on: boolean; off: boolean };
+
+/** RFID booth speed. expressway.ph gives 15-20 km/h as optimal for NLEX/SCTEX
+ *  RFID lanes, 30 km/h at most; the top of the optimal band is used. */
+const TOLL_BOOTH_KMH = 20;
+/** Length of the plaza drawn across the road (canopy and islands), metres. */
+const TOLL_PLAZA_M = 40;
+/** How long a merge slide takes on screen, seconds of simulated time. */
+const MERGE_SLIDE_S = 1.5;
+/** Matches the ghost lifetime in simulation.ts advanceGhosts(). */
+const GHOST_EXIT_S = 4;
+
+/** A toll plaza across the carriageway: a canopy band and booth islands
+ *  between the lanes. */
+function drawTollPlaza(
+  ctx: CanvasRenderingContext2D,
+  x: number,
+  roadTop: number,
+  roadH: number,
+  laneH: number,
+  lanes: number,
+  widthPx: number,
+) {
+  const w = Math.max(8, widthPx);
+  ctx.fillStyle = "rgba(250,204,21,0.16)";
+  ctx.fillRect(x - w / 2, roadTop, w, roadH);
+  ctx.fillStyle = "rgba(250,204,21,0.9)";
+  ctx.fillRect(x - w / 2, roadTop - 3, w, 3);
+  ctx.fillRect(x - w / 2, roadTop + roadH, w, 3);
+  // Islands on each lane line, booths on the islands.
+  const islandH = Math.max(2, Math.min(6, laneH * 0.14));
+  for (let l = 0; l <= lanes; l++) {
+    const y = roadTop + l * laneH;
+    ctx.fillStyle = "#facc15";
+    ctx.fillRect(x - w * 0.35, y - islandH / 2, w * 0.7, islandH);
+    ctx.fillStyle = "#1f2937";
+    ctx.fillRect(x - 2, y - islandH / 2 - 1, 4, islandH + 2);
+  }
+}
+
 function render(
   ctx: CanvasRenderingContext2D,
   canvas: HTMLCanvasElement,
@@ -2418,7 +2882,10 @@ function render(
   // travel itself is always drawn left to right.
   marks: { fromKm: number; toKm: number; direction: "NB" | "SB" },
   maxLaneH: number,
-  exits: { name: string; km: number }[],
+  exits: DrawnExit[],
+  stations: { name: string; brand: string; km: number }[] = [],
+  rain: RainLevel = "dry",
+  laybys: { km: number; kind: string }[] = [],
 ) {
   const dpr = window.devicePixelRatio || 1;
   const cssW = canvas.clientWidth;
@@ -2446,16 +2913,39 @@ function render(
    * crossing it. The gutter is reserved on that same side, and the km scale
    * on the other — see roadLayout(), which owns all of that arithmetic and is
    * shared with the click handler and the page's canvas sizing. */
-  const rampsAbove = marks.direction === "NB";
+  /* Traffic keeps right, so the kerb side is the driver's right: the bottom
+   * of the canvas when travel runs left to right (northbound) and the top when
+   * it runs right to left (southbound). The ramps, and the outer lane they
+   * leave from, are drawn on that side, so an exiting vehicle peels off from
+   * the lane next to its ramp instead of crossing the whole carriageway. */
+  const rampsAbove = marks.direction === "SB";
   const { rampGutter, laneH, roadH, roadTop } = roadLayout({
     cssW,
     cssH,
     lanes,
     segLenM: L,
-    exitCount: exits.length,
+    exitCount: exits.length + stations.length + laybys.length,
     maxLaneH,
     rampsAbove,
   });
+  // Screen row of a lane (fractional while changing lanes). Lane 0 is the
+  // median lane; rows run from the median toward the kerb side.
+  const rowOf = (l: number) => (rampsAbove ? lanes - 1 - l : l);
+  const laneMidY = (l: number) => roadTop + rowOf(l) * laneH + laneH * 0.5;
+
+  // Shared ramp and bay geometry: the ramps, the bays and the vehicles using
+  // them must agree on where they are.
+  const edge = rampsAbove ? roadTop + 1 : roadTop + roadH - 1;
+  const out = rampsAbove ? -1 : 1;
+  const fwd = marks.direction === "SB" ? -1 : 1; // on-screen direction of travel
+  const rampLen = Math.max(26, Math.min(70, cssW * 0.06));
+  const rampDrop = rampGutter * 0.35;
+  const rampThick = rampGutter * 0.24;
+  // Wide enough to show a row of parked vehicles; presentation only.
+  const bayLen = Math.max(34, Math.min(170, cssW * 0.12));
+  const bayTaper = bayLen * 0.25;
+  const bayOff = rampGutter * 0.12;
+  const bayH = rampGutter * 0.26;
   const mToPx = cssW / L;
   /* The corridor keeps a fixed, map-like orientation: the low km post is always
    * on the left. Southbound traffic therefore runs right to left, which is what
@@ -2505,7 +2995,7 @@ function render(
   // closed-lane hatching + taper
   for (let l = 0; l < lanes; l++) {
     if (!sim.interventions.closedLanes[l]) continue;
-    const y = roadTop + l * laneH;
+    const y = roadTop + rowOf(l) * laneH;
     const x0 = xPx(sim.interventions.closurePoint);
     // The works end where the operator said they end, not at the edge of the
     // view — a closure that always ran to the end of the screen could not
@@ -2614,7 +3104,7 @@ function render(
         const b = Math.min(bins - 1, Math.max(0, Math.floor(xPx(v.x) / binPx)));
         worst[b] = Math.min(worst[b], v.v);
       }
-      const y = roadTop + lane * laneH;
+      const y = roadTop + rowOf(lane) * laneH;
       for (let b = 0; b < bins; b++) {
         if (!Number.isFinite(worst[b])) continue;
         // Deeper red the slower it is: stopped reads differently from crawling.
@@ -2673,7 +3163,7 @@ function render(
     ctx.textAlign = "center";
     ctx.textBaseline = "middle";
     for (let lane = 0; lane < lanes; lane++) {
-      const cy = roadTop + lane * laneH + laneH / 2;
+      const cy = laneMidY(lane);
       ctx.fillStyle = "rgba(9,14,28,0.72)";
       roundRect(ctx, 5, cy - tagH / 2, tagW, tagH, 3);
       ctx.fill();
@@ -2695,7 +3185,18 @@ function render(
       );
       // visualLane, not v.lane: the integer flips the instant MOBIL accepts
       // the move, which drew the change as a one-frame jump across a whole lane.
-      const y = roadTop + visualLane(v) * laneH + laneH * 0.5;
+      let y = laneMidY(visualLane(v));
+      /* Just joined — from an on-ramp or back out of a service bay. The
+       * physics places it in the outer lane at once; the picture slides it in
+       * from the ramp side over the first moments, as a merge looks. */
+      if (v.joinedAt != null) {
+        const tj = (sim.time - v.joinedAt) / MERGE_SLIDE_S;
+        if (tj >= 0 && tj < 1) {
+          const e = tj * tj * (3 - 2 * tj);
+          const from = edge + out * (v.joinedFrom === "service" ? bayOff + bayH * 0.5 : rampDrop * 0.6);
+          y = from + (y - from) * e;
+        }
+      }
       // Braking, or already stopped. The threshold is a real lift-off rather
       // than any negative value, so brake lights do not flicker on the small
       // corrections every car-following model makes continuously.
@@ -2719,7 +3220,7 @@ function render(
 
   // incidents
   for (const inc of sim.interventions.incidents) {
-    const y = roadTop + inc.lane * laneH + laneH * 0.5;
+    const y = laneMidY(inc.lane);
     ctx.fillStyle = "#dc2626";
     ctx.beginPath();
     ctx.arc(xPx(inc.x), y, Math.min(8, laneH * 0.32), 0, Math.PI * 2);
@@ -2748,17 +3249,9 @@ function render(
   // trails away in the direction of travel, which flips with the carriageway.
   {
     // `edge` is the carriageway side the ramp leaves from; `out` is the
-    // direction away from the road, so one sign flips the whole shape.
-    const edge = rampsAbove ? roadTop + 1 : roadTop + roadH - 1;
-    const out = rampsAbove ? -1 : 1;
-    const rampLen = Math.max(26, Math.min(70, cssW * 0.06));
-    /* Every vertical measurement here comes out of the reserved gutter, never
-     * out of laneH. Tying the ramp to lane height meant a tall canvas drew it
-     * up to 114 px below the carriageway while only 34 px had been set aside,
-     * so it spilled past the bottom of the canvas as a stray dark wedge. */
-    const rampDrop = rampGutter * 0.35;
-    const rampThick = rampGutter * 0.24;
-    const fwd = sb ? -1 : 1; // on-screen direction of travel
+    // direction away from the road, so one sign flips the whole shape. Every
+    // vertical measurement comes out of the reserved gutter, never out of
+    // laneH — see the shared geometry at the top of render().
 
     for (const ex of exits) {
       // Distance along travel; xPx mirrors it when southbound, so the km posts
@@ -2766,7 +3259,73 @@ function render(
       const x = xPx(sb ? (marks.toKm - ex.km) * 1000 : (ex.km - marks.fromKm) * 1000);
       if (x < -rampLen || x > cssW + rampLen) continue;
 
+      if (ex.toll) {
+        drawTollPlaza(ctx, x, roadTop, roadH, laneH, lanes, wPx(TOLL_PLAZA_M));
+        const label = `${ex.name.replace(/\s*barrier$/i, "")} Toll Plaza · Km ${ex.km} · booths ~${TOLL_BOOTH_KMH} km/h`;
+        ctx.font = "600 11px system-ui";
+        const w = ctx.measureText(label).width + 10;
+        const left = Math.max(2, Math.min(cssW - w - 2, x - w / 2));
+        const top = rampsAbove
+          ? Math.max(1, edge - rampDrop - rampThick - 15)
+          : Math.min(cssH - 17, edge + rampDrop + rampThick - 1);
+        ctx.fillStyle = "rgba(250,204,21,0.95)";
+        roundRect(ctx, left, top, w, 16, 4);
+        ctx.fill();
+        ctx.fillStyle = "#3b2f03";
+        ctx.textAlign = "left";
+        ctx.textBaseline = "top";
+        ctx.fillText(label, left + 5, top + 3);
+        continue;
+      }
+
+      // On-ramp: arrives from upstream and merges at the junction, which is
+      // where the model places joining traffic.
+      if (ex.on) {
+        const xStart = x - fwd * rampLen;
+        ctx.fillStyle = "#20293a";
+        ctx.beginPath();
+        ctx.moveTo(x, edge);
+        ctx.lineTo(xStart, edge + out * rampDrop);
+        ctx.lineTo(xStart, edge + out * (rampDrop + rampThick));
+        ctx.lineTo(x + fwd * rampThick * 1.6, edge);
+        ctx.closePath();
+        ctx.fill();
+        ctx.strokeStyle = "rgba(134,239,172,0.8)";
+        ctx.lineWidth = 2;
+        ctx.setLineDash([]);
+        ctx.beginPath();
+        ctx.moveTo(xStart, edge + out * rampDrop);
+        ctx.lineTo(x, edge);
+        ctx.stroke();
+      }
+
       const xEnd = x + fwd * rampLen;
+      if (!ex.off) {
+        // Entry only: a tick and a tag, no off-ramp to leave by.
+        ctx.strokeStyle = "rgba(125,211,252,0.28)";
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.moveTo(x, roadTop);
+        ctx.lineTo(x, roadTop + roadH);
+        ctx.stroke();
+        const label = `${ex.name} · Km ${ex.km}${ex.on ? " · entry only" : ""}`;
+        ctx.font = "600 11px system-ui";
+        const w = ctx.measureText(label).width + 10;
+        const xs = x - fwd * rampLen;
+        let left = fwd > 0 ? xs - w * 0.9 : xs - w * 0.1;
+        left = Math.max(2, Math.min(cssW - w - 2, left));
+        const top = rampsAbove
+          ? Math.max(1, edge - rampDrop - rampThick - 15)
+          : Math.min(cssH - 17, edge + rampDrop + rampThick - 1);
+        ctx.fillStyle = "rgba(134,239,172,0.92)";
+        roundRect(ctx, left, top, w, 16, 4);
+        ctx.fill();
+        ctx.fillStyle = "#052e16";
+        ctx.textAlign = "left";
+        ctx.textBaseline = "top";
+        ctx.fillText(label, left + 5, top + 3);
+        continue;
+      }
 
       // The ramp surface: same asphalt as the mainline so it reads as road
       // rather than as an overlay, tapering as it leaves.
@@ -2826,6 +3385,232 @@ function render(
     }
   }
 
+  // ── Fuel stations (service areas) ───────────────────────────────────────────
+  // A service area sits on the outer edge like an exit, but traffic returns to
+  // the mainline after it, so it is drawn as a bay: an entry taper, a strip of
+  // parking alongside, and an exit taper back onto the road. Amber, so it is
+  // never mistaken for a junction's cyan off-ramp.
+  if (stations.length) {
+    const taper = bayTaper;
+    for (const st of stations) {
+      const x = xPx(sb ? (marks.toKm - st.km) * 1000 : (st.km - marks.fromKm) * 1000);
+      if (x < -bayLen || x > cssW + bayLen) continue;
+      // The bay starts at the station's km-post and runs with the traffic.
+      const x0 = x;
+      const x1 = x + fwd * bayLen;
+      const nearTop = edge + out * bayOff;
+      const farTop = edge + out * (bayOff + bayH);
+
+      ctx.fillStyle = "#2a2f3d";
+      ctx.beginPath();
+      ctx.moveTo(x0, edge);
+      ctx.lineTo(x0 + fwd * taper, nearTop);
+      ctx.lineTo(x0 + fwd * taper, farTop);
+      ctx.lineTo(x1 - fwd * taper, farTop);
+      ctx.lineTo(x1 - fwd * taper, nearTop);
+      ctx.lineTo(x1, edge);
+      ctx.closePath();
+      ctx.fill();
+
+      ctx.strokeStyle = "rgba(245,158,11,0.9)";
+      ctx.lineWidth = 1.5;
+      ctx.setLineDash([]);
+      ctx.beginPath();
+      ctx.moveTo(x0, edge);
+      ctx.lineTo(x0 + fwd * taper, farTop);
+      ctx.lineTo(x1 - fwd * taper, farTop);
+      ctx.lineTo(x1, edge);
+      ctx.stroke();
+
+      // Pump glyph in the bay, drawn rather than an emoji so it renders the
+      // same on every machine.
+      const gx = (x0 + x1) / 2 - 4;
+      const gy = Math.min(nearTop, farTop) + Math.abs(farTop - nearTop) / 2 - 5;
+      ctx.fillStyle = "#f59e0b";
+      roundRect(ctx, gx, gy, 7, 10, 1.5);
+      ctx.fill();
+      ctx.fillStyle = "#2a2f3d";
+      ctx.fillRect(gx + 1.5, gy + 1.5, 4, 3);
+      ctx.strokeStyle = "#f59e0b";
+      ctx.lineWidth = 1.2;
+      ctx.beginPath();
+      ctx.moveTo(gx + 7, gy + 2);
+      ctx.lineTo(gx + 9.5, gy + 4);
+      ctx.lineTo(gx + 9.5, gy + 8);
+      ctx.stroke();
+
+      // Faint tick across the carriageway at the km-post, like the exits.
+      ctx.strokeStyle = "rgba(245,158,11,0.22)";
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(x0, roadTop);
+      ctx.lineTo(x0, roadTop + roadH);
+      ctx.stroke();
+
+      const label = `${st.name} · Km ${st.km.toFixed(2)}`;
+      ctx.font = "600 11px system-ui";
+      const w = ctx.measureText(label).width + 10;
+      let left = fwd > 0 ? x0 : x0 - w;
+      left = Math.max(2, Math.min(cssW - w - 2, left));
+      const top = rampsAbove
+        ? Math.max(1, edge - rampGutter + 1)
+        : Math.min(cssH - 17, edge + rampGutter - 17);
+      ctx.fillStyle = "rgba(245,158,11,0.95)";
+      roundRect(ctx, left, top, w, 16, 4);
+      ctx.fill();
+      ctx.fillStyle = "#3b2503";
+      ctx.textAlign = "left";
+      ctx.textBaseline = "top";
+      ctx.fillText(label, left + 5, top + 3);
+    }
+  }
+
+  // ── Lay-bys ─────────────────────────────────────────────────────────────────
+  // A short notch in the kerb side with a P, teal so it is not read as a
+  // junction or a service area. Real bays are some 40-60 m long; the notch is
+  // floored so it stays visible at corridor scale.
+  if (laybys.length) {
+    const notch = Math.max(12, Math.min(30, wPx(50)));
+    const depth = Math.max(6, rampGutter * 0.2);
+    for (const lb of laybys) {
+      const x = xPx(sb ? (marks.toKm - lb.km) * 1000 : (lb.km - marks.fromKm) * 1000);
+      if (x < -notch || x > cssW + notch) continue;
+      const x1 = x + fwd * notch;
+      ctx.fillStyle = "#2a2f3d";
+      ctx.beginPath();
+      ctx.moveTo(x, edge);
+      ctx.lineTo(x + fwd * notch * 0.25, edge + out * depth);
+      ctx.lineTo(x1 - fwd * notch * 0.25, edge + out * depth);
+      ctx.lineTo(x1, edge);
+      ctx.closePath();
+      ctx.fill();
+      ctx.strokeStyle = "rgba(45,212,191,0.95)";
+      ctx.lineWidth = 1.5;
+      ctx.stroke();
+      ctx.fillStyle = "#5eead4";
+      ctx.font = "700 9px system-ui";
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.fillText(lb.kind === "emergency_bay" ? "E" : "P", (x + x1) / 2, edge + out * depth * 0.55);
+    }
+    ctx.textAlign = "left";
+    ctx.textBaseline = "top";
+  }
+
+  // ── Vehicles leaving the mainline ────────────────────────────────────────────
+  // The physics lets a vehicle go the moment it reaches its ramp; these are
+  // drawn after the ramps so they sit on them. Sized like the traffic.
+  {
+    const spriteOf = (length: number, vClass: 1 | 2 | 3, maxW: number) => {
+      let len = Math.max(2, length * mToPx * k);
+      let wid = Math.max(2, Math.min(laneH * 0.8, widthM[vClass] * mToPx * k * widScale));
+      if (wid > maxW) {
+        len *= maxW / wid;
+        wid = maxW;
+      }
+      return { len: Math.max(2, len), wid: Math.max(1.5, wid) };
+    };
+    const drawAlong = (
+      pos: (p: number) => [number, number],
+      p: number,
+      length: number,
+      vClass: 1 | 2 | 3,
+      color: string,
+      braking: boolean,
+      maxW: number,
+      alpha: number,
+    ) => {
+      const [px, py] = pos(p);
+      const [qx, qy] = p < 0.98 ? pos(Math.min(1, p + 0.02)) : [px + fwd, py];
+      const dx = qx - px;
+      const dy = qy - py;
+      const ang = sb ? Math.atan2(-dy, -dx) : Math.atan2(dy, dx);
+      const { len, wid } = spriteOf(length, vClass, maxW);
+      ctx.save();
+      ctx.globalAlpha = alpha;
+      ctx.translate(px, py);
+      ctx.rotate(ang);
+      drawVehicle(ctx, 0, 0, len, wid, vClass, color, braking, sb);
+      ctx.restore();
+    };
+    const smooth = (t: number) => t * t * (3 - 2 * t);
+    const outerY = laneMidY(lanes - 1);
+    const services = sim.cfg.services ?? [];
+    const slotW = Math.max(4, spriteOf(4.6, 1, bayH * 0.8).len + 2);
+    const slots = Math.max(1, Math.floor((bayLen - 2 * bayTaper) / slotW));
+    const bayMidY = edge + out * (bayOff + bayH * 0.5);
+    const slotX = (sx: number, i: number) => sx + fwd * (bayTaper + slotW * (Math.min(i, slots - 1) + 1) - 1);
+    // Parked order per service area = arrival order, which fixes each slot.
+    const parkedBySvc = new Map<number, number[]>();
+    for (const pk of sim.parked) {
+      const ids = parkedBySvc.get(pk.serviceIdx) ?? [];
+      ids.push(pk.vehicle.id);
+      parkedBySvc.set(pk.serviceIdx, ids);
+    }
+    const arriving = new Set<number>();
+
+    for (const g of sim.ghosts) {
+      try {
+        const x0 = xPx(g.x);
+        if (g.kind === "exit") {
+          // Down the off-ramp over its short life, fading at the far end.
+          const p = Math.min(1, g.t / GHOST_EXIT_S);
+          const x1 = x0 + fwd * rampLen;
+          const y1 = edge + out * (rampDrop + rampThick * 0.5);
+          const pos = (q: number): [number, number] => [x0 + (x1 - x0) * q, outerY + (y1 - outerY) * smooth(Math.min(1, q * 1.4))];
+          drawAlong(pos, p, g.length, g.vClass, g.color, false, laneH * 0.8, p > 0.7 ? Math.max(0, (1 - p) / 0.3) : 1);
+        } else if (g.serviceIdx != null && services[g.serviceIdx]) {
+          // Into the bay: progress is the share of its stopping distance
+          // covered, so it rolls to a halt exactly at its parking slot.
+          arriving.add(g.id);
+          const sx = xPx(services[g.serviceIdx].x);
+          const slot = Math.max(0, (parkedBySvc.get(g.serviceIdx) ?? []).indexOf(g.id));
+          const tx = slotX(sx, slot);
+          const remaining = (g.v * g.v) / (2 * B_COMF);
+          const p = Math.min(1, g.s / Math.max(0.01, g.s + remaining));
+          const pos = (q: number): [number, number] => [x0 + (tx - x0) * q, outerY + (bayMidY - outerY) * smooth(Math.min(1, q / 0.45))];
+          drawAlong(pos, p, g.length, g.vClass, g.color, true, bayH * 0.8, 1);
+        }
+      } catch {
+        // presentation only
+      }
+    }
+
+    // Parked vehicles, nose to tail in their bay; any beyond the drawn slots
+    // are counted on a badge rather than stacked on top of each other.
+    for (const [idx, ids] of parkedBySvc) {
+      const spec = services[idx];
+      if (!spec) continue;
+      const sx = xPx(spec.x);
+      if (sx < -bayLen || sx > cssW + bayLen) continue;
+      ids.forEach((id, i) => {
+        if (i >= slots || arriving.has(id)) return;
+        const pk = sim.parked.find((q) => q.vehicle.id === id);
+        if (!pk) return;
+        const { len, wid } = spriteOf(pk.vehicle.length, pk.vehicle.vClass, bayH * 0.8);
+        try {
+          drawVehicle(ctx, slotX(sx, i), bayMidY, len, wid, pk.vehicle.vClass, pk.vehicle.color, false, sb);
+        } catch {
+          // presentation only
+        }
+      });
+      if (ids.length > slots) {
+        const tag = `+${ids.length - slots}`;
+        ctx.font = "700 10px system-ui";
+        const w = ctx.measureText(tag).width + 8;
+        const bx = sx + fwd * (bayLen - bayTaper) - (fwd > 0 ? 0 : w);
+        ctx.fillStyle = "rgba(245,158,11,0.95)";
+        roundRect(ctx, bx, bayMidY - 7, w, 14, 4);
+        ctx.fill();
+        ctx.fillStyle = "#3b2503";
+        ctx.textAlign = "left";
+        ctx.textBaseline = "middle";
+        ctx.fillText(tag, bx + 4, bayMidY);
+        ctx.textBaseline = "top";
+      }
+    }
+  }
+
   // Km ladder. Without it the road is 600 m of anonymous tarmac and an operator
   // cannot say where on the corridor a queue is forming — which is the first
   // thing they need in order to act on it.
@@ -2864,6 +3649,44 @@ function render(
     }
     ctx.textAlign = "left";
     ctx.textBaseline = "top";
+  }
+
+  // ── Rain ────────────────────────────────────────────────────────────────────
+  // A wet sheen on the carriageway and falling streaks whose density follows
+  // the intensity class. Purely visual: the effect on traffic is in the model.
+  if (rain !== "dry") {
+    const density = rain === "light" ? 0.05 : rain === "moderate" ? 0.12 : 0.24; // streaks per px of width
+    const wet = rain === "light" ? 0.06 : rain === "moderate" ? 0.1 : 0.15;
+    ctx.fillStyle = `rgba(56,120,190,${wet})`;
+    ctx.fillRect(0, roadTop, cssW, roadH);
+    const t = performance.now() / 1000;
+    const n = Math.round(cssW * density);
+    const len = rain === "heavy" ? 16 : rain === "moderate" ? 12 : 9;
+    ctx.strokeStyle = `rgba(186,215,245,${rain === "heavy" ? 0.5 : rain === "moderate" ? 0.42 : 0.34})`;
+    ctx.lineWidth = rain === "heavy" ? 1.3 : 1;
+    ctx.beginPath();
+    for (let i = 0; i < n; i++) {
+      // Deterministic scatter, advanced by time, so the rain falls smoothly
+      // without per-frame randomness or any state kept between frames.
+      const fx = (i * 97.13) % 1;
+      const fy = (i * 57.31) % 1;
+      const x = ((fx * (cssW + 60) + t * 60) % (cssW + 60)) - 30;
+      const y = ((fy * cssH + t * (rain === "heavy" ? 520 : 420)) % (cssH + len)) - len;
+      ctx.moveTo(x, y);
+      ctx.lineTo(x - len * 0.25, y + len);
+    }
+    ctx.stroke();
+
+    const tag = `${RAIN[rain].label} · ${RAIN[rain].intensity}`;
+    ctx.font = "700 11px system-ui";
+    ctx.textAlign = "left";
+    ctx.textBaseline = "top";
+    const w = ctx.measureText(tag).width + 12;
+    ctx.fillStyle = "rgba(2,132,199,0.9)";
+    roundRect(ctx, 6, roadTop + 20, w, 18, 5);
+    ctx.fill();
+    ctx.fillStyle = "#ffffff";
+    ctx.fillText(tag, 12, roadTop + 23);
   }
 
   ctx.font = "10px system-ui";

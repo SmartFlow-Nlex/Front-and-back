@@ -3,6 +3,7 @@ import { SandboxCommandSchema } from "../validators/ai-sandbox.validator.js";
 import { parseCommand, CommandParseError } from "../services/sandbox-command.service.js";
 import { isGlmConfigured, providerInfo } from "../lib/glm.client.js";
 import { getScenarioContext } from "../services/sandbox-scenario.service.js";
+import { getRecordedRain } from "../services/sandbox-weather.service.js";
 import { getDemandExits, getDemandProfile, getPlazaFlows } from "../services/sandbox-demand.service.js";
 
 /**
@@ -132,6 +133,39 @@ export const plazaFlows = async (req: Request, res: Response) => {
     return res.status(503).json({
       success: false,
       message: "The warehouse is unreachable, so plaza flows are unavailable.",
+    });
+  }
+  return res.json({ success: true, data });
+};
+
+/**
+ * GET /api/ai-sandbox/weather?date=YYYY-MM-DD&hour=0-23&lat=..&lon=..
+ *
+ * The rain recorded (ERA5 / Open-Meteo, public.hourly_weather) at the weather
+ * location nearest the simulated stretch, for one Manila-time hour. Recorded,
+ * not forecast — see services/sandbox-weather.service.ts.
+ */
+export const recordedWeather = async (req: Request, res: Response) => {
+  const date = typeof req.query.date === "string" ? req.query.date : "";
+  const hour = Number(req.query.hour);
+  const lat = Number(req.query.lat);
+  const lon = Number(req.query.lon);
+  if (
+    !/^\d{4}-\d{2}-\d{2}$/.test(date) ||
+    !Number.isInteger(hour) || hour < 0 || hour > 23 ||
+    !Number.isFinite(lat) || lat < 4 || lat > 22 ||
+    !Number.isFinite(lon) || lon < 116 || lon > 127
+  ) {
+    return res.status(400).json({
+      success: false,
+      message: "Expected date=YYYY-MM-DD, hour=0-23, and lat/lon inside the Philippines.",
+    });
+  }
+  const data = await getRecordedRain(date, hour, lat, lon);
+  if (!data) {
+    return res.status(404).json({
+      success: false,
+      message: "No recorded weather for that hour, or the warehouse is unreachable.",
     });
   }
   return res.json({ success: true, data });

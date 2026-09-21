@@ -95,6 +95,12 @@ export type Vehicle = {
   laneFrom: number;
   laneShift: number;
   color: string; // the agent's own paint — class hue with per-vehicle variation
+  /** Service area this vehicle means to stop at (index into cfg.services), or null. */
+  serviceIdx?: number | null;
+  /** Sim time it merged in from an on-ramp or a service area. Drawing only. */
+  joinedAt?: number;
+  /** Where it joined from, for the merge animation. */
+  joinedFrom?: "ramp" | "service";
 };
 
 export type Interventions = {
@@ -125,6 +131,8 @@ export type Interventions = {
   incidents: { lane: number; x: number }[]; // stalled obstacles
   speedLimitKmh: number | null; // applies in the speed zone
   speedZone: [number, number]; // [from, to] metres
+  /** Rainfall, as a PAGASA intensity class. Absent means dry. See RAIN. */
+  weather?: RainLevel;
 };
 
 export type Metrics = {
@@ -178,6 +186,10 @@ export type SimConfig = {
   warmupS?: number;
   /** Ramps along the segment: where traffic joins and leaves. */
   ramps?: RampSpec[];
+  /** Service areas along the segment. Read live, so the page can change the stop share. */
+  services?: ServiceSpec[];
+  /** Mainline toll barriers along the segment. Read live. */
+  tolls?: TollSpec[];
 };
 
 /** An interchange on the simulated stretch: traffic joins, leaves, or both. */
@@ -191,6 +203,46 @@ export type RampSpec = {
   /** Exit name, for debugging and tooltips. */
   name: string;
 };
+
+/** A service area (fuel / rest stop). Traffic that stops leaves at `x`, parks
+ *  for a sampled dwell, and rejoins at `x` through the same gap test an
+ *  on-ramp uses. */
+export type ServiceSpec = {
+  x: number;
+  /** Share of passing traffic that stops, 0-1. Zero (the default) means nobody. */
+  stopFraction: number;
+  /** Mean time parked, seconds. */
+  dwellMeanS: number;
+  name: string;
+};
+
+/** A mainline toll barrier: every vehicle passes a booth at `x`. */
+export type TollSpec = {
+  x: number;
+  /** Speed at the booth, km/h. */
+  boothKmh: number;
+  name: string;
+};
+
+/** Presentation only: a vehicle that has left the mainline, drawn down its
+ *  off-ramp or into a service bay. The physics has already let it go. */
+export type Ghost = {
+  id: number;
+  vClass: VehicleClass;
+  color: string;
+  length: number;
+  /** Where it left, metres along the segment. */
+  x: number;
+  /** Distance travelled since, metres. */
+  s: number;
+  v: number;
+  t: number;
+  kind: "exit" | "service";
+  serviceIdx: number | null;
+};
+
+/** A vehicle stopped at a service area, waiting to rejoin. */
+export type Parked = { vehicle: Vehicle; serviceIdx: number; readyAt: number };
 
 // Per-class kinematics. Heavier = slower desired speed, longer, more CO2/km.
 // Colours are a colourblind-safe categorical trio (validated) so each class is
@@ -230,9 +282,75 @@ const PROFILE = {
 
 // IDM constants
 const A_MAX = 1.4; // max accel m/s^2
-const B_COMF = 2.0; // comfortable decel m/s^2
+export const B_COMF = 2.0; // comfortable decel m/s^2
 const S0 = 2.5; // minimum bumper gap m
 const DELTA = 4;
+
+/* ── Rain ────────────────────────────────────────────────────────────────────
+ *
+ * WHAT A RAIN LEVEL MEANS. The three levels are PAGASA's hourly rainfall
+ * intensity classes (PAGASA memorandum of 20 June 2012): light < 2.5 mm/h,
+ * moderate 2.5-7.5 mm/h, heavy 7.5-15 mm/h. They line up with the bands the
+ * US Highway Capacity Manual measures rain in — >0-0.10 in/h (0-2.54 mm/h),
+ * 0.10-0.25 in/h (2.54-6.35 mm/h), >0.25 in/h (>6.35 mm/h) — closely enough
+ * that each PAGASA class takes the HCM figure for the matching band.
+ * PAGASA's "intense" (15-30 mm/h) and "torrential" (>30 mm/h) classes are not
+ * offered: the HCM studies do not reach them, and extrapolating would be
+ * inventing the effect.
+ *
+ * WHAT RAIN DOES, AND WHERE THE NUMBERS COME FROM. Two published effects,
+ * both for basic freeway segments:
+ *   - Free-flow speed. SHRP 2-L08 speed adjustment factors at a 65 mi/h
+ *     (~105 km/h) base free-flow speed — the column nearest NLEX's 100 km/h
+ *     limit and the sandbox's own Class 1 desired speed: light 0.96,
+ *     moderate 0.94, heavy 0.93. Applied to each driver's desired speed.
+ *     Source status: moderate and heavy were read from the table as reproduced
+ *     in FHWA-HOP-13-042 Appendix A (Table 34). The light-rain 0.96 comes from
+ *     the SHRP 2 reliability report's Appendix G, which is published only as page
+ *     images and was seen via a secondary summary, not the table itself. It sits
+ *     inside the published spread for light rain (about -2 to -10 km/h: Ibrahim &
+ *     Hall 1994 vs. HCM 2000, as reported by Kyte et al., TRB E-C018) but should
+ *     be checked against the original before being quoted as exact.
+ *   All of these are US/Canadian freeway measurements, not NLEX data. The
+ *   project's own Waze speed column cannot calibrate them: its values run -5 to
+ *   55 km/h and rise with jam level (see the weather-speed incident script).
+ *   - Capacity. HCM 2010 Exhibit 10-15 average capacity reductions: light
+ *     2.01 %, moderate 7.24 %, heavy 14.13 % (ranges 1.17-3.43, 5.67-10.10,
+ *     10.72-17.67 %).
+ *
+ * HOW CAPACITY IS DELIVERED. In IDM a lane's capacity is set by drivers' time
+ * headway T, so rain lengthens every driver's headway by a factor chosen to make
+ * the simulation lose exactly the HCM share of its capacity once the lower
+ * desired speed is also in effect. The factors are calibrated against THIS
+ * simulation, not a textbook formula: IDM's equilibrium diagram ignores lane
+ * changing, the truck mix and reaction lag, and a factor solved from it
+ * delivered only about three-quarters of the loss. Calibration (2026-09-21):
+ * 4 lanes, 1 km, 12,000 veh/h offered so the road is saturated, 180 s warm-up,
+ * throughput over 600 s, four seeds, bisection per level. Result:
+ *   light    x1.034 -> -2.74 %   (HCM -2.01 %,  range 1.17-3.43)
+ *   moderate x1.116 -> -6.40 %   (HCM -7.24 %,  range 5.67-10.10)
+ *   heavy    x1.267 -> -13.73 %  (HCM -14.13 %, range 10.72-17.67)
+ * Every level lands inside HCM's published range; the residual is run-to-run
+ * noise (about +-0.7 points between seeds). Re-run
+ * smartflow_scripts/4_studies_audits/rain_headway_calibration.mts after any
+ * change to the car-following or lane-changing model.
+ *
+ * NOT MODELLED: wet-road braking distance, spray and visibility, and driver
+ * reaction time. They matter, but no source here gives a calibrated value for
+ * this model, and the capacity and speed figures above already carry their
+ * aggregate effect on flow.
+ */
+export type RainLevel = "dry" | "light" | "moderate" | "heavy";
+
+export const RAIN: Record<
+  RainLevel,
+  { label: string; intensity: string; speedFactor: number; capacityLossPct: number; headwayFactor: number }
+> = {
+  dry: { label: "Dry", intensity: "no rain", speedFactor: 1, capacityLossPct: 0, headwayFactor: 1 },
+  light: { label: "Light rain", intensity: "< 2.5 mm/h", speedFactor: 0.96, capacityLossPct: 2.01, headwayFactor: 1.034 },
+  moderate: { label: "Moderate rain", intensity: "2.5–7.5 mm/h", speedFactor: 0.94, capacityLossPct: 7.24, headwayFactor: 1.116 },
+  heavy: { label: "Heavy rain", intensity: "7.5–15 mm/h", speedFactor: 0.93, capacityLossPct: 14.13, headwayFactor: 1.267 },
+};
 const INCIDENT_LENGTH = 5; // a stalled vehicle occupies ~5 m of lane
 
 const B_SAFE = 4.0; // MOBIL: max decel a follower may be forced into
@@ -512,6 +630,12 @@ export class TrafficSim {
   private rng: () => number;
   private nextId = 1;
   private spawnAccumulator = 0;
+  /** Presentation only — see Ghost. */
+  ghosts: Ghost[] = [];
+  /** Vehicles stopped at service areas. */
+  parked: Parked[] = [];
+  /** Which service area the last pickExit() chose, or null for a ramp / none. */
+  private lastLeaveSvc: number | null = null;
 
   /**
    * Vehicles per lane, ordered by position, rebuilt once per step.
@@ -686,6 +810,7 @@ export class TrafficSim {
           reactTimer: d.reactTimer,
           accel: 0,
           exitAtX: this.pickExit(0),
+          serviceIdx: this.lastLeaveSvc,
           length: c.len,
           // Negative so the first throughput readings are not skewed by a
           // cohort that appears to have crossed the segment instantly.
@@ -716,7 +841,7 @@ export class TrafficSim {
     return r < 0.25 ? "cautious" : r < 0.85 ? "normal" : "aggressive";
   }
 
-  private spawn(lane: number, vClass: VehicleClass, exitAtX: number | null = null) {
+  private spawn(lane: number, vClass: VehicleClass, exitAtX: number | null = null, serviceIdx: number | null = null) {
     const profile = this.pickProfile();
     const c = this.cls[vClass];
     const d = makeDriver(this.rng, vClass, profile);
@@ -755,7 +880,7 @@ export class TrafficSim {
      * exactly the gap the vehicle will settle at anyway — so a vehicle is
      * admitted only when the road in front of it can already support it. */
     const nearest = lead ? lead.x : Infinity;
-    if (nearest < c.len + S0 + enterV * d.T) return false;
+    if (nearest < c.len + S0 + enterV * d.T * this.rainHeadway()) return false;
 
     this.vehicles.push({
       id: this.nextId++,
@@ -777,6 +902,7 @@ export class TrafficSim {
       reactTimer: d.reactTimer,
       accel: 0,
       exitAtX,
+      serviceIdx,
       length: c.len,
       spawnTime: this.time,
       co2: 0,
@@ -788,10 +914,28 @@ export class TrafficSim {
     return true;
   }
 
+  /** Headway multiplier for the current rain. See RAIN. */
+  private rainHeadway(): number {
+    return RAIN[this.interventions.weather ?? "dry"].headwayFactor;
+  }
+
   // Desired speed at a position, honouring an active speed-limit zone.
   private desiredSpeed(v: Vehicle): number {
     const { speedLimitKmh, speedZone } = this.interventions;
-    let v0 = v.v0;
+    // Rain lowers the speed a driver chooses on open road; a speed-limit zone
+    // still caps it below.
+    let v0 = v.v0 * RAIN[this.interventions.weather ?? "dry"].speedFactor;
+    /* Toll barrier ahead: slow to the booth speed. The approach is the speed
+     * from which a driver can still reach the booth speed at the model's own
+     * comfortable deceleration, sqrt(vb^2 + 2*b*d), so braking starts where
+     * physics says it must rather than at an invented zone boundary. Past the
+     * booth the cap lifts and IDM accelerates away as usual. */
+    for (const t of this.cfg.tolls ?? []) {
+      const d = t.x - v.x;
+      if (d < 0) continue;
+      const vb = t.boothKmh / 3.6;
+      v0 = Math.min(v0, Math.sqrt(vb * vb + 2 * B_COMF * d));
+    }
     if (speedLimitKmh != null && v.x >= speedZone[0] && v.x <= speedZone[1]) {
       v0 = Math.min(v0, speedLimitKmh / 3.6);
     }
@@ -900,7 +1044,7 @@ export class TrafficSim {
     const free = v.aMax * (1 - Math.pow(v.v / Math.max(1, v0), DELTA));
     const lead = this.leaderAhead(v, lane);
     if (!lead) return free;
-    const sStar = S0 + Math.max(0, v.v * v.T + (v.v * lead.dv) / (2 * Math.sqrt(v.aMax * B_COMF)));
+    const sStar = S0 + Math.max(0, v.v * v.T * this.rainHeadway() + (v.v * lead.dv) / (2 * Math.sqrt(v.aMax * B_COMF)));
     const interaction = -v.aMax * Math.pow(sStar / lead.gap, 2);
     return free + interaction;
   }
@@ -1166,7 +1310,7 @@ export class TrafficSim {
     const free = f.aMax * (1 - Math.pow(f.v / Math.max(1, v0), DELTA));
     const gap = Math.max(0.1, leadX - f.x - leadLen);
     const dv = f.v - leadV;
-    const sStar = S0 + Math.max(0, f.v * f.T + (f.v * dv) / (2 * Math.sqrt(f.aMax * B_COMF)));
+    const sStar = S0 + Math.max(0, f.v * f.T * this.rainHeadway() + (f.v * dv) / (2 * Math.sqrt(f.aMax * B_COMF)));
     return free - f.aMax * Math.pow(sStar / gap, 2);
   }
 
@@ -1207,9 +1351,38 @@ export class TrafficSim {
    * which is how turning proportions compose along a corridor: 20% leaving at
    * two successive ramps takes 20% then 20% of the remaining 80%, not 40%. */
   private pickExit(fromX: number): number | null {
+    /* Service areas are taken in road order with the ramps, each with its own
+     * stop share of whoever is still on the road by then. `lastLeaveSvc`
+     * records whether the choice was a service stop, so callers can set
+     * serviceIdx alongside exitAtX.
+     *
+     * A service area with a zero share draws no random number, so with stops
+     * off the draw sequence is exactly what it was before service areas
+     * existed — every seeded run, and the rain calibration, are unchanged. */
+    this.lastLeaveSvc = null;
+    const services = this.cfg.services ?? [];
+    const order = services
+      .map((sv, i) => ({ sv, i }))
+      .filter((o) => o.sv.stopFraction > 0 && o.sv.x > fromX + 1)
+      .sort((a, b) => a.sv.x - b.sv.x);
+    let k = 0;
     for (const r of this.ramps) {
+      while (k < order.length && order[k].sv.x < r.x) {
+        const o = order[k++];
+        if (this.rng() < o.sv.stopFraction) {
+          this.lastLeaveSvc = o.i;
+          return o.sv.x;
+        }
+      }
       if (r.x <= fromX + 1) continue; // already passed it
       if (r.offFraction > 0 && this.rng() < r.offFraction) return r.x;
+    }
+    while (k < order.length) {
+      const o = order[k++];
+      if (this.rng() < o.sv.stopFraction) {
+        this.lastLeaveSvc = o.i;
+        return o.sv.x;
+      }
     }
     return null;
   }
@@ -1259,7 +1432,7 @@ export class TrafficSim {
          * waits on the ramp — and its place in the queue is KEPT rather than
          * discarded, which is what was quietly losing 40% of every ramp's
          * configured volume. */
-        const needAhead = c.len + S0 + joinV * d.T;
+        const needAhead = c.len + S0 + joinV * d.T * this.rainHeadway();
         const needBehind = behind ? S0 + behind.v * 0.8 : S0;
         if ((ahead && ahead.x - ahead.length - r.x < needAhead - c.len) ||
             (behind && r.x - c.len - behind.x < needBehind)) {
@@ -1273,6 +1446,9 @@ export class TrafficSim {
           scanSec: d.scanSec, scanTimer: d.scanTimer, patience: d.patience, stuckFor: 0,
           reactionS: d.reactionS, reactTimer: d.reactTimer, accel: 0,
           exitAtX: this.pickExit(r.x),
+          serviceIdx: this.lastLeaveSvc,
+          joinedAt: this.time,
+          joinedFrom: "ramp",
           length: c.len, spawnTime: this.time, co2: 0,
           laneCooldown: 0, laneFrom: lane, laneShift: 1,
           color: varyColor(c.color, this.rng()),
@@ -1288,18 +1464,93 @@ export class TrafficSim {
    * carries on, which is both what happens and what keeps the exit lane's
    * demand honest. Getting there is handled by the lane-change bias. */
   private takeExits() {
-    if (this.ramps.length === 0) return;
+    if (this.ramps.length === 0 && !(this.cfg.services ?? []).length) return;
     this.vehicles = this.vehicles.filter((v) => {
       if (v.exitAtX == null || v.x < v.exitAtX) return true;
       if (v.lane !== this.exitLane) {
         // Missed it. Carry on to the next one they can reach, or run through.
         v.exitAtX = this.pickExit(v.x);
+        v.serviceIdx = this.lastLeaveSvc;
         return true;
+      }
+      const svc = v.serviceIdx ?? null;
+      // Leaves the physics here; the ghost is what the page draws leaving.
+      this.ghosts.push({
+        id: v.id, vClass: v.vClass, color: v.color, length: v.length,
+        x: v.exitAtX, s: 0, v: v.v, t: 0,
+        kind: svc == null ? "exit" : "service", serviceIdx: svc,
+      });
+      if (svc != null) {
+        // Off the mainline but not "completed": it has not crossed the stretch.
+        // Dwell is exponential about the configured mean, capped at an hour.
+        const mean = this.cfg.services?.[svc]?.dwellMeanS ?? 1800;
+        const dwell = Math.min(3600, -Math.log(1 - this.rng()) * mean);
+        this.parked.push({ vehicle: v, serviceIdx: svc, readyAt: this.time + dwell });
+        return false;
       }
       this.completedTimes.push(this.time - v.spawnTime);
       this.completedInWindow.push(this.time);
       return false;
     });
+  }
+
+  /** Presentation only: ease each ghost along its ramp, then let it go. */
+  private advanceGhosts(dt: number) {
+    if (!this.ghosts.length) return;
+    for (const g of this.ghosts) {
+      // An exit settles to ramp speed; a service stop rolls to a halt in the bay.
+      const target = g.kind === "service" ? 0 : RAMP_JOIN_SPEED;
+      const dv = target - g.v;
+      g.v = Math.max(0, g.v + Math.sign(dv) * Math.min(Math.abs(dv), B_COMF * dt));
+      g.s += g.v * dt;
+      g.t += dt;
+    }
+    this.ghosts = this.ghosts.filter((g) => (g.kind === "exit" ? g.t < 4 : g.v > 0.3 || g.t < 1));
+  }
+
+  /* Parked vehicles whose dwell is up rejoin at the service area, in the
+   * outermost lane, through the same gap test an on-ramp uses. One that cannot
+   * fit waits another step, as a driver at the end of an access road does. */
+  private rejoinFromServices() {
+    const lane = this.exitLane;
+    const still: Parked[] = [];
+    for (const p of this.parked) {
+      const spec = this.cfg.services?.[p.serviceIdx];
+      if (!spec) continue; // the service area left the modelled stretch
+      if (this.time < p.readyAt) {
+        still.push(p);
+        continue;
+      }
+      const v = p.vehicle;
+      let ahead: Vehicle | null = null;
+      let behind: Vehicle | null = null;
+      for (const other of this.vehicles) {
+        if (other.lane !== lane) continue;
+        if (other.x >= spec.x) { if (!ahead || other.x < ahead.x) ahead = other; }
+        else if (!behind || other.x > behind.x) behind = other;
+      }
+      const joinV = Math.min(v.v0, ahead ? Math.max(ahead.v, 4) : v.v0, RAMP_JOIN_SPEED);
+      const needAhead = v.length + S0 + joinV * v.T * this.rainHeadway();
+      const needBehind = behind ? S0 + behind.v * 0.8 : S0;
+      if ((ahead && ahead.x - ahead.length - spec.x < needAhead - v.length) ||
+          (behind && spec.x - v.length - behind.x < needBehind)) {
+        still.push(p);
+        continue;
+      }
+      v.x = spec.x;
+      v.lane = lane;
+      v.laneFrom = lane;
+      v.laneShift = 1;
+      v.v = Math.max(4, joinV);
+      v.accel = 0;
+      v.stuckFor = 0;
+      v.exitAtX = this.pickExit(spec.x);
+      v.serviceIdx = this.lastLeaveSvc;
+      v.joinedAt = this.time;
+      v.joinedFrom = "service";
+      this.vehicles.push(v);
+    }
+    this.parked = still;
   }
 
   // Place a stalled-vehicle incident. Any car sitting on that spot is absorbed
@@ -1355,6 +1606,7 @@ export class TrafficSim {
        * later one, so the ramps drained at a third of the turning proportion
        * they were configured with. */
       const exitAtX = this.pickExit(0);
+      const serviceIdx = this.lastLeaveSvc;
       const legal: number[] = [];
       for (let l = 0; l < this.cfg.laneCount; l++) if (laneAllowsClass(vClass, l)) legal.push(l);
       // A one-lane road is all inner lane; there is nowhere legal to put a
@@ -1384,7 +1636,7 @@ export class TrafficSim {
        * within each group, so no single lane is favoured. */
       if (exitAtX != null && exitAtX < EXIT_APPROACH_M * 1.5) legal.sort((a, b) => b - a);
       for (const lane of legal) {
-        if (this.spawn(lane, vClass, exitAtX)) { placed = true; this.admitted++; break; }
+        if (this.spawn(lane, vClass, exitAtX, serviceIdx)) { placed = true; this.admitted++; break; }
       }
       if (!placed) {
         this.spawnAccumulator += 1; // retry on a later tick
@@ -1406,6 +1658,11 @@ export class TrafficSim {
       this.spawnFromRamps(dt);
       this.rebuildLaneIndex();
     }
+    if (this.parked.length > 0) {
+      this.rejoinFromServices();
+      this.rebuildLaneIndex();
+    }
+    this.advanceGhosts(dt);
 
     // Lane-change decisions (before motion, using current state).
     for (const v of this.vehicles) {

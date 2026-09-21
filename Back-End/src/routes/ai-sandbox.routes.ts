@@ -1,7 +1,7 @@
 import { Router } from "express";
 import { asyncHandler } from "../middleware/error.middleware.js";
 import { triggerSimulation, configLanes, getResults } from "../controllers/ai-sandbox.controller.js";
-import { parseSandboxCommand, commandStatus, scenarioContext, demandExits, demandProfile, plazaFlows } from "../controllers/sandbox-command.controller.js";
+import { parseSandboxCommand, commandStatus, scenarioContext, demandExits, demandProfile, plazaFlows, recordedWeather } from "../controllers/sandbox-command.controller.js";
 import { authenticateToken, authorizeRoles } from "../middleware/auth.middleware.js";
 
 const router = Router();
@@ -21,6 +21,9 @@ const router = Router();
 router.get("/command/status", asyncHandler(commandStatus));
 router.post("/command", asyncHandler(parseSandboxCommand));
 router.get("/scenario", asyncHandler(scenarioContext));
+// Recorded rain for the simulated hour. Public for the same reason: a read of
+// published warehouse weather, no per-user content.
+router.get("/weather", asyncHandler(recordedWeather));
 
 /* Observed demand. Public for the same reason as the routes above: the
  * dashboard carries no session yet, and these read published warehouse

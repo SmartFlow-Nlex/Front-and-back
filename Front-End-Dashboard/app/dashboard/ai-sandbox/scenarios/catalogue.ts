@@ -1,12 +1,14 @@
 import {
   ASSUMPTIONS,
   type BreakdownCause,
+  type BreakdownFamilyKey,
+  type ClosureFamilyKey,
   type FamilyKey,
   type PhaseIdOf,
   type VehicleKind,
 } from "./assumptions";
 
-export type { BreakdownCause, ClosureFamilyKey, FamilyKey, PhaseIdOf, VehicleKind } from "./assumptions";
+export type { BreakdownCause, BreakdownFamilyKey, ClosureFamilyKey, FamilyKey, PhaseIdOf, VehicleKind } from "./assumptions";
 
 /* ══════════════════════════════════════════════════════════════════════════════
    SCENARIO CATALOGUE
@@ -17,8 +19,10 @@ export type { BreakdownCause, ClosureFamilyKey, FamilyKey, PhaseIdOf, VehicleKin
    closureEnd / incidents / speedLimitKmh / speedZone), and the engine does the
    rest.
 
-   Durations come from calibration.json (data). Phase splits, lanes blocked,
-   lengths and speeds come from assumptions.ts (not data). This file holds only
+   Durations come from calibration.json (data). Accident phase splits, lanes
+   blocked, lengths and speeds come from assumptions.ts (not data). A breakdown's
+   phase split is measured (the response share in calibration.json), so its
+   second phase has no fixed offset: it is set per event. This file holds only
    structure: names, labels, ordering, defaults and which resources are used.
 ══════════════════════════════════════════════════════════════════════════════ */
 
@@ -40,7 +44,7 @@ export const RESOURCE_SHARING = {
   speed_zone: "exclusive",
 } as const satisfies Record<EngineResource, "shared" | "exclusive">;
 
-/** Keys into calibration.json `families`. */
+/** Keys of the entries every calibration file must contain: one per family, plus one per minor-collision label. */
 export const CALIBRATION_KEYS = [
   "breakdown_in_lane",
   "breakdown_shoulder",
@@ -52,6 +56,34 @@ export const CALIBRATION_KEYS = [
   "self_accident",
 ] as const;
 export type CalibrationKey = (typeof CALIBRATION_KEYS)[number];
+
+export const BREAKDOWN_FAMILIES = ["breakdown_in_lane", "breakdown_shoulder"] as const satisfies readonly BreakdownFamilyKey[];
+export const BREAKDOWN_CAUSES = ["tire", "engine", "mechanical", "fuel", "electrical"] as const satisfies readonly BreakdownCause[];
+export const BREAKDOWN_VEHICLES = ["car", "bus", "truck"] as const satisfies readonly VehicleKind[];
+
+/**
+ * Keys of the optional breakdown hierarchy entries. Only cells with enough usable
+ * events are written to calibration.json, so any of these may be absent.
+ */
+export type HierarchyKey =
+  | `${BreakdownFamilyKey}__cause_${BreakdownCause}`
+  | `${BreakdownFamilyKey}__vehicle_${VehicleKind}`
+  | `${BreakdownFamilyKey}__cause_${BreakdownCause}__vehicle_${VehicleKind}`;
+export type EntryKey = CalibrationKey | HierarchyKey;
+
+export function causeKey<F extends BreakdownFamilyKey, C extends BreakdownCause>(family: F, cause: C): `${F}__cause_${C}` {
+  return `${family}__cause_${cause}`;
+}
+export function vehicleKey<F extends BreakdownFamilyKey, V extends VehicleKind>(family: F, vehicle: V): `${F}__vehicle_${V}` {
+  return `${family}__vehicle_${vehicle}`;
+}
+export function causeVehicleKey<F extends BreakdownFamilyKey, C extends BreakdownCause, V extends VehicleKind>(
+  family: F,
+  cause: C,
+  vehicle: V,
+): `${F}__cause_${C}__vehicle_${V}` {
+  return `${family}__cause_${cause}__vehicle_${vehicle}`;
+}
 
 export type CollisionLabel = "rear_end" | "sideswipe" | "hit_and_run";
 
@@ -66,11 +98,21 @@ export type LaneDefault =
   | { readonly kind: "operator_lane"; readonly lane: number }
   | { readonly kind: "outermost" };
 
-/** A phase of an event. `offsetFraction` is where it starts, as a fraction of the event's total duration (0 <= f < 1). */
+/**
+ * Where a phase starts, as a fraction of the event's total duration.
+ *   fixed          - a constant (the first phase is always fixed at 0).
+ *   response_share - the event's own response share: the fraction of its total
+ *                    spent waiting for the responder. Known only once the event's
+ *                    duration has been resolved (see phaseOffsetFractions).
+ */
+export type PhaseOffset =
+  | { readonly kind: "fixed"; readonly fraction: number }
+  | { readonly kind: "response_share" };
+
 export type PhaseDef<Id extends string> = {
   readonly id: Id;
   readonly label: string;
-  readonly offsetFraction: number;
+  readonly offset: PhaseOffset;
 };
 
 type TemplateCommon<F extends FamilyKey> = {
@@ -92,16 +134,17 @@ export type CollisionLabelOption = {
   [L in CollisionLabel]: { readonly id: L; readonly label: string; readonly calibrationKey: `minor_collision_${L}` };
 }[CollisionLabel];
 
-export type BreakdownInLaneTemplate = TemplateCommon<"breakdown_in_lane"> & {
+type BreakdownCommon<F extends BreakdownFamilyKey> = TemplateCommon<F> & {
   readonly vehicles: readonly VehicleOption[];
   readonly causes: readonly CauseOption[];
   readonly defaultVehicle: VehicleKind;
   readonly defaultCause: BreakdownCause;
-  readonly calibrationKey: "breakdown_in_lane";
+  /** The family-level entry: where the fallback hierarchy ends. */
+  readonly calibrationKey: F;
 };
-export type BreakdownShoulderTemplate = TemplateCommon<"breakdown_shoulder"> & {
-  readonly calibrationKey: "breakdown_shoulder";
-};
+
+export type BreakdownInLaneTemplate = BreakdownCommon<"breakdown_in_lane">;
+export type BreakdownShoulderTemplate = BreakdownCommon<"breakdown_shoulder">;
 export type MinorCollisionTemplate = TemplateCommon<"minor_collision"> & {
   readonly labels: readonly CollisionLabelOption[];
   readonly defaultLabel: CollisionLabel;
@@ -127,7 +170,7 @@ export type TemplateOf<F extends FamilyKey> = Extract<ScenarioTemplate, { readon
 /** What the operator picked within a family. */
 export type ScenarioVariant =
   | { readonly family: "breakdown_in_lane"; readonly vehicle: VehicleKind; readonly cause: BreakdownCause }
-  | { readonly family: "breakdown_shoulder" }
+  | { readonly family: "breakdown_shoulder"; readonly vehicle: VehicleKind; readonly cause: BreakdownCause }
   | { readonly family: "minor_collision"; readonly label: CollisionLabel }
   | { readonly family: "multi_vehicle_collision" }
   | { readonly family: "self_accident" };
@@ -137,54 +180,86 @@ export function assertNever(value: never): never {
 }
 
 /* ─────────────────────────────────────────────────────────────────────────────
-   Phases: labels are here, shares are an assumption. One list drives both, so a
-   phase cannot exist without a share or a share without a phase.
+   Phases
+   Accident phases: labels are here, shares are an assumption. One list drives
+   both, so a phase cannot exist without a share or a share without a phase.
+   Breakdown phases: two, "Waiting for responder" then "Service / tow"; the
+   second starts at the event's own response share, measured from data.
 ───────────────────────────────────────────────────────────────────────────── */
-function buildPhases<F extends FamilyKey>(
+function buildAccidentPhases<F extends ClosureFamilyKey>(
   family: F,
   labels: Readonly<Record<PhaseIdOf[F], string>>,
 ): readonly PhaseDef<PhaseIdOf[F]>[] {
   const split: readonly { readonly id: PhaseIdOf[F]; readonly share: number }[] = ASSUMPTIONS.PHASE_SPLIT.value[family];
   let offset = 0;
   return split.map((p) => {
-    const phase: PhaseDef<PhaseIdOf[F]> = { id: p.id, label: labels[p.id], offsetFraction: offset };
+    const phase: PhaseDef<PhaseIdOf[F]> = { id: p.id, label: labels[p.id], offset: { kind: "fixed", fraction: offset } };
     offset += p.share;
     return phase;
   });
 }
 
+function breakdownPhases(): readonly PhaseDef<"waiting" | "service">[] {
+  return [
+    { id: "waiting", label: "Waiting for responder", offset: { kind: "fixed", fraction: 0 } },
+    { id: "service", label: "Service / tow", offset: { kind: "response_share" } },
+  ];
+}
+
+/**
+ * The start of each phase as a fraction of the event's duration.
+ * `responseShare` is the event's own share (from its resolved duration); it is required
+ * when the template has a response_share phase and ignored otherwise.
+ */
+export function phaseOffsetFractions(phases: readonly PhaseDef<string>[], responseShare: number | null): readonly number[] {
+  return phases.map((p) => {
+    switch (p.offset.kind) {
+      case "fixed":
+        return p.offset.fraction;
+      case "response_share":
+        if (responseShare === null || !(responseShare >= 0 && responseShare <= 1)) {
+          throw new RangeError(`phase "${p.id}" needs a response share in [0, 1], got ${responseShare}`);
+        }
+        return responseShare;
+      default:
+        return assertNever(p.offset);
+    }
+  });
+}
+
 const DEFAULT_PLACEMENT: Placement = { kind: "segment_pct", pct: ASSUMPTIONS.DEFAULT_PLACEMENT_PCT.value };
+
+const VEHICLE_OPTIONS: readonly VehicleOption[] = [
+  { id: "car", label: "Car / light vehicle", engineClass: 1 },
+  { id: "bus", label: "Bus", engineClass: 2 },
+  { id: "truck", label: "Truck", engineClass: 3 },
+];
+const CAUSE_OPTIONS: readonly CauseOption[] = [
+  { id: "tire", label: "Tire failure" },
+  { id: "engine", label: "Engine fault" },
+  { id: "mechanical", label: "Mechanical fault" },
+  { id: "fuel", label: "Out of fuel" },
+  { id: "electrical", label: "Electrical / battery" },
+];
 
 /* ─────────────────────────────────────────────────────────────────────────────
    Templates
    Default lanes are the modal numbered lane in calibration.json
-   (reference.lane_distribution.all); verify.ts re-checks them.
+   (reference.lane_distribution.all); default vehicle and cause are the most
+   frequent cells in hierarchy.cells. verify.ts re-checks all of them.
 ───────────────────────────────────────────────────────────────────────────── */
 const BREAKDOWN_IN_LANE: BreakdownInLaneTemplate = {
   family: "breakdown_in_lane",
   displayName: "Breakdown in a lane",
   description:
-    "A vehicle stalls in a running lane and stays there until the patrol clears it. Modelled as a stopped obstacle in that lane (a bus or truck uses several of the engine's 5 m obstacle slots) and removed when the event ends. Traffic behind it queues and works around it.",
-  phases: buildPhases("breakdown_in_lane", {
-    securing: "Stalled: patrol securing the vehicle",
-    recovery: "Recovery in progress",
-  }),
+    "A vehicle stalls in a running lane and stays there until the patrol has finished with it: first waiting for the responder, then service or tow. Modelled as a stopped obstacle in that lane (a bus or truck uses several of the engine's 5 m obstacle slots) for the whole event, removed when it ends. Traffic behind it queues and works around it.",
+  phases: breakdownPhases(),
   defaultLane: { kind: "operator_lane", lane: 3 },
   defaultPlacement: DEFAULT_PLACEMENT,
   resources: ["incident_slot"],
-  vehicles: [
-    { id: "car", label: "Car / light vehicle", engineClass: 1 },
-    { id: "bus", label: "Bus", engineClass: 2 },
-    { id: "truck", label: "Truck", engineClass: 3 },
-  ],
-  causes: [
-    { id: "tire", label: "Tire failure" },
-    { id: "engine", label: "Engine fault" },
-    { id: "mechanical", label: "Mechanical fault" },
-    { id: "fuel", label: "Out of fuel" },
-    { id: "electrical", label: "Electrical / battery" },
-  ],
-  // Most in-lane deployment records: truck (3,835) and engine (2,713) in calibration.json reference.
+  vehicles: VEHICLE_OPTIONS,
+  causes: CAUSE_OPTIONS,
+  // Most usable in-lane events: truck (3,544) and engine (2,600); see hierarchy.cells.
   defaultVehicle: "truck",
   defaultCause: "engine",
   calibrationKey: "breakdown_in_lane",
@@ -194,14 +269,16 @@ const BREAKDOWN_SHOULDER: BreakdownShoulderTemplate = {
   family: "breakdown_shoulder",
   displayName: "Breakdown on the shoulder",
   description:
-    "A vehicle stops on the shoulder. No lane is blocked, but passing traffic slows to look. Modelled as a speed zone around the location for the duration of the event. The engine has a single speed zone, so this cannot run alongside a hand-set speed limit.",
-  phases: buildPhases("breakdown_shoulder", {
-    stopped: "Stopped on the shoulder",
-    assist: "Patrol assisting",
-  }),
+    "A vehicle stops on the shoulder and waits for the responder, then is served or towed. No lane is blocked, but passing traffic slows to look. Modelled as a speed zone around the location for the whole event. The engine has a single speed zone, so this cannot run alongside a hand-set speed limit.",
+  phases: breakdownPhases(),
   defaultLane: { kind: "outermost" },
   defaultPlacement: DEFAULT_PLACEMENT,
   resources: ["speed_zone"],
+  vehicles: VEHICLE_OPTIONS,
+  causes: CAUSE_OPTIONS,
+  // Most usable shoulder events: car (3,154) and engine (3,209); see hierarchy.cells.
+  defaultVehicle: "car",
+  defaultCause: "engine",
   calibrationKey: "breakdown_shoulder",
 };
 
@@ -209,8 +286,8 @@ const MINOR_COLLISION: MinorCollisionTemplate = {
   family: "minor_collision",
   displayName: "Minor collision",
   description:
-    "A rear-end, side-swipe or hit-and-run that blocks its lane until the vehicles are moved, then clears the scene. Modelled by closing the lane over a short stretch and reopening it when the lane-blocked share of the duration has passed. The engine has a single closure stretch, so it cannot overlap another collision.",
-  phases: buildPhases("minor_collision", {
+    "A rear-end, side-swipe or hit-and-run that blocks its lane until the vehicles are moved, then clears the scene. Modelled by closing the lane from a short distance upstream of the wreck to its far end, and reopening it when the lane-blocked share of the duration has passed. The engine has a single closure stretch, so it cannot overlap another collision.",
+  phases: buildAccidentPhases("minor_collision", {
     blocked: "Lane blocked: awaiting response",
     clearing: "Scene clearing: lane reopened",
   }),
@@ -231,7 +308,7 @@ const MULTI_VEHICLE_COLLISION: MultiVehicleCollisionTemplate = {
   displayName: "Multi-vehicle collision",
   description:
     "Three or more vehicles. Two lanes are blocked at first, reduced to one while the tow works, then reopened while the scene is cleared. Modelled through the engine's single closure stretch, so it cannot overlap another collision.",
-  phases: buildPhases("multi_vehicle_collision", {
+  phases: buildAccidentPhases("multi_vehicle_collision", {
     blocked: "Lanes blocked: awaiting response",
     tow: "Tow in progress",
     clearing: "Scene clearing: lanes reopened",
@@ -246,8 +323,8 @@ const SELF_ACCIDENT: SelfAccidentTemplate = {
   family: "self_accident",
   displayName: "Self accident",
   description:
-    "A single vehicle loses control. The slowest family to clear in the data. The lane stays blocked while awaiting response and during the tow, then reopens while the scene is cleared. Modelled through the engine's single closure stretch, so it cannot overlap another collision.",
-  phases: buildPhases("self_accident", {
+    "A single vehicle loses control. The slowest accident family to clear in the data. The lane stays blocked while awaiting response and during the tow, then reopens while the scene is cleared. Modelled through the engine's single closure stretch, so it cannot overlap another collision.",
+  phases: buildAccidentPhases("self_accident", {
     blocked: "Vehicle in lane: awaiting response",
     tow: "Tow in progress",
     clearing: "Scene clearing: lane reopened",
@@ -285,7 +362,7 @@ export function defaultVariant(family: FamilyKey): ScenarioVariant {
     case "breakdown_in_lane":
       return { family, vehicle: BREAKDOWN_IN_LANE.defaultVehicle, cause: BREAKDOWN_IN_LANE.defaultCause };
     case "breakdown_shoulder":
-      return { family };
+      return { family, vehicle: BREAKDOWN_SHOULDER.defaultVehicle, cause: BREAKDOWN_SHOULDER.defaultCause };
     case "minor_collision":
       return { family, label: MINOR_COLLISION.defaultLabel };
     case "multi_vehicle_collision":
@@ -298,9 +375,10 @@ export function defaultVariant(family: FamilyKey): ScenarioVariant {
 }
 
 /**
- * Which calibration entry a variant's duration is drawn from. Breakdowns use
- * one family-level entry whatever the cause or vehicle (the variant is a label);
- * minor collisions use the entry for their own label.
+ * The BASE calibration entry a variant belongs to: the family entry, or for a
+ * minor collision the entry for its own label. For breakdowns this is where the
+ * cause x vehicle -> cause -> vehicle -> family fallback ENDS; the sampler's
+ * selectCalibration() walks the hierarchy above it.
  */
 export function calibrationKeyFor(variant: ScenarioVariant): CalibrationKey {
   switch (variant.family) {

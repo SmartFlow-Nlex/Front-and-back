@@ -7,9 +7,10 @@ import { CLASS_META } from "../simulation";
    is an `Assumption`: it carries its value, why it was chosen, what data (if
    any) informed it without determining it, and what would settle it.
 
-   What DOES come from data lives in calibration.json (duration quantiles) and is
-   documented there. The line between the two is deliberate: a number in this
-   file is a modelling choice a reviewer is entitled to argue with.
+   What DOES come from data lives in calibration.json (duration quantiles, the
+   breakdown response share) and is documented there. The line between the two
+   is deliberate: a number in this file is a modelling choice a reviewer is
+   entitled to argue with.
 
    Nothing here changes the engine. The engine's own Interventions
    (closedLanes / closurePoint / closureEnd / incidents / speedLimitKmh /
@@ -27,10 +28,13 @@ export type FamilyKey =
 /** Families that act on the engine through its single closure stretch. */
 export type ClosureFamilyKey = "minor_collision" | "multi_vehicle_collision" | "self_accident";
 
+/** Breakdown families: their durations and phase split both come from data. */
+export type BreakdownFamilyKey = "breakdown_in_lane" | "breakdown_shoulder";
+
 /** Phase ids per family. The catalogue attaches the display labels. */
 export type PhaseIdOf = {
-  readonly breakdown_in_lane: "securing" | "recovery";
-  readonly breakdown_shoulder: "stopped" | "assist";
+  readonly breakdown_in_lane: "waiting" | "service";
+  readonly breakdown_shoulder: "waiting" | "service";
   readonly minor_collision: "blocked" | "clearing";
   readonly multi_vehicle_collision: "blocked" | "tow" | "clearing";
   readonly self_accident: "blocked" | "tow" | "clearing";
@@ -59,8 +63,12 @@ type PerPhase<F extends FamilyKey, V> = Readonly<Record<PhaseIdOf[F], V>>;
 type ByFamily<V> = { readonly [F in FamilyKey]: PerPhase<F, V> };
 type ByClosureFamily<V> = { readonly [F in ClosureFamilyKey]: PerPhase<F, V> };
 type PhaseShare<Id extends string> = { readonly id: Id; readonly share: number };
-/** Ordered, so the catalogue can lay phases out in sequence. Shares sum to 1. */
-type PhaseSplitTable = { readonly [F in FamilyKey]: readonly PhaseShare<PhaseIdOf[F]>[] };
+/**
+ * Ordered, so the catalogue can lay phases out in sequence. Shares sum to 1.
+ * ACCIDENT families only: a breakdown's phases are split by the response share
+ * measured in the data, so a breakdown has no entry here.
+ */
+type PhaseSplitTable = { readonly [F in ClosureFamilyKey]: readonly PhaseShare<PhaseIdOf[F]>[] };
 
 /* ─────────────────────────────────────────────────────────────────────────────
    Chainage: how event locations in the data relate to the app's km scale.
@@ -118,13 +126,13 @@ export const ASSUMPTIONS = {
 
   LANES_BLOCKED: assume<ByFamily<number>>(
     {
-      breakdown_in_lane: { securing: 1, recovery: 1 },
-      breakdown_shoulder: { stopped: 0, assist: 0 },
+      breakdown_in_lane: { waiting: 1, service: 1 },
+      breakdown_shoulder: { waiting: 0, service: 0 },
       minor_collision: { blocked: 1, clearing: 0 },
       multi_vehicle_collision: { blocked: 2, tow: 1, clearing: 0 },
       self_accident: { blocked: 1, tow: 1, clearing: 0 },
     },
-    "NOT AVAILABLE in the data: neither export has a lanes-blocked count, only the single lane an event was logged in. The values are the smallest physically plausible ones. An in-lane breakdown blocks the lane it is in; a shoulder breakdown blocks none; a collision blocks its own lane; a multi-vehicle collision starts by blocking two lanes and is reduced to the working lane once vehicles are moved. Once the recorded lane-reopen time has passed (see PHASE_SPLIT) no lane is blocked.",
+    "NOT AVAILABLE in the data: neither export has a lanes-blocked count, only the single lane an event was logged in. The values are the smallest physically plausible ones. An in-lane breakdown blocks the lane it is in for its whole duration (waiting and service alike); a shoulder breakdown blocks none; a collision blocks its own lane; a multi-vehicle collision starts by blocking two lanes and is reduced to the working lane once vehicles are moved. Once the recorded lane-reopen time has passed (see PHASE_SPLIT) no lane is blocked.",
     {
       evidence:
         "BlockageCleared (lane reopened) precedes SiteCleared for all but 358 of 21,804 accidents, so a final phase with no lane blocked is supported by the data. In-lane multi-vehicle collisions are logged with a median of 3 vehicles (96% have 3 or more, 25% have 4 or more: 556 of 2,257), which is why two lanes is assumed rather than one.",
@@ -138,26 +146,27 @@ export const ASSUMPTIONS = {
       multi_vehicle_collision: { blocked: 100, tow: 60, clearing: 0 },
       self_accident: { blocked: 60, tow: 60, clearing: 0 },
     },
-    "NOT AVAILABLE in the data: no export records how much road a scene occupies. Sized to the vehicles involved (4.6 m car, 9 m bus, 14 m truck in the engine) plus a working buffer: two vehicles about 40 m, a multi-vehicle scene about 100 m while lanes are blocked, then a shorter working area while a tow is in progress. Deliberately short against the sandbox's 600 m default view. Zero where no lane is blocked.",
+    "The WRECK LENGTH: how far downstream of the event position the scene extends. NOT AVAILABLE in the data (no export records how much road a scene occupies). Sized to the vehicles involved (4.6 m car, 9 m bus, 14 m truck in the engine) plus a working buffer: two vehicles about 40 m, a multi-vehicle scene about 100 m while lanes are blocked, then a shorter working area while a tow is in progress. Zero where no lane is blocked. The closed stretch is longer than this: it also includes UPSTREAM_BUFFER_M.",
     { settledBy: "Field measurement or NLEX incident-management guidance." },
   ),
 
-  CLOSURE_ANCHOR: assume<"event_position_is_upstream_edge">(
-    "event_position_is_upstream_edge",
-    "The engine's closure is a stopped obstacle at closurePoint that traffic in the closed lane must merge out of before reaching it, and the lane is closed from there to closureEnd. A collision is therefore placed with closurePoint at the event position and closureEnd = closurePoint + CLOSURE_LENGTH_M. The engine models no separate advance-warning taper.",
+  UPSTREAM_BUFFER_M: assume(
+    100,
+    "How far UPSTREAM of a collision the closure begins. In the engine a closure is a wall at closurePoint that traffic in the closed lane must merge out of before reaching it, so a closure that begins exactly at the wreck makes vehicles queue right up against it. A real scene is protected by advance warning and cones well before the wreck. 100 m is a round figure of that order; it is not from an NLEX document. Applies to the closure families only.",
+    {
+      evidence: "The engine's own merge-urgency zone is 150 m (MERGE_ZONE_M), so at 100 m the wall sits inside the distance over which drivers are already merging. With the sandbox's 600 m default segment and the default 55% placement, the closure starts at about 230 m for a 330 m event.",
+      settledBy: "NLEX incident-management practice for advance warning distance.",
+    },
+  ),
+
+  CLOSURE_ANCHOR: assume<"closure_starts_upstream_of_event">(
+    "closure_starts_upstream_of_event",
+    "A collision's closure is placed as closurePoint = position - UPSTREAM_BUFFER_M and closureEnd = position + wreck length (CLOSURE_LENGTH_M for the current phase). CLAMPING: each end is clamped to the segment independently, closurePoint = max(0, position - buffer) and closureEnd = min(segment length, position + wreck length), so the closure can only be shortened, never moved, and the event position itself is never altered. The event position must lie within [0, segment length], otherwise there is no stretch (see closureStretch). The engine models no separate advance-warning taper.",
     { settledBy: "Nothing external: this follows from how simulation.ts treats a closure." },
   ),
 
   PHASE_SPLIT: assume<PhaseSplitTable>(
     {
-      breakdown_in_lane: [
-        { id: "securing", share: 0.3 },
-        { id: "recovery", share: 0.7 },
-      ],
-      breakdown_shoulder: [
-        { id: "stopped", share: 0.4 },
-        { id: "assist", share: 0.6 },
-      ],
       minor_collision: [
         { id: "blocked", share: 0.8 },
         { id: "clearing", share: 0.2 },
@@ -173,11 +182,51 @@ export const ASSUMPTIONS = {
         { id: "clearing", share: 0.29 },
       ],
     },
-    "The data gives one total duration per event, not a timeline. How that total divides into phases is a modelling choice. For accidents the lane-blocked share is anchored to the data (below) and only the split of that share into 'awaiting response' and 'tow' is assumed. For breakdowns nothing in the data splits the on-scene time, so the split is assumed and changes labels only: the engine obstacle (or speed zone) is identical in both phases.",
+    "ACCIDENT families only. The data gives one total duration per event, not a timeline, so how that total divides into phases is a modelling choice. The lane-blocked share is anchored to the data (below) and only the split of that share into 'awaiting response' and 'tow' is assumed. Breakdown phases are NOT here: they are split by the response share measured in the data (RESPONSE_SHARE_MODEL).",
     {
       evidence:
-        "Ratio of median lane-blockage time (BlockageCleared - start) to median clearance time (SiteCleared - start), in-lane events, positive values only: minor collision 0.80 (rear-end 0.80, side-swipe 0.80, hit-and-run 0.38 on n=76), multi-vehicle 0.54, self accident 0.71. A ratio of medians is a rough guide, not a median of ratios. Breakdown reference: median response wait (dispatch to arrival) 23 min against a median on-scene service time of 16 min, in-lane.",
+        "Ratio of median lane-blockage time (BlockageCleared - start) to median clearance time (SiteCleared - start), in-lane events, positive values only: minor collision 0.80 (rear-end 0.80, side-swipe 0.80, hit-and-run 0.38 on n=76), multi-vehicle 0.54, self accident 0.71. A ratio of medians is a rough guide, not a median of ratios.",
       settledBy: "An event timeline (reported / lanes reopened / cleared) in the incident export.",
+    },
+  ),
+
+  BREAKDOWN_DURATION_SCOPE: assume<"response_plus_service_per_event">(
+    "response_plus_service_per_event",
+    "AMENDED in Phase 1b. A breakdown's simulated duration is the event's TOTAL, first dispatch to last departure (response + service), replacing the Phase 1 choice of on-scene service time only. The obstacle exists while it waits for the responder as well as while it is served, so service-only understated it by roughly 2.7x at the median in-lane. Still understated: the clock starts at the first dispatch, not at the breakdown, and any delay before dispatch is not recorded.",
+    {
+      evidence:
+        "In-lane median total 43 min (p90 105) against 16 (p90 56) for service only per deployment record; shoulder 37 (p90 86) against 14 (p90 40). The service-only quantiles are kept in calibration.json under reference.service_only_per_deployment_record. Only 53% of in-lane and 28% of shoulder breakdown events have any deployment record, and events without one cannot be calibrated. Dispatch precedes the event's encoded time in 29% of deployment records, so time since the breakdown cannot be reconstructed.",
+      settledBy: "A reported-at (breakdown began) timestamp in the incident export.",
+    },
+  ),
+
+  MULTI_DEPLOYMENT_RULE: assume<"first_dispatch_to_last_departure_ignoring_check_ins">(
+    "first_dispatch_to_last_departure_ignoring_check_ins",
+    "A breakdown event can carry several deployment records. Rule: ignore records that are zero-length check-ins (dispatch = arrival = departure); over the rest take t0 = earliest dispatch, a = earliest arrival, t1 = latest departure; response = a - t0, service = t1 - a, total = t1 - t0. Gaps between visits therefore count as service, on the assumption that the obstacle is present until the last departure. Zero-length records are ignored because they show no responder attending; keeping them would move the start earlier by an unknown amount.",
+    {
+      evidence:
+        "13.3% of usable in-lane events (781 of 5,863) and 2.7% of shoulder events (156 of 5,690) have more than one substantive record, and run longer (in-lane median 67 min against 41 for single-record events; shoulder 74.5 against 36). Keeping check-ins in the span instead changes the aggregate very little: in-lane p50 43 / p90 106 against 43 / 105, shoulder 37 / 87 against 37 / 86.",
+      settledBy: "NLEX confirmation of whether several records on one event are successive visits to one obstacle or separate jobs.",
+    },
+  ),
+
+  RESPONSE_SHARE_MODEL: assume<"per_event_share_quantiles_drawn_independently_of_total">(
+    "per_event_share_quantiles_drawn_independently_of_total",
+    "The response share (response / total) is calibrated as its own per-event quantile set, not as a ratio of medians: the distribution is wide (in-lane p10 0.18, median 0.60, p90 0.89) and one fixed ratio would give every event the same phase split. A sampled event draws its share independently of its total, from a second seed derived from the first. p50, p90 and manual durations use the median share, because they fix the total deliberately.",
+    {
+      evidence:
+        "Spearman correlation between total and share: in-lane -0.195, shoulder -0.007. The mild in-lane negative correlation (long events tend to be service-heavy) is ignored. 6.9% of in-lane events (3.7% of shoulder) have a share of exactly 1 (service recorded as 0 min); the p90-p99 knots smooth that mass, so the model draws fewer exact 1s than the data has. A share of exactly 1 gives the Service / tow phase zero length.",
+      settledBy: "A joint (total, share) model, if the correlation is judged to matter.",
+    },
+  ),
+
+  SAMPLED_CAP: assume<"entry_p99">(
+    "entry_p99",
+    "A sampled duration is capped at its own calibration entry's p99 and reported as capped. The last 1% of the distribution runs from p99 out to the observed maximum (up to 24 h), which a sandbox run cannot usefully show; the cap is a project decision, not a statistical one. About 1% of draws are capped. Manual durations are never capped; p50 and p90 are below the cap by construction.",
+    {
+      evidence:
+        "p99 caps: minor collision 127 min, multi-vehicle 157, self accident 535, in-lane breakdown 347, shoulder breakdown 251. A p99 estimated from about 200 events rests on two observations, so the cap is noisy for the smallest hierarchy entries.",
+      settledBy: "Operator preference: the sampler accepts a different cap, or none.",
     },
   ),
 
@@ -229,15 +278,6 @@ export const ASSUMPTIONS = {
     { settledBy: "Operator choice." },
   ),
 
-  BREAKDOWN_DURATION_SCOPE: assume<"on_scene_service_time_only">(
-    "on_scene_service_time_only",
-    "A breakdown's simulated duration is the calibrated service time (a deployment record's arrival to departure). The obstacle in reality also exists while waiting for the patrol, so this UNDERSTATES total obstruction time.",
-    {
-      evidence: "In-lane: median response wait 23 min (p90 54) against median service 16 min (p90 56); shoulder: 20 min (p90 50) against 14 min (p90 40). Only about 31% of breakdowns have any deployment record.",
-      settledBy: "A decision on whether the obstacle should last response + service. calibration.json carries the response quantiles as a reference block if that is chosen.",
-    },
-  ),
-
   LABEL_MAPPINGS: assume<{
     readonly cause: Readonly<Record<BreakdownCause, string>>;
     readonly vehicle: Readonly<Record<VehicleKind, string>>;
@@ -258,17 +298,17 @@ export const ASSUMPTIONS = {
       },
       collision: { rear_end: "TypeOfEvent = Rear End", sideswipe: "TypeOfEvent = Side Swipe", hit_and_run: "TypeOfEvent = Hit and Run" },
     },
-    "How the template's variant labels correspond to the exports' raw categories. The exports have no 'electrical' cause (it is spread across MainCause 'Others'), and no car/bus/truck field (Truck alone spans all three engine vehicle classes in the data). Used only for the reference cuts in calibration.json and for the labels shown to the operator: durations are calibrated per family, not per cause or vehicle.",
+    "How the template's variant labels correspond to the exports' raw categories. The exports have no 'electrical' cause (it is spread across MainCause 'Others') and no car/bus/truck field (Truck alone spans all three engine vehicle classes). Breakdown durations follow the variant wherever a cause x vehicle, cause or vehicle cell has at least LOW_SAMPLE_N usable events; a breakdown of an unmapped vehicle (PUV, jeepney, motorcycle, heavy equipment) or an unmapped cause simply does not contribute to those cells.",
     {
       evidence:
-        "Reference service-time medians for in-lane breakdowns differ by cause (tire 21 min, mechanical 19, electrical 14, engine 13, fuel 13) and vehicle (bus 26.5, truck 19, car 11), so the family-level duration does not track them.",
-      settledBy: "A decision on whether durations should follow the variant. The per-variant quantiles are in calibration.json under reference.",
+        "The variant matters: in-lane median totals are truck 50 min against car 35, and mechanical 52 against engine 40 (tire 43). Bus (175 in-lane, 99 shoulder usable events) is below the threshold in both families, so a bus falls back to its cause or the family.",
+      settledBy: "NLEX definitions of the cause and vehicle categories.",
     },
   ),
 
   LOW_SAMPLE_N: assume(
     200,
-    "A calibration entry with fewer usable values than this is flagged as a small sample when shown to the operator. The figure is a judgement, not a statistical threshold. Hit-and-run (129 usable values after excluding 105 zero-minute and 9 negative records) is currently below it.",
+    "A calibration entry with fewer usable values than this is flagged as a small sample when shown to the operator, and a breakdown hierarchy entry (cause x vehicle, cause, vehicle) is used only if it has at least this many usable events. calibration.json records the value it was generated with and verify.ts checks the two agree. The figure is a judgement, not a statistical threshold. Hit-and-run (129 usable events after excluding 105 zero-minute and 9 negative) is below it but has no lower level inside its family to fall back to, so it keeps its own entry and is flagged.",
     { settledBy: "Nothing external." },
   ),
 } as const satisfies Record<string, Assumption<unknown>>;
@@ -283,6 +323,7 @@ export function listAssumptions(): readonly { readonly id: string; readonly assu
 /** LANE1_IS_INNERMOST as a plain constant, because it is used everywhere. */
 export const LANE1_IS_INNERMOST: boolean = ASSUMPTIONS.LANE1_IS_INNERMOST.value;
 export const CHAINAGE_OFFSET_KM: number = ASSUMPTIONS.CHAINAGE_OFFSET_KM.value;
+export const UPSTREAM_BUFFER_M: number = ASSUMPTIONS.UPSTREAM_BUFFER_M.value;
 
 /* ─────────────────────────────────────────────────────────────────────────────
    Small conversions that depend on the assumptions above
@@ -318,4 +359,40 @@ export function chainageKmToAppKm(chainageKm: number): number {
 /** How many 5 m engine incident slots a stalled vehicle of this kind occupies. */
 export function incidentSlotsFor(vehicle: VehicleKind): number {
   return Math.max(1, Math.ceil(ASSUMPTIONS.OBSTACLE_LENGTH_M.value[vehicle] / ASSUMPTIONS.ENGINE_INCIDENT_SLOT_M.value));
+}
+
+/* ─────────────────────────────────────────────────────────────────────────────
+   Closure geometry (CLOSURE_ANCHOR, UPSTREAM_BUFFER_M, CLOSURE_LENGTH_M)
+───────────────────────────────────────────────────────────────────────────── */
+export type ClosureStretch = {
+  /** Where the closed lane begins, metres along the segment in the direction of travel (the engine's closurePoint). */
+  readonly closurePointM: number;
+  /** Where it ends (the engine's closureEnd). */
+  readonly closureEndM: number;
+  /** True when the upstream buffer ran off the start of the segment and was cut to 0. */
+  readonly clampedStart: boolean;
+  /** True when the wreck ran off the end of the segment and was cut to the segment length. */
+  readonly clampedEnd: boolean;
+};
+
+/**
+ * The closure stretch for a collision at `positionM` (metres along the segment, in the direction of travel).
+ *
+ *   closurePoint = max(0, position - UPSTREAM_BUFFER_M)
+ *   closureEnd   = min(segmentLength, position + wreckLength)
+ *
+ * Each end is clamped independently, so a clamp only ever shortens the closure; the event itself does not move.
+ * Returns null when there is no valid stretch: a non-finite argument, a segment or wreck length that is not
+ * positive, or a position outside [0, segmentLength]. The caller decides whether that means "flag the event".
+ */
+export function closureStretch(positionM: number, wreckLengthM: number, segmentLengthM: number): ClosureStretch | null {
+  if (!Number.isFinite(positionM) || !Number.isFinite(wreckLengthM) || !Number.isFinite(segmentLengthM)) return null;
+  if (segmentLengthM <= 0 || wreckLengthM <= 0) return null;
+  if (positionM < 0 || positionM > segmentLengthM) return null;
+  const rawStart = positionM - UPSTREAM_BUFFER_M;
+  const rawEnd = positionM + wreckLengthM;
+  const closurePointM = Math.max(0, rawStart);
+  const closureEndM = Math.min(segmentLengthM, rawEnd);
+  if (closureEndM <= closurePointM) return null;
+  return { closurePointM, closureEndM, clampedStart: rawStart < 0, clampedEnd: rawEnd > segmentLengthM };
 }

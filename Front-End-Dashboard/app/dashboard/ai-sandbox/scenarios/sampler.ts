@@ -1,6 +1,23 @@
 import calibrationJson from "./calibration.json";
 import { ASSUMPTIONS } from "./assumptions";
-import { assertNever, type CalibrationKey } from "./catalogue";
+import {
+  BREAKDOWN_CAUSES,
+  BREAKDOWN_FAMILIES,
+  BREAKDOWN_VEHICLES,
+  CALIBRATION_KEYS,
+  assertNever,
+  calibrationKeyFor,
+  causeKey,
+  causeVehicleKey,
+  vehicleKey,
+  type BreakdownCause,
+  type BreakdownFamilyKey,
+  type CalibrationKey,
+  type EntryKey,
+  type HierarchyKey,
+  type ScenarioVariant,
+  type VehicleKind,
+} from "./catalogue";
 
 /* ══════════════════════════════════════════════════════════════════════════════
    DURATION SAMPLER
@@ -12,9 +29,18 @@ import { assertNever, type CalibrationKey } from "./catalogue";
                (0,min) (.10,p10) (.25,p25) (.50,p50) (.75,p75) (.90,p90)
                (.99,p99) (1,max), where min and max are the observed extremes
                after exclusions. Seeded, so the same seed gives the same number.
+               Capped at the entry's own p99 by default; reported as `capped`.
      p50     - the median.
      p90     - the 90th percentile.
-     manual  - the operator's own figure, validated.
+     manual  - the operator's own figure, validated, never capped.
+
+   A breakdown's duration is its TOTAL (response + service), and it also carries
+   the response share: the fraction of that total spent waiting for the
+   responder. That is what splits its two phases.
+
+   Which entry an event draws from: breakdowns walk a hierarchy
+   (cause x vehicle -> cause -> vehicle -> family) and use the first level that
+   has at least LOW_SAMPLE_N usable events; the level used is returned.
 
    The calibration file is parsed defensively (no casts from JSON), so a
    hand-edited or regenerated file that breaks the contract fails loudly here
@@ -39,23 +65,42 @@ export type Exclusions = {
   readonly over1440: number;
 };
 
-export type DurationKind = "clearance_min" | "service_time_min_per_deployment_record";
+export type DurationKind = "clearance_min" | "response_plus_service_min_per_event";
+export type CalibrationLevel = "cause_vehicle" | "cause" | "vehicle" | "label" | "family";
+
+export type ResponseShareModel = {
+  readonly n: number;
+  /** Per-event share of the total spent waiting for the responder, 0..1. */
+  readonly quantiles: QuantileSet;
+  readonly mean: number;
+  /** Fraction of events whose share is exactly 1 (service recorded as 0 min). */
+  readonly fractionExactlyOne: number;
+};
 
 export type CalibrationEntry = {
-  readonly key: CalibrationKey;
+  readonly key: EntryKey;
+  readonly level: CalibrationLevel;
   readonly label: string;
   readonly durationKind: DurationKind;
   readonly durationDefinition: string;
   readonly population: string;
   /** Events in the population. */
   readonly nEvents: number;
-  /** Duration values before exclusions (events for accidents, deployment records for breakdowns). */
+  /** Duration values before exclusions (events with a usable record for breakdowns, events for accidents). */
   readonly nBeforeExclusion: number;
-  /** Values that remain and the quantiles describe. */
+  /** Usable values: what the quantiles describe. */
   readonly n: number;
   readonly excluded: Exclusions;
   readonly quantiles: QuantileSet;
+  /** Present exactly for breakdown entries. */
+  readonly responseShare: ResponseShareModel | null;
 };
+
+export type HierarchyCell =
+  | { readonly level: "family"; readonly family: BreakdownFamilyKey; readonly n: number; readonly qualifies: boolean }
+  | { readonly level: "cause"; readonly family: BreakdownFamilyKey; readonly cause: BreakdownCause; readonly n: number; readonly qualifies: boolean }
+  | { readonly level: "vehicle"; readonly family: BreakdownFamilyKey; readonly vehicle: VehicleKind; readonly n: number; readonly qualifies: boolean }
+  | { readonly level: "cause_vehicle"; readonly family: BreakdownFamilyKey; readonly cause: BreakdownCause; readonly vehicle: VehicleKind; readonly n: number; readonly qualifies: boolean };
 
 export type CalibrationProvenance = {
   readonly generatedOn: string;
@@ -65,12 +110,19 @@ export type CalibrationProvenance = {
   readonly csvRowTotals: { readonly accident: number; readonly breakdown: number };
   readonly exclusionRule: string;
   readonly quantileMethod: string;
+  readonly breakdownEventRule: readonly string[];
   readonly knownLimitations: readonly string[];
 };
 
 export type Calibration = {
   readonly provenance: CalibrationProvenance;
+  /** Always present: one per family, plus one per minor-collision label. */
   readonly entries: Readonly<Record<CalibrationKey, CalibrationEntry>>;
+  /** Present only for breakdown cells with at least `hierarchyMinN` usable events. */
+  readonly hierarchy: Readonly<Partial<Record<HierarchyKey, CalibrationEntry>>>;
+  readonly hierarchyMinN: number;
+  /** Every cell, qualifying or not, so a skipped level can say why. */
+  readonly hierarchyCells: readonly HierarchyCell[];
 };
 
 /* ─────────────────────────────────────────────────────────────────────────────
@@ -102,19 +154,32 @@ function readString(parent: Record<string, unknown>, key: string, path: string):
   return v;
 }
 
+function readBoolean(parent: Record<string, unknown>, key: string, path: string): boolean {
+  const v = parent[key];
+  if (typeof v !== "boolean") return fail(`${path}.${key}`, "a boolean");
+  return v;
+}
+
 function readArray(parent: Record<string, unknown>, key: string, path: string): readonly unknown[] {
   const v = parent[key];
   if (!Array.isArray(v)) return fail(`${path}.${key}`, "an array");
   return v;
 }
 
-function readDurationKind(parent: Record<string, unknown>, key: string, path: string): DurationKind {
-  const v = readString(parent, key, path);
-  if (v === "clearance_min" || v === "service_time_min_per_deployment_record") return v;
-  return fail(`${path}.${key}`, "clearance_min or service_time_min_per_deployment_record");
+function readStringArray(parent: Record<string, unknown>, key: string, path: string): readonly string[] {
+  return readArray(parent, key, path).map((v, i) => (typeof v === "string" ? v : fail(`${path}.${key}[${i}]`, "a string")));
 }
 
-function parseQuantiles(raw: Record<string, unknown>, path: string): QuantileSet {
+/** Narrows a string to one member of `allowed` without a cast. */
+function oneOf<T extends string>(value: unknown, allowed: readonly T[], path: string): T {
+  for (const a of allowed) if (value === a) return a;
+  return fail(path, `one of ${allowed.join(", ")}`);
+}
+
+const LEVELS = ["cause_vehicle", "cause", "vehicle", "label", "family"] as const;
+const DURATION_KINDS = ["clearance_min", "response_plus_service_min_per_event"] as const;
+
+function parseKnots(raw: Record<string, unknown>, path: string): QuantileSet {
   const q: QuantileSet = {
     min: readNumber(raw, "min", path),
     p10: readNumber(raw, "p10", path),
@@ -126,14 +191,30 @@ function parseQuantiles(raw: Record<string, unknown>, path: string): QuantileSet
     max: readNumber(raw, "max", path),
   };
   const ordered = [q.min, q.p10, q.p25, q.p50, q.p75, q.p90, q.p99, q.max];
-  if (q.min <= 0) fail(`${path}.min`, "greater than 0 (zero and negative durations are excluded upstream)");
   for (let i = 1; i < ordered.length; i++) {
     if (ordered[i] < ordered[i - 1]) fail(path, "non-decreasing from min to max");
   }
   return q;
 }
 
-function parseEntry(key: CalibrationKey, raw: Record<string, unknown>): CalibrationEntry {
+function parseDurationQuantiles(raw: Record<string, unknown>, path: string): QuantileSet {
+  const q = parseKnots(raw, path);
+  if (q.min <= 0) fail(`${path}.min`, "greater than 0 (zero and negative durations are excluded upstream)");
+  return q;
+}
+
+function parseShare(raw: Record<string, unknown>, path: string): ResponseShareModel {
+  const q = parseKnots(raw, path);
+  if (q.min < 0 || q.max > 1) fail(path, "a share between 0 and 1");
+  return {
+    n: readNumber(raw, "n", path),
+    quantiles: q,
+    mean: readNumber(raw, "mean", path),
+    fractionExactlyOne: readNumber(raw, "fraction_exactly_1", path),
+  };
+}
+
+function parseEntry(key: EntryKey, raw: Record<string, unknown>): CalibrationEntry {
   const path = `families.${key}`;
   const ex = readRecord(raw, "excluded", path);
   const excluded: Exclusions = {
@@ -147,22 +228,58 @@ function parseEntry(key: CalibrationKey, raw: Record<string, unknown>): Calibrat
   const excludedTotal = excluded.missing + excluded.negative + excluded.zero + excluded.over1440;
   if (n <= 0) fail(`${path}.n`, "greater than 0");
   if (n + excludedTotal !== nBeforeExclusion) fail(path, "consistent: n + excluded must equal n_values_before_exclusion");
+  const durationKind = oneOf(raw.duration_kind, DURATION_KINDS, `${path}.duration_kind`);
+  const shareRaw = raw.response_share;
+  let responseShare: ResponseShareModel | null = null;
+  if (durationKind === "response_plus_service_min_per_event") {
+    if (!isRecord(shareRaw)) return fail(`${path}.response_share`, "an object for a breakdown entry");
+    responseShare = parseShare(shareRaw, `${path}.response_share`);
+    if (responseShare.n !== n) fail(`${path}.response_share.n`, "equal to n");
+  } else if (shareRaw !== null && shareRaw !== undefined) {
+    return fail(`${path}.response_share`, "null for an accident entry");
+  }
   return {
     key,
+    level: oneOf(raw.level, LEVELS, `${path}.level`),
     label: readString(raw, "label", path),
-    durationKind: readDurationKind(raw, "duration_kind", path),
+    durationKind,
     durationDefinition: readString(raw, "duration_definition", path),
     population: readString(raw, "population", path),
     nEvents: readNumber(raw, "n_events", path),
     nBeforeExclusion,
     n,
     excluded,
-    quantiles: parseQuantiles(raw, path),
+    quantiles: parseDurationQuantiles(raw, path),
+    responseShare,
   };
 }
 
-function readStringArray(parent: Record<string, unknown>, key: string, path: string): readonly string[] {
-  return readArray(parent, key, path).map((v, i) => (typeof v === "string" ? v : fail(`${path}.${key}[${i}]`, "a string")));
+function parseCell(raw: unknown, i: number): HierarchyCell {
+  const path = `provenance.hierarchy.cells[${i}]`;
+  if (!isRecord(raw)) return fail(path, "an object");
+  const family = oneOf(raw.family, BREAKDOWN_FAMILIES, `${path}.family`);
+  const n = readNumber(raw, "n", path);
+  const qualifies = readBoolean(raw, "qualifies", path);
+  const level = oneOf(raw.level, ["family", "cause", "vehicle", "cause_vehicle"] as const, `${path}.level`);
+  switch (level) {
+    case "family":
+      return { level, family, n, qualifies };
+    case "cause":
+      return { level, family, cause: oneOf(raw.cause, BREAKDOWN_CAUSES, `${path}.cause`), n, qualifies };
+    case "vehicle":
+      return { level, family, vehicle: oneOf(raw.vehicle, BREAKDOWN_VEHICLES, `${path}.vehicle`), n, qualifies };
+    case "cause_vehicle":
+      return {
+        level,
+        family,
+        cause: oneOf(raw.cause, BREAKDOWN_CAUSES, `${path}.cause`),
+        vehicle: oneOf(raw.vehicle, BREAKDOWN_VEHICLES, `${path}.vehicle`),
+        n,
+        qualifies,
+      };
+    default:
+      return assertNever(level);
+  }
 }
 
 function parseProvenance(raw: Record<string, unknown>): CalibrationProvenance {
@@ -179,13 +296,31 @@ function parseProvenance(raw: Record<string, unknown>): CalibrationProvenance {
     csvRowTotals: { accident: readNumber(totals, "accident", `${path}.csv_row_totals`), breakdown: readNumber(totals, "breakdown", `${path}.csv_row_totals`) },
     exclusionRule: readString(raw, "exclusion_rule", path),
     quantileMethod: readString(raw, "quantile_method", path),
+    breakdownEventRule: readStringArray(raw, "breakdown_event_rule", path),
     knownLimitations: readStringArray(raw, "known_limitations", path),
   };
+}
+
+/** The JSON key a hierarchy cell's entry is stored under, or null for the family cell (a base entry). */
+function cellEntryKey(cell: HierarchyCell): HierarchyKey | null {
+  switch (cell.level) {
+    case "family":
+      return null;
+    case "cause":
+      return causeKey(cell.family, cell.cause);
+    case "vehicle":
+      return vehicleKey(cell.family, cell.vehicle);
+    case "cause_vehicle":
+      return causeVehicleKey(cell.family, cell.cause, cell.vehicle);
+    default:
+      return assertNever(cell);
+  }
 }
 
 export function parseCalibration(raw: unknown): Calibration {
   if (!isRecord(raw)) return fail("(root)", "an object");
   const families = readRecord(raw, "families", "(root)");
+  const provenanceRaw = readRecord(raw, "provenance", "(root)");
   const at = (key: CalibrationKey): CalibrationEntry => parseEntry(key, readRecord(families, key, "families"));
   // Written out, not looped: a key added to CALIBRATION_KEYS without a line here is a compile error.
   const entries: Record<CalibrationKey, CalibrationEntry> = {
@@ -198,7 +333,35 @@ export function parseCalibration(raw: unknown): Calibration {
     multi_vehicle_collision: at("multi_vehicle_collision"),
     self_accident: at("self_accident"),
   };
-  return { provenance: parseProvenance(readRecord(raw, "provenance", "(root)")), entries };
+
+  // The hierarchy block: minimum n, and a row for every cell, qualifying or not.
+  const hierarchyRaw = readRecord(provenanceRaw, "hierarchy", "provenance");
+  const hierarchyMinN = readNumber(hierarchyRaw, "min_n", "provenance.hierarchy");
+  const hierarchyCells = readArray(hierarchyRaw, "cells", "provenance.hierarchy").map(parseCell);
+
+  // Entries exist exactly for the qualifying non-family cells, and only for those.
+  const hierarchy: Partial<Record<HierarchyKey, CalibrationEntry>> = {};
+  const expectedKeys = new Set<string>();
+  for (const cell of hierarchyCells) {
+    const key = cellEntryKey(cell);
+    if (key === null) continue;
+    const present = families[key];
+    if (cell.qualifies) {
+      if (cell.n < hierarchyMinN) fail(`hierarchy cell ${key}`, `qualifying only with n >= ${hierarchyMinN}`);
+      if (!isRecord(present)) return fail(`families.${key}`, "present: the cell qualifies");
+      const entry = parseEntry(key, present);
+      if (entry.n !== cell.n) fail(`families.${key}.n`, `equal to its hierarchy cell (${cell.n})`);
+      hierarchy[key] = entry;
+      expectedKeys.add(key);
+    } else if (present !== undefined) {
+      fail(`families.${key}`, `absent: its cell has n = ${cell.n}, below ${hierarchyMinN}`);
+    }
+  }
+  const known = new Set<string>([...CALIBRATION_KEYS, ...expectedKeys]);
+  for (const key of Object.keys(families)) {
+    if (!known.has(key)) fail(`families.${key}`, "a known entry (unexpected key)");
+  }
+  return { provenance: parseProvenance(provenanceRaw), entries, hierarchy, hierarchyMinN, hierarchyCells };
 }
 
 let cached: Calibration | null = null;
@@ -216,6 +379,90 @@ export function getCalibrationEntry(key: CalibrationKey): CalibrationEntry {
 /** True when the entry has fewer usable values than the small-sample threshold (see ASSUMPTIONS.LOW_SAMPLE_N). */
 export function isLowSample(entry: CalibrationEntry): boolean {
   return entry.n < ASSUMPTIONS.LOW_SAMPLE_N.value;
+}
+
+/* ─────────────────────────────────────────────────────────────────────────────
+   Hierarchy selection
+───────────────────────────────────────────────────────────────────────────── */
+export type SkippedLevel = {
+  readonly level: "cause_vehicle" | "cause" | "vehicle";
+  readonly key: HierarchyKey;
+  /** Usable events in that cell, or null when the cell does not exist (e.g. a variant with no such cause). */
+  readonly n: number | null;
+  readonly reason: "below_min_n" | "no_cell";
+};
+
+export type CalibrationSelection = {
+  readonly entry: CalibrationEntry;
+  readonly level: CalibrationLevel;
+  /** Levels tried first and passed over, in order, with why. Empty when the first choice was used. */
+  readonly skipped: readonly SkippedLevel[];
+};
+
+function cellN(cal: Calibration, family: BreakdownFamilyKey, cause: BreakdownCause | null, vehicle: VehicleKind | null): number | null {
+  for (const c of cal.hierarchyCells) {
+    if (c.family !== family) continue;
+    switch (c.level) {
+      case "family":
+        break;
+      case "cause":
+        if (cause !== null && vehicle === null && c.cause === cause) return c.n;
+        break;
+      case "vehicle":
+        if (vehicle !== null && cause === null && c.vehicle === vehicle) return c.n;
+        break;
+      case "cause_vehicle":
+        if (cause !== null && vehicle !== null && c.cause === cause && c.vehicle === vehicle) return c.n;
+        break;
+      default:
+        return assertNever(c);
+    }
+  }
+  return null;
+}
+
+function selectBreakdown(cal: Calibration, family: BreakdownFamilyKey, cause: BreakdownCause, vehicle: VehicleKind): CalibrationSelection {
+  const tries: readonly { readonly level: SkippedLevel["level"]; readonly key: HierarchyKey; readonly n: number | null }[] = [
+    { level: "cause_vehicle", key: causeVehicleKey(family, cause, vehicle), n: cellN(cal, family, cause, vehicle) },
+    { level: "cause", key: causeKey(family, cause), n: cellN(cal, family, cause, null) },
+    { level: "vehicle", key: vehicleKey(family, vehicle), n: cellN(cal, family, null, vehicle) },
+  ];
+  const skipped: SkippedLevel[] = [];
+  for (const t of tries) {
+    const entry = cal.hierarchy[t.key];
+    if (entry !== undefined) return { entry, level: t.level, skipped };
+    skipped.push({ level: t.level, key: t.key, n: t.n, reason: t.n === null ? "no_cell" : "below_min_n" });
+  }
+  return { entry: cal.entries[family], level: "family", skipped };
+}
+
+/**
+ * The calibration entry a variant draws from. Breakdowns use the first of
+ * cause x vehicle, cause, vehicle, family that has at least hierarchyMinN usable
+ * events. Every other family uses its own entry (a minor collision, its label's).
+ * Pure: takes the calibration, so a test can hand it a modified one.
+ */
+export function selectFromCalibration(cal: Calibration, variant: ScenarioVariant): CalibrationSelection {
+  switch (variant.family) {
+    case "breakdown_in_lane":
+    case "breakdown_shoulder":
+      return selectBreakdown(cal, variant.family, variant.cause, variant.vehicle);
+    case "minor_collision": {
+      const entry = cal.entries[calibrationKeyFor(variant)];
+      return { entry, level: entry.level, skipped: [] };
+    }
+    case "multi_vehicle_collision":
+    case "self_accident": {
+      const entry = cal.entries[calibrationKeyFor(variant)];
+      return { entry, level: entry.level, skipped: [] };
+    }
+    default:
+      return assertNever(variant);
+  }
+}
+
+export function selectCalibration(variant: ScenarioVariant): CalibrationSelection {
+  return selectFromCalibration(getCalibration(), variant);
 }
 
 /* ─────────────────────────────────────────────────────────────────────────────
@@ -246,6 +493,9 @@ export function makeRng(seed: number): () => number {
     return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
   };
 }
+
+/** XORed into an event's seed for its response-share draw, so the share is independent of the duration draw. */
+export const SHARE_SEED_SALT = 0x5bd1e995;
 
 /* ─────────────────────────────────────────────────────────────────────────────
    Inverse CDF
@@ -282,38 +532,83 @@ export type DurationMode =
 
 export type SampleOptions = {
   /**
-   * Upper bound on a SAMPLED duration, in minutes. The last 1% of the
-   * distribution runs from p99 out to the observed maximum (up to a day), so an
-   * uncapped draw occasionally produces an event far longer than a sandbox run
-   * can show. Draws above the cap are clamped to it. Not applied to p50, p90 or
-   * manual, which are deliberate choices.
+   * Cap on a SAMPLED duration, in minutes.
+   *   undefined - the entry's own p99 (the default)
+   *   a number  - that cap
+   *   null      - no cap
+   * Never applied to p50, p90 or manual, which are deliberate choices.
    */
-  readonly capMinutes?: number;
+  readonly capMinutes?: number | null;
 };
 
-/** Duration of an event, in minutes. Always finite and greater than 0. */
-export function resolveDurationMinutes(entry: CalibrationEntry, mode: DurationMode, options?: SampleOptions): number {
+export type DrawnDuration = {
+  /** Total duration of the event. Always finite and greater than 0. */
+  readonly minutes: number;
+  /** Fraction of `minutes` spent waiting for the responder (breakdowns); null for accident families. */
+  readonly responseShare: number | null;
+  /** True when a sampled draw exceeded the cap and was clamped to it. */
+  readonly capped: boolean;
+  /** The cap in force for a sampled draw; null when uncapped or not a sampled draw. */
+  readonly capMinutes: number | null;
+  readonly mode: DurationMode["kind"];
+};
+
+function resolveCap(entry: CalibrationEntry, options: SampleOptions | undefined): number | null {
+  const requested = options?.capMinutes;
+  if (requested === undefined) return entry.quantiles.p99;
+  if (requested === null) return null;
+  if (!Number.isFinite(requested) || requested <= 0) throw new RangeError(`capMinutes must be a positive number or null, got ${requested}`);
+  return requested;
+}
+
+/** One duration from one entry. */
+export function drawDuration(entry: CalibrationEntry, mode: DurationMode, options?: SampleOptions): DrawnDuration {
+  const medianShare = entry.responseShare === null ? null : entry.responseShare.quantiles.p50;
   switch (mode.kind) {
     case "sampled": {
-      const drawn = inverseCdf(entry.quantiles, makeRng(mode.seed)());
-      const cap = options?.capMinutes;
-      if (cap === undefined) return drawn;
-      if (!Number.isFinite(cap) || cap <= 0) throw new RangeError(`capMinutes must be a positive number, got ${cap}`);
-      return Math.min(drawn, cap);
+      const raw = inverseCdf(entry.quantiles, makeRng(mode.seed)());
+      const cap = resolveCap(entry, options);
+      const minutes = cap !== null && raw > cap ? cap : raw;
+      const responseShare =
+        entry.responseShare === null ? null : inverseCdf(entry.responseShare.quantiles, makeRng(mode.seed ^ SHARE_SEED_SALT)());
+      return { minutes, responseShare, capped: minutes !== raw, capMinutes: cap, mode: mode.kind };
     }
     case "p50":
-      return entry.quantiles.p50;
+      return { minutes: entry.quantiles.p50, responseShare: medianShare, capped: false, capMinutes: null, mode: mode.kind };
     case "p90":
-      return entry.quantiles.p90;
+      return { minutes: entry.quantiles.p90, responseShare: medianShare, capped: false, capMinutes: null, mode: mode.kind };
     case "manual":
       if (!Number.isFinite(mode.minutes) || mode.minutes <= 0) throw new RangeError(`manual minutes must be a positive number, got ${mode.minutes}`);
-      return mode.minutes;
+      return { minutes: mode.minutes, responseShare: medianShare, capped: false, capMinutes: null, mode: mode.kind };
     default:
       return assertNever(mode);
   }
 }
 
-/** Convenience: a seeded draw by calibration key. */
-export function sampleDurationMinutes(key: CalibrationKey, seed: number, options?: SampleOptions): number {
-  return resolveDurationMinutes(getCalibrationEntry(key), { kind: "sampled", seed }, options);
+export type ResolvedDuration = DrawnDuration & {
+  /** The entry the duration was drawn from. */
+  readonly calibrationKey: EntryKey;
+  /** Which level of the hierarchy that entry sits at. */
+  readonly level: CalibrationLevel;
+  /** Usable events behind the entry. */
+  readonly n: number;
+  /** Levels tried first and passed over, and why. */
+  readonly skippedLevels: readonly SkippedLevel[];
+};
+
+/** Resolve an event's duration: pick its entry through the hierarchy, then draw. */
+export function resolveDuration(variant: ScenarioVariant, mode: DurationMode, options?: SampleOptions): ResolvedDuration {
+  const selection = selectCalibration(variant);
+  return {
+    ...drawDuration(selection.entry, mode, options),
+    calibrationKey: selection.entry.key,
+    level: selection.level,
+    n: selection.entry.n,
+    skippedLevels: selection.skipped,
+  };
+}
+
+/** Convenience: a seeded draw for a variant. */
+export function sampleDuration(variant: ScenarioVariant, seed: number, options?: SampleOptions): ResolvedDuration {
+  return resolveDuration(variant, { kind: "sampled", seed }, options);
 }

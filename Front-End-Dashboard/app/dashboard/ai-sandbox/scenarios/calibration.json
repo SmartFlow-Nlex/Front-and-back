@@ -57,7 +57,9 @@
       "breakdown_silver_events": 156901,
       "accident_mainline_lane_events": 13527,
       "breakdown_mainline_lane_events": 13277,
-      "breakdown_soft_shoulder_events": 21866
+      "breakdown_soft_shoulder_events": 21866,
+      "breakdown_mainline_lane_events_with_deployment_records": 6996,
+      "breakdown_soft_shoulder_events_with_deployment_records": 6199
     },
     "silver_reproduction_note": "The ETL + silver rules below reproduce the database's silver row counts recorded on 2026-09-21 (21,804 accidents / 156,901 breakdowns) exactly. The database itself was unreachable when this file was generated, so no live query was run.",
     "population_rules": [
@@ -67,15 +69,420 @@
       "scenario populations: accidents and in-lane breakdowns logged in Lane1-4 / Main Line; shoulder breakdowns logged as Soft Shoulder. Toll-plaza, ramp, E-Lane, E-Parking and named-place events are excluded.",
       "Angle Collision, Hit Toll Plaza Equipment, Hit Objects On The Road, Head-On, Hit Pedestrian, Hit Animal and Others are not part of any scenario family and are not calibrated."
     ],
-    "exclusion_rule": "keep 0 < minutes <= 1440; every excluded value is counted per family under `excluded` (missing / negative / zero / over_1440)",
+    "exclusion_rule": "keep 0 < minutes <= 1440; every excluded value is counted per entry under `excluded` (missing / negative / zero / over_1440)",
+    "breakdown_event_rule": [
+      "usable record: three timestamps + both recorded minutes present, minutes agree with the timestamps within 1 min, no negative interval, each figure within 0-1440",
+      "zero-length check-in record (dispatch = arrival = departure) is ignored for timing",
+      "t0 = earliest dispatch, a = earliest arrival, t1 = latest departure over the remaining records",
+      "response = a - t0; service = t1 - a (gaps between visits count as service); total = response + service; response_share = response / total",
+      "no substantive record -> excluded as zero; total > 1440 -> excluded as over_1440",
+      "the clock starts at the first dispatch, not at the breakdown itself: any delay before dispatch is not recorded"
+    ],
+    "hierarchy": {
+      "min_n": 200,
+      "fallback_order": [
+        "cause_vehicle",
+        "cause",
+        "vehicle",
+        "family"
+      ],
+      "n_counts": "usable (kept) events",
+      "cells": [
+        {
+          "family": "breakdown_in_lane",
+          "level": "family",
+          "cause": null,
+          "vehicle": null,
+          "n": 5863,
+          "qualifies": true
+        },
+        {
+          "family": "breakdown_in_lane",
+          "level": "cause_vehicle",
+          "cause": "tire",
+          "vehicle": "car",
+          "n": 526,
+          "qualifies": true
+        },
+        {
+          "family": "breakdown_in_lane",
+          "level": "cause_vehicle",
+          "cause": "tire",
+          "vehicle": "bus",
+          "n": 21,
+          "qualifies": false
+        },
+        {
+          "family": "breakdown_in_lane",
+          "level": "cause_vehicle",
+          "cause": "tire",
+          "vehicle": "truck",
+          "n": 456,
+          "qualifies": true
+        },
+        {
+          "family": "breakdown_in_lane",
+          "level": "cause_vehicle",
+          "cause": "engine",
+          "vehicle": "car",
+          "n": 1023,
+          "qualifies": true
+        },
+        {
+          "family": "breakdown_in_lane",
+          "level": "cause_vehicle",
+          "cause": "engine",
+          "vehicle": "bus",
+          "n": 97,
+          "qualifies": false
+        },
+        {
+          "family": "breakdown_in_lane",
+          "level": "cause_vehicle",
+          "cause": "engine",
+          "vehicle": "truck",
+          "n": 1446,
+          "qualifies": true
+        },
+        {
+          "family": "breakdown_in_lane",
+          "level": "cause_vehicle",
+          "cause": "mechanical",
+          "vehicle": "car",
+          "n": 278,
+          "qualifies": true
+        },
+        {
+          "family": "breakdown_in_lane",
+          "level": "cause_vehicle",
+          "cause": "mechanical",
+          "vehicle": "bus",
+          "n": 45,
+          "qualifies": false
+        },
+        {
+          "family": "breakdown_in_lane",
+          "level": "cause_vehicle",
+          "cause": "mechanical",
+          "vehicle": "truck",
+          "n": 1234,
+          "qualifies": true
+        },
+        {
+          "family": "breakdown_in_lane",
+          "level": "cause_vehicle",
+          "cause": "fuel",
+          "vehicle": "car",
+          "n": 84,
+          "qualifies": false
+        },
+        {
+          "family": "breakdown_in_lane",
+          "level": "cause_vehicle",
+          "cause": "fuel",
+          "vehicle": "bus",
+          "n": 3,
+          "qualifies": false
+        },
+        {
+          "family": "breakdown_in_lane",
+          "level": "cause_vehicle",
+          "cause": "fuel",
+          "vehicle": "truck",
+          "n": 189,
+          "qualifies": false
+        },
+        {
+          "family": "breakdown_in_lane",
+          "level": "cause_vehicle",
+          "cause": "electrical",
+          "vehicle": "car",
+          "n": 77,
+          "qualifies": false
+        },
+        {
+          "family": "breakdown_in_lane",
+          "level": "cause_vehicle",
+          "cause": "electrical",
+          "vehicle": "bus",
+          "n": 3,
+          "qualifies": false
+        },
+        {
+          "family": "breakdown_in_lane",
+          "level": "cause_vehicle",
+          "cause": "electrical",
+          "vehicle": "truck",
+          "n": 122,
+          "qualifies": false
+        },
+        {
+          "family": "breakdown_in_lane",
+          "level": "cause",
+          "cause": "tire",
+          "vehicle": null,
+          "n": 1031,
+          "qualifies": true
+        },
+        {
+          "family": "breakdown_in_lane",
+          "level": "cause",
+          "cause": "engine",
+          "vehicle": null,
+          "n": 2600,
+          "qualifies": true
+        },
+        {
+          "family": "breakdown_in_lane",
+          "level": "cause",
+          "cause": "mechanical",
+          "vehicle": null,
+          "n": 1579,
+          "qualifies": true
+        },
+        {
+          "family": "breakdown_in_lane",
+          "level": "cause",
+          "cause": "fuel",
+          "vehicle": null,
+          "n": 283,
+          "qualifies": true
+        },
+        {
+          "family": "breakdown_in_lane",
+          "level": "cause",
+          "cause": "electrical",
+          "vehicle": null,
+          "n": 204,
+          "qualifies": true
+        },
+        {
+          "family": "breakdown_in_lane",
+          "level": "vehicle",
+          "cause": null,
+          "vehicle": "car",
+          "n": 2047,
+          "qualifies": true
+        },
+        {
+          "family": "breakdown_in_lane",
+          "level": "vehicle",
+          "cause": null,
+          "vehicle": "bus",
+          "n": 175,
+          "qualifies": false
+        },
+        {
+          "family": "breakdown_in_lane",
+          "level": "vehicle",
+          "cause": null,
+          "vehicle": "truck",
+          "n": 3544,
+          "qualifies": true
+        },
+        {
+          "family": "breakdown_shoulder",
+          "level": "family",
+          "cause": null,
+          "vehicle": null,
+          "n": 5690,
+          "qualifies": true
+        },
+        {
+          "family": "breakdown_shoulder",
+          "level": "cause_vehicle",
+          "cause": "tire",
+          "vehicle": "car",
+          "n": 560,
+          "qualifies": true
+        },
+        {
+          "family": "breakdown_shoulder",
+          "level": "cause_vehicle",
+          "cause": "tire",
+          "vehicle": "bus",
+          "n": 3,
+          "qualifies": false
+        },
+        {
+          "family": "breakdown_shoulder",
+          "level": "cause_vehicle",
+          "cause": "tire",
+          "vehicle": "truck",
+          "n": 185,
+          "qualifies": false
+        },
+        {
+          "family": "breakdown_shoulder",
+          "level": "cause_vehicle",
+          "cause": "engine",
+          "vehicle": "car",
+          "n": 1939,
+          "qualifies": true
+        },
+        {
+          "family": "breakdown_shoulder",
+          "level": "cause_vehicle",
+          "cause": "engine",
+          "vehicle": "bus",
+          "n": 67,
+          "qualifies": false
+        },
+        {
+          "family": "breakdown_shoulder",
+          "level": "cause_vehicle",
+          "cause": "engine",
+          "vehicle": "truck",
+          "n": 1133,
+          "qualifies": true
+        },
+        {
+          "family": "breakdown_shoulder",
+          "level": "cause_vehicle",
+          "cause": "mechanical",
+          "vehicle": "car",
+          "n": 314,
+          "qualifies": true
+        },
+        {
+          "family": "breakdown_shoulder",
+          "level": "cause_vehicle",
+          "cause": "mechanical",
+          "vehicle": "bus",
+          "n": 22,
+          "qualifies": false
+        },
+        {
+          "family": "breakdown_shoulder",
+          "level": "cause_vehicle",
+          "cause": "mechanical",
+          "vehicle": "truck",
+          "n": 743,
+          "qualifies": true
+        },
+        {
+          "family": "breakdown_shoulder",
+          "level": "cause_vehicle",
+          "cause": "fuel",
+          "vehicle": "car",
+          "n": 113,
+          "qualifies": false
+        },
+        {
+          "family": "breakdown_shoulder",
+          "level": "cause_vehicle",
+          "cause": "fuel",
+          "vehicle": "bus",
+          "n": 1,
+          "qualifies": false
+        },
+        {
+          "family": "breakdown_shoulder",
+          "level": "cause_vehicle",
+          "cause": "fuel",
+          "vehicle": "truck",
+          "n": 72,
+          "qualifies": false
+        },
+        {
+          "family": "breakdown_shoulder",
+          "level": "cause_vehicle",
+          "cause": "electrical",
+          "vehicle": "car",
+          "n": 211,
+          "qualifies": true
+        },
+        {
+          "family": "breakdown_shoulder",
+          "level": "cause_vehicle",
+          "cause": "electrical",
+          "vehicle": "bus",
+          "n": 3,
+          "qualifies": false
+        },
+        {
+          "family": "breakdown_shoulder",
+          "level": "cause_vehicle",
+          "cause": "electrical",
+          "vehicle": "truck",
+          "n": 102,
+          "qualifies": false
+        },
+        {
+          "family": "breakdown_shoulder",
+          "level": "cause",
+          "cause": "tire",
+          "vehicle": null,
+          "n": 776,
+          "qualifies": true
+        },
+        {
+          "family": "breakdown_shoulder",
+          "level": "cause",
+          "cause": "engine",
+          "vehicle": null,
+          "n": 3209,
+          "qualifies": true
+        },
+        {
+          "family": "breakdown_shoulder",
+          "level": "cause",
+          "cause": "mechanical",
+          "vehicle": null,
+          "n": 1103,
+          "qualifies": true
+        },
+        {
+          "family": "breakdown_shoulder",
+          "level": "cause",
+          "cause": "fuel",
+          "vehicle": null,
+          "n": 201,
+          "qualifies": true
+        },
+        {
+          "family": "breakdown_shoulder",
+          "level": "cause",
+          "cause": "electrical",
+          "vehicle": null,
+          "n": 320,
+          "qualifies": true
+        },
+        {
+          "family": "breakdown_shoulder",
+          "level": "vehicle",
+          "cause": null,
+          "vehicle": "car",
+          "n": 3154,
+          "qualifies": true
+        },
+        {
+          "family": "breakdown_shoulder",
+          "level": "vehicle",
+          "cause": null,
+          "vehicle": "bus",
+          "n": 99,
+          "qualifies": false
+        },
+        {
+          "family": "breakdown_shoulder",
+          "level": "vehicle",
+          "cause": null,
+          "vehicle": "truck",
+          "n": 2294,
+          "qualifies": true
+        }
+      ]
+    },
     "quantile_method": "numpy.percentile, linear interpolation; min and max are the observed extremes after exclusion",
     "existing_mttc_rule_cited": [
       "Back-End/scripts/medallion/10-bronze-accident-breakdown.sql:124-125 (accident clearance_min: NULL outside 0-1440, zeros kept)",
       "Back-End/src/services/incident-events.service.ts:48-49 (breakdown RESPONSE_MIN / SERVICE_MIN: NULL outside 0-1440, zeros kept)"
     ],
     "known_limitations": [
-      "Breakdown durations are per-deployment service_time_min (on scene only). They exclude the wait before the patrol arrives, so they understate total obstruction time.",
-      "Only about 31% of breakdown events have any deployment record.",
+      "Breakdown totals start at the first dispatch, not at the breakdown, so they still understate total obstruction time.",
+      "Only 53% of in-lane and 28% of shoulder breakdown events have any deployment record.",
+      "A p99 taken from about 200 events rests on two observations: the sampler's default cap is noisy for the smallest hierarchy cells.",
       "Accident event_start_date is heavily rounded (36% on a multiple of 5 minutes) and 19% of accident clearances are exactly 0 minutes.",
       "Timestamps are naive (no timezone) in the CSVs."
     ]
@@ -244,6 +651,7 @@
   "families": {
     "minor_collision": {
       "label": "Minor collision (rear-end + side-swipe + hit-and-run)",
+      "level": "family",
       "duration_kind": "clearance_min",
       "duration_definition": "SiteCleared - event_start_date, minutes (per accident event)",
       "population": "accident events with TypeOfEvent in (Rear End, Side Swipe, Hit and Run) logged in a mainline lane",
@@ -264,6 +672,7 @@
       "p90": 48.0,
       "p99": 127.0,
       "max": 1215.0,
+      "response_share": null,
       "reference": {
         "not_used_by_sampler": true,
         "including_zeros_existing_rule": {
@@ -319,6 +728,7 @@
     },
     "minor_collision_rear_end": {
       "label": "Minor collision: rear_end",
+      "level": "label",
       "duration_kind": "clearance_min",
       "duration_definition": "SiteCleared - event_start_date, minutes (per accident event)",
       "population": "TypeOfEvent = Rear End, logged in a mainline lane",
@@ -339,6 +749,7 @@
       "p90": 49.0,
       "p99": 126.0,
       "max": 1215.0,
+      "response_share": null,
       "reference": {
         "not_used_by_sampler": true,
         "including_zeros_existing_rule": {
@@ -394,6 +805,7 @@
     },
     "minor_collision_sideswipe": {
       "label": "Minor collision: sideswipe",
+      "level": "label",
       "duration_kind": "clearance_min",
       "duration_definition": "SiteCleared - event_start_date, minutes (per accident event)",
       "population": "TypeOfEvent = Side Swipe, logged in a mainline lane",
@@ -414,6 +826,7 @@
       "p90": 43.0,
       "p99": 128.0,
       "max": 700.0,
+      "response_share": null,
       "reference": {
         "not_used_by_sampler": true,
         "including_zeros_existing_rule": {
@@ -469,6 +882,7 @@
     },
     "minor_collision_hit_and_run": {
       "label": "Minor collision: hit_and_run",
+      "level": "label",
       "duration_kind": "clearance_min",
       "duration_definition": "SiteCleared - event_start_date, minutes (per accident event)",
       "population": "TypeOfEvent = Hit and Run, logged in a mainline lane",
@@ -489,6 +903,7 @@
       "p90": 66.6,
       "p99": 212.24,
       "max": 484.0,
+      "response_share": null,
       "reference": {
         "not_used_by_sampler": true,
         "including_zeros_existing_rule": {
@@ -544,6 +959,7 @@
     },
     "multi_vehicle_collision": {
       "label": "Multi-vehicle collision",
+      "level": "family",
       "duration_kind": "clearance_min",
       "duration_definition": "SiteCleared - event_start_date, minutes (per accident event)",
       "population": "TypeOfEvent = Multiple Collision, logged in a mainline lane",
@@ -564,6 +980,7 @@
       "p90": 70.0,
       "p99": 156.9,
       "max": 1421.0,
+      "response_share": null,
       "reference": {
         "not_used_by_sampler": true,
         "including_zeros_existing_rule": {
@@ -619,6 +1036,7 @@
     },
     "self_accident": {
       "label": "Self accident",
+      "level": "family",
       "duration_kind": "clearance_min",
       "duration_definition": "SiteCleared - event_start_date, minutes (per accident event)",
       "population": "TypeOfEvent = Self Accident, logged in a mainline lane",
@@ -639,6 +1057,7 @@
       "p90": 162.4,
       "p99": 535.16,
       "max": 1424.0,
+      "response_share": null,
       "reference": {
         "not_used_by_sampler": true,
         "including_zeros_existing_rule": {
@@ -694,56 +1113,118 @@
     },
     "breakdown_in_lane": {
       "label": "Breakdown in a lane",
-      "duration_kind": "service_time_min_per_deployment_record",
-      "duration_definition": "service_time_min of each deployment record (arrival -> departure), minutes. One breakdown event can have several records; each is one value. Events without any deployment record contribute nothing.",
-      "population": "breakdown events logged in a mainline lane (Lane1-4 / Main Line)",
+      "level": "family",
+      "duration_kind": "response_plus_service_min_per_event",
+      "duration_definition": "first dispatch to last departure of the event's substantive deployment records = (first arrival - first dispatch) + (last departure - first arrival), minutes; one value per event",
+      "population": "Breakdown in a lane: all breakdown events in the population",
       "n_events": 13277,
       "n_events_with_deployment_records": 6996,
-      "n_values_before_exclusion": 8577,
-      "n": 6302,
+      "n_values_before_exclusion": 6996,
+      "n": 5863,
       "excluded": {
-        "missing": 2,
+        "missing": 1,
         "negative": 0,
-        "zero": 2271,
-        "over_1440": 2
+        "zero": 1127,
+        "over_1440": 5
       },
       "min": 1.0,
-      "p10": 6.0,
-      "p25": 10.0,
-      "p50": 16.0,
-      "p75": 30.0,
-      "p90": 56.0,
-      "p99": 189.99,
-      "max": 1086.0,
+      "p10": 20.0,
+      "p25": 29.0,
+      "p50": 43.0,
+      "p75": 66.0,
+      "p90": 105.0,
+      "p99": 347.0,
+      "max": 1207.0,
+      "response_share": {
+        "n": 5863,
+        "min": 0.0,
+        "p10": 0.1802,
+        "p25": 0.375,
+        "p50": 0.6,
+        "p75": 0.7568,
+        "p90": 0.8903,
+        "p99": 1.0,
+        "max": 1.0,
+        "mean": 0.5666,
+        "fraction_exactly_1": 0.0694
+      },
+      "multi_record_events": 781,
       "reference": {
         "not_used_by_sampler": true,
-        "including_zeros_existing_rule": {
-          "n": 8573,
-          "p10": 0.0,
-          "p25": 0.0,
-          "p50": 11.0,
-          "p75": 23.0,
-          "p90": 47.0,
-          "p99": 166.0
-        },
-        "response_time_min_positive": {
-          "n": 6901,
+        "service_only_per_deployment_record": {
+          "note": "Phase 1 definition: service_time_min of every deployment record (arrival to departure), one value per RECORD. Excludes the wait for the responder.",
+          "n": 6302,
           "excluded": {
             "missing": 2,
             "negative": 0,
-            "zero": 1673,
-            "over_1440": 1
+            "zero": 2271,
+            "over_1440": 2
           },
           "min": 1.0,
+          "p10": 6.0,
+          "p25": 10.0,
+          "p50": 16.0,
+          "p75": 30.0,
+          "p90": 56.0,
+          "p99": 189.99,
+          "max": 1086.0,
+          "including_zeros_existing_rule": {
+            "n": 8573,
+            "p10": 0.0,
+            "p25": 0.0,
+            "p50": 11.0,
+            "p75": 23.0,
+            "p90": 47.0,
+            "p99": 166.0
+          }
+        },
+        "total_including_check_in_records": {
+          "note": "Rule B: zero-length check-in records kept in the first-dispatch to last-departure span.",
+          "n": 5925,
+          "excluded": {
+            "missing": 4,
+            "negative": 0,
+            "zero": 1063,
+            "over_1440": 4
+          },
+          "min": 1.0,
+          "p10": 20.0,
+          "p25": 29.0,
+          "p50": 43.0,
+          "p75": 67.0,
+          "p90": 106.0,
+          "p99": 357.52,
+          "max": 1207.0
+        },
+        "response_only_per_event": {
+          "min": 0.0,
           "p10": 8.0,
           "p25": 14.0,
-          "p50": 23.0,
-          "p75": 35.0,
+          "p50": 22.0,
+          "p75": 34.0,
           "p90": 54.0,
           "p99": 144.0,
           "max": 733.0
         },
-        "response_time_min_note": "dispatch -> arrival. NOT part of the calibrated duration. The obstacle exists from the breakdown until the patrol departs, i.e. response + service.",
+        "service_only_per_event": {
+          "min": 0.0,
+          "p10": 4.0,
+          "p25": 9.0,
+          "p50": 15.0,
+          "p75": 30.0,
+          "p90": 60.0,
+          "p99": 263.38,
+          "max": 1201.0
+        },
+        "spearman_total_vs_response_share": -0.195,
+        "single_vs_multi_record_events": {
+          "single_n": 5082,
+          "multi_n": 781,
+          "single_p50": 41.0,
+          "single_p90": 92.0,
+          "multi_p50": 67.0,
+          "multi_p90": 215.0
+        },
         "lane_distribution": {
           "all": {
             "Lane1": 2153,
@@ -766,203 +1247,1138 @@
             "Lane4": 1810,
             "Main Line": 62
           }
-        },
-        "service_by_cause": {
-          "electrical": {
-            "n": 209,
-            "excluded": {
-              "missing": 0,
-              "negative": 0,
-              "zero": 78,
-              "over_1440": 0
-            },
-            "min": 1.0,
-            "p10": 5.8,
-            "p25": 9.0,
-            "p50": 14.0,
-            "p75": 25.0,
-            "p90": 39.6,
-            "p99": 117.12,
-            "max": 160.0
-          },
-          "engine": {
-            "n": 2713,
-            "excluded": {
-              "missing": 1,
-              "negative": 0,
-              "zero": 839,
-              "over_1440": 0
-            },
-            "min": 1.0,
-            "p10": 6.0,
-            "p25": 9.0,
-            "p50": 13.0,
-            "p75": 23.0,
-            "p90": 41.8,
-            "p99": 108.88,
-            "max": 395.0
-          },
-          "fuel": {
-            "n": 295,
-            "excluded": {
-              "missing": 0,
-              "negative": 0,
-              "zero": 104,
-              "over_1440": 0
-            },
-            "min": 1.0,
-            "p10": 5.0,
-            "p25": 9.0,
-            "p50": 13.0,
-            "p75": 22.0,
-            "p90": 36.6,
-            "p99": 73.2,
-            "max": 97.0
-          },
-          "mechanical": {
-            "n": 1757,
-            "excluded": {
-              "missing": 0,
-              "negative": 0,
-              "zero": 661,
-              "over_1440": 1
-            },
-            "min": 1.0,
-            "p10": 8.0,
-            "p25": 12.0,
-            "p50": 19.0,
-            "p75": 36.0,
-            "p90": 68.4,
-            "p99": 244.4,
-            "max": 1086.0
-          },
-          "tire": {
-            "n": 1139,
-            "excluded": {
-              "missing": 1,
-              "negative": 0,
-              "zero": 474,
-              "over_1440": 1
-            },
-            "min": 1.0,
-            "p10": 6.0,
-            "p25": 11.0,
-            "p50": 21.0,
-            "p75": 44.0,
-            "p90": 84.0,
-            "p99": 262.2,
-            "max": 806.0
-          }
-        },
-        "service_by_vehicle": {
-          "bus": {
-            "n": 198,
-            "excluded": {
-              "missing": 0,
-              "negative": 0,
-              "zero": 99,
-              "over_1440": 0
-            },
-            "min": 1.0,
-            "p10": 10.0,
-            "p25": 15.0,
-            "p50": 26.5,
-            "p75": 46.0,
-            "p90": 63.0,
-            "p99": 131.17,
-            "max": 244.0
-          },
-          "car": {
-            "n": 2166,
-            "excluded": {
-              "missing": 2,
-              "negative": 0,
-              "zero": 452,
-              "over_1440": 0
-            },
-            "min": 1.0,
-            "p10": 5.0,
-            "p25": 8.0,
-            "p50": 11.0,
-            "p75": 19.0,
-            "p90": 34.0,
-            "p99": 94.05,
-            "max": 252.0
-          },
-          "truck": {
-            "n": 3835,
-            "excluded": {
-              "missing": 0,
-              "negative": 0,
-              "zero": 1689,
-              "over_1440": 2
-            },
-            "min": 1.0,
-            "p10": 8.0,
-            "p25": 12.0,
-            "p50": 19.0,
-            "p75": 36.0,
-            "p90": 70.0,
-            "p99": 217.32,
-            "max": 1086.0
-          }
-        },
-        "variant_mapping_note": "cause: MainCause Tire/Engine/Mechanical/Fuel; electrical = SubCause in Battery, Electrical, Alternator, Starter, Wiring, Spark Plug, Contact Point. vehicle: Truck->truck, Bus->bus, Sedan/Car+AUV+SUV+Van+Pick-Up->car; PUV, Owner-Type Jeepney, Motorcycle, Heavy Equipment excluded. These mappings are assumptions."
+        }
       }
     },
-    "breakdown_shoulder": {
-      "label": "Breakdown on the shoulder",
-      "duration_kind": "service_time_min_per_deployment_record",
-      "duration_definition": "service_time_min of each deployment record (arrival -> departure), minutes. One breakdown event can have several records; each is one value. Events without any deployment record contribute nothing.",
-      "population": "breakdown events with SubLocation = Soft Shoulder",
-      "n_events": 21866,
-      "n_events_with_deployment_records": 6199,
-      "n_values_before_exclusion": 6492,
-      "n": 5622,
+    "breakdown_in_lane__cause_tire__vehicle_car": {
+      "label": "Breakdown in a lane (cause = tire, vehicle = car)",
+      "level": "cause_vehicle",
+      "duration_kind": "response_plus_service_min_per_event",
+      "duration_definition": "first dispatch to last departure of the event's substantive deployment records = (first arrival - first dispatch) + (last departure - first arrival), minutes; one value per event",
+      "population": "Breakdown in a lane, cause = tire, vehicle = car",
+      "n_events": 2883,
+      "n_events_with_deployment_records": 608,
+      "n_values_before_exclusion": 608,
+      "n": 526,
+      "excluded": {
+        "missing": 1,
+        "negative": 0,
+        "zero": 81,
+        "over_1440": 0
+      },
+      "min": 3.0,
+      "p10": 16.0,
+      "p25": 24.0,
+      "p50": 36.0,
+      "p75": 52.0,
+      "p90": 74.0,
+      "p99": 150.75,
+      "max": 244.0,
+      "response_share": {
+        "n": 526,
+        "min": 0.0052,
+        "p10": 0.163,
+        "p25": 0.3109,
+        "p50": 0.5,
+        "p75": 0.6796,
+        "p90": 0.8353,
+        "p99": 1.0,
+        "max": 1.0,
+        "mean": 0.503,
+        "fraction_exactly_1": 0.0513
+      },
+      "multi_record_events": 70
+    },
+    "breakdown_in_lane__cause_tire__vehicle_truck": {
+      "label": "Breakdown in a lane (cause = tire, vehicle = truck)",
+      "level": "cause_vehicle",
+      "duration_kind": "response_plus_service_min_per_event",
+      "duration_definition": "first dispatch to last departure of the event's substantive deployment records = (first arrival - first dispatch) + (last departure - first arrival), minutes; one value per event",
+      "population": "Breakdown in a lane, cause = tire, vehicle = truck",
+      "n_events": 2369,
+      "n_events_with_deployment_records": 556,
+      "n_values_before_exclusion": 556,
+      "n": 456,
       "excluded": {
         "missing": 0,
         "negative": 0,
-        "zero": 869,
+        "zero": 99,
+        "over_1440": 1
+      },
+      "min": 2.0,
+      "p10": 18.5,
+      "p25": 32.0,
+      "p50": 57.5,
+      "p75": 97.0,
+      "p90": 160.5,
+      "p99": 520.7,
+      "max": 823.0,
+      "response_share": {
+        "n": 456,
+        "min": 0.0079,
+        "p10": 0.0733,
+        "p25": 0.1584,
+        "p50": 0.3618,
+        "p75": 0.6563,
+        "p90": 1.0,
+        "p99": 1.0,
+        "max": 1.0,
+        "mean": 0.4354,
+        "fraction_exactly_1": 0.1316
+      },
+      "multi_record_events": 111
+    },
+    "breakdown_in_lane__cause_engine__vehicle_car": {
+      "label": "Breakdown in a lane (cause = engine, vehicle = car)",
+      "level": "cause_vehicle",
+      "duration_kind": "response_plus_service_min_per_event",
+      "duration_definition": "first dispatch to last departure of the event's substantive deployment records = (first arrival - first dispatch) + (last departure - first arrival), minutes; one value per event",
+      "population": "Breakdown in a lane, cause = engine, vehicle = car",
+      "n_events": 1568,
+      "n_events_with_deployment_records": 1113,
+      "n_values_before_exclusion": 1113,
+      "n": 1023,
+      "excluded": {
+        "missing": 0,
+        "negative": 0,
+        "zero": 90,
+        "over_1440": 0
+      },
+      "min": 3.0,
+      "p10": 18.0,
+      "p25": 24.0,
+      "p50": 33.0,
+      "p75": 44.0,
+      "p90": 63.8,
+      "p99": 153.34,
+      "max": 736.0,
+      "response_share": {
+        "n": 1023,
+        "min": 0.0,
+        "p10": 0.3333,
+        "p25": 0.5385,
+        "p50": 0.6667,
+        "p75": 0.7766,
+        "p90": 0.8609,
+        "p99": 1.0,
+        "max": 1.0,
+        "mean": 0.6345,
+        "fraction_exactly_1": 0.0254
+      },
+      "multi_record_events": 78
+    },
+    "breakdown_in_lane__cause_engine__vehicle_truck": {
+      "label": "Breakdown in a lane (cause = engine, vehicle = truck)",
+      "level": "cause_vehicle",
+      "duration_kind": "response_plus_service_min_per_event",
+      "duration_definition": "first dispatch to last departure of the event's substantive deployment records = (first arrival - first dispatch) + (last departure - first arrival), minutes; one value per event",
+      "population": "Breakdown in a lane, cause = engine, vehicle = truck",
+      "n_events": 2471,
+      "n_events_with_deployment_records": 1825,
+      "n_values_before_exclusion": 1825,
+      "n": 1446,
+      "excluded": {
+        "missing": 0,
+        "negative": 0,
+        "zero": 378,
         "over_1440": 1
       },
       "min": 1.0,
-      "p10": 6.0,
-      "p25": 9.0,
-      "p50": 14.0,
-      "p75": 22.0,
-      "p90": 40.0,
-      "p99": 153.79,
-      "max": 1370.0,
+      "p10": 23.0,
+      "p25": 32.25,
+      "p50": 47.0,
+      "p75": 69.0,
+      "p90": 102.0,
+      "p99": 217.2,
+      "max": 1206.0,
+      "response_share": {
+        "n": 1446,
+        "min": 0.0,
+        "p10": 0.2466,
+        "p25": 0.4348,
+        "p50": 0.6203,
+        "p75": 0.7742,
+        "p90": 0.9078,
+        "p99": 1.0,
+        "max": 1.0,
+        "mean": 0.598,
+        "fraction_exactly_1": 0.0761
+      },
+      "multi_record_events": 151
+    },
+    "breakdown_in_lane__cause_mechanical__vehicle_car": {
+      "label": "Breakdown in a lane (cause = mechanical, vehicle = car)",
+      "level": "cause_vehicle",
+      "duration_kind": "response_plus_service_min_per_event",
+      "duration_definition": "first dispatch to last departure of the event's substantive deployment records = (first arrival - first dispatch) + (last departure - first arrival), minutes; one value per event",
+      "population": "Breakdown in a lane, cause = mechanical, vehicle = car",
+      "n_events": 400,
+      "n_events_with_deployment_records": 307,
+      "n_values_before_exclusion": 307,
+      "n": 278,
+      "excluded": {
+        "missing": 0,
+        "negative": 0,
+        "zero": 29,
+        "over_1440": 0
+      },
+      "min": 3.0,
+      "p10": 21.0,
+      "p25": 27.0,
+      "p50": 38.0,
+      "p75": 54.0,
+      "p90": 78.6,
+      "p99": 173.15,
+      "max": 208.0,
+      "response_share": {
+        "n": 278,
+        "min": 0.0,
+        "p10": 0.229,
+        "p25": 0.4449,
+        "p50": 0.6176,
+        "p75": 0.7418,
+        "p90": 0.8288,
+        "p99": 1.0,
+        "max": 1.0,
+        "mean": 0.5792,
+        "fraction_exactly_1": 0.0144
+      },
+      "multi_record_events": 25
+    },
+    "breakdown_in_lane__cause_mechanical__vehicle_truck": {
+      "label": "Breakdown in a lane (cause = mechanical, vehicle = truck)",
+      "level": "cause_vehicle",
+      "duration_kind": "response_plus_service_min_per_event",
+      "duration_definition": "first dispatch to last departure of the event's substantive deployment records = (first arrival - first dispatch) + (last departure - first arrival), minutes; one value per event",
+      "population": "Breakdown in a lane, cause = mechanical, vehicle = truck",
+      "n_events": 1936,
+      "n_events_with_deployment_records": 1487,
+      "n_values_before_exclusion": 1487,
+      "n": 1234,
+      "excluded": {
+        "missing": 0,
+        "negative": 0,
+        "zero": 251,
+        "over_1440": 2
+      },
+      "min": 1.0,
+      "p10": 26.0,
+      "p25": 36.0,
+      "p50": 56.0,
+      "p75": 84.0,
+      "p90": 139.0,
+      "p99": 466.7,
+      "max": 1105.0,
+      "response_share": {
+        "n": 1234,
+        "min": 0.0,
+        "p10": 0.1557,
+        "p25": 0.3245,
+        "p50": 0.5652,
+        "p75": 0.7572,
+        "p90": 0.9158,
+        "p99": 1.0,
+        "max": 1.0,
+        "mean": 0.546,
+        "fraction_exactly_1": 0.0794
+      },
+      "multi_record_events": 216
+    },
+    "breakdown_in_lane__cause_tire": {
+      "label": "Breakdown in a lane (cause = tire)",
+      "level": "cause",
+      "duration_kind": "response_plus_service_min_per_event",
+      "duration_definition": "first dispatch to last departure of the event's substantive deployment records = (first arrival - first dispatch) + (last departure - first arrival), minutes; one value per event",
+      "population": "Breakdown in a lane, cause = tire",
+      "n_events": 5432,
+      "n_events_with_deployment_records": 1221,
+      "n_values_before_exclusion": 1221,
+      "n": 1031,
+      "excluded": {
+        "missing": 1,
+        "negative": 0,
+        "zero": 188,
+        "over_1440": 1
+      },
+      "min": 2.0,
+      "p10": 17.0,
+      "p25": 27.0,
+      "p50": 43.0,
+      "p75": 70.0,
+      "p90": 116.0,
+      "p99": 393.4,
+      "max": 823.0,
+      "response_share": {
+        "n": 1031,
+        "min": 0.0052,
+        "p10": 0.1026,
+        "p25": 0.2381,
+        "p50": 0.4545,
+        "p75": 0.6752,
+        "p90": 0.9091,
+        "p99": 1.0,
+        "max": 1.0,
+        "mean": 0.4729,
+        "fraction_exactly_1": 0.0921
+      },
+      "multi_record_events": 188
+    },
+    "breakdown_in_lane__cause_engine": {
+      "label": "Breakdown in a lane (cause = engine)",
+      "level": "cause",
+      "duration_kind": "response_plus_service_min_per_event",
+      "duration_definition": "first dispatch to last departure of the event's substantive deployment records = (first arrival - first dispatch) + (last departure - first arrival), minutes; one value per event",
+      "population": "Breakdown in a lane, cause = engine",
+      "n_events": 4262,
+      "n_events_with_deployment_records": 3100,
+      "n_values_before_exclusion": 3100,
+      "n": 2600,
+      "excluded": {
+        "missing": 0,
+        "negative": 0,
+        "zero": 499,
+        "over_1440": 1
+      },
+      "min": 1.0,
+      "p10": 20.0,
+      "p25": 28.0,
+      "p50": 40.0,
+      "p75": 60.0,
+      "p90": 91.1,
+      "p99": 215.04,
+      "max": 1206.0,
+      "response_share": {
+        "n": 2600,
+        "min": 0.0,
+        "p10": 0.2653,
+        "p25": 0.4737,
+        "p50": 0.6422,
+        "p75": 0.775,
+        "p90": 0.8838,
+        "p99": 1.0,
+        "max": 1.0,
+        "mean": 0.6105,
+        "fraction_exactly_1": 0.0562
+      },
+      "multi_record_events": 245
+    },
+    "breakdown_in_lane__cause_mechanical": {
+      "label": "Breakdown in a lane (cause = mechanical)",
+      "level": "cause",
+      "duration_kind": "response_plus_service_min_per_event",
+      "duration_definition": "first dispatch to last departure of the event's substantive deployment records = (first arrival - first dispatch) + (last departure - first arrival), minutes; one value per event",
+      "population": "Breakdown in a lane, cause = mechanical",
+      "n_events": 2442,
+      "n_events_with_deployment_records": 1876,
+      "n_values_before_exclusion": 1876,
+      "n": 1579,
+      "excluded": {
+        "missing": 0,
+        "negative": 0,
+        "zero": 295,
+        "over_1440": 2
+      },
+      "min": 1.0,
+      "p10": 24.0,
+      "p25": 34.0,
+      "p50": 52.0,
+      "p75": 79.0,
+      "p90": 126.0,
+      "p99": 437.86,
+      "max": 1105.0,
+      "response_share": {
+        "n": 1579,
+        "min": 0.0,
+        "p10": 0.1754,
+        "p25": 0.3448,
+        "p50": 0.5758,
+        "p75": 0.75,
+        "p90": 0.8923,
+        "p99": 1.0,
+        "max": 1.0,
+        "mean": 0.552,
+        "fraction_exactly_1": 0.069
+      },
+      "multi_record_events": 250
+    },
+    "breakdown_in_lane__cause_fuel": {
+      "label": "Breakdown in a lane (cause = fuel)",
+      "level": "cause",
+      "duration_kind": "response_plus_service_min_per_event",
+      "duration_definition": "first dispatch to last departure of the event's substantive deployment records = (first arrival - first dispatch) + (last departure - first arrival), minutes; one value per event",
+      "population": "Breakdown in a lane, cause = fuel",
+      "n_events": 469,
+      "n_events_with_deployment_records": 342,
+      "n_values_before_exclusion": 342,
+      "n": 283,
+      "excluded": {
+        "missing": 0,
+        "negative": 0,
+        "zero": 58,
+        "over_1440": 1
+      },
+      "min": 12.0,
+      "p10": 21.2,
+      "p25": 29.0,
+      "p50": 40.0,
+      "p75": 56.0,
+      "p90": 72.0,
+      "p99": 144.9,
+      "max": 183.0,
+      "response_share": {
+        "n": 283,
+        "min": 0.0417,
+        "p10": 0.2661,
+        "p25": 0.4406,
+        "p50": 0.6562,
+        "p75": 0.7795,
+        "p90": 0.9125,
+        "p99": 1.0,
+        "max": 1.0,
+        "mean": 0.6119,
+        "fraction_exactly_1": 0.0883
+      },
+      "multi_record_events": 36
+    },
+    "breakdown_in_lane__cause_electrical": {
+      "label": "Breakdown in a lane (cause = electrical)",
+      "level": "cause",
+      "duration_kind": "response_plus_service_min_per_event",
+      "duration_definition": "first dispatch to last departure of the event's substantive deployment records = (first arrival - first dispatch) + (last departure - first arrival), minutes; one value per event",
+      "population": "Breakdown in a lane, cause = electrical",
+      "n_events": 371,
+      "n_events_with_deployment_records": 255,
+      "n_values_before_exclusion": 255,
+      "n": 204,
+      "excluded": {
+        "missing": 0,
+        "negative": 0,
+        "zero": 51,
+        "over_1440": 0
+      },
+      "min": 1.0,
+      "p10": 17.0,
+      "p25": 26.0,
+      "p50": 41.0,
+      "p75": 58.25,
+      "p90": 74.7,
+      "p99": 142.94,
+      "max": 183.0,
+      "response_share": {
+        "n": 204,
+        "min": 0.0,
+        "p10": 0.2732,
+        "p25": 0.461,
+        "p50": 0.6132,
+        "p75": 0.7512,
+        "p90": 0.8721,
+        "p99": 1.0,
+        "max": 1.0,
+        "mean": 0.5998,
+        "fraction_exactly_1": 0.0588
+      },
+      "multi_record_events": 18
+    },
+    "breakdown_in_lane__vehicle_car": {
+      "label": "Breakdown in a lane (vehicle = car)",
+      "level": "vehicle",
+      "duration_kind": "response_plus_service_min_per_event",
+      "duration_definition": "first dispatch to last departure of the event's substantive deployment records = (first arrival - first dispatch) + (last departure - first arrival), minutes; one value per event",
+      "population": "Breakdown in a lane, vehicle = car",
+      "n_events": 5203,
+      "n_events_with_deployment_records": 2275,
+      "n_values_before_exclusion": 2275,
+      "n": 2047,
+      "excluded": {
+        "missing": 1,
+        "negative": 0,
+        "zero": 226,
+        "over_1440": 1
+      },
+      "min": 3.0,
+      "p10": 18.0,
+      "p25": 24.0,
+      "p50": 35.0,
+      "p75": 48.0,
+      "p90": 69.0,
+      "p99": 163.16,
+      "max": 736.0,
+      "response_share": {
+        "n": 2047,
+        "min": 0.0,
+        "p10": 0.2415,
+        "p25": 0.4466,
+        "p50": 0.6207,
+        "p75": 0.75,
+        "p90": 0.854,
+        "p99": 1.0,
+        "max": 1.0,
+        "mean": 0.5885,
+        "fraction_exactly_1": 0.0332
+      },
+      "multi_record_events": 194
+    },
+    "breakdown_in_lane__vehicle_truck": {
+      "label": "Breakdown in a lane (vehicle = truck)",
+      "level": "vehicle",
+      "duration_kind": "response_plus_service_min_per_event",
+      "duration_definition": "first dispatch to last departure of the event's substantive deployment records = (first arrival - first dispatch) + (last departure - first arrival), minutes; one value per event",
+      "population": "Breakdown in a lane, vehicle = truck",
+      "n_events": 7515,
+      "n_events_with_deployment_records": 4390,
+      "n_values_before_exclusion": 4390,
+      "n": 3544,
+      "excluded": {
+        "missing": 0,
+        "negative": 0,
+        "zero": 842,
+        "over_1440": 4
+      },
+      "min": 1.0,
+      "p10": 23.0,
+      "p25": 34.0,
+      "p50": 50.0,
+      "p75": 76.0,
+      "p90": 121.0,
+      "p99": 407.57,
+      "max": 1207.0,
+      "response_share": {
+        "n": 3544,
+        "min": 0.0,
+        "p10": 0.1562,
+        "p25": 0.3408,
+        "p50": 0.5822,
+        "p75": 0.7627,
+        "p90": 0.9335,
+        "p99": 1.0,
+        "max": 1.0,
+        "mean": 0.5554,
+        "fraction_exactly_1": 0.0883
+      },
+      "multi_record_events": 552
+    },
+    "breakdown_shoulder": {
+      "label": "Breakdown on the shoulder",
+      "level": "family",
+      "duration_kind": "response_plus_service_min_per_event",
+      "duration_definition": "first dispatch to last departure of the event's substantive deployment records = (first arrival - first dispatch) + (last departure - first arrival), minutes; one value per event",
+      "population": "Breakdown on the shoulder: all breakdown events in the population",
+      "n_events": 21866,
+      "n_events_with_deployment_records": 6199,
+      "n_values_before_exclusion": 6199,
+      "n": 5690,
+      "excluded": {
+        "missing": 0,
+        "negative": 0,
+        "zero": 505,
+        "over_1440": 4
+      },
+      "min": 1.0,
+      "p10": 20.0,
+      "p25": 27.0,
+      "p50": 37.0,
+      "p75": 55.0,
+      "p90": 86.0,
+      "p99": 251.11,
+      "max": 1440.0,
+      "response_share": {
+        "n": 5690,
+        "min": 0.0,
+        "p10": 0.2727,
+        "p25": 0.439,
+        "p50": 0.6,
+        "p75": 0.7435,
+        "p90": 0.8571,
+        "p99": 1.0,
+        "max": 1.0,
+        "mean": 0.5826,
+        "fraction_exactly_1": 0.0373
+      },
+      "multi_record_events": 156,
       "reference": {
         "not_used_by_sampler": true,
-        "including_zeros_existing_rule": {
-          "n": 6491,
-          "p10": 0.0,
-          "p25": 7.0,
-          "p50": 12.0,
-          "p75": 20.0,
-          "p90": 37.0,
-          "p99": 145.0
-        },
-        "response_time_min_positive": {
-          "n": 5871,
+        "service_only_per_deployment_record": {
+          "note": "Phase 1 definition: service_time_min of every deployment record (arrival to departure), one value per RECORD. Excludes the wait for the responder.",
+          "n": 5622,
           "excluded": {
             "missing": 0,
             "negative": 0,
-            "zero": 621,
-            "over_1440": 0
+            "zero": 869,
+            "over_1440": 1
           },
           "min": 1.0,
+          "p10": 6.0,
+          "p25": 9.0,
+          "p50": 14.0,
+          "p75": 22.0,
+          "p90": 40.0,
+          "p99": 153.79,
+          "max": 1370.0,
+          "including_zeros_existing_rule": {
+            "n": 6491,
+            "p10": 0.0,
+            "p25": 7.0,
+            "p50": 12.0,
+            "p75": 20.0,
+            "p90": 37.0,
+            "p99": 145.0
+          }
+        },
+        "total_including_check_in_records": {
+          "note": "Rule B: zero-length check-in records kept in the first-dispatch to last-departure span.",
+          "n": 5693,
+          "excluded": {
+            "missing": 1,
+            "negative": 0,
+            "zero": 502,
+            "over_1440": 3
+          },
+          "min": 1.0,
+          "p10": 20.0,
+          "p25": 27.0,
+          "p50": 37.0,
+          "p75": 56.0,
+          "p90": 87.0,
+          "p99": 265.08,
+          "max": 1440.0
+        },
+        "response_only_per_event": {
+          "min": 0.0,
           "p10": 9.0,
           "p25": 14.0,
           "p50": 20.0,
           "p75": 31.0,
-          "p90": 50.0,
-          "p99": 156.0,
+          "p90": 49.0,
+          "p99": 155.11,
           "max": 498.0
         },
-        "response_time_min_note": "dispatch -> arrival. NOT part of the calibrated duration. The obstacle exists from the breakdown until the patrol departs, i.e. response + service."
+        "service_only_per_event": {
+          "min": 0.0,
+          "p10": 6.0,
+          "p25": 9.0,
+          "p50": 13.0,
+          "p75": 22.0,
+          "p90": 40.0,
+          "p99": 183.0,
+          "max": 1370.0
+        },
+        "spearman_total_vs_response_share": -0.007,
+        "single_vs_multi_record_events": {
+          "single_n": 5534,
+          "multi_n": 156,
+          "single_p50": 36.0,
+          "single_p90": 82.0,
+          "multi_p50": 74.5,
+          "multi_p90": 288.0
+        }
       }
+    },
+    "breakdown_shoulder__cause_tire__vehicle_car": {
+      "label": "Breakdown on the shoulder (cause = tire, vehicle = car)",
+      "level": "cause_vehicle",
+      "duration_kind": "response_plus_service_min_per_event",
+      "duration_definition": "first dispatch to last departure of the event's substantive deployment records = (first arrival - first dispatch) + (last departure - first arrival), minutes; one value per event",
+      "population": "Breakdown on the shoulder, cause = tire, vehicle = car",
+      "n_events": 4542,
+      "n_events_with_deployment_records": 635,
+      "n_values_before_exclusion": 635,
+      "n": 560,
+      "excluded": {
+        "missing": 0,
+        "negative": 0,
+        "zero": 75,
+        "over_1440": 0
+      },
+      "min": 2.0,
+      "p10": 19.0,
+      "p25": 28.0,
+      "p50": 39.0,
+      "p75": 56.0,
+      "p90": 79.0,
+      "p99": 126.41,
+      "max": 600.0,
+      "response_share": {
+        "n": 560,
+        "min": 0.0,
+        "p10": 0.1818,
+        "p25": 0.3472,
+        "p50": 0.5045,
+        "p75": 0.6845,
+        "p90": 0.8261,
+        "p99": 1.0,
+        "max": 1.0,
+        "mean": 0.5145,
+        "fraction_exactly_1": 0.0393
+      },
+      "multi_record_events": 17
+    },
+    "breakdown_shoulder__cause_engine__vehicle_car": {
+      "label": "Breakdown on the shoulder (cause = engine, vehicle = car)",
+      "level": "cause_vehicle",
+      "duration_kind": "response_plus_service_min_per_event",
+      "duration_definition": "first dispatch to last departure of the event's substantive deployment records = (first arrival - first dispatch) + (last departure - first arrival), minutes; one value per event",
+      "population": "Breakdown on the shoulder, cause = engine, vehicle = car",
+      "n_events": 3937,
+      "n_events_with_deployment_records": 2036,
+      "n_values_before_exclusion": 2036,
+      "n": 1939,
+      "excluded": {
+        "missing": 0,
+        "negative": 0,
+        "zero": 97,
+        "over_1440": 0
+      },
+      "min": 2.0,
+      "p10": 18.0,
+      "p25": 23.0,
+      "p50": 30.0,
+      "p75": 41.0,
+      "p90": 58.0,
+      "p99": 119.0,
+      "max": 751.0,
+      "response_share": {
+        "n": 1939,
+        "min": 0.0303,
+        "p10": 0.3427,
+        "p25": 0.475,
+        "p50": 0.6154,
+        "p75": 0.7353,
+        "p90": 0.8216,
+        "p99": 0.953,
+        "max": 1.0,
+        "mean": 0.5961,
+        "fraction_exactly_1": 0.0083
+      },
+      "multi_record_events": 41
+    },
+    "breakdown_shoulder__cause_engine__vehicle_truck": {
+      "label": "Breakdown on the shoulder (cause = engine, vehicle = truck)",
+      "level": "cause_vehicle",
+      "duration_kind": "response_plus_service_min_per_event",
+      "duration_definition": "first dispatch to last departure of the event's substantive deployment records = (first arrival - first dispatch) + (last departure - first arrival), minutes; one value per event",
+      "population": "Breakdown on the shoulder, cause = engine, vehicle = truck",
+      "n_events": 3351,
+      "n_events_with_deployment_records": 1234,
+      "n_values_before_exclusion": 1234,
+      "n": 1133,
+      "excluded": {
+        "missing": 0,
+        "negative": 0,
+        "zero": 100,
+        "over_1440": 1
+      },
+      "min": 1.0,
+      "p10": 24.0,
+      "p25": 31.0,
+      "p50": 43.0,
+      "p75": 64.0,
+      "p90": 103.0,
+      "p99": 266.08,
+      "max": 1200.0,
+      "response_share": {
+        "n": 1133,
+        "min": 0.0,
+        "p10": 0.2927,
+        "p25": 0.4516,
+        "p50": 0.6111,
+        "p75": 0.7632,
+        "p90": 0.8833,
+        "p99": 1.0,
+        "max": 1.0,
+        "mean": 0.6,
+        "fraction_exactly_1": 0.0424
+      },
+      "multi_record_events": 24
+    },
+    "breakdown_shoulder__cause_mechanical__vehicle_car": {
+      "label": "Breakdown on the shoulder (cause = mechanical, vehicle = car)",
+      "level": "cause_vehicle",
+      "duration_kind": "response_plus_service_min_per_event",
+      "duration_definition": "first dispatch to last departure of the event's substantive deployment records = (first arrival - first dispatch) + (last departure - first arrival), minutes; one value per event",
+      "population": "Breakdown on the shoulder, cause = mechanical, vehicle = car",
+      "n_events": 580,
+      "n_events_with_deployment_records": 331,
+      "n_values_before_exclusion": 331,
+      "n": 314,
+      "excluded": {
+        "missing": 0,
+        "negative": 0,
+        "zero": 16,
+        "over_1440": 1
+      },
+      "min": 5.0,
+      "p10": 19.3,
+      "p25": 26.0,
+      "p50": 33.5,
+      "p75": 45.75,
+      "p90": 64.7,
+      "p99": 121.87,
+      "max": 235.0,
+      "response_share": {
+        "n": 314,
+        "min": 0.0588,
+        "p10": 0.323,
+        "p25": 0.483,
+        "p50": 0.6154,
+        "p75": 0.75,
+        "p90": 0.8682,
+        "p99": 1.0,
+        "max": 1.0,
+        "mean": 0.606,
+        "fraction_exactly_1": 0.0223
+      },
+      "multi_record_events": 8
+    },
+    "breakdown_shoulder__cause_mechanical__vehicle_truck": {
+      "label": "Breakdown on the shoulder (cause = mechanical, vehicle = truck)",
+      "level": "cause_vehicle",
+      "duration_kind": "response_plus_service_min_per_event",
+      "duration_definition": "first dispatch to last departure of the event's substantive deployment records = (first arrival - first dispatch) + (last departure - first arrival), minutes; one value per event",
+      "population": "Breakdown on the shoulder, cause = mechanical, vehicle = truck",
+      "n_events": 2220,
+      "n_events_with_deployment_records": 823,
+      "n_values_before_exclusion": 823,
+      "n": 743,
+      "excluded": {
+        "missing": 0,
+        "negative": 0,
+        "zero": 78,
+        "over_1440": 2
+      },
+      "min": 1.0,
+      "p10": 25.2,
+      "p25": 34.0,
+      "p50": 48.0,
+      "p75": 72.0,
+      "p90": 123.8,
+      "p99": 445.48,
+      "max": 914.0,
+      "response_share": {
+        "n": 743,
+        "min": 0.0135,
+        "p10": 0.262,
+        "p25": 0.4451,
+        "p50": 0.6111,
+        "p75": 0.7921,
+        "p90": 0.9511,
+        "p99": 1.0,
+        "max": 1.0,
+        "mean": 0.603,
+        "fraction_exactly_1": 0.0902
+      },
+      "multi_record_events": 24
+    },
+    "breakdown_shoulder__cause_electrical__vehicle_car": {
+      "label": "Breakdown on the shoulder (cause = electrical, vehicle = car)",
+      "level": "cause_vehicle",
+      "duration_kind": "response_plus_service_min_per_event",
+      "duration_definition": "first dispatch to last departure of the event's substantive deployment records = (first arrival - first dispatch) + (last departure - first arrival), minutes; one value per event",
+      "population": "Breakdown on the shoulder, cause = electrical, vehicle = car",
+      "n_events": 451,
+      "n_events_with_deployment_records": 229,
+      "n_values_before_exclusion": 229,
+      "n": 211,
+      "excluded": {
+        "missing": 0,
+        "negative": 0,
+        "zero": 18,
+        "over_1440": 0
+      },
+      "min": 5.0,
+      "p10": 19.0,
+      "p25": 25.0,
+      "p50": 32.0,
+      "p75": 42.5,
+      "p90": 74.0,
+      "p99": 146.9,
+      "max": 226.0,
+      "response_share": {
+        "n": 211,
+        "min": 0.0265,
+        "p10": 0.3729,
+        "p25": 0.4721,
+        "p50": 0.6032,
+        "p75": 0.7253,
+        "p90": 0.8438,
+        "p99": 1.0,
+        "max": 1.0,
+        "mean": 0.599,
+        "fraction_exactly_1": 0.019
+      },
+      "multi_record_events": 5
+    },
+    "breakdown_shoulder__cause_tire": {
+      "label": "Breakdown on the shoulder (cause = tire)",
+      "level": "cause",
+      "duration_kind": "response_plus_service_min_per_event",
+      "duration_definition": "first dispatch to last departure of the event's substantive deployment records = (first arrival - first dispatch) + (last departure - first arrival), minutes; one value per event",
+      "population": "Breakdown on the shoulder, cause = tire",
+      "n_events": 9147,
+      "n_events_with_deployment_records": 894,
+      "n_values_before_exclusion": 894,
+      "n": 776,
+      "excluded": {
+        "missing": 0,
+        "negative": 0,
+        "zero": 118,
+        "over_1440": 0
+      },
+      "min": 2.0,
+      "p10": 19.0,
+      "p25": 28.75,
+      "p50": 42.0,
+      "p75": 65.0,
+      "p90": 101.0,
+      "p99": 365.5,
+      "max": 1440.0,
+      "response_share": {
+        "n": 776,
+        "min": 0.0,
+        "p10": 0.1578,
+        "p25": 0.3043,
+        "p50": 0.4846,
+        "p75": 0.6792,
+        "p90": 0.8333,
+        "p99": 1.0,
+        "max": 1.0,
+        "mean": 0.4917,
+        "fraction_exactly_1": 0.0425
+      },
+      "multi_record_events": 30
+    },
+    "breakdown_shoulder__cause_engine": {
+      "label": "Breakdown on the shoulder (cause = engine)",
+      "level": "cause",
+      "duration_kind": "response_plus_service_min_per_event",
+      "duration_definition": "first dispatch to last departure of the event's substantive deployment records = (first arrival - first dispatch) + (last departure - first arrival), minutes; one value per event",
+      "population": "Breakdown on the shoulder, cause = engine",
+      "n_events": 7695,
+      "n_events_with_deployment_records": 3424,
+      "n_values_before_exclusion": 3424,
+      "n": 3209,
+      "excluded": {
+        "missing": 0,
+        "negative": 0,
+        "zero": 214,
+        "over_1440": 1
+      },
+      "min": 1.0,
+      "p10": 20.0,
+      "p25": 25.0,
+      "p50": 34.0,
+      "p75": 50.0,
+      "p90": 75.0,
+      "p99": 204.84,
+      "max": 1200.0,
+      "response_share": {
+        "n": 3209,
+        "min": 0.0,
+        "p10": 0.32,
+        "p25": 0.4706,
+        "p50": 0.6129,
+        "p75": 0.7442,
+        "p90": 0.8462,
+        "p99": 1.0,
+        "max": 1.0,
+        "mean": 0.5979,
+        "fraction_exactly_1": 0.024
+      },
+      "multi_record_events": 67
+    },
+    "breakdown_shoulder__cause_mechanical": {
+      "label": "Breakdown on the shoulder (cause = mechanical)",
+      "level": "cause",
+      "duration_kind": "response_plus_service_min_per_event",
+      "duration_definition": "first dispatch to last departure of the event's substantive deployment records = (first arrival - first dispatch) + (last departure - first arrival), minutes; one value per event",
+      "population": "Breakdown on the shoulder, cause = mechanical",
+      "n_events": 2954,
+      "n_events_with_deployment_records": 1204,
+      "n_values_before_exclusion": 1204,
+      "n": 1103,
+      "excluded": {
+        "missing": 0,
+        "negative": 0,
+        "zero": 98,
+        "over_1440": 3
+      },
+      "min": 1.0,
+      "p10": 23.0,
+      "p25": 30.0,
+      "p50": 42.0,
+      "p75": 63.0,
+      "p90": 107.8,
+      "p99": 328.92,
+      "max": 914.0,
+      "response_share": {
+        "n": 1103,
+        "min": 0.0135,
+        "p10": 0.2703,
+        "p25": 0.4545,
+        "p50": 0.6129,
+        "p75": 0.7791,
+        "p90": 0.9109,
+        "p99": 1.0,
+        "max": 1.0,
+        "mean": 0.6031,
+        "fraction_exactly_1": 0.0707
+      },
+      "multi_record_events": 35
+    },
+    "breakdown_shoulder__cause_fuel": {
+      "label": "Breakdown on the shoulder (cause = fuel)",
+      "level": "cause",
+      "duration_kind": "response_plus_service_min_per_event",
+      "duration_definition": "first dispatch to last departure of the event's substantive deployment records = (first arrival - first dispatch) + (last departure - first arrival), minutes; one value per event",
+      "population": "Breakdown on the shoulder, cause = fuel",
+      "n_events": 717,
+      "n_events_with_deployment_records": 221,
+      "n_values_before_exclusion": 221,
+      "n": 201,
+      "excluded": {
+        "missing": 0,
+        "negative": 0,
+        "zero": 20,
+        "over_1440": 0
+      },
+      "min": 1.0,
+      "p10": 20.0,
+      "p25": 30.0,
+      "p50": 42.0,
+      "p75": 59.0,
+      "p90": 84.0,
+      "p99": 147.0,
+      "max": 204.0,
+      "response_share": {
+        "n": 201,
+        "min": 0.0245,
+        "p10": 0.2414,
+        "p25": 0.4286,
+        "p50": 0.619,
+        "p75": 0.7647,
+        "p90": 0.8571,
+        "p99": 1.0,
+        "max": 1.0,
+        "mean": 0.583,
+        "fraction_exactly_1": 0.0448
+      },
+      "multi_record_events": 9
+    },
+    "breakdown_shoulder__cause_electrical": {
+      "label": "Breakdown on the shoulder (cause = electrical)",
+      "level": "cause",
+      "duration_kind": "response_plus_service_min_per_event",
+      "duration_definition": "first dispatch to last departure of the event's substantive deployment records = (first arrival - first dispatch) + (last departure - first arrival), minutes; one value per event",
+      "population": "Breakdown on the shoulder, cause = electrical",
+      "n_events": 1093,
+      "n_events_with_deployment_records": 364,
+      "n_values_before_exclusion": 364,
+      "n": 320,
+      "excluded": {
+        "missing": 0,
+        "negative": 0,
+        "zero": 44,
+        "over_1440": 0
+      },
+      "min": 5.0,
+      "p10": 19.0,
+      "p25": 25.0,
+      "p50": 33.0,
+      "p75": 48.25,
+      "p90": 77.2,
+      "p99": 155.48,
+      "max": 303.0,
+      "response_share": {
+        "n": 320,
+        "min": 0.0265,
+        "p10": 0.3333,
+        "p25": 0.4545,
+        "p50": 0.6,
+        "p75": 0.7206,
+        "p90": 0.8333,
+        "p99": 1.0,
+        "max": 1.0,
+        "mean": 0.5834,
+        "fraction_exactly_1": 0.0219
+      },
+      "multi_record_events": 7
+    },
+    "breakdown_shoulder__vehicle_car": {
+      "label": "Breakdown on the shoulder (vehicle = car)",
+      "level": "vehicle",
+      "duration_kind": "response_plus_service_min_per_event",
+      "duration_definition": "first dispatch to last departure of the event's substantive deployment records = (first arrival - first dispatch) + (last departure - first arrival), minutes; one value per event",
+      "population": "Breakdown on the shoulder, vehicle = car",
+      "n_events": 9880,
+      "n_events_with_deployment_records": 3370,
+      "n_values_before_exclusion": 3370,
+      "n": 3154,
+      "excluded": {
+        "missing": 0,
+        "negative": 0,
+        "zero": 215,
+        "over_1440": 1
+      },
+      "min": 2.0,
+      "p10": 19.0,
+      "p25": 24.0,
+      "p50": 32.0,
+      "p75": 45.0,
+      "p90": 63.0,
+      "p99": 126.0,
+      "max": 751.0,
+      "response_share": {
+        "n": 3154,
+        "min": 0.0,
+        "p10": 0.3015,
+        "p25": 0.4545,
+        "p50": 0.6016,
+        "p75": 0.7315,
+        "p90": 0.8293,
+        "p99": 1.0,
+        "max": 1.0,
+        "mean": 0.5826,
+        "fraction_exactly_1": 0.0159
+      },
+      "multi_record_events": 77
+    },
+    "breakdown_shoulder__vehicle_truck": {
+      "label": "Breakdown on the shoulder (vehicle = truck)",
+      "level": "vehicle",
+      "duration_kind": "response_plus_service_min_per_event",
+      "duration_definition": "first dispatch to last departure of the event's substantive deployment records = (first arrival - first dispatch) + (last departure - first arrival), minutes; one value per event",
+      "population": "Breakdown on the shoulder, vehicle = truck",
+      "n_events": 11049,
+      "n_events_with_deployment_records": 2560,
+      "n_values_before_exclusion": 2560,
+      "n": 2294,
+      "excluded": {
+        "missing": 0,
+        "negative": 0,
+        "zero": 263,
+        "over_1440": 3
+      },
+      "min": 1.0,
+      "p10": 24.0,
+      "p25": 32.0,
+      "p50": 46.0,
+      "p75": 70.0,
+      "p90": 120.0,
+      "p99": 370.42,
+      "max": 1440.0,
+      "response_share": {
+        "n": 2294,
+        "min": 0.0,
+        "p10": 0.2368,
+        "p25": 0.4167,
+        "p50": 0.6,
+        "p75": 0.7647,
+        "p90": 0.8995,
+        "p99": 1.0,
+        "max": 1.0,
+        "mean": 0.5824,
+        "fraction_exactly_1": 0.0619
+      },
+      "multi_record_events": 71
     }
   }
 }

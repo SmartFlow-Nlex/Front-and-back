@@ -74,6 +74,24 @@ from xgboost import XGBRegressor
 # leaves MAE flat (6.78 -> 6.11) and improves WMAPE (28.6% -> 21.1%), so this
 # buys a trustworthy estimate rather than a flattering one.
 VALIDATION_DAYS = 90
+# Days left out of SCORING — never out of the series. The day stays in
+# ml_daily_actuals as the 0 the source implies (so the chart shows exactly what
+# silver holds), it is not imputed, and it still feeds the lag/rolling features of
+# later days. It only stops counting toward MAE/RMSE/R2/MASE/WMAPE, because one
+# missing-data day was doing a third of the squared error: on the 2026-04-02..
+# 2026-06-30 holdout it moved the champion's RMSE from ~18.1 to 21.6. Each entry is
+# written to metadata.evaluation.excluded_from_scoring so a reader of the stored
+# metrics can see what was dropped, why, and how many days were actually scored.
+# The dashboard's live accuracy table reads that same list (incident.service.ts),
+# so the trainer and the UI cannot disagree about which days were scored.
+EVAL_EXCLUDED_DAYS: dict[str, str] = {
+    "2026-04-19": (
+        "Suspected data gap, not a real zero: silver.nlex_accident_events_clean and "
+        "silver.nlex_breakdown_events_clean both hold no rows for this ordinary Sunday, "
+        "while every other day since 2022-01-01 has events. Excluded from evaluation; "
+        "the value was not imputed."
+    ),
+}
 # 28 so the dashboard's Future control has a full month to trim: its presets are
 # 1 wk / 2 wk / 1 mo, and a preset wider than what this writes renders disabled.
 #
@@ -529,6 +547,42 @@ def evaluation_folds(n_rows: int, protocol: str) -> list[tuple[int, int]]:
     return holdout_fold(n_rows) if protocol == "holdout" else walk_forward_folds(n_rows)
 
 
+def scoring_mask(dates) -> np.ndarray:
+    """True for each date that counts toward the metrics, False for a date listed
+    in EVAL_EXCLUDED_DAYS. Applied to y_true / y_pred / y_naive together so every
+    metric — including MASE's naive denominator and R2's mean — is computed over
+    the same days."""
+    excluded = {pd.Timestamp(d).date() for d in EVAL_EXCLUDED_DAYS}
+    return np.array([pd.Timestamp(d).date() not in excluded for d in dates], dtype=bool)
+
+
+def excluded_days_in_scored_windows(feat: pd.DataFrame, protocol: str, daily: pd.DataFrame) -> list[dict]:
+    """The EVAL_EXCLUDED_DAYS that actually fall inside a scored window of THIS
+    run, as audit records for metadata. A listed day outside every test window
+    (e.g. a different --holdout-days) was not excluded from anything, so it is not
+    reported as if it were. observed_total / next_lowest_total are read from the
+    series being trained, so the record is correct for the blended and the
+    accident-only run alike."""
+    scored = np.zeros(len(feat), dtype=bool)
+    for a, b in evaluation_folds(len(feat), protocol):
+        scored[a:b] = True
+    in_window = {pd.Timestamp(d).date() for d in feat["d"][scored]}
+    out = []
+    for day, reason in EVAL_EXCLUDED_DAYS.items():
+        d = pd.Timestamp(day)
+        if d.date() not in in_window:
+            continue
+        rest = daily.loc[daily["d"] != d, "total"]
+        observed = daily.loc[daily["d"] == d, "total"]
+        out.append({
+            "date": day,
+            "reason": reason,
+            "observed_total": int(observed.iloc[0]) if len(observed) else None,
+            "next_lowest_total": int(rest.min()) if len(rest) else None,
+        })
+    return out
+
+
 def mase_of(y_true: np.ndarray, y_pred: np.ndarray, y_naive: np.ndarray) -> float | None:
     naive_mae = mean_absolute_error(y_true, y_naive)
     if naive_mae <= 0:
@@ -580,8 +634,10 @@ def full_metrics(
     train_true: np.ndarray, train_pred: np.ndarray, n_features: int,
 ) -> dict:
     """Every figure the project's model-comparison report carries. Percentage
-    errors guard against zero actuals; the daily incident series never hits 0 in
-    practice (min = 2), but a filled calendar gap could."""
+    errors guard against zero actuals. The daily incident series has exactly one
+    zero (2026-04-19, a suspected data gap that main() zero-fills and
+    EVAL_EXCLUDED_DAYS keeps out of scoring); every other day is >= 36 — but a
+    filled calendar gap can always reintroduce one."""
     y_true = np.asarray(y_true, dtype=float)
     y_pred = np.asarray(y_pred, dtype=float)
     err = y_true - y_pred
@@ -746,7 +802,8 @@ def run_evaluation(feat: pd.DataFrame, protocol: str) -> dict[str, list[dict]]:
             try:
                 print(f"  {name}...", end=" ", flush=True)
                 train_pred, val_pred = fitter(train_df, val_df)
-                m = full_metrics(val_df["total"].values, val_pred, y_val_naive,
+                keep = scoring_mask(val_df["d"])  # EVAL_EXCLUDED_DAYS: scored on the rest
+                m = full_metrics(val_df["total"].values[keep], np.asarray(val_pred)[keep], y_val_naive[keep],
                                  train_df["total"].values, train_pred, n_feat)
                 per_model_fold_metrics[name].append(m)
                 print(f"MAE={m['MAE']:.3f} Val_R2={m['R2']:.3f} {m['Diagnosis']}")
@@ -760,9 +817,11 @@ def run_evaluation(feat: pd.DataFrame, protocol: str) -> dict[str, list[dict]]:
                 train_true, train_pred, val_pred, _, _ = _cv_rnn(kind, feat, train_end, test_end)
                 val_true = feat["total"].values[max(train_end, SEQ_LEN):test_end]
                 val_naive = feat["lag_7"].values[max(train_end, SEQ_LEN):test_end]
+                keep = scoring_mask(feat["d"].values[max(train_end, SEQ_LEN):test_end])
                 # RNNs are univariate on the sequence, so only the lookback counts
                 # as a parameter for the adjusted-R2 penalty.
-                m = full_metrics(val_true, val_pred, val_naive, train_true, train_pred, SEQ_LEN)
+                m = full_metrics(val_true[keep], np.asarray(val_pred)[keep], val_naive[keep],
+                                 train_true, train_pred, SEQ_LEN)
                 per_model_fold_metrics[kind].append(m)
                 print(f"MAE={m['MAE']:.3f} Val_R2={m['R2']:.3f} {m['Diagnosis']}")
             except Exception as e:
@@ -849,6 +908,11 @@ def format_report(comparison: list[dict], champion: str, degraded: bool, evaluat
     L.append(f"  Holdout window: {evaluation['holdout_window'][0]} .. {evaluation['holdout_window'][1]}")
     L.append(f"  Train rows    : {evaluation['train_rows']}")
     L.append(f"  Selected by   : {evaluation['selected_by']}")
+    for ex in evaluation.get("excluded_from_scoring", []):
+        L.append(f"  Excluded      : {ex['date']} (observed {ex['observed_total']}, next-lowest day "
+                 f"{ex['next_lowest_total']}) — suspected data gap, left out of every metric below")
+    if evaluation.get("scored_days") is not None:
+        L.append(f"  Scored days   : {evaluation['scored_days']} of {evaluation['holdout_days']}")
     L.append("")
 
     # Rank by whichever criterion actually picked the champion. Ranking by R2
@@ -1523,6 +1587,14 @@ def main() -> None:
                      "the traffic module in gold.ml_model_metrics. 90 days rather than 14 "
                      "because R2 is unstable on a 14-day window for this series."),
         }
+        # Days left out of scoring (EVAL_EXCLUDED_DAYS), recorded so the stored metrics
+        # are auditable: which day, why, what the series held for it, and how many
+        # days the figures above were actually computed over. Always present, empty
+        # when nothing was excluded, so a reader never has to guess.
+        excluded = excluded_days_in_scored_windows(feat, args.protocol, daily)
+        evaluation["excluded_from_scoring"] = excluded
+        if args.protocol == "holdout":
+            evaluation["scored_days"] = VALIDATION_DAYS - len(excluded)
 
         report = format_report(comparison, champion, degraded, evaluation)
         report_path = Path(__file__).resolve().parent / ("model_results_accident.txt" if SERIES_LABEL == "accident" else "model_results.txt")

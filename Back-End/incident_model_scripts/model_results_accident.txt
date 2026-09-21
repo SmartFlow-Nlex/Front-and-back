@@ -8,136 +8,138 @@
   Holdout window: 2026-04-02 .. 2026-06-30
   Train rows    : 1186
   Selected by   : r2
+  Excluded      : 2026-04-19 (observed 0, next-lowest day 1) — suspected data gap, left out of every metric below
+  Scored days   : 89 of 90
 
   [SELECTED] Random Forest
   ------------------------------------------------------------
-    MAE              =       3.7796
-    MSE              =      22.5383
-    RMSE             =       4.7474
+    MAE              =       3.7019
+    MSE              =      21.5064
+    RMSE             =       4.6375
     MAPE             =      36.8956 %
-    sMAPE            =      31.5329 %
-    WMAPE            =      29.6055 %
-    Poisson_Deviance =       1.8562
-    MASE             =       0.7238
-    RMSSE            =       0.7473
-    R2               =       0.1687
-    Adjusted_R2      =       0.0002
+    sMAPE            =      29.6400 %
+    WMAPE            =      28.6747 %
+    Poisson_Deviance =       1.6367
+    MASE             =       0.7085
+    RMSSE            =       0.7285
+    R2               =       0.1588
+    Adjusted_R2      =      -0.0141
     --- Split R2 (Adviser Diagnostic) ---
     Train R2         =       0.6497
-    Val R2           =       0.1687
-    Gap              =       0.4810
+    Val R2           =       0.1588
+    Gap              =       0.4909
     DIAGNOSIS        = OVERFITTING
 
-  [RANK #2] XGBoost
+  [RANK #2] Poisson GLM
   ------------------------------------------------------------
-    MAE              =       3.8731
-    MSE              =      24.0818
-    RMSE             =       4.9073
+    MAE              =       3.8187
+    MSE              =      22.7196
+    RMSE             =       4.7665
+    MAPE             =      38.5678 %
+    sMAPE            =      30.5816 %
+    WMAPE            =      29.5793 %
+    Poisson_Deviance =       1.7377
+    MASE             =       0.7309
+    RMSSE            =       0.7487
+    R2               =       0.1113
+    Adjusted_R2      =      -0.0713
+    --- Split R2 (Adviser Diagnostic) ---
+    Train R2         =       0.2207
+    Val R2           =       0.1113
+    Gap              =       0.1094
+    DIAGNOSIS        = UNDERFITTING
+
+  [RANK #3] Negative Binomial GLM
+  ------------------------------------------------------------
+    MAE              =       3.8187
+    MSE              =      22.7196
+    RMSE             =       4.7665
+    MAPE             =      38.5678 %
+    sMAPE            =      30.5816 %
+    WMAPE            =      29.5793 %
+    Poisson_Deviance =       1.7377
+    MASE             =       0.7309
+    RMSSE            =       0.7487
+    R2               =       0.1113
+    Adjusted_R2      =      -0.0713
+    --- Split R2 (Adviser Diagnostic) ---
+    Train R2         =       0.2207
+    Val R2           =       0.1113
+    Gap              =       0.1094
+    DIAGNOSIS        = UNDERFITTING
+
+  [RANK #4] XGBoost
+  ------------------------------------------------------------
+    MAE              =       3.8099
+    MSE              =      23.3387
+    RMSE             =       4.8310
     MAPE             =      37.5050 %
-    sMAPE            =      32.2377 %
-    WMAPE            =      30.3377 %
-    Poisson_Deviance =       1.9494
-    MASE             =       0.7417
-    RMSSE            =       0.7725
-    R2               =       0.1118
-    Adjusted_R2      =      -0.0683
+    sMAPE            =      30.3528 %
+    WMAPE            =      29.5111 %
+    Poisson_Deviance =       1.7579
+    MASE             =       0.7292
+    RMSSE            =       0.7589
+    R2               =       0.0871
+    Adjusted_R2      =      -0.1005
     --- Split R2 (Adviser Diagnostic) ---
     Train R2         =       0.7097
-    Val R2           =       0.1118
-    Gap              =       0.5979
+    Val R2           =       0.0871
+    Gap              =       0.6226
     DIAGNOSIS        = OVERFITTING
-
-  [RANK #3] Poisson GLM
-  ------------------------------------------------------------
-    MAE              =       3.9284
-    MSE              =      24.5484
-    RMSE             =       4.9546
-    MAPE             =      38.5678 %
-    sMAPE            =      32.4640 %
-    WMAPE            =      30.7704 %
-    Poisson_Deviance =       2.0225
-    MASE             =       0.7522
-    RMSSE            =       0.7799
-    R2               =       0.0946
-    Adjusted_R2      =      -0.0890
-    --- Split R2 (Adviser Diagnostic) ---
-    Train R2         =       0.2207
-    Val R2           =       0.0946
-    Gap              =       0.1261
-    DIAGNOSIS        = UNDERFITTING
-
-  [RANK #4] Negative Binomial GLM
-  ------------------------------------------------------------
-    MAE              =       3.9284
-    MSE              =      24.5484
-    RMSE             =       4.9546
-    MAPE             =      38.5678 %
-    sMAPE            =      32.4640 %
-    WMAPE            =      30.7704 %
-    Poisson_Deviance =       2.0225
-    MASE             =       0.7522
-    RMSSE            =       0.7799
-    R2               =       0.0946
-    Adjusted_R2      =      -0.0890
-    --- Split R2 (Adviser Diagnostic) ---
-    Train R2         =       0.2207
-    Val R2           =       0.0946
-    Gap              =       0.1261
-    DIAGNOSIS        = UNDERFITTING
 
   [RANK #5] SARIMAX
   ------------------------------------------------------------
-    MAE              =       4.0133
-    MSE              =      26.2984
-    RMSE             =       5.1282
+    MAE              =       3.9340
+    MSE              =      25.2153
+    RMSE             =       5.0215
     MAPE             =      39.3289 %
-    sMAPE            =      32.8034 %
-    WMAPE            =      31.4360 %
-    Poisson_Deviance =       2.0885
-    MASE             =       0.7685
-    RMSSE            =       0.8073
-    R2               =       0.0300
-    Adjusted_R2      =      -0.1666
+    sMAPE            =      30.9248 %
+    WMAPE            =      30.4719 %
+    Poisson_Deviance =       1.8630
+    MASE             =       0.7530
+    RMSSE            =       0.7888
+    R2               =       0.0137
+    Adjusted_R2      =      -0.1890
     --- Split R2 (Adviser Diagnostic) ---
     Train R2         =       0.0420
-    Val R2           =       0.0300
-    Gap              =       0.0120
+    Val R2           =       0.0137
+    Gap              =       0.0284
     DIAGNOSIS        = UNDERFITTING
 
   [RANK #6] GRU
   ------------------------------------------------------------
-    MAE              =       4.0145
-    MSE              =      26.7976
-    RMSE             =       5.1766
+    MAE              =       3.9255
+    MSE              =      25.5001
+    RMSE             =       5.0498
     MAPE             =      42.9522 %
-    sMAPE            =      33.0470 %
-    WMAPE            =      31.4448 %
-    Poisson_Deviance =       2.1934
-    MASE             =       0.7687
-    RMSSE            =       0.8149
-    R2               =       0.0116
-    Adjusted_R2      =      -0.1729
+    sMAPE            =      31.1711 %
+    WMAPE            =      30.4067 %
+    Poisson_Deviance =       1.9500
+    MASE             =       0.7513
+    RMSSE            =       0.7932
+    R2               =       0.0025
+    Adjusted_R2      =      -0.1862
     --- Split R2 (Adviser Diagnostic) ---
     Train R2         =       0.0653
-    Val R2           =       0.0116
-    Gap              =       0.0537
+    Val R2           =       0.0025
+    Gap              =       0.0628
     DIAGNOSIS        = UNDERFITTING
 
   [RANK #7] LSTM
   ------------------------------------------------------------
-    MAE              =       4.2223
-    MSE              =      28.7817
-    RMSE             =       5.3649
+    MAE              =       4.1257
+    MSE              =      27.2583
+    RMSE             =       5.2209
     MAPE             =      44.7496 %
-    sMAPE            =      34.5657 %
-    WMAPE            =      33.0728 %
-    Poisson_Deviance =       2.3478
-    MASE             =       0.8085
-    RMSSE            =       0.8445
-    R2               =      -0.0616
-    Adjusted_R2      =      -0.2597
+    sMAPE            =      32.7069 %
+    WMAPE            =      31.9570 %
+    Poisson_Deviance =       2.0860
+    MASE             =       0.7896
+    RMSSE            =       0.8201
+    R2               =      -0.0662
+    Adjusted_R2      =      -0.2680
     --- Split R2 (Adviser Diagnostic) ---
     Train R2         =       0.0147
-    Val R2           =      -0.0616
-    Gap              =       0.0763
+    Val R2           =      -0.0662
+    Gap              =       0.0810
     DIAGNOSIS        = UNDERFITTING

@@ -45,8 +45,22 @@ type SegmentRisk = {
   predictedIncidents: number;
   lastObservedCount: number | null;
   rank: number;
+  // false = the model never saw an incident at this exit, so its 0.0 means "no
+  // data", not "forecast safe". Optional so an older payload renders as before.
+  hasData?: boolean;
+  historyEventCount?: number | null;
 };
-type SegmentRiskByKm = { label: string; kmStart: number; kmEnd: number; predictedIncidents: number; rank: number };
+type SegmentRiskByKm = {
+  label: string;
+  kmStart: number;
+  kmEnd: number;
+  predictedIncidents: number;
+  rank: number | null;
+  // full = both bounding exits have history; partial = one does (the value is that
+  // exit's alone); none = neither does (no forecast to show).
+  coverage?: "full" | "partial" | "none";
+  noDataExits?: string[];
+};
 type SpatialData = {
   segmentRisk: SegmentRisk[];
   segmentRiskByKm: SegmentRiskByKm[];
@@ -110,41 +124,62 @@ export default function PredictiveCorridorChart() {
 
   // Common shape both views reduce to, so one chart/callout implementation
   // serves either grouping instead of two near-duplicate ones.
-  type Row = { key: string; label: string; tooltipDetail: string; value: number; lastObserved: number | null };
+  // noData: the model has no incident history here (see SegmentRisk.hasData), so
+  // there is no forecast to draw — the row says so instead of showing a bare 0.0,
+  // which would read as "confirmed safe" for a stretch that is simply uncovered.
+  // partialOf: a stretch where only one bounding exit has data; its value is that
+  // exit's alone, and the exits named here are NOT averaged in as zeros.
+  type Row = {
+    key: string; label: string; tooltipDetail: string; value: number; lastObserved: number | null;
+    noData: boolean; partialOf?: string[]; km: number; historyCount?: number | null;
+  };
   const useKmView = view === "km" && data.segmentRiskByKm.length > 0;
 
   const exitRows: Row[] = data.segmentRisk.map((x) => ({
     key: `exit-${x.exitId}`, label: x.exitName, tooltipDetail: `Km ${x.km}`,
     value: x.predictedIncidents, lastObserved: x.lastObservedCount,
+    noData: x.hasData === false, km: x.km, historyCount: x.historyEventCount ?? null,
   }));
   const kmRows: Row[] = [...data.segmentRiskByKm]
     .sort((a, b) => a.kmStart - b.kmStart)
     .map((x) => ({
       key: `seg-${x.kmStart}`, label: x.label, tooltipDetail: `Km ${x.kmStart}–${x.kmEnd}`,
       value: x.predictedIncidents, lastObserved: null,
+      noData: x.coverage === "none", km: x.kmStart,
+      partialOf: x.coverage === "partial" ? (x.noDataExits ?? []) : undefined,
     }));
 
-  const byValue = [...exitRows].sort((a, b) => b.value - a.value);
-  const maxValue = Math.max(...(useKmView ? kmRows : exitRows).map((x) => x.value), 1e-9);
-  const exitTotal = exitRows.reduce((s, x) => s + x.value, 0);
+  // Everything ranked, scaled and totalled below uses only rows that HAVE a
+  // forecast — a no-data row must not take a rank, stretch the axis, or count
+  // toward the corridor total.
+  const rankedExitRows = exitRows.filter((x) => !x.noData);
+  const noDataExitRows = exitRows.filter((x) => x.noData).sort((a, b) => a.km - b.km);
+  const rankedKmRows = kmRows.filter((x) => !x.noData);
+
+  const byValue = [...rankedExitRows].sort((a, b) => b.value - a.value);
+  const maxValue = Math.max(...(useKmView ? rankedKmRows : rankedExitRows).map((x) => x.value), 1e-9);
+  const exitTotal = rankedExitRows.reduce((s, x) => s + x.value, 0);
   const topN = Math.min(3, byValue.length);
   const topNShare = exitTotal > 0 ? byValue.slice(0, topN).reduce((s, x) => s + x.value, 0) / exitTotal : 0;
 
-  // Exit view is a leaderboard (rank order, top-3 tier + the rest); Km view
-  // keeps corridor order (Km 0 first) with no tiering, since walking the
-  // corridor is that view's whole point.
-  const topKmRow = [...kmRows].sort((a, b) => b.value - a.value)[0];
+  // Exit view is a leaderboard (rank order, top-3 tier + the rest, then the exits
+  // with no data); Km view keeps corridor order (Km 0 first) with no tiering,
+  // since walking the corridor is that view's whole point — so its no-data
+  // stretches stay where they are on the corridor.
+  const topKmRow = [...rankedKmRows].sort((a, b) => b.value - a.value)[0];
   const headline = useKmView ? topKmRow : byValue[0];
   const topTierRows = useKmView ? [] : byValue.slice(0, 3);
   const remainingRows = useKmView ? kmRows : byValue.slice(3);
+  const noDataGroupRows = useKmView ? [] : noDataExitRows;
+  const noDataExitNames = noDataExitRows.map((x) => x.label);
   const axisTicks = [0, 0.25, 0.5, 0.75, 1].map((f) => maxValue * f);
 
   const forecastDate = data.segmentRisk[0]?.forecastDate ?? null;
   const lstm = data.metadata?.spatial_lstm?.metrics;
 
   const renderRow = (row: Row, displayIndex: number, tier: "top" | "remaining") => {
-    const pct = maxValue > 0 ? Math.max((row.value / maxValue) * 100, row.value > 0 ? 2 : 0) : 0;
-    const isHighest = headline != null && row.key === headline.key;
+    const pct = row.noData ? 0 : maxValue > 0 ? Math.max((row.value / maxValue) * 100, row.value > 0 ? 2 : 0) : 0;
+    const isHighest = !row.noData && headline != null && row.key === headline.key;
     const isTop = tier === "top";
     const barHeight = isTop ? 20 : 13;
     return (
@@ -155,7 +190,7 @@ export default function PredictiveCorridorChart() {
         style={{
           position: "relative",
           display: "grid",
-          gridTemplateColumns: "26px minmax(120px, 240px) 1fr 64px",
+          gridTemplateColumns: "26px minmax(120px, 240px) 1fr 76px",
           columnGap: "10px",
           alignItems: "center",
           padding: isTop ? "6px 8px" : "3px 8px",
@@ -165,16 +200,38 @@ export default function PredictiveCorridorChart() {
         }}
       >
         <span style={{ fontSize: isTop ? "0.9rem" : "0.74rem", fontWeight: isTop ? 800 : 600, color: isTop ? "#0f172a" : "#94a3b8", textAlign: "right" }}>
-          {displayIndex}
+          {row.noData ? "—" : displayIndex}
         </span>
         <span
           title={row.tooltipDetail ? `${row.label} (${row.tooltipDetail})` : row.label}
-          style={{ fontSize: isTop ? "0.85rem" : "0.76rem", fontWeight: isTop ? 700 : 500, color: "#334155", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
+          style={{
+            fontSize: isTop ? "0.85rem" : "0.76rem", fontWeight: isTop ? 700 : 500,
+            color: row.noData ? "#64748b" : "#334155",
+            overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
+          }}
         >
           {row.label}
+          {row.partialOf && (
+            <span
+              style={{
+                marginLeft: 6, fontSize: "0.58rem", fontWeight: 800, color: "#92400e", background: "#fffbeb",
+                border: "1px solid #fde68a", borderRadius: "999px", padding: "0 5px", verticalAlign: "middle",
+              }}
+            >
+              partial
+            </span>
+          )}
         </span>
         <div style={{ position: "relative" }}>
-          <div style={{ height: barHeight, borderRadius: "999px", background: "#eef1f7", overflow: "hidden" }}>
+          {/* A hatched, empty track for a no-data row: it has no bar because there is nothing to size one by. */}
+          <div
+            style={{
+              height: barHeight, borderRadius: "999px", overflow: "hidden",
+              background: row.noData
+                ? "repeating-linear-gradient(135deg, #f1f5f9 0 6px, #e2e8f0 6px 12px)"
+                : "#eef1f7",
+            }}
+          >
             <div
               style={{
                 height: "100%",
@@ -208,9 +265,27 @@ export default function PredictiveCorridorChart() {
               <div style={{ fontWeight: 700 }}>
                 {row.label}{row.tooltipDetail ? ` (${row.tooltipDetail})` : ""}
               </div>
-              <div>{fmtNum(row.value, 1)} predicted incidents · next 24h</div>
-              {row.lastObserved != null && (
-                <div style={{ color: "#94a3b8" }}>{fmtInt(row.lastObserved)} observed the last day</div>
+              {row.noData ? (
+                <div>
+                  No incident data. Nothing has ever been recorded {useKmView ? "along this stretch" : "at this exit"}, so
+                  there is no forecast — a coverage gap in the source, not a low-risk reading.
+                </div>
+              ) : (
+                <>
+                  <div>{fmtNum(row.value, 1)} predicted incidents · next 24h</div>
+                  {row.partialOf && (
+                    <div style={{ color: "#fcd34d" }}>
+                      Partial: based on the bound with data only. {row.partialOf.join(" and ")} has no incident data and
+                      is not averaged in as a zero.
+                    </div>
+                  )}
+                  {row.lastObserved != null && (
+                    <div style={{ color: "#94a3b8" }}>{fmtInt(row.lastObserved)} observed the last day</div>
+                  )}
+                  {row.historyCount != null && (
+                    <div style={{ color: "#94a3b8" }}>{fmtInt(row.historyCount)} incidents on record here</div>
+                  )}
+                </>
               )}
             </div>
           )}
@@ -218,11 +293,15 @@ export default function PredictiveCorridorChart() {
         <span
           style={{
             justifySelf: "end", padding: isTop ? "4px 12px" : "2px 9px", borderRadius: "8px",
-            background: "#fff", border: `1.5px solid ${isTop ? "#c7d2fe" : "#e2e8f0"}`,
-            fontSize: isTop ? "0.85rem" : "0.74rem", fontWeight: isTop ? 800 : 700, color: "#1e1b4b",
+            background: row.noData ? "#f8fafc" : "#fff",
+            border: row.noData ? "1.5px dashed #cbd5e1" : `1.5px solid ${isTop ? "#c7d2fe" : "#e2e8f0"}`,
+            fontSize: row.noData ? "0.68rem" : isTop ? "0.85rem" : "0.74rem",
+            fontWeight: row.noData ? 700 : isTop ? 800 : 700,
+            color: row.noData ? "#64748b" : "#1e1b4b",
+            whiteSpace: "nowrap",
           }}
         >
-          {fmtNum(row.value, 1)}
+          {row.noData ? "No data" : fmtNum(row.value, 1)}
         </span>
       </div>
     );
@@ -233,7 +312,7 @@ export default function PredictiveCorridorChart() {
       <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: "12px", flexWrap: "wrap" }}>
         <h3 style={{ fontSize: "1.05rem", color: "#0f172a", fontWeight: 700, margin: 0, letterSpacing: "-0.01em" }}>
           Predicted Incidents Ranking
-          <InfoTooltip text="A trained per-exit model, not a split of the forecast above: a Spatial LSTM (one network shared across all 20 exits, fed each exit's own recent incident history plus its nearest neighbours') forecasts each exit's next-day incident count. Accidents and breakdowns are both counted, placed by corridor_km. It is a snapshot from the last training run, so it does not follow the Range/Weather/Volume/Models controls above. By Km averages the two exits that bound each stretch — the model predicts at exits, not at arbitrary positions." />
+          <InfoTooltip text="A trained per-exit model, not a split of the forecast above: a Spatial LSTM (one network shared across all 20 exits, fed each exit's own recent incident history plus its nearest neighbours') forecasts each exit's next-day incident count. Accidents and breakdowns are both counted, placed by corridor_km. It is a snapshot from the last training run, so it does not follow the Range/Weather/Volume/Models controls above. By Km averages the two exits that bound each stretch — the model predicts at exits, not at arbitrary positions. An exit that has never had an incident recorded shows No data and is not ranked; in By Km it is left out of the average rather than counted as a zero." />
         </h3>
         <div style={{ display: "inline-flex", gap: "2px", padding: "3px", background: "var(--bg-surface, #fff)", border: "1px solid #dce2ef", borderRadius: "999px" }}>
           {(["exit", "km"] as const).map((v) => (
@@ -279,6 +358,16 @@ export default function PredictiveCorridorChart() {
           </p>
         </div>
       )}
+      {noDataExitNames.length > 0 && (
+        <div style={{ padding: "8px 12px", borderRadius: "10px", background: "#f8fafc", border: "1px dashed #cbd5e1" }}>
+          <p style={{ margin: 0, fontSize: "0.8rem", color: "#475569" }}>
+            <strong>{noDataExitNames.join(" and ")}</strong> {noDataExitNames.length > 1 ? "have" : "has"} no incident data:
+            no accident or breakdown has ever been recorded {noDataExitNames.length > 1 ? "at either" : "there"}, so the model has
+            nothing to forecast from. That is missing coverage, not a confirmed-safe stretch — {noDataExitNames.length > 1 ? "they are" : "it is"} left out of
+            the ranking and the totals above{useKmView ? ", and stretches that touch " + (noDataExitNames.length > 1 ? "them are" : "it is") + " marked partial or no data" : ""}.
+          </p>
+        </div>
+      )}
       <div style={{ width: "100%" }}>
         <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: "10px", flexWrap: "wrap", marginBottom: "6px" }}>
           <div>
@@ -318,7 +407,18 @@ export default function PredictiveCorridorChart() {
           </>
         )}
 
-        <div style={{ display: "grid", gridTemplateColumns: "26px minmax(120px, 240px) 1fr 64px", columnGap: "10px", marginTop: "6px" }}>
+        {noDataGroupRows.length > 0 && (
+          <>
+            <div style={{ fontSize: "0.66rem", fontWeight: 700, color: "#94a3b8", letterSpacing: "0.04em", textTransform: "uppercase", margin: "12px 0 2px 0" }}>
+              No incident data — not ranked
+            </div>
+            <div style={{ display: "flex", flexDirection: "column", gap: "1px" }}>
+              {noDataGroupRows.map((row) => renderRow(row, 0, "remaining"))}
+            </div>
+          </>
+        )}
+
+        <div style={{ display: "grid", gridTemplateColumns: "26px minmax(120px, 240px) 1fr 76px", columnGap: "10px", marginTop: "6px" }}>
           <span />
           <span />
           <div style={{ display: "flex", justifyContent: "space-between", borderTop: "1px solid #e2e8f0", paddingTop: "4px" }}>

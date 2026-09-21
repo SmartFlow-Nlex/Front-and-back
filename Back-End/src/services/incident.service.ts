@@ -1604,7 +1604,25 @@ export function buildIncidentPredictiveResponse(
   // via the caller's SQL, Weather via this filter) — so composing the two
   // filters and re-reading the metrics table shows the number that matches
   // what's on screen, not a number from a different slice of history.
-  const rangeAligned = toAlignedValidationRows(predictions, actualByDate, wetByDate, availableModels, includeVolume, includeWeather);
+  // Days the trainer left out of scoring (metadata.evaluation.excluded_from_scoring —
+  // a suspected data gap, e.g. 2026-04-19, where the source holds no rows at all).
+  // The live accuracy numbers below must drop the same days, or this table would
+  // contradict the metrics stored beside the model. Only the SCORING is affected:
+  // `daily` (what the chart draws) still shows the day exactly as recorded.
+  const excludedScoringDates = new Set(
+    (
+      (metadata.evaluation as { excluded_from_scoring?: { date?: unknown }[] } | undefined)
+        ?.excluded_from_scoring ?? []
+    )
+      .map((d) => d?.date)
+      .filter((d): d is string => typeof d === "string")
+  );
+  const scoredOnly = <T extends { date: string }>(rows: T[]): T[] =>
+    excludedScoringDates.size === 0 ? rows : rows.filter((r) => !excludedScoringDates.has(r.date));
+
+  const rangeAligned = scoredOnly(
+    toAlignedValidationRows(predictions, actualByDate, wetByDate, availableModels, includeVolume, includeWeather)
+  );
   const weatherFilteredRangeAligned =
     filters.weather === "all" ? rangeAligned : rangeAligned.filter((r) => r.isWet === (filters.weather === "wet"));
 
@@ -1682,7 +1700,9 @@ export function buildIncidentPredictiveResponse(
   // holdoutPredictions/holdoutActuals carry the full holdout independent of
   // whatever the user picked in the Range control.
   const holdoutActualByDate = new Map(holdoutActuals.map((r) => [r.date, Number(r.total)]));
-  const holdoutAligned = toAlignedValidationRows(holdoutPredictions, holdoutActualByDate, wetByDate, availableModels, includeVolume, includeWeather);
+  const holdoutAligned = scoredOnly(
+    toAlignedValidationRows(holdoutPredictions, holdoutActualByDate, wetByDate, availableModels, includeVolume, includeWeather)
+  );
 
   const weatherMetrics =
     filters.weather === "all"

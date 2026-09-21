@@ -221,11 +221,23 @@ export default function TrafficMapPanel({ title, subtitle, badge, endpoint, laye
     /* The Current alerts list asks for a report by dispatching this. The map
        owns both the camera and the detail panel, so the sidebar hands over the
        record it already has rather than the two components trying to share
-       state — same pattern as nlex:flyto above. */
+       state — same pattern as nlex:flyto above.
+
+       The camera moves on BOTH panels and the detail panel opens on only one.
+       This component is mounted twice, live and forecast, and the event goes to
+       the window, so both were answering it: clicking a hazard put a card
+       reading "Reported 14 min ago · Waze driver" over the forecast map, which
+       does not carry reports at all -- renderAlerts is realtime-only, so the
+       forecast map was describing a marker it had never drawn, and describing
+       an observation on a panel whose whole job is prediction.
+
+       The flyTo stays on both, because keeping the two maps over the same
+       stretch is the point of having them side by side. */
+    const showsReports = endpoint.includes("real-time");
     const onShowReport = (e: Event) => {
       const d = (e as CustomEvent<ReportDetail>).detail;
       if (!d) return;
-      setSelectedReport(d);
+      if (showsReports) setSelectedReport(d);
       if (d.lon != null && d.lat != null && Number.isFinite(d.lon) && Number.isFinite(d.lat)) {
         map.flyTo({ center: [d.lon, d.lat], zoom: 13, duration: 900 });
       }

@@ -65,7 +65,9 @@ type SpatialData = {
   segmentRisk: SegmentRisk[];
   segmentRiskByKm: SegmentRiskByKm[];
   metadata: {
-    spatial_lstm?: { metrics?: { MAE?: number; baseline_mae_per_exit_mean?: number; n?: number } };
+    // n / n_exits count only exits that have incident history (the trainer skips
+    // the no-data exits when scoring), so the caption below matches what is ranked.
+    spatial_lstm?: { metrics?: { MAE?: number; baseline_mae_per_exit_mean?: number; n?: number; n_exits?: number } };
   } | null;
   trainedAt: string | null;
 };
@@ -267,8 +269,8 @@ export default function PredictiveCorridorChart() {
               </div>
               {row.noData ? (
                 <div>
-                  No incident data. Nothing has ever been recorded {useKmView ? "along this stretch" : "at this exit"}, so
-                  there is no forecast — a coverage gap in the source, not a low-risk reading.
+                  No incident data. No accident or breakdown records are loaded {useKmView ? "for this stretch" : "for this exit"}, so
+                  there is no forecast — a coverage gap in the loaded data, not a low-risk reading.
                 </div>
               ) : (
                 <>
@@ -338,7 +340,8 @@ export default function PredictiveCorridorChart() {
         Spatial LSTM forecast{forecastDate ? ` for ${forecastDate}` : ""}, as of the last training run.
         {lstm?.MAE != null && lstm.baseline_mae_per_exit_mean != null && (
           <> Holdout error {fmtNum(lstm.MAE, 2)} incidents per exit-day, against {fmtNum(lstm.baseline_mae_per_exit_mean, 2)} for simply
-          assuming each exit&apos;s historical average{lstm.n != null ? ` (${fmtInt(lstm.n)} exit-days)` : ""}.</>
+          assuming each exit&apos;s historical average
+          {lstm.n != null ? ` (${fmtInt(lstm.n)} exit-days${lstm.n_exits != null ? ` across the ${lstm.n_exits} exits with data` : ""})` : ""}.</>
         )}
         {useKmView && <> Listed in corridor order (Km 0 first), not by rank.</>}
       </p>
@@ -362,7 +365,7 @@ export default function PredictiveCorridorChart() {
         <div style={{ padding: "8px 12px", borderRadius: "10px", background: "#f8fafc", border: "1px dashed #cbd5e1" }}>
           <p style={{ margin: 0, fontSize: "0.8rem", color: "#475569" }}>
             <strong>{noDataExitNames.join(" and ")}</strong> {noDataExitNames.length > 1 ? "have" : "has"} no incident data:
-            no accident or breakdown has ever been recorded {noDataExitNames.length > 1 ? "at either" : "there"}, so the model has
+            no accident or breakdown records are loaded {noDataExitNames.length > 1 ? "for either" : "for it"}, so the model has
             nothing to forecast from. That is missing coverage, not a confirmed-safe stretch — {noDataExitNames.length > 1 ? "they are" : "it is"} left out of
             the ranking and the totals above{useKmView ? ", and stretches that touch " + (noDataExitNames.length > 1 ? "them are" : "it is") + " marked partial or no data" : ""}.
           </p>

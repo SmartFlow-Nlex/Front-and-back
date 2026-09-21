@@ -57,9 +57,17 @@ const NLEX_PLAZA_NORMALIZED = new Set(
   )
 );
 
-// NLEX corridor km-post range (Balintawak Km 0 to Sta. Ines/Dau Km ~84)
+// NLEX corridor km-post range, on the DPWH national-highway scale (measured from
+// Manila; Balintawak sits at ~km 12) that accident_data/breakdown_data's StartKM and the
+// legacy "Km N" location text both use. The mainline ends at Sta. Ines, km 88.70
+// (published posts: Dau 83.35, SCTEX 85.56, Sta. Ines 88.70). This was 84 — a figure
+// written as "Sta. Ines/Dau Km ~84", i.e. Dau's post mistaken for Sta. Ines' — and it
+// silently rejected everything from Dau to Sta. Ines: 376 accident and 1,516 breakdown
+// rows in the client's 2022-2026 CSVs (km 84.1-88.9), leaving SCTEX and Sta. Ines with no
+// incident history at all. 89.0 = Sta. Ines plus a 0.3 km buffer; the only CSV rows
+// beyond it are six breakdowns at km 90.0, 96.0, 97.2 and 98.0, well past the terminus.
 const NLEX_KM_MIN = 0;
-const NLEX_KM_MAX = 84;
+const NLEX_KM_MAX = 89;
 
 // ── Normalization Helpers ────────────────────────────────────────────
 
@@ -227,7 +235,7 @@ function cleanIncident(rows: RawRow[], type: "road_crash" | "stalled_vehicle" | 
     const isValidKm = km !== null && isNlexKmPost(km);
 
     if (!isPlaza && !isValidKm) {
-      rejected.push({ row, reason: `Location '${location}' is NOT in the NLEX corridor (Km 0–84).` });
+      rejected.push({ row, reason: `Location '${location}' is NOT in the NLEX corridor (Km ${NLEX_KM_MIN}–${NLEX_KM_MAX}).` });
       continue;
     }
 

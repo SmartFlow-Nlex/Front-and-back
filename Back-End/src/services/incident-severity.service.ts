@@ -109,6 +109,12 @@ export type IncidentSeverityData = {
   meanPredictedClearanceMin: number | null;
   avgSecondaryRisk: number | null;
   secondaryRiskByExit: SecondaryRiskByExit[];
+  // Exits on the corridor's reference list that no held-out incident resolved to, in
+  // corridor order. They are absent from secondaryRiskByExit because there is nothing
+  // to average — not because they scored low — so the panel names them instead of
+  // silently listing fewer exits than the corridor has (SCTEX and Sta. Ines today:
+  // no incident records are loaded for either).
+  exitsWithoutData: string[];
   secondaryRiskByKmSegment: SecondaryRiskByKmSegment[];
   trainedAt: string | null;
   metadata: Record<string, unknown> | null;
@@ -280,6 +286,10 @@ export async function getIncidentSeverityFromDb(): Promise<IncidentSeverityData 
       meanPredictedClearanceMin: avg?.avg_clearance_mean == null ? null : Number(avg.avg_clearance_mean),
       avgSecondaryRisk: avg?.avg_risk == null ? null : Number(avg.avg_risk),
       secondaryRiskByExit,
+      exitsWithoutData: exits
+        .filter((x) => !byExit.has(x.exit_id))
+        .sort((a, b) => a.km - b.km)
+        .map((x) => x.exit_name),
       secondaryRiskByKmSegment,
       trainedAt: avg?.trained_at ? new Date(avg.trained_at).toISOString() : null,
       metadata: metaRes.rows[0]?.metadata_json ?? null,

@@ -614,12 +614,40 @@ def fit_spatial_lstm(panel: pd.DataFrame, exits_df: pd.DataFrame, holdout_days: 
     val_exit_ids = [m_[0] for m_, v in zip(meta, is_val) if v]
     baseline_pred = np.array([train_mean_by_exit.get(e, float(y_tr.mean())) for e in val_exit_ids])
 
+    # Score only exits that have EVER had an incident. An exit with no history
+    # (until 2026-09-21 SCTEX and Sta. Ines: etl/cleaner.ts's NLEX_KM_MAX = 84 rejected
+    # every row beyond km-post 84.0 at load, although the client's CSVs held some — a
+    # loader gap, not an absence of incidents; the cap is now 89 and every exit has
+    # history, so nothing is excluded today) has an all-zero series that any model —
+    # including the per-exit-mean baseline
+    # — "predicts" perfectly, so counting its exit-days pads n and pulls both MAE
+    # figures down without saying anything about how well real exits are forecast
+    # (2 of 20 exits = 10% of exit-days, ~11% too-low MAE). Same definition as the
+    # dashboard's No-data marking (incident-spatial.service.ts): zero events over the
+    # whole panel. Training is untouched — these exits still feed the network as
+    # before; only the SCORING skips them. The all-exit figures are kept under
+    # "all_exits" so the change is auditable against earlier runs.
+    ids_with_history = set(panel.groupby("exit_id")["count"].sum().loc[lambda s: s > 0].index)
+    keep = np.array([e in ids_with_history for e in val_exit_ids], dtype=bool)
+    excluded_names = (
+        exits_df[~exits_df["exit_id"].isin(ids_with_history)].sort_values("km")["exit_name"].tolist()
+    )
+
     metrics = {
-        "MAE": mae_of(y_val_np, val_pred_count),
-        "Poisson_Deviance": poisson_deviance_of(y_val_np, val_pred_count),
-        "baseline_mae_per_exit_mean": mae_of(y_val_np, baseline_pred),
-        "baseline_mae_zero": mae_of(y_val_np, np.zeros_like(y_val_np)),
-        "n": int(len(y_val_np)),
+        "MAE": mae_of(y_val_np[keep], val_pred_count[keep]),
+        "Poisson_Deviance": poisson_deviance_of(y_val_np[keep], val_pred_count[keep]),
+        "baseline_mae_per_exit_mean": mae_of(y_val_np[keep], baseline_pred[keep]),
+        "baseline_mae_zero": mae_of(y_val_np[keep], np.zeros_like(y_val_np[keep])),
+        "n": int(keep.sum()),
+        "n_exits": len(ids_with_history & set(val_exit_ids)),
+        "excluded_exits": excluded_names,
+        "all_exits": {
+            "MAE": mae_of(y_val_np, val_pred_count),
+            "Poisson_Deviance": poisson_deviance_of(y_val_np, val_pred_count),
+            "baseline_mae_per_exit_mean": mae_of(y_val_np, baseline_pred),
+            "baseline_mae_zero": mae_of(y_val_np, np.zeros_like(y_val_np)),
+            "n": int(len(y_val_np)),
+        },
         "epochs_trained": epoch + 1,
     }
 
@@ -781,7 +809,11 @@ def print_report(gwr_out: dict, lstm_out: dict) -> str:
     L.append(f"    Poisson_Deviance = {lstm_out['metrics']['Poisson_Deviance']:.3f}")
     L.append(f"    baseline MAE     = {lstm_out['metrics']['baseline_mae_per_exit_mean']:.3f} (per-exit train mean)  "
              f"{lstm_out['metrics']['baseline_mae_zero']:.3f} (predict zero)")
-    L.append(f"    holdout n        = {lstm_out['metrics']['n']}")
+    L.append(f"    holdout n        = {lstm_out['metrics']['n']} exit-days across {lstm_out['metrics']['n_exits']} exits")
+    if lstm_out["metrics"]["excluded_exits"]:
+        allx = lstm_out["metrics"]["all_exits"]
+        L.append(f"    not scored       : {', '.join(lstm_out['metrics']['excluded_exits'])} (no incident history)")
+        L.append(f"    (all-exit figures: MAE {allx['MAE']:.3f}, baseline {allx['baseline_mae_per_exit_mean']:.3f}, n {allx['n']})")
     L.append(f"    epochs trained   = {lstm_out['metrics']['epochs_trained']}")
     L.append("")
     L.append("  Next-24h high-risk segments (top 5):")

@@ -38,6 +38,9 @@ type SeverityData = {
   meanPredictedClearanceMin: number | null;
   avgSecondaryRisk: number | null;
   secondaryRiskByExit: SecondaryRiskByExit[];
+  // Exits with no held-out incident to score (see the service's own note) — named
+  // in the panel so "18 exits" is never a silent gap in a 20-exit corridor.
+  exitsWithoutData?: string[];
   secondaryRiskByKmSegment: SecondaryRiskByKmSegment[];
   trainedAt: string | null;
   metadata: Metadata | null;
@@ -109,6 +112,7 @@ export default function SecondaryIncidentRiskPanel() {
     n: x.n, avgRisk: x.avgRisk, actualSecondaryCount: x.actualSecondaryCount,
   }));
   const allRows = view === "km" ? kmRows : exitRows;
+  const missingExits = data.exitsWithoutData ?? [];
 
   // Top corridors only, not all of them — cut by evidence, not by a round
   // number. Sorted by n descending, kept until the running total crosses
@@ -302,6 +306,12 @@ export default function SecondaryIncidentRiskPanel() {
             held-out incidents — enough evidence to rank with some confidence. Even within this set n still varies,
             so thin bars are less certain than they look; the rest are listed, not dropped, below.
           </p>
+          {view === "exit" && missingExits.length > 0 && (
+            <p style={{ color: "#94a3b8", fontSize: "0.72rem", margin: "-4px 0 10px 0" }}>
+              Showing {allRows.length} of {allRows.length + missingExits.length} exits — {missingExits.join(" and ")}{" "}
+              {missingExits.length > 1 ? "have" : "has"} no incident data to score, so {missingExits.length > 1 ? "they are" : "it is"} not listed.
+            </p>
+          )}
           <div style={{ display: "flex", flexDirection: "column", gap: "2px" }}>
             {topRows.map((row, i) => renderRow(row, i + 1))}
           </div>

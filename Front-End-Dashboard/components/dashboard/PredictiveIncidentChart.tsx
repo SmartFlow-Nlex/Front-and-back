@@ -514,6 +514,25 @@ export default function PredictiveIncidentChart({
     splitLine("Breakdown forecast (derived)", effBdP, BREAKDOWN_COLOR, true),
   ];
 
+  // Legend swatches for the split view: three short bars read as a dashed line, one long
+  // bar as a solid one. The path's own bounding box is scaled to itemWidth x itemHeight
+  // (28 x 3), so these stay thin lines rather than blocks.
+  const SOLID_SWATCH = "path://M0,0h28v3h-28z";
+  const DASHED_SWATCH = "path://M0,0h8v3h-8zM10,0h8v3h-8zM20,0h8v3h-8z";
+  const legendData: (string | { name: string; icon: string })[] = [
+    ...(splitOn
+      ? [
+          { name: "Actual Accidents", icon: SOLID_SWATCH },
+          { name: "Accident forecast", icon: DASHED_SWATCH },
+          { name: "Actual Breakdowns", icon: SOLID_SWATCH },
+          { name: "Breakdown forecast (derived)", icon: DASHED_SWATCH },
+        ]
+      : ["Actual Count", ...activeModels.map((k) => `${META[k].label} Prediction`)]),
+    // The bar/overlay entries keep a block-like icon in split view (a 3px circle would vanish).
+    ...(showWeather ? [splitOn ? { name: "Rainfall", icon: "roundRect" } : "Rainfall"] : []),
+    ...(showVolume ? [splitOn ? { name: "Vehicle Volume", icon: SOLID_SWATCH } : "Vehicle Volume"] : []),
+  ];
+
   const option: EChartsOption = {
     grid: { left: 60, right: 24, top: 28, bottom: 96 },
     // A scrub/zoom bar under the chart, same as PredictiveVolumeChart's —
@@ -558,16 +577,14 @@ export default function PredictiveIncidentChart({
       },
     },
     legend: {
-      data: [
-        ...(splitOn
-          ? ["Actual Accidents", "Accident forecast", "Actual Breakdowns", "Breakdown forecast (derived)"]
-          : ["Actual Count", ...activeModels.map((k) => `${META[k].label} Prediction`)]),
-        ...(showWeather ? ["Rainfall"] : []),
-        ...(showVolume ? ["Vehicle Volume"] : []),
-      ],
+      data: legendData,
       bottom: 0,
       icon: "circle",
       itemGap: 16,
+      // Split view draws each series as a thin line swatch (solid = actual, dashed =
+      // forecast) so the legend matches the line style; a coloured dot was the same for
+      // both members of a pair. Total view keeps the dots.
+      ...(splitOn ? { itemWidth: 28, itemHeight: 3 } : {}),
       textStyle: { fontSize: 12 },
     },
     xAxis: {
@@ -946,7 +963,6 @@ export default function PredictiveIncidentChart({
               ))}
             </div>
           )}
-          {splitOn ? null : modelToolbar}
           {/* Exposure overlay toggle — same pill the traffic forecast uses for
               its Weather overlay, so the two charts are operated the same way. */}
           <button
@@ -1011,6 +1027,25 @@ export default function PredictiveIncidentChart({
             Weather
           </button>
         </div>
+      </div>
+
+      {/* The model picker has its own row instead of sharing the flex-wrapping cluster
+          above. It used to sit in that cluster and vanish in the Accident / Breakdown
+          view, which let the row reflow: at typical widths the cluster wrapped in Total
+          view and not in split view, so the Total | Accident / Breakdown toggle jumped
+          position exactly when clicked. With the picker out of the cluster, the toggle,
+          Volume and Weather are identical in both views, and this row keeps its height in
+          split view (saying why the picker doesn't apply) so nothing below shifts either. */}
+      <div style={{ display: "flex", alignItems: "center", minHeight: 40 }}>
+        {splitOn && split ? (
+          <span style={{ fontSize: "0.76rem", color: "#64748b" }}>
+            Model picker not used in this view — the accident forecast is{" "}
+            {split.championModel ? (META[split.championModel as ModelKey]?.label ?? split.championModel) : "its own champion model"},
+            fitted on accidents alone; breakdowns are derived as blended total minus accidents.
+          </span>
+        ) : (
+          modelToolbar
+        )}
       </div>
 
       {/* "Each point = X" badge — only relevant once aggregation is actually
@@ -1192,10 +1227,12 @@ export default function PredictiveIncidentChart({
           {typeof split.metrics?.MAE === "number" && typeof split.metrics?.R2 === "number" && (
             <> Held-out MAE <strong>{fmtNum(split.metrics.MAE as number)}</strong> incidents/day, R² <strong>{fmtNum(split.metrics.R2 as number, 3)}</strong>.</>
           )}{" "}
-          Accidents are only ~12% of daily volume, so in the blended fit they are outweighed by breakdowns; giving them their own
-          model is what recovers their signal. <strong>Breakdowns are derived, not separately modeled</strong> (blended forecast minus
-          accident forecast): a dedicated breakdown model was tested and did no better than the blended fit. Metrics below describe the
-          blended forecast.
+          Accidents are only ~12% of daily incidents, so a fit tuned to the combined count is tuned to breakdowns: on the current
+          holdout, scaling the blended forecast down to an accident estimate does worse than simply assuming the historical average,
+          and this dedicated model beats it clearly. Its own skill is modest, though — without traffic volume it is not clearly better
+          than the historical average (re-measured 2026-09-21). <strong>Breakdowns are derived, not separately modeled</strong> (blended
+          forecast minus accident forecast): a dedicated breakdown model was tested and did no better than the blended fit. Metrics
+          below describe the blended forecast.
         </div>
       )}
       {metricsTable}

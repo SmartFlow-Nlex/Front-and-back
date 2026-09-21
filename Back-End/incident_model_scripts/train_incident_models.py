@@ -218,6 +218,20 @@ DAILY_COUNTS_SQL = """
 # optimised for breakdowns. Breakdowns showed no such gain from their own
 # model (blended-implied R2 0.30 vs 0.26 dedicated), so there is no
 # breakdown series: the dashboard derives it as blended total - accident.
+#
+# Re-measured 2026-09-21 on the current volume-free setup (holdout 2026-04-02..
+# 2026-06-30, 2026-04-19 unscored; the 0.38 / 0.12 figures above were volume-aware
+# on 2025-10-03..2025-12-31 and reproduce exactly from the pre-fix backups —
+# accident-only R2 0.397 / MAE 5.43 vs blended champion x train accident share
+# R2 0.115 / MAE 6.29). Now: accident-only Random Forest R2 0.159 / MAE 3.70 vs
+# blended champion x share R2 -0.423 / MAE 5.02. The accident-only forecast beats
+# the blended read-out by 1.32 incidents/day of MAE (paired 7-day-block bootstrap
+# 95% CI +0.77..+2.14), so a separate model still beats deriving accidents from the
+# blended fit — but the blended read-out is now worse than a constant (-1.13,
+# CI -1.73..-0.65 vs the training mean) and the dedicated model is NOT
+# distinguishable from that constant (+0.19, CI -0.24..+0.78): without volume there
+# is little accident signal left to recover. Keep the series; do not read its
+# forecast as skilled until volume returns.
 ACCIDENT_DAILY_COUNTS_SQL = """
     SELECT event_start_date::date AS d, COUNT(*)::float AS total
     FROM silver.nlex_accident_events_clean

@@ -591,7 +591,19 @@ def fit_secondary_risk(train: pd.DataFrame, holdout: pd.DataFrame) -> dict:
 
     Xtr_c = sm.add_constant(X_train, has_constant="add")
     Xho_c = sm.add_constant(X_holdout, has_constant="add")
-    model = sm.Logit(y_train, Xtr_c).fit(disp=False, maxiter=200)
+    # A tiny ridge penalty (alpha 1e-4), not a plain sm.Logit MLE. The one-hot columns
+    # include categories whose rows ALL have had_secondary = 0 (sub_cause_Environment,
+    # type_of_event_Hit Animal, and one-row sub_causes such as Overspeeding/Electrical) —
+    # perfect separation, so the unpenalised maximum-likelihood coefficient does not
+    # exist. It "worked" before only because the optimiser ran that coefficient off to
+    # about -92 and the Hessian happened to invert; when the ETL's km cap was raised
+    # (2026-09-21, +320 training rows) it stopped inverting: LinAlgError, singular
+    # matrix. The penalty makes the fit well-posed with no visible change in skill
+    # (holdout AUC 0.6214 vs 0.6222 unpenalised on the pre-change data; 0.6203 on the
+    # current data) and keeps every coefficient sane (min about -2.7).
+    model = sm.GLM(y_train, Xtr_c, family=sm.families.Binomial()).fit_regularized(
+        alpha=1e-4, L1_wt=0.0, maxiter=500
+    )
     proba = np.asarray(model.predict(Xho_c))
 
     auc = float(roc_auc_score(y_holdout, proba)) if len(np.unique(y_holdout)) > 1 else None

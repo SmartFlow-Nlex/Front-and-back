@@ -42,9 +42,12 @@ export type SegmentRisk = {
   // panel degrades to its old behaviour instead of hiding every exit.
   historyEventCount: number | null;
   // false when historyEventCount is exactly 0: the model never saw an incident here,
-  // so its 0.0 is "no data", not "forecast safe". The source logs stop at km-post
-  // 84.0 (corridor km 72.0) while SCTEX and Sta. Ines sit beyond it, so those two
-  // exits have never had a record; the panel must not present them as low-risk.
+  // so its 0.0 is "no data", not "forecast safe". Until 2026-09-21 that was SCTEX and
+  // Sta. Ines, and the cause was the loader, not the client's data: etl/cleaner.ts had
+  // NLEX_KM_MAX = 84 (Dau's post mistaken for Sta. Ines') and rejected every row beyond
+  // km-post 84.0, although the CSVs held 376 accident and 1,516 breakdown rows at km
+  // 84.1-98.0. The cap is now 89 and every exit has history; this flag stays as the
+  // guard so an exit with no records is never presented as low-risk.
   hasData: boolean;
 };
 

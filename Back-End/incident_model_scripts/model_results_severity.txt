@@ -3,19 +3,19 @@
 ================================================================================
 
   Severity — chronological holdout
-    OrdinalLogistic  accuracy=0.901  MAE_ordinal=0.101  n=4286  
-    XGBoost          accuracy=0.901  MAE_ordinal=0.101  n=4286  [SELECTED]
+    OrdinalLogistic  accuracy=0.900  MAE_ordinal=0.102  n=4361  
+    XGBoost          accuracy=0.901  MAE_ordinal=0.101  n=4361  [SELECTED]
 
   Cox PH — clearance-time survival (site_cleared - event_start_date; see module docstring)
-    concordance index = 0.624
-    MAE (minutes)     = 16.51
-    median-based avg  = 6.85 min (mean of per-row predict_median)
-    mean-based avg    = 20.15 min (mean of per-row predict_expectation)
-    n (holdout)       = 4286
-    trained+scored on = 18393 incidents with known daily volume (85.8% of all incidents — volume now a real covariate, alongside weather, cause, type, and corridor position)
+    concordance index = 0.625
+    MAE (minutes)     = 16.52
+    median-based avg  = 6.95 min (mean of per-row predict_median)
+    mean-based avg    = 20.31 min (mean of per-row predict_expectation)
+    n (holdout)       = 4361
+    trained+scored on = 18724 incidents with known daily volume (85.9% of all incidents — volume now a real covariate, alongside weather, cause, type, and corridor position)
 
   Secondary incident risk — logistic regression
-    AUC       = 0.623
+    AUC       = 0.620
     base rate = 11.5% of holdout incidents had a secondary incident follow
-    n         = 4286
+    n         = 4361
 ================================================================================

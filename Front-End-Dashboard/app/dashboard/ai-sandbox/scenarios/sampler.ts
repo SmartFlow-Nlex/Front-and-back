@@ -597,6 +597,8 @@ export type DrawnDuration = {
   readonly minutes: number;
   /** Fraction of `minutes` spent waiting for the responder (breakdowns); null for accident families. */
   readonly responseShare: number | null;
+  /** What was drawn before any cap: equals `minutes` unless `capped`. */
+  readonly uncappedMinutes: number;
   /** True when a sampled draw exceeded the cap and was clamped to it. */
   readonly capped: boolean;
   /** The cap in force for a sampled draw; null when uncapped or not a sampled draw. */
@@ -622,15 +624,15 @@ export function drawDuration(entry: CalibrationEntry, mode: DurationMode, capMin
       const minutes = cap !== null && raw > cap ? cap : raw;
       const responseShare =
         entry.responseShare === null ? null : inverseCdf(entry.responseShare.quantiles, makeRng(mode.seed ^ SHARE_SEED_SALT)());
-      return { minutes, responseShare, capped: minutes !== raw, capMinutes: cap, mode: mode.kind };
+      return { minutes, responseShare, uncappedMinutes: raw, capped: minutes !== raw, capMinutes: cap, mode: mode.kind };
     }
     case "p50":
-      return { minutes: entry.quantiles.p50, responseShare: medianShare, capped: false, capMinutes: null, mode: mode.kind };
+      return { minutes: entry.quantiles.p50, responseShare: medianShare, uncappedMinutes: entry.quantiles.p50, capped: false, capMinutes: null, mode: mode.kind };
     case "p90":
-      return { minutes: entry.quantiles.p90, responseShare: medianShare, capped: false, capMinutes: null, mode: mode.kind };
+      return { minutes: entry.quantiles.p90, responseShare: medianShare, uncappedMinutes: entry.quantiles.p90, capped: false, capMinutes: null, mode: mode.kind };
     case "manual":
       if (!Number.isFinite(mode.minutes) || mode.minutes <= 0) throw new RangeError(`manual minutes must be a positive number, got ${mode.minutes}`);
-      return { minutes: mode.minutes, responseShare: medianShare, capped: false, capMinutes: null, mode: mode.kind };
+      return { minutes: mode.minutes, responseShare: medianShare, uncappedMinutes: mode.minutes, capped: false, capMinutes: null, mode: mode.kind };
     default:
       return assertNever(mode);
   }

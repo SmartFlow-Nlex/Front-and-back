@@ -6168,6 +6168,8 @@ body:has(.sandbox-main.is-expanded) {
   border-color: var(--color-danger-border);
   color: var(--color-danger);
 }
+/* A lane a scenario event is blocking: shown closed, and the operator cannot reopen it. */
+.sandbox-lane-toggles button:disabled { cursor: not-allowed; }
 /* In the full-screen bar the toggles sit in an unsized flex row, so `flex: 1`
    collapsed them to slivers and the closed state was hard to see on the dark
    background. Give them a real size and a dark-bar palette. */

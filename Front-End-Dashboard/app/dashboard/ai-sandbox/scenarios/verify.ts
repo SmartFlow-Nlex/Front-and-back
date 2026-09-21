@@ -15,7 +15,7 @@
  */
 import { readFileSync } from "node:fs";
 import calibrationJson from "./calibration.json";
-import { TrafficSim } from "../simulation";
+import { TrafficSim, type Interventions } from "../simulation";
 import {
   ASSUMPTIONS,
   CHAINAGE_DERIVATION,
@@ -29,6 +29,37 @@ import {
   listAssumptions,
   operatorLaneToEngineIndex,
 } from "./assumptions";
+import {
+  NO_OWNERS,
+  addEvent,
+  applyAtBoundary,
+  boundaryTimes,
+  composeInterventions,
+  createEngineBinding,
+  describeOwner,
+  describeResolution,
+  eventProblems,
+  eventProgress,
+  eventState,
+  formatClock,
+  nextBoundaryAfter,
+  ownershipKey,
+  phaseAt,
+  removeEvent,
+  resourceWindows,
+  roadOf,
+  scenarioLockedLanes,
+  scenarioTimeS,
+  schedulePhases,
+  stepToScenarioTime,
+  type EngineBinding,
+  type ManualControls,
+  type ManualInterventions,
+  type NewEventSpec,
+  type Road,
+  type RoadFrame,
+  type ScenarioEvent,
+} from "./adapter";
 import {
   BREAKDOWN_CAUSES,
   BREAKDOWN_FAMILIES,
@@ -67,6 +98,7 @@ import {
   selectFromCalibration,
   type Calibration,
   type CalibrationEntry,
+  type DurationMode,
   type QuantileSet,
 } from "./sampler";
 
@@ -606,6 +638,458 @@ check("every assumption is marked ASSUMPTION with a reason", listed.length > 0 &
 check("LANE1_IS_INNERMOST is recorded as pending confirmation", (ASSUMPTIONS.LANE1_IS_INNERMOST.settledBy ?? "").includes("PENDING"));
 check("BREAKDOWN_DURATION_SCOPE records the change to response + service", ASSUMPTIONS.BREAKDOWN_DURATION_SCOPE.value === "response_plus_service_per_event" && ASSUMPTIONS.BREAKDOWN_DURATION_SCOPE.reason.includes("AMENDED"));
 check("the multi-deployment rule, share model and cap rule are recorded", ASSUMPTIONS.MULTI_DEPLOYMENT_RULE.status === "ASSUMPTION" && ASSUMPTIONS.RESPONSE_SHARE_MODEL.status === "ASSUMPTION" && ASSUMPTIONS.SAMPLED_CAP.value === "chain_p99" && ASSUMPTIONS.CAP_MIN_N.status === "ASSUMPTION" && ASSUMPTIONS.CAP_MIN_N.value === 1000);
+
+/* ───────────────────────────── 7. adapter: scheduler and ownership ───────────────────────────── */
+const FROM_KM = 10;
+// Rounded to a millimetre: (10.33 - 10) * 1000 is 330.00000000000006 in floating point, and these tests compare positions exactly.
+const frame: RoadFrame = { warmupS: 60, metresAt: (km) => Math.round((km - FROM_KM) * 1e6) / 1e3 };
+const kmOf = (m: number): number => FROM_KM + m / 1000;
+const road600: Road = { laneCount: 4, segmentLengthM: 600, ...frame };
+const idle: ManualControls = { closedLanes: [false, false, false, false], closurePoint: 330, closureEnd: 600, showClosurePreview: false, speedLimitKmh: null, speedZone: [180, 480] };
+const abs = (minutesAfterWarmup: number): number => frame.warmupS + minutesAfterWarmup * 60;
+
+function must(events: readonly ScenarioEvent[], spec: NewEventSpec, seq: number, road: Road = road600): { events: readonly ScenarioEvent[]; event: ScenarioEvent } {
+  const r = addEvent(events, spec, road, seq);
+  if (!r.ok) throw new Error(`fixture: addEvent refused: ${r.reason}`);
+  return { events: r.events, event: r.event };
+}
+function refused(events: readonly ScenarioEvent[], spec: NewEventSpec, seq: number, road: Road = road600): string | null {
+  const r = addEvent(events, spec, road, seq);
+  return r.ok ? null : r.reason;
+}
+const manualMinutes = (minutes: number): DurationMode => ({ kind: "manual", minutes });
+const inLaneSpec = (vehicle: VehicleKind, lane: number, posM: number, startMin: number, duration: DurationMode): NewEventSpec => ({
+  variant: { family: "breakdown_in_lane", vehicle, cause: "engine" }, lane, positionKm: kmOf(posM), startMinutes: startMin, duration,
+});
+const shoulderSpec = (posM: number, startMin: number, duration: DurationMode): NewEventSpec => ({
+  variant: { family: "breakdown_shoulder", vehicle: "car", cause: "engine" }, lane: null, positionKm: kmOf(posM), startMinutes: startMin, duration,
+});
+const collisionSpec = (family: "minor_collision" | "multi_vehicle_collision" | "self_accident", lane: number, posM: number, startMin: number, duration: DurationMode): NewEventSpec => ({
+  variant: family === "minor_collision" ? { family, label: "rear_end" } : { family }, lane, positionKm: kmOf(posM), startMinutes: startMin, duration,
+});
+const ALL_SPECS: readonly { name: string; spec: NewEventSpec }[] = [
+  { name: "in-lane", spec: inLaneSpec("truck", 3, 330, 5, { kind: "sampled", seed: 7 }) },
+  { name: "shoulder", spec: shoulderSpec(330, 5, { kind: "sampled", seed: 7 }) },
+  { name: "minor", spec: collisionSpec("minor_collision", 1, 330, 5, { kind: "sampled", seed: 7 }) },
+  { name: "multi", spec: collisionSpec("multi_vehicle_collision", 1, 330, 5, { kind: "sampled", seed: 7 }) },
+  { name: "self", spec: collisionSpec("self_accident", 1, 330, 5, { kind: "sampled", seed: 7 }) },
+];
+
+// --- the stored resolution holds everything the UI needs, and matches a fresh draw
+let resolutionOk = true;
+let phasesOk = true;
+for (const { spec } of ALL_SPECS) {
+  const { event } = must([], spec, 1);
+  const fresh = resolveDuration(spec.variant, { kind: "sampled", seed: 7 });
+  if (JSON.stringify(event.resolved) !== JSON.stringify(fresh)) resolutionOk = false;
+  const r = event.resolved;
+  if (!(r.minutes > 0) || !(r.uncappedMinutes >= r.minutes) || r.capLevel === null || r.capN === null || r.capKey === null || r.capMinutes === null) resolutionOk = false;
+  if (r.calibrationKey.length === 0 || !(r.n > 0) || typeof r.lowSample !== "boolean" || typeof r.capped !== "boolean") resolutionOk = false;
+  if (event.duration.kind !== "sampled" || event.duration.seed !== 7) resolutionOk = false;
+  const sumS = event.phases.reduce((a, p) => a + p.durationS, 0);
+  if (!near(sumS, r.minutes * 60, 1e-6) || !near(event.endS - event.startS, r.minutes * 60, 1e-9) || event.startS !== 300) phasesOk = false;
+  if (event.phases[0].offsetS !== 0 || event.phases.some((p, i) => i > 0 && p.offsetS < event.phases[i - 1].offsetS)) phasesOk = false;
+  if (!event.phases.every((p) => p.text.startsWith(p.label) && (p.skipped ? p.text.endsWith(" — 0 min (skipped)") : /— [\d.]+ min$/.test(p.text)))) phasesOk = false;
+  if (event.phases.some((p) => !near(p.minutes * 60, p.durationS, 1e-9))) phasesOk = false;
+  if (r.responseShare !== null && !near(event.phases[0].minutes, r.minutes * r.responseShare, 1e-9)) phasesOk = false;
+}
+check("event: the stored resolution equals a fresh draw and carries level, n, low-sample, cap (level, n, key), uncapped draw, seed and share", resolutionOk);
+check("event: phases tile the whole duration, start at 0, ascend, are labelled with their minutes, and split at the response share", phasesOk);
+
+// --- purity: nothing is mutated, the result depends only on the inputs
+{
+  const events = [must([], inLaneSpec("truck", 3, 330, 0, manualMinutes(2)), 1).event, must([], collisionSpec("multi_vehicle_collision", 1, 330, 10, manualMinutes(30)), 2).event];
+  const manual: ManualInterventions = { ...idle, incidents: [{ lane: 1, x: 100 }] };
+  const before = JSON.stringify([events, manual]);
+  const a = composeInterventions(manual, events, abs(0.5), road600);
+  const b = composeInterventions(manual, events, abs(0.5), road600);
+  check("compose: does not mutate its inputs, and is deterministic", JSON.stringify([events, manual]) === before && JSON.stringify(a) === JSON.stringify(b));
+  check("compose: returns fresh arrays, never the operator's own", a.interventions.closedLanes !== manual.closedLanes && a.interventions.speedZone !== manual.speedZone && a.interventions.incidents[0] !== manual.incidents[0]);
+}
+
+// --- times count from the end of warm-up
+{
+  const { event } = must([], inLaneSpec("car", 3, 330, 1, manualMinutes(10)), 1);
+  const at = (t: number) => composeInterventions({ ...idle, incidents: [] }, [event], t, road600).owners.incidents.length;
+  check("time: nothing before warm-up ends, nothing at 1 min less a step, the event from +1 min, gone at its end", at(0) === 0 && at(abs(1) - 0.05) === 0 && at(abs(1)) === 1 && at(abs(11) - 0.05) === 1 && at(abs(11)) === 0);
+  check("time: scenarioTimeS is engine time less warm-up", scenarioTimeS(75, frame) === 15 && scenarioTimeS(30, frame) === -30);
+}
+
+// --- in-lane breakdown: obstacle slots, lane mapping, for its whole duration
+{
+  let ok = true;
+  for (const [vehicle, slots] of [["car", 1], ["bus", 2], ["truck", 3]] as const) {
+    const { event } = must([], inLaneSpec(vehicle, 3, 330, 0, manualMinutes(10)), 1);
+    const c = composeInterventions({ ...idle, incidents: [] }, [event], abs(1), road600);
+    const want = Array.from({ length: slots }, (_, k) => ({ lane: 2, x: 330 - 5 * k }));
+    if (JSON.stringify(c.interventions.incidents) !== JSON.stringify(want) || c.owners.incidents.length !== slots || c.interventions.closedLanes.some(Boolean) || c.owners.closure !== null || c.owners.speedZone !== null) ok = false;
+    if (incidentSlotsFor(vehicle) !== slots) ok = false;
+  }
+  check("in-lane breakdown: a car uses 1 slot, a bus 2, a truck 3, chained upstream from the event position, in engine lane (operator lane - 1); no closure or zone", ok);
+  const near0 = must([], inLaneSpec("truck", 3, 8, 0, manualMinutes(10)), 1).event;
+  check("in-lane breakdown: slots that would start before the segment are dropped", composeInterventions({ ...idle, incidents: [] }, [near0], abs(1), road600).owners.incidents.length === 2);
+  const both = must(must([], inLaneSpec("truck", 3, 330, 0, manualMinutes(10)), 1).events, inLaneSpec("car", 2, 200, 3, manualMinutes(10)), 2);
+  check("in-lane breakdowns share the incident list: overlapping events are accepted", composeInterventions({ ...idle, incidents: [] }, both.events, abs(4), road600).owners.incidents.length === 4);
+}
+
+// --- collisions: the closure stretch, phase by phase
+{
+  const expectedLanes = (base: number, count: number, laneCount: number): number[] => {
+    const out = [base];
+    for (let i = base + 1; out.length < count && i < laneCount; i++) out.push(i);
+    for (let i = base - 1; out.length < count && i >= 0; i--) out.push(i);
+    return out.sort((a, b) => a - b);
+  };
+  let ok = true;
+  let checked = 0;
+  for (const family of ["minor_collision", "multi_vehicle_collision", "self_accident"] as const) {
+    const blocked = new Map(Object.entries(ASSUMPTIONS.LANES_BLOCKED.value[family]));
+    const wreck = new Map(Object.entries(ASSUMPTIONS.CLOSURE_LENGTH_M.value[family]));
+    for (const opLane of [1, 2, 4]) {
+      const base = operatorLaneToEngineIndex(opLane, 4);
+      if (base === null) throw new Error("fixture: lane");
+      for (const posM of [330, 40, 590]) {
+        const { event } = must([], collisionSpec(family, opLane, posM, 0, manualMinutes(50)), 1);
+        for (const p of event.phases) {
+          const t = frame.warmupS + event.startS + p.offsetS + p.durationS / 2;
+          const c = composeInterventions({ ...idle, incidents: [] }, [event], t, road600);
+          const n = blocked.get(p.id);
+          const w = wreck.get(p.id);
+          if (n === undefined || w === undefined) { ok = false; continue; }
+          checked++;
+          if (n === 0) {
+            if (c.owners.closure !== null || c.interventions.closedLanes.some(Boolean) || c.interventions.closurePoint !== idle.closurePoint || c.interventions.closureEnd !== idle.closureEnd) ok = false;
+          } else {
+            const lanes = expectedLanes(base, n, 4);
+            const point = Math.max(0, posM - UPSTREAM_BUFFER_M);
+            const end = Math.min(600, posM + w);
+            if (c.owners.closure === null || c.owners.closure.phaseId !== p.id || c.owners.closure.phaseLabel !== p.label) { ok = false; continue; }
+            if (JSON.stringify(c.owners.closure.lanes) !== JSON.stringify(lanes)) ok = false;
+            if (c.interventions.closedLanes.map((x, i) => (x ? i : -1)).filter((i) => i >= 0).join() !== lanes.join()) ok = false;
+            if (c.interventions.closurePoint !== point || c.interventions.closureEnd !== end || c.interventions.showClosurePreview) ok = false;
+          }
+        }
+      }
+    }
+  }
+  check(`collisions: in every phase (${checked} cases: 3 families x 3 lanes x 3 positions, 8 phases per lane and position) the lanes, stretch and owner match the assumption tables, updating as phases advance`, ok && checked === 72);
+}
+
+// --- shoulder breakdown: the speed zone, unless the operator is using it
+{
+  const { event } = must([], shoulderSpec(330, 0, manualMinutes(20)), 1);
+  const zone = ASSUMPTIONS.GAWK_ZONE_M.value;
+  const c = composeInterventions({ ...idle, incidents: [] }, [event], abs(1), road600);
+  check("shoulder: while it runs, the zone is [position - 150, position + 100] at 70 km/h, owned by the event, no lane closed", c.interventions.speedLimitKmh === 70 && c.interventions.speedZone[0] === 330 - zone.upstream && c.interventions.speedZone[1] === 330 + zone.downstream && c.owners.speedZone !== null && c.owners.speedZone.eventId === event.id && !c.interventions.closedLanes.some(Boolean));
+  const edge = composeInterventions({ ...idle, incidents: [] }, [must([], shoulderSpec(60, 0, manualMinutes(20)), 1).event], abs(1), road600);
+  check("shoulder: the zone is clamped to the stretch, never moved", edge.interventions.speedZone[0] === 0 && edge.interventions.speedZone[1] === 160);
+  const opLimit = composeInterventions({ ...idle, speedLimitKmh: 50, incidents: [] }, [event], abs(1), road600);
+  check("shoulder: yields when the operator has a limit set (the operator's limit and zone stand, the event is listed as yielded)", opLimit.interventions.speedLimitKmh === 50 && opLimit.interventions.speedZone[0] === 180 && opLimit.owners.speedZone === null && opLimit.owners.yielded.length === 1 && opLimit.owners.yielded[0].eventId === event.id);
+  const later = composeInterventions({ ...idle, speedLimitKmh: null, incidents: [] }, [event], abs(5), road600);
+  check("shoulder: takes the zone as soon as the operator no longer uses it, for the rest of its window", later.owners.speedZone !== null && later.interventions.speedLimitKmh === 70);
+  const after = composeInterventions({ ...idle, incidents: [] }, [event], abs(21), road600);
+  check("shoulder: free for the operator once it ends (the operator's zone and limit come straight back)", after.owners.speedZone === null && after.interventions.speedLimitKmh === null && after.interventions.speedZone[0] === 180);
+}
+
+// --- operator controls while a scenario owns a lever
+{
+  const { event } = must([], collisionSpec("minor_collision", 1, 330, 0, manualMinutes(10)), 1);
+  const manual: ManualControls = { closedLanes: [false, false, true, false], closurePoint: 100, closureEnd: 200, showClosurePreview: true, speedLimitKmh: null, speedZone: [180, 480] };
+  const during = composeInterventions({ ...manual, incidents: [] }, [event], abs(1), road600);
+  check("lock: an extra lane the operator closes is kept, ON the scenario's stretch", during.interventions.closedLanes.join() === "true,false,true,false" && during.interventions.closurePoint === 230 && during.interventions.closureEnd === 370);
+  check("lock: the operator cannot move the stretch while it is owned (their stretch and preview are ignored)", during.interventions.closurePoint !== manual.closurePoint && during.interventions.showClosurePreview === false);
+  const reopen = composeInterventions({ ...manual, closedLanes: [false, false, false, false], incidents: [] }, [event], abs(1), road600);
+  check("lock: the operator cannot reopen a lane the scenario blocks (it stays closed with their state open)", reopen.interventions.closedLanes[0] === true && scenarioLockedLanes(reopen.owners, 4).join() === "true,false,false,false");
+  const both = composeInterventions({ ...manual, closedLanes: [true, false, false, false], incidents: [] }, [event], abs(1), road600);
+  check("lock: closing the same lane as the scenario changes nothing", both.interventions.closedLanes.join() === "true,false,false,false");
+  const after = composeInterventions({ ...manual, incidents: [] }, [event], abs(11), road600);
+  check("lock: when the event ends the operator's lanes, stretch and preview come back exactly", after.interventions.closedLanes.join() === "false,false,true,false" && after.interventions.closurePoint === 100 && after.interventions.closureEnd === 200 && after.interventions.showClosurePreview === true && after.owners.closure === null);
+  check("lock: the owner reads \"<event> — <phase>\"", during.owners.closure !== null && describeOwner(during.owners.closure) === `${event.name} — Lane blocked: awaiting response` && event.name === "Minor collision #1");
+}
+
+// --- conflicts: an exclusive lever cannot be held twice, and nothing is merged
+{
+  const a = must([], collisionSpec("multi_vehicle_collision", 1, 330, 10, manualMinutes(40)), 1);
+  const overlap = refused(a.events, collisionSpec("self_accident", 2, 200, 20, manualMinutes(30)), 2);
+  check("conflict: two collisions with overlapping closures are refused, naming BOTH events", overlap !== null && overlap.includes("Self accident #2") && overlap.includes("Multi-vehicle collision #1") && overlap.includes("closure stretch") && overlap.includes("Nothing was changed"), overlap ?? "was accepted");
+  const first = a.event;
+  const blockingEnd = first.phases.filter((p) => !p.skipped && p.lanesBlocked > 0).reduce((m, p) => Math.max(m, first.startS + p.offsetS + p.durationS), 0);
+  const touching = addEvent(a.events, collisionSpec("self_accident", 2, 200, blockingEnd / 60 + 1e-9, manualMinutes(30)), road600, 2);
+  check("conflict: an event starting as the other lets go of the stretch is accepted", touching.ok);
+  // Exactly touching, with numbers that are exact in floating point: 5 min minor collision from +10 min blocks [600, 840) s.
+  const exactA = must([], collisionSpec("minor_collision", 1, 330, 10, manualMinutes(5)), 1);
+  const exactWindow = resourceWindows(exactA.event)[0];
+  check("conflict: (fixture) that window is exactly [600, 840) seconds", exactWindow.fromS === 600 && exactWindow.toS === 840);
+  check("conflict: an event starting at exactly the second the other's window ends is accepted; one a second earlier is refused", addEvent(exactA.events, collisionSpec("minor_collision", 2, 200, 14, manualMinutes(5)), road600, 2).ok && refused(exactA.events, collisionSpec("minor_collision", 2, 200, 14 - 1 / 60, manualMinutes(5)), 2) !== null);
+  const inClearing = addEvent(a.events, collisionSpec("minor_collision", 2, 200, blockingEnd / 60 + 0.5, manualMinutes(5)), road600, 3);
+  check("conflict: the clearing phase holds nothing, so another collision may start in it", inClearing.ok && first.endS > blockingEnd + 30);
+  const during = refused(a.events, collisionSpec("minor_collision", 2, 200, blockingEnd / 60 - 0.5, manualMinutes(5)), 4);
+  check("conflict: the same half a minute earlier, inside the blocking phases, is refused", during !== null);
+  const shoulderAlong = addEvent(a.events, shoulderSpec(300, 12, manualMinutes(30)), road600, 5);
+  check("conflict: a shoulder breakdown may run alongside a collision (a different lever)", shoulderAlong.ok);
+  const s1 = must([], shoulderSpec(330, 5, manualMinutes(20)), 1);
+  const s2 = refused(s1.events, shoulderSpec(200, 10, manualMinutes(20)), 2);
+  check("conflict: two shoulder breakdowns overlapping are refused, naming both and the speed zone", s2 !== null && s2.includes("Breakdown on the shoulder #1") && s2.includes("Breakdown on the shoulder #2") && s2.includes("speed zone"));
+  check("conflict: a refusal returns no events (nothing to apply) and does not change the stored list", addEvent(a.events, collisionSpec("self_accident", 2, 200, 20, manualMinutes(30)), road600, 2).ok === false && a.events.length === 1);
+  check("event: a shoulder breakdown has no lane, whatever lane it was given", must([], { ...shoulderSpec(330, 0, manualMinutes(5)), lane: 2 }, 1).event.lane === null && must([], inLaneSpec("car", 3, 330, 0, manualMinutes(5)), 1).event.lane === 3);
+  check("event: an id already in use is rejected (the caller's counter must not repeat)", throws(() => addEvent(a.events, collisionSpec("minor_collision", 2, 200, 100, manualMinutes(5)), road600, 1)) && throws(() => addEvent([], inLaneSpec("car", 3, 330, 0, manualMinutes(5)), road600, 0)));
+  check("conflict: an event whose phases all round to nothing is refused", refused([], inLaneSpec("car", 3, 330, 0, manualMinutes(1e-9)), 1) !== null);
+  check("conflict: bad input is refused with a reason, not thrown (negative start, zero duration, lane that does not exist)", refused([], inLaneSpec("car", 3, 330, -1, manualMinutes(5)), 1) !== null && refused([], inLaneSpec("car", 3, 330, 0, manualMinutes(0)), 1) !== null && refused([], inLaneSpec("car", 5, 330, 0, manualMinutes(5)), 1) !== null && refused([], inLaneSpec("car", 3, 9999, 0, manualMinutes(5)), 1) !== null);
+  check("conflict: resource windows: a collision's is its blocking phases, a shoulder's the whole event, an in-lane breakdown holds none", resourceWindows(first).length === 1 && resourceWindows(first)[0].resource === "closure_stretch" && resourceWindows(first)[0].toS === blockingEnd && resourceWindows(s1.event)[0].resource === "speed_zone" && resourceWindows(must([], inLaneSpec("car", 3, 330, 0, manualMinutes(5)), 1).event).length === 0);
+}
+
+// --- zero-length phases are skipped, still listed, never applied
+{
+  const variant: ScenarioVariant = { family: "breakdown_in_lane", vehicle: "truck", cause: "engine" };
+  const base = must([], inLaneSpec("truck", 3, 330, 0, manualMinutes(10)), 1).event;
+  const withShare = (share: number): ScenarioEvent => {
+    const resolved = { ...base.resolved, minutes: 10, responseShare: share };
+    return { ...base, resolved, phases: schedulePhases(variant, resolved) };
+  };
+  const one = withShare(1);
+  const zero = withShare(0);
+  check("zero-length: share 1 skips the service phase and lists it as \"Service / tow — 0 min (skipped)\"", one.phases[1].skipped && one.phases[1].text === "Service / tow — 0 min (skipped)" && !one.phases[0].skipped && one.phases[0].text === "Waiting for responder — 10 min");
+  check("zero-length: share 0 skips the waiting phase and lists it as \"Waiting for responder — 0 min (skipped)\"", zero.phases[0].skipped && zero.phases[0].text === "Waiting for responder — 0 min (skipped)" && !zero.phases[1].skipped && zero.phases[1].text === "Service / tow — 10 min");
+  let neverCurrent = true;
+  const ownerPhases = new Set<string>();
+  for (const [ev, skippedId] of [[one, "service"], [zero, "waiting"]] as const) {
+    for (let t = 0; t <= 600.5; t += 0.5) {
+      const p = phaseAt(ev, t);
+      if (p !== null && p.id === skippedId) neverCurrent = false;
+      const c = composeInterventions({ ...idle, incidents: [] }, [ev], abs(0) + t, road600);
+      for (const o of c.owners.incidents) ownerPhases.add(`${ev === one ? "one" : "zero"}:${o.phaseId}`);
+    }
+  }
+  check("zero-length: a skipped phase is never the current phase and never the owner of anything", neverCurrent && [...ownerPhases].sort().join() === "one:waiting,zero:service");
+  check("zero-length: it adds no boundary of its own (share 1 has start, waiting start, end; share 0 has start and service start, end)", boundaryTimes([one], road600).join() === "0,600" && boundaryTimes([zero], road600).join() === "0,600");
+  check("zero-length: the obstacle is present the whole event either way, with no gap at the join", composeInterventions({ ...idle, incidents: [] }, [zero], abs(0), road600).owners.incidents.length === 3 && composeInterventions({ ...idle, incidents: [] }, [one], abs(0) + 599.9, road600).owners.incidents.length === 3);
+  const collisionBase = must([], collisionSpec("multi_vehicle_collision", 1, 330, 0, manualMinutes(10)), 1).event;
+  const collisionZeroTow: ScenarioEvent = { ...collisionBase, phases: collisionBase.phases.map((p) => (p.id === "tow" ? { ...p, durationS: 0, minutes: 0, skipped: true, text: `${p.label} — 0 min (skipped)` } : p)) };
+  const tAtTow = abs(0) + collisionBase.phases[1].offsetS + collisionBase.phases[1].durationS / 2;
+  check("zero-length: a skipped closure phase changes no lane and no stretch", composeInterventions({ ...idle, incidents: [] }, [collisionZeroTow], tAtTow, road600).owners.closure === null);
+}
+
+// --- a road that no longer suits an event flags it; it is never dropped
+{
+  const { events } = must(must(must([], collisionSpec("multi_vehicle_collision", 1, 330, 0, manualMinutes(30)), 1).events, inLaneSpec("car", 4, 200, 0, manualMinutes(30)), 2).events, shoulderSpec(300, 0, manualMinutes(30)), 3);
+  const road3: Road = { ...road600, laneCount: 3 };
+  const road2: Road = { ...road600, laneCount: 2 };
+  const shortRoad: Road = { ...road600, segmentLengthM: 250 };
+  const c3 = composeInterventions({ ...idle, closedLanes: [false, false, false], incidents: [] }, events, abs(1), road3);
+  check("lane count: dropping to 3 lanes flags the lane-4 breakdown, keeps the other two", c3.owners.invalid.length === 1 && c3.owners.invalid[0].eventId === "ev2" && c3.owners.invalid[0].problems[0].includes("lane 4 does not exist on a 3-lane road") && c3.owners.incidents.length === 0 && c3.owners.closure !== null);
+  const c2 = composeInterventions({ ...idle, closedLanes: [false, false], incidents: [] }, events, abs(1), road2);
+  check("lane count: on 2 lanes the multi-vehicle collision (blocks 2) is flagged as blocking every lane", c2.owners.invalid.some((i) => i.eventId === "ev1" && i.problems[0].includes("every lane")) && c2.owners.closure === null && c2.interventions.closedLanes.every((x) => !x));
+  check("lane count: a flagged event changes nothing and is not in the boundary list, but is still in the stored list", boundaryTimes(events, road2).length > 0 && events.length === 3 && !boundaryTimes([events[0]], road2).length);
+  const back = composeInterventions({ ...idle, incidents: [] }, events, abs(1), road600);
+  check("lane count: back on 4 lanes the same events are valid again, with the same stored durations", back.owners.invalid.length === 0 && back.owners.closure !== null && back.owners.incidents.length === 1 && back.owners.speedZone !== null);
+  const cs = composeInterventions({ ...idle, incidents: [] }, events, abs(1), shortRoad);
+  check("stretch: a route change that leaves an event off the stretch flags it (km, not metres, is stored)", cs.owners.invalid.some((i) => i.eventId === "ev1" && i.problems[0].includes("outside the simulated stretch")));
+  check("stretch: eventProblems is empty for a valid event and lists reasons otherwise", eventProblems(events[0], road600).length === 0 && eventProblems(events[1], road3).length === 1);
+}
+
+// --- on the real engine: the loop, rebuild, removal, fast-forward
+const engineIv = (len: number, lanes: number): Partial<Interventions> => ({ closedLanes: Array(lanes).fill(false), closurePoint: len * 0.55, closureEnd: len, incidents: [], speedLimitKmh: null, speedZone: [len * 0.3, len * 0.8] });
+const newSim = (len = 600, lanes = 4): TrafficSim => new TrafficSim({ length: len, laneCount: lanes, inflowVehPerHour: 4500, seed: 12345, warmupS: 60 }, engineIv(len, lanes));
+const incidentKeyOf = (l: readonly { lane: number; x: number }[]): string => l.map((i) => `${i.lane}:${i.x}`).sort().join("|");
+function engineInSync(ts: TrafficSim, controls: ManualControls, events: readonly ScenarioEvent[], binding: EngineBinding): boolean {
+  const want = composeInterventions({ ...controls, incidents: binding.operatorIncidents(ts) }, events, ts.time, roadOf(ts, frame)).interventions;
+  const iv = ts.interventions;
+  return iv.closedLanes.join() === want.closedLanes.join() && iv.closurePoint === want.closurePoint && iv.closureEnd === want.closureEnd && iv.speedLimitKmh === want.speedLimitKmh && iv.speedZone[0] === want.speedZone[0] && iv.speedZone[1] === want.speedZone[1] && incidentKeyOf(iv.incidents) === incidentKeyOf(want.incidents);
+}
+
+{
+  // the animation loop: apply when a boundary is crossed; the engine is never a step behind
+  const events = must(must([], collisionSpec("minor_collision", 1, 330, 0.2, manualMinutes(5)), 1).events, inLaneSpec("bus", 3, 150, 4, manualMinutes(2)), 2).events;
+  const ts = newSim();
+  const binding = createEngineBinding();
+  let due = -Infinity;
+  let applied = 0;
+  let inSync = true;
+  const seen = new Set<string>();
+  const end = Math.max(...events.map((e) => e.endS)) + 5;
+  while (scenarioTimeS(ts.time, frame) < end) {
+    ts.step(0.05);
+    const r = applyAtBoundary(binding, ts, idle, events, frame, due);
+    due = r.dueS;
+    if (r.composition !== null) applied++;
+    if (!engineInSync(ts, idle, events, binding)) inSync = false;
+    seen.add(`${ts.interventions.closedLanes.filter(Boolean).length}/${ts.interventions.incidents.length}`);
+  }
+  check("loop: after every one of ~" + Math.round(ts.time / 0.05) + " steps the engine holds exactly what compose says for that moment", inSync);
+  check("loop: it applies once at the start and once per boundary crossed, no more", applied === 1 + boundaryTimes(events, road600).length, `${applied} applies, ${boundaryTimes(events, road600).length} boundaries`);
+  check("loop: the run passed through every state (lane closed alone, lane closed with the bus, the bus alone, nothing)", ["1/0", "1/2", "0/2", "0/0"].every((s) => seen.has(s)), [...seen].join(" "));
+  check("loop: when everything has ended the engine is back to the operator's settings, with no scenario incident left", ts.interventions.incidents.length === 0 && ts.interventions.closedLanes.every((x) => !x) && ts.interventions.closurePoint === idle.closurePoint);
+}
+
+{
+  // operator incidents are never touched, even at the same spot; clearing spares a running scenario's
+  const ts = newSim();
+  for (let i = 0; i < 400; i++) ts.step(0.05);
+  ts.time = abs(0);
+  const binding = createEngineBinding();
+  ts.addIncident(2, 330);
+  const operatorObj = ts.interventions.incidents[0];
+  const { events, event } = must([], inLaneSpec("car", 3, 330, 0, manualMinutes(3)), 1);
+  binding.apply(ts, idle, events, frame);
+  check("incidents: a scenario adds its own beside the operator's, even at the same lane and spot", ts.interventions.incidents.length === 2 && binding.operatorIncidents(ts).length === 1 && binding.operatorIncidents(ts)[0] === operatorObj);
+  const scenarioObj = ts.interventions.incidents.find((i) => i !== operatorObj);
+  const vehiclesBefore = ts.vehicles.length;
+  binding.apply(ts, idle, events, frame);
+  binding.apply(ts, idle, events, frame);
+  check("incidents: applying again is idempotent (no duplicates, the same obstacle objects, no vehicles absorbed again)", ts.interventions.incidents.length === 2 && scenarioObj !== undefined && ts.interventions.incidents.includes(scenarioObj) && ts.interventions.incidents.includes(operatorObj) && ts.vehicles.length === vehiclesBefore);
+  binding.clearOperatorIncidents(ts);
+  check("incidents: clearing the operator's leaves the running scenario's obstacle in place", ts.interventions.incidents.length === 1 && binding.operatorIncidents(ts).length === 0);
+  binding.apply(ts, idle, events, frame);
+  check("incidents: and a later apply does not double it", ts.interventions.incidents.length === 1);
+  ts.addIncident(0, 100);
+  const later = removeEvent(events, event.id);
+  binding.apply(ts, idle, later, frame);
+  check("removal: removing the event takes exactly its obstacle out and leaves the operator's new one", ts.interventions.incidents.length === 1 && ts.interventions.incidents[0].lane === 0 && ts.interventions.incidents[0].x === 100);
+  check("incidents: a vehicle standing on the obstacle's spot is absorbed on arrival, as when the operator places one", ts.vehicles.every((v) => v.lane !== 2 || v.x - v.length >= 331 || v.x <= 324));
+  const shifted = createEngineBinding();
+  const ts2 = newSim();
+  ts2.time = abs(0);
+  shifted.apply(ts2, idle, events, frame);
+  ts2.interventions.incidents = [];
+  shifted.apply(ts2, idle, events, frame);
+  check("incidents: if something else empties the engine's list, the next apply puts the scenario's back", ts2.interventions.incidents.length === 1 && shifted.operatorIncidents(ts2).length === 0);
+}
+
+{
+  const ts = newSim();
+  ts.interventions.closureDraft = { from: 100, to: 200 };
+  createEngineBinding().apply(ts, idle, [], frame);
+  check("binding: the operator's click-to-place draft (closureDraft) survives an apply", ts.interventions.closureDraft !== null && ts.interventions.closureDraft !== undefined && ts.interventions.closureDraft.from === 100 && ts.interventions.closureDraft.to === 200);
+}
+
+{
+  // removing an event restores exactly what it changed, for every family
+  let ok = true;
+  for (const { spec } of ALL_SPECS) {
+    const events = must([], { ...spec, startMinutes: 0, duration: manualMinutes(20) }, 1).events;
+    const ts = newSim();
+    const ref = newSim();
+    const b = createEngineBinding();
+    const bRef = createEngineBinding();
+    const controls: ManualControls = { closedLanes: [false, false, true, false], closurePoint: 100, closureEnd: 200, showClosurePreview: false, speedLimitKmh: null, speedZone: [180, 480] };
+    ts.addIncident(0, 50);
+    ref.addIncident(0, 50);
+    ts.time = abs(2);
+    ref.time = abs(2);
+    b.apply(ts, controls, events, frame);
+    const during = incidentKeyOf(ts.interventions.incidents) + ts.interventions.closedLanes.join() + ts.interventions.speedLimitKmh;
+    b.apply(ts, controls, removeEvent(events, "ev1"), frame);
+    bRef.apply(ref, controls, [], frame);
+    const a = JSON.stringify([ts.interventions.closedLanes, ts.interventions.closurePoint, ts.interventions.closureEnd, ts.interventions.speedLimitKmh, ts.interventions.speedZone, incidentKeyOf(ts.interventions.incidents)]);
+    const r = JSON.stringify([ref.interventions.closedLanes, ref.interventions.closurePoint, ref.interventions.closureEnd, ref.interventions.speedLimitKmh, ref.interventions.speedZone, incidentKeyOf(ref.interventions.incidents)]);
+    if (a !== r) ok = false;
+    const rest = incidentKeyOf(ref.interventions.incidents) + ref.interventions.closedLanes.join() + ref.interventions.speedLimitKmh;
+    if (during === rest) ok = false; // the event really had changed something
+  }
+  check("removal: for every family, removing a running event leaves the engine exactly as if it had never been added", ok);
+}
+
+{
+  // rebuild: sim time resets, the stored events replay from the new warm-up, nothing is re-sampled
+  const spec = collisionSpec("multi_vehicle_collision", 1, 330, 0.5, { kind: "sampled", seed: 99 });
+  const { events, event } = must([], spec, 1);
+  const stored = JSON.stringify(events);
+  const first = newSim();
+  const binding = createEngineBinding();
+  first.time = abs(1);
+  binding.apply(first, idle, events, frame);
+  const during = first.interventions.closedLanes.filter(Boolean).length;
+  const second = newSim();
+  binding.reset();
+  binding.apply(second, idle, events, frame);
+  check("rebuild: a fresh engine at time 0 starts with nothing applied, and the events are byte-for-byte the stored ones", during === 2 && second.interventions.closedLanes.every((x) => !x) && JSON.stringify(events) === stored);
+  second.time = abs(1);
+  binding.apply(second, idle, events, frame);
+  check("rebuild: the same event runs again from the new warm-up with the same phases", second.interventions.closedLanes.filter(Boolean).length === 2 && second.interventions.closurePoint === first.interventions.closurePoint && event.resolved.mode === "sampled");
+  const resized = newSim(600, 2);
+  binding.reset();
+  binding.apply(resized, { ...idle, closedLanes: [false, false] }, events, frame);
+  resized.time = abs(1);
+  const cr = binding.apply(resized, { ...idle, closedLanes: [false, false] }, events, frame);
+  check("rebuild: a new lane count flags the event (owners.invalid) and keeps it in the list", cr.owners.invalid.length === 1 && events.length === 1 && resized.interventions.closedLanes.every((x) => !x));
+}
+
+{
+  // fast-forward: stepping without rendering, in slices, lands on the boundary, and matches running normally
+  const events = must([], collisionSpec("minor_collision", 1, 330, 0.5, manualMinutes(6)), 1).events;
+  const target = nextBoundaryAfter(events, road600, 0);
+  check("skip: the next boundary from time 0 is the event's start", target === 30);
+  if (target !== null) {
+    const a = newSim();
+    const bA = createEngineBinding();
+    let steps = 0;
+    let calls = 0;
+    let fake = 0;
+    let done = false;
+    while (!done) {
+      const r = stepToScenarioTime(a, frame, target, 0.05, 5, () => (fake += 1)); // a fake clock: 5 ms of budget = 5 reads
+      steps += r.steps;
+      calls++;
+      done = r.reached;
+    }
+    bA.apply(a, idle, events, frame);
+    const b = newSim();
+    const bB = createEngineBinding();
+    let due = -Infinity;
+    while (scenarioTimeS(b.time, frame) < target) {
+      b.step(0.05);
+      due = applyAtBoundary(bB, b, idle, events, frame, due).dueS;
+    }
+    bB.apply(b, idle, events, frame);
+    check("skip: in budgeted slices it reaches the target within one step, and the run is identical to stepping normally", scenarioTimeS(a.time, frame) >= target && scenarioTimeS(a.time, frame) < target + 0.05 + 1e-9 && a.time === b.time && JSON.stringify(a.metrics()) === JSON.stringify(b.metrics()) && steps === Math.round(a.time / 0.05));
+    check("skip: a small budget splits the work across calls (it yields), a zero budget does one step at most", calls > 5 && stepToScenarioTime(newSim(), frame, 10, 0.05, 0, () => 1).steps === 0);
+    check("skip: after the skip the new phase is applied (lane closed on the scenario's stretch)", a.interventions.closedLanes[0] === true && a.interventions.closurePoint === 230);
+    check("skip: rejects a non-positive step", throws(() => stepToScenarioTime(newSim(), frame, 10, 0, 100, () => 0)));
+  }
+  const bs = boundaryTimes(events, road600);
+  check("skip: successive boundaries visit start, end of lane-blocked, end of event, then none", nextBoundaryAfter(events, road600, 0) === 30 && nextBoundaryAfter(events, road600, 30) === bs[1] && nextBoundaryAfter(events, road600, bs[1]) === bs[2] && nextBoundaryAfter(events, road600, bs[2]) === null && bs.length === 3);
+}
+
+{
+  // progress, for the list the operator will read
+  const { event } = must([], collisionSpec("multi_vehicle_collision", 1, 330, 2, manualMinutes(20)), 1);
+  const before = eventProgress(event, 0);
+  const mid = eventProgress(event, event.startS + 10);
+  const past = eventProgress(event, event.endS + 1);
+  check("progress: pending, active (with its phase and time left in it) and done", before.state === "pending" && before.startsInS === 120 && mid.state === "active" && mid.phase !== null && mid.phase.id === "blocked" && mid.phaseRemainingS !== null && near(mid.phaseRemainingS, event.phases[0].durationS - 10, 1e-9) && past.state === "done" && past.remainingS === 0 && eventState(event, event.endS) === "done");
+}
+
+{
+  const c = composeInterventions({ ...idle, incidents: [] }, [must([], collisionSpec("minor_collision", 1, 330, 0, manualMinutes(10)), 1).event], abs(1), road600);
+  check("ownership: NO_OWNERS is empty, and ownershipKey tells owned from unowned", NO_OWNERS.closure === null && NO_OWNERS.incidents.length === 0 && ownershipKey(NO_OWNERS) !== ownershipKey(c.owners) && ownershipKey(c.owners) === ownershipKey(c.owners));
+}
+
+{
+  // the words the operator reads come from the stored resolution
+  const capped = ALL_SPECS.map((s) => must([], s.spec, 1).event).concat([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30].map((seed) => must([], { variant: { family: "breakdown_in_lane", vehicle: "truck", cause: "tire" }, lane: 3, positionKm: kmOf(330), startMinutes: 0, duration: { kind: "sampled", seed } }, 1).event)).find((e) => e.resolved.capped);
+  const tt = must([], { variant: { family: "breakdown_in_lane", vehicle: "truck", cause: "tire" }, lane: 3, positionKm: kmOf(330), startMinutes: 0, duration: { kind: "p50" } }, 1).event;
+  const hnr = must([], { variant: { family: "minor_collision", label: "hit_and_run" }, lane: 1, positionKm: kmOf(330), startMinutes: 0, duration: { kind: "p50" } }, 1).event;
+  const man = must([], inLaneSpec("car", 3, 330, 0, manualMinutes(12)), 1).event;
+  const text = describeResolution(tt);
+  check("describe: a p50 names the level and n from the stored resolution", text.includes("median") && text.includes("calibrated at cause × vehicle level") && text.includes(`n = ${tt.resolved.n.toLocaleString("en-US")}`) && !text.includes("capped") && !text.includes("low sample"));
+  check("describe: hit-and-run carries the low-sample warning", describeResolution(hnr).includes("(low sample)"));
+  check("describe: a manual duration claims no calibration", describeResolution(man) === "12 min entered by the operator");
+  check(
+    "describe: when the cap applied it says what was drawn, what it was cut to, and the level and n of the cap",
+    capped !== undefined && capped.resolved.capLevel !== null && capped.resolved.capN !== null && capped.resolved.capMinutes !== null && describeResolution(capped).includes(`capped: drew ${Number(capped.resolved.uncappedMinutes.toFixed(1))} min`) && describeResolution(capped).includes(`(n = ${capped.resolved.capN.toLocaleString("en-US")})`),
+    capped === undefined ? "no capped draw found in 30 seeds" : "",
+  );
+  check("format: clock shows m:ss and h:mm:ss", formatClock(0) === "0:00" && formatClock(75) === "1:15" && formatClock(3725) === "1:02:05" && formatClock(-5) === "0:00");
+}
+
+// --- the page uses the adapter and nothing else to write scenario state; the engine and replicate() are untouched
+{
+  const pageSource = readFileSync(new URL("../page.tsx", import.meta.url), "utf8");
+  check("page: no direct write to the engine's closure, speed or lane state remains (the adapter is the only writer)", !/interventions\.(closedLanes|closurePoint|closureEnd|speedLimitKmh|speedZone|showClosurePreview)\s*=[^=]/.test(pageSource));
+  check("page: the confidence run says why it is off while events exist", (pageSource.match(/Confidence runs don't yet support timed events\./g) ?? []).length === 1);
+  check("page: replicate() is still called exactly once (at its one call site), and the confidence run refuses while events exist", (pageSource.match(/= replicate\(/g) ?? []).length === 1 && /if \(scenarioEvents\.length > 0\) return;/.test(pageSource));
+  check("engine source does not mention the adapter or scenario events", !/adapter|ScenarioEvent|composeInterventions/.test(engineSource));
+}
 
 /* ───────────────────────────── report ───────────────────────────── */
 console.log(`verify: ${checks} checks, ${failures.length} failed  (${listed.length} assumptions, ${allEntries.length} calibration entries [${CALIBRATION_KEYS.length} base + ${allEntries.length - CALIBRATION_KEYS.length} hierarchy], ${SCENARIO_TEMPLATES.length} templates, ${N.toLocaleString("en-US")} draws per entry)`);

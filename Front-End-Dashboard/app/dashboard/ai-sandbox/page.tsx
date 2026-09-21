@@ -10,6 +10,29 @@ import {
   TrafficSim, CLASS_META, mixHex, visualLane, replicate,
   type Metrics, type Interventions, type ReplicationResult, type RepStat,
 } from "./simulation";
+import {
+  NO_OWNERS,
+  addEvent,
+  applyAtBoundary,
+  createEngineBinding,
+  describeOwner,
+  describeResolution,
+  eventProgress,
+  formatClock,
+  nextBoundaryAfter,
+  ownershipKey,
+  removeEvent,
+  roadOf,
+  scenarioLockedLanes,
+  scenarioTimeS,
+  stepToScenarioTime,
+  type ManualControls,
+  type NewEventSpec,
+  type Ownership,
+  type Road,
+  type RoadFrame,
+  type ScenarioEvent,
+} from "./scenarios/adapter";
 
 const BACKEND = process.env.NEXT_PUBLIC_BACKEND_URL ?? "http://localhost:4000";
 
@@ -124,6 +147,9 @@ function roadLayout(opts: {
  * where the old scan would have needed ~450 ms — i.e. more than real time.
  */
 const SIM_DT = 0.05;
+
+/** Seconds the road is left to fill before its readings mean anything. Scenario events are timed from the end of it. */
+const WARMUP_S = 60;
 
 const SPEED_STEPS = [0.5, 1, 2, 4] as const;
 
@@ -422,6 +448,28 @@ export default function AiSandboxPage() {
   const [closedLanes, setClosedLanes] = useState<boolean[]>(Array(4).fill(false));
   const [speedLimit, setSpeedLimit] = useState<number | null>(null);
   const [incidentCount, setIncidentCount] = useState(0);
+  /* Scenario events (see ./scenarios/adapter.ts). closedLanes, speedLimit and the
+   * closure and zone positions below stay the OPERATOR's settings; what the engine
+   * actually holds is composeInterventions(operator's settings, these events, sim
+   * time), applied through the binding. incidentCount counts the operator's
+   * incidents only. */
+  const [scenarioEvents, setScenarioEvents] = useState<readonly ScenarioEvent[]>([]);
+  const [owners, setOwners] = useState<Ownership>(NO_OWNERS);
+  const [scenarioBinding] = useState(createEngineBinding);
+  const [skipProgress, setSkipProgress] = useState<number | null>(null);
+  /** When (on the scenario clock) the animation loop next has to re-apply. -Infinity: at the next step. */
+  const scenarioDueRef = useRef(-Infinity);
+  const scenarioSeqRef = useRef(0);
+  /** The stored events, kept in step with the state so two calls in one tick (a script, a double click) each see the other. */
+  const scenarioEventsRef = useRef<readonly ScenarioEvent[]>([]);
+  const skipRef = useRef<{ cancel: boolean } | null>(null);
+  /**
+   * What the animation loop applies. Written by the live-apply effect, so the loop
+   * (which is not re-created when these change) always sees the latest.
+   */
+  const scenarioCtxRef = useRef<{ controls: ManualControls; events: readonly ScenarioEvent[]; frame: RoadFrame } | null>(null);
+  /** Lanes a running scenario is blocking: shown closed, and the operator cannot reopen them. */
+  const lockedLanes = scenarioLockedLanes(owners, laneCount);
   /**
    * Where on the corridor an intervention is applied, as km-posts.
    *
@@ -796,11 +844,18 @@ export default function AiSandboxPage() {
     setSpeedLimit(null);
     setIncidentCount(0);
     setBaseline(null);
+    /* Sim time is back at 0, so scenario events start over from the new warm-up.
+     * The events themselves are kept as stored (durations are never re-drawn); the
+     * binding forgets the old engine's incidents, a fast-forward aimed at the old
+     * engine is cancelled, and the next step re-applies. */
+    scenarioBinding.reset();
+    scenarioDueRef.current = -Infinity;
+    if (skipRef.current) skipRef.current.cancel = true;
     // eslint-disable-next-line react-hooks/exhaustive-deps
     // classProfile included so the run restarts once the warehouse values
     // land — otherwise the first simulation would keep emitting at the
     // bundled defaults for its whole life.
-  }, [laneCount, segLengthM, buildInterventions, effectiveClassProfile, ramps]);
+  }, [laneCount, segLengthM, buildInterventions, effectiveClassProfile, ramps, scenarioBinding]);
 
   useEffect(() => {
     rebuild();
@@ -831,6 +886,13 @@ export default function AiSandboxPage() {
   // raw subtraction would give a negative offset and an inverted stretch.
   const closureM = Math.min(mAt(closureAtKm), mAt(closureEndAtKm));
   const closureEndM = Math.max(mAt(closureAtKm), mAt(closureEndAtKm));
+  // Likewise the speed zone: the operator's, or a shoulder breakdown's while it owns it.
+  const shownSpeedLimit = owners.speedZone ? owners.speedZone.limitKmh : speedLimit;
+  const shownZoneFromKm = owners.speedZone ? Math.min(kmAt(owners.speedZone.zone[0]), kmAt(owners.speedZone.zone[1])) : zoneA;
+  const shownZoneToKm = owners.speedZone ? Math.max(kmAt(owners.speedZone.zone[0]), kmAt(owners.speedZone.zone[1])) : zoneB;
+  // The stretch the controls show: the operator's own, or, while a scenario owns it, the scenario's (locked).
+  const shownClosureFromKm = owners.closure ? Math.min(kmAt(owners.closure.closurePointM), kmAt(owners.closure.closureEndM)) : closureAtKm;
+  const shownClosureToKm = owners.closure ? Math.max(kmAt(owners.closure.closurePointM), kmAt(owners.closure.closureEndM)) : closureEndAtKm;
 
   // Typed ends always keep the value the operator typed. The previous clamp
   // (end = max(end, start + 0.01)) silently discarded a "To" below the current
@@ -851,6 +913,21 @@ export default function AiSandboxPage() {
     Math.max(mAt(zoneA), mAt(zoneB)),
   ];
 
+  /* What the operator has set by hand, and how km-posts map to metres on this
+   * stretch: the two things the scenario adapter needs from the page. */
+  const manualControls: ManualControls = {
+    closedLanes,
+    closurePoint: closureM,
+    closureEnd: closureEndM,
+    showClosurePreview: closureKm != null || closureEndKm != null || placingClosure,
+    speedLimitKmh: speedLimit,
+    speedZone: zoneM,
+  };
+  const scenarioFrame: RoadFrame = { warmupS: WARMUP_S, metresAt: mAt };
+  const scenarioRoad: Road = { laneCount, segmentLengthM: segLengthM, ...scenarioFrame };
+  // Seconds since the end of warm-up, as of the last metrics refresh (a few times a second), for the events list.
+  const scenarioNowS = scenarioTimeS(metrics?.elapsedS ?? 0, scenarioFrame);
+
   /* ── Confidence run ──────────────────────────────────────────────────────
    *
    * The animation is one seed. Any number an operator is going to act on
@@ -867,6 +944,8 @@ export default function AiSandboxPage() {
   const repCancel = useRef(false);
 
   const runReplications = useCallback(() => {
+    // replicate() runs static interventions and cannot follow a timed event.
+    if (scenarioEvents.length > 0) return;
     if (repProgress != null) { repCancel.current = true; return; }
     repCancel.current = false;
     setRepResult(null);
@@ -910,21 +989,30 @@ export default function AiSandboxPage() {
     setTimeout(pump, 0);
   }, [
     repProgress, repRuns, segLengthM, laneCount, inflow, effectiveClassProfile, ramps,
-    closedLanes, closureM, closureEndM, speedLimit, zoneM,
+    closedLanes, closureM, closureEndM, speedLimit, zoneM, scenarioEvents,
   ]);
 
 
-  // Live-apply interventions.
+  /* Live-apply interventions.
+   *
+   * This used to copy the operator's state straight onto the engine. It now goes
+   * through the scenario adapter, which lays any running scenario event over that
+   * state (composeInterventions) and applies the result. The animation loop below
+   * goes through the same call when a phase boundary is crossed, so neither path
+   * can overwrite the other. Runs whenever the operator's settings or the events
+   * change. */
   useEffect(() => {
     const sim = simRef.current;
     if (!sim) return;
-    sim.interventions.closedLanes = closedLanes;
-    sim.interventions.speedLimitKmh = speedLimit;
-    sim.interventions.closurePoint = closureM;
-    sim.interventions.closureEnd = closureEndM;
-    sim.interventions.showClosurePreview = closureKm != null || closureEndKm != null || placingClosure;
-    sim.interventions.speedZone = zoneM;
-  }, [closedLanes, speedLimit, closureM, closureEndM, zoneM, closureKm, closureEndKm, placingClosure]);
+    scenarioCtxRef.current = { controls: manualControls, events: scenarioEvents, frame: scenarioFrame };
+    const { owners: next } = scenarioBinding.apply(sim, manualControls, scenarioEvents, scenarioFrame);
+    const now = scenarioTimeS(sim.time, scenarioFrame);
+    const due = nextBoundaryAfter(scenarioEvents, roadOf(sim, scenarioFrame), now);
+    scenarioDueRef.current = due === null ? Infinity : due;
+    setOwners((cur) => (ownershipKey(cur) === ownershipKey(next) ? cur : next));
+    // manualControls and scenarioFrame are rebuilt from the values listed on every render.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [closedLanes, speedLimit, closureM, closureEndM, zoneM, closureKm, closureEndKm, placingClosure, scenarioEvents, direction, fromKm, toKm, scenarioBinding]);
 
   // Animation + physics loop.
   useEffect(() => {
@@ -940,7 +1028,8 @@ export default function AiSandboxPage() {
       const dtReal = Math.min(0.1, (now - (lastFrameRef.current || now)) / 1000);
       lastFrameRef.current = now;
 
-      if (running) {
+      // While a "skip to next phase" is fast-forwarding the engine it is the only thing stepping it.
+      if (running && skipRef.current === null) {
         // advance sim time = real time × simSpeed, in fixed steps for stability.
         // A persistent accumulator carries the sub-timestep remainder between
         // frames, so slow (1×) speeds still integrate correctly.
@@ -950,6 +1039,16 @@ export default function AiSandboxPage() {
         // simulated time rather than shrinking when SIM_DT does.
         while (simAccRef.current >= SIM_DT && guard < 3 / SIM_DT) {
           sim.step(SIM_DT);
+          // Scenario events: re-apply when a phase boundary has just been crossed.
+          const ctx = scenarioCtxRef.current;
+          if (ctx) {
+            const r = applyAtBoundary(scenarioBinding, sim, ctx.controls, ctx.events, ctx.frame, scenarioDueRef.current);
+            scenarioDueRef.current = r.dueS;
+            if (r.composition !== null) {
+              const next = r.composition.owners;
+              setOwners((cur) => (ownershipKey(cur) === ownershipKey(next) ? cur : next));
+            }
+          }
           simAccRef.current -= SIM_DT;
           guard++;
         }
@@ -964,7 +1063,7 @@ export default function AiSandboxPage() {
     };
     rafRef.current = requestAnimationFrame(loop);
     return () => cancelAnimationFrame(rafRef.current);
-  }, [running, simSpeed]);
+  }, [running, simSpeed, scenarioBinding]);
 
   // Incident placement: arm "placing" mode, then let the user click the
   // simulation to choose exactly where (which lane / how far along) the
@@ -1024,7 +1123,7 @@ export default function AiSandboxPage() {
       return;
     }
     sim.addIncident(lane, x);
-    setIncidentCount(sim.interventions.incidents.length);
+    setIncidentCount(scenarioBinding.operatorIncidents(sim).length);
     setPlacingIncident(false); // one accident per click; re-arm to drop another
   };
 
@@ -1133,30 +1232,42 @@ export default function AiSandboxPage() {
       return;
     }
 
+    // Things a running scenario event owns cannot be changed from here either; say so rather than report them applied.
+    const notApplied: string[] = [];
     for (const a of plan.actions) {
       switch (a.type) {
         case "close_lane":
         case "open_lane": {
           const shut = a.type === "close_lane";
           const idx = a.lanes.map((n) => n - 1).filter((i) => i >= 0 && i < laneCount);
-          if (idx.length === 0) break;
-          setClosedLanes((prev) => prev.map((c, i) => (idx.includes(i) ? shut : c)));
-          applied.push(`${shut ? "Closed" : "Opened"} lane ${a.lanes.join(", ")}`);
+          const held = shut ? [] : idx.filter((i) => lockedLanes[i]);
+          if (held.length > 0 && owners.closure) {
+            notApplied.push(`Lane ${held.map((i) => i + 1).join(", ")} stays closed (driven by ${describeOwner(owners.closure)})`);
+          }
+          const free = idx.filter((i) => !held.includes(i));
+          if (free.length === 0) break;
+          setClosedLanes((prev) => prev.map((c, i) => (free.includes(i) ? shut : c)));
+          applied.push(`${shut ? "Closed" : "Opened"} lane ${free.map((i) => i + 1).join(", ")}`);
           break;
         }
         case "set_speed_limit":
+          if (owners.speedZone) {
+            notApplied.push(`The speed zone is driven by ${describeOwner(owners.speedZone)}`);
+            break;
+          }
           setSpeedLimit(a.kmh);
           applied.push(a.kmh == null ? "Removed the speed limit" : `Speed limit ${a.kmh} km/h`);
           break;
         case "add_incident": {
           const x = (a.positionPct / 100) * segLengthM;
           sim.addIncident(a.lane - 1, x);
-          setIncidentCount(sim.interventions.incidents.length);
+          setIncidentCount(scenarioBinding.operatorIncidents(sim).length);
           applied.push(`Incident in lane ${a.lane}`);
           break;
         }
         case "clear_incidents":
-          sim.interventions.incidents = [];
+          // Only the operator's: a running scenario's obstacle stays until its event ends.
+          scenarioBinding.clearOperatorIncidents(sim);
           setIncidentCount(0);
           applied.push("Cleared incidents");
           break;
@@ -1180,18 +1291,111 @@ export default function AiSandboxPage() {
       }
     }
 
-    setCommandNote(applied.length ? `Applied: ${applied.join(" · ")}.` : "Nothing to apply.");
+    setCommandNote(
+      (applied.length ? `Applied: ${applied.join(" · ")}.` : "Nothing to apply.") +
+        (notApplied.length ? ` Not applied: ${notApplied.join(" · ")}.` : ""),
+    );
     setPlan(null);
     setCommand("");
   };
   const clearIncidents = () => {
     const sim = simRef.current;
     if (!sim) return;
-    sim.interventions.incidents = [];
+    // The operator's incidents only: an in-lane breakdown event removes its own when it ends.
+    scenarioBinding.clearOperatorIncidents(sim);
     setIncidentCount(0);
   };
 
-  const toggleLane = (i: number) => setClosedLanes((prev) => prev.map((c, idx) => (idx === i ? !c : c)));
+  // A lane a scenario event is blocking cannot be reopened; any other lane can be closed or opened as before.
+  const toggleLane = (i: number) => {
+    if (lockedLanes[i]) return;
+    setClosedLanes((prev) => prev.map((c, idx) => (idx === i ? !c : c)));
+  };
+
+  /* ── Scenario events ─────────────────────────────────────────────────────
+   * Adding stores the event with its duration already drawn; it is refused,
+   * with a message naming what it collides with, if it cannot run or needs a
+   * lever another event holds at an overlapping time. */
+  const addScenarioEvent = (spec: NewEventSpec): { ok: true; event: ScenarioEvent } | { ok: false; reason: string } => {
+    const sim = simRef.current;
+    if (!sim) return { ok: false, reason: "The simulation has not started yet." };
+    const seq = scenarioSeqRef.current + 1;
+    const r = addEvent(scenarioEventsRef.current, spec, roadOf(sim, scenarioFrame), seq);
+    if (!r.ok) return r;
+    scenarioSeqRef.current = seq;
+    scenarioEventsRef.current = r.events;
+    setScenarioEvents(r.events);
+    return { ok: true, event: r.event };
+  };
+  const removeScenarioEvent = (id: string) => {
+    scenarioEventsRef.current = removeEvent(scenarioEventsRef.current, id);
+    setScenarioEvents(scenarioEventsRef.current);
+  };
+
+  /* Skip to the next phase boundary of any scenario event. The engine is stepped
+   * without rendering, in ~25 ms slices so the page stays responsive, and the
+   * metrics are refreshed once at the end. Pressing the button again while it runs
+   * stops it; a rebuild stops it too. */
+  const skipToNextPhase = () => {
+    const sim = simRef.current;
+    if (!sim) return;
+    if (skipRef.current) {
+      skipRef.current.cancel = true;
+      return;
+    }
+    const road = roadOf(sim, scenarioFrame);
+    const from = scenarioTimeS(sim.time, road);
+    const target = nextBoundaryAfter(scenarioEventsRef.current, road, from);
+    if (target === null) return;
+    const token = { cancel: false };
+    skipRef.current = token;
+    setSkipProgress(0);
+    const finish = () => {
+      skipRef.current = null;
+      setSkipProgress(null);
+      simAccRef.current = 0;
+    };
+    const pump = () => {
+      if (token.cancel || simRef.current !== sim) {
+        finish();
+        return;
+      }
+      const r = stepToScenarioTime(sim, scenarioFrame, target, SIM_DT, 25, () => performance.now());
+      if (!r.reached) {
+        setSkipProgress((scenarioTimeS(sim.time, scenarioFrame) - from) / (target - from));
+        setTimeout(pump, 0);
+        return;
+      }
+      // On the boundary: apply the new phase (with whatever the operator has set by now), then show the result.
+      const ctx = scenarioCtxRef.current;
+      if (ctx) {
+        const applied = applyAtBoundary(scenarioBinding, sim, ctx.controls, ctx.events, ctx.frame, -Infinity);
+        scenarioDueRef.current = applied.dueS;
+        const next = applied.composition ? applied.composition.owners : NO_OWNERS;
+        setOwners((cur) => (ownershipKey(cur) === ownershipKey(next) ? cur : next));
+      }
+      setMetrics(sim.metrics());
+      finish();
+    };
+    setTimeout(pump, 0);
+  };
+
+  /* No "Add event" panel exists yet, so while developing, events can be driven
+   * from the browser console:
+   *   sandboxScenarios.add({ variant: { family: "self_accident" }, lane: 1, positionKm: <km>,
+   *                          startMinutes: 1, duration: { kind: "p50" } })
+   *   sandboxScenarios.skip() · .remove("ev1") · .list()
+   * Development builds only. */
+  useEffect(() => {
+    if (process.env.NODE_ENV !== "development") return;
+    Object.defineProperty(window, "sandboxScenarios", {
+      value: { add: addScenarioEvent, remove: removeScenarioEvent, skip: skipToNextPhase, list: () => scenarioEventsRef.current },
+      configurable: true,
+    });
+    return () => {
+      Reflect.deleteProperty(window, "sandboxScenarios");
+    };
+  });
 
   const captureBaseline = () => {
     if (!metrics) return;
@@ -1239,7 +1443,6 @@ export default function AiSandboxPage() {
    * nobody has finished the segment yet — and every later comparison then
    * reads as a miracle. Hence the settling step, which is the one an operator
    * would never guess at. */
-  const WARMUP_S = 60;
   const elapsedS = metrics?.elapsedS ?? 0;
   const warmedUp = elapsedS >= WARMUP_S;
   const stepDone = [warmedUp, baseline != null, baseline != null && anyIntervention];
@@ -1360,7 +1563,13 @@ export default function AiSandboxPage() {
               <span className="k">Close lane</span>
               <div className="sandbox-lane-toggles">
                 {Array.from({ length: laneCount }, (_, i) => (
-                  <button key={i} className={closedLanes[i] ? "closed" : ""} onClick={() => toggleLane(i)}>
+                  <button
+                    key={i}
+                    className={closedLanes[i] || lockedLanes[i] ? "closed" : ""}
+                    onClick={() => toggleLane(i)}
+                    disabled={lockedLanes[i]}
+                    title={lockedLanes[i] && owners.closure ? `Driven by: ${describeOwner(owners.closure)}` : undefined}
+                  >
                     L{i + 1}
                   </button>
                 ))}
@@ -1369,24 +1578,29 @@ export default function AiSandboxPage() {
               <span className="k">Closed Km</span>
               <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
                 <div style={{ width: 84 }}>
-                  <KmInput value={closureAtKm} min={fromKm} max={toKm} onCommit={commitClosureStart} />
+                  <KmInput value={shownClosureFromKm} min={fromKm} max={toKm} onCommit={commitClosureStart} disabled={owners.closure !== null} />
                 </div>
                 <span className="k" style={{ opacity: 0.7 }}>to</span>
                 <div style={{ width: 84 }}>
                   <KmInput
-                    value={closureEndAtKm}
+                    value={shownClosureToKm}
                     min={fromKm}
                     max={toKm}
                     onCommit={commitClosureEnd}
+                    disabled={owners.closure !== null}
                   />
                 </div>
                 <span className="k" style={{ opacity: 0.7 }}>
-                  {Math.round((closureEndAtKm - closureAtKm) * 1000)} m
+                  {Math.round((shownClosureToKm - shownClosureFromKm) * 1000)} m
                 </span>
               </div>
+              {owners.closure && (
+                <span className="k" style={{ opacity: 0.85 }}>Driven by: {describeOwner(owners.closure)}</span>
+              )}
 
               <button
                 className={`btn-muted ${placingClosure ? "active" : ""}`}
+                disabled={owners.closure !== null}
                 onClick={() => {
                   setPlacingClosure((v) => !v);
                   setPlacingIncident(false);
@@ -1849,10 +2063,64 @@ export default function AiSandboxPage() {
             summary={interventionSummary}
           >
 
+          {scenarioEvents.length > 0 && (
+            <div>
+              <span className="sandbox-mini-label">Scenario events · timed from the end of warm-up</span>
+              {scenarioEvents.map((e) => {
+                const p = eventProgress(e, scenarioNowS);
+                const bad = owners.invalid.find((i) => i.eventId === e.id);
+                const status = bad
+                  ? `not running: ${bad.problems.join("; ")}`
+                  : p.state === "pending"
+                    ? `starts in ${formatClock(p.startsInS)}`
+                    : p.state === "done"
+                      ? "finished"
+                      : p.phase
+                        ? `${p.phase.label} · ${formatClock(p.phaseRemainingS ?? 0)} left`
+                        : "running";
+                return (
+                  <div key={e.id} className={`sandbox-live-note${bad ? " warn" : ""}`}>
+                    <b>{e.name}</b> · {status}
+                    <br />
+                    {describeResolution(e)}
+                    {e.phases.map((ph) => (
+                      <span key={ph.id} style={{ display: "block", opacity: ph.skipped ? 0.65 : 1 }}>{ph.text}</span>
+                    ))}
+                    <button className="btn-muted" style={{ marginTop: 6 }} onClick={() => removeScenarioEvent(e.id)}>
+                      Remove
+                    </button>
+                  </div>
+                );
+              })}
+              <div className="sandbox-btn-row">
+                <button
+                  className="btn-muted"
+                  onClick={skipToNextPhase}
+                  disabled={skipProgress === null && nextBoundaryAfter(scenarioEvents, scenarioRoad, scenarioNowS) === null}
+                  title="Fast-forward without drawing to the next phase change of any event. Press again to stop."
+                >
+                  {skipProgress === null ? "Skip to next phase" : `Skipping… ${Math.round(skipProgress * 100)}% (stop)`}
+                </button>
+              </div>
+            </div>
+          )}
+          {owners.yielded.length > 0 && (
+            <p className="sandbox-live-note warn">
+              {owners.yielded.map((y) => y.eventName).join(", ")} {owners.yielded.length === 1 ? "is" : "are"} not applying{" "}
+              {owners.yielded.length === 1 ? "its" : "their"} speed zone: a speed limit is set below.
+            </p>
+          )}
+
           <span className="sandbox-mini-label">Close a lane (traffic must merge out)</span>
           <div className="sandbox-lane-toggles">
             {Array.from({ length: laneCount }, (_, i) => (
-              <button key={i} className={closedLanes[i] ? "closed" : ""} onClick={() => toggleLane(i)}>
+              <button
+                key={i}
+                className={closedLanes[i] || lockedLanes[i] ? "closed" : ""}
+                onClick={() => toggleLane(i)}
+                disabled={lockedLanes[i]}
+                title={lockedLanes[i] && owners.closure ? `Driven by: ${describeOwner(owners.closure)}` : undefined}
+              >
                 L{i + 1}
               </button>
             ))}
@@ -1860,17 +2128,23 @@ export default function AiSandboxPage() {
 
           <div style={{ marginTop: 8 }}>
             <span className="sandbox-mini-label">
-              Closed from Km {closureAtKm.toFixed(2)} to Km {closureEndAtKm.toFixed(2)} ·{" "}
-              {Math.round((closureEndAtKm - closureAtKm) * 1000)} m
+              Closed from Km {shownClosureFromKm.toFixed(2)} to Km {shownClosureToKm.toFixed(2)} ·{" "}
+              {Math.round((shownClosureToKm - shownClosureFromKm) * 1000)} m
             </span>
+            {owners.closure && (
+              <p className="sandbox-live-note">
+                Driven by: {describeOwner(owners.closure)}. The stretch is locked. You can close more lanes on it; the lanes
+                the event blocks stay closed until it moves on.
+              </p>
+            )}
             <div style={{ display: "flex", gap: 8, marginTop: 4 }}>
               <label style={{ flex: 1, minWidth: 0 }}>
                 <span className="sandbox-slider-hint" style={{ display: "block", marginBottom: 3 }}>From km</span>
-                <KmInput value={closureAtKm} min={fromKm} max={toKm} onCommit={commitClosureStart} />
+                <KmInput value={shownClosureFromKm} min={fromKm} max={toKm} onCommit={commitClosureStart} disabled={owners.closure !== null} />
               </label>
               <label style={{ flex: 1, minWidth: 0 }}>
                 <span className="sandbox-slider-hint" style={{ display: "block", marginBottom: 3 }}>To km</span>
-                <KmInput value={closureEndAtKm} min={fromKm} max={toKm} onCommit={commitClosureEnd} />
+                <KmInput value={shownClosureToKm} min={fromKm} max={toKm} onCommit={commitClosureEnd} disabled={owners.closure !== null} />
               </label>
             </div>
             {/* The instruction that used to sit here ran to three wrapped lines
@@ -1888,6 +2162,7 @@ export default function AiSandboxPage() {
             <button
               className={`btn-muted ${placingClosure ? "active" : ""}`}
               title="Traffic merges out before the start and the lane reopens after the end. Type the Km range above, or press this and click the road twice — start, then end."
+              disabled={owners.closure !== null}
               onClick={() => {
                 setPlacingClosure((p) => !p);
                 setPlacingIncident(false);
@@ -1917,37 +2192,43 @@ export default function AiSandboxPage() {
             <div className="sandbox-slider-header">
               <span className="sandbox-slider-label">Speed limit zone</span>
               <span className="sandbox-slider-value" style={{ color: "#ea580c" }}>
-                {speedLimit == null ? "off" : `${speedLimit} km/h`}
+                {shownSpeedLimit == null ? "off" : `${shownSpeedLimit} km/h`}
               </span>
             </div>
+            {owners.speedZone && (
+              <p className="sandbox-live-note">
+                Driven by: {describeOwner(owners.speedZone)}. The zone and its limit are locked until the event ends.
+              </p>
+            )}
             <input
               type="range"
               min={20}
               max={100}
               step={5}
-              value={speedLimit ?? 100}
+              value={shownSpeedLimit ?? 100}
               onChange={(e) => setSpeedLimit(Number(e.target.value) >= 100 ? null : Number(e.target.value))}
+              disabled={owners.speedZone !== null}
               className="sandbox-range capacity"
               title="Slide to 100 to disable the zone."
-              style={{ "--range-pct": `${(((speedLimit ?? 100) - 20) / 80) * 100}%` } as React.CSSProperties}
+              style={{ "--range-pct": `${(((shownSpeedLimit ?? 100) - 20) / 80) * 100}%` } as React.CSSProperties}
             />
             {/* "Slide to 100 to disable" was a whole line spent restating the
                 value readout beside the title, which already says "off" the
                 moment the zone is disabled. It survives as the slider's own
                 tooltip. */}
-            {speedLimit != null && (
+            {shownSpeedLimit != null && (
               <div style={{ display: "flex", gap: 8, marginTop: 6 }}>
                 <label style={{ flex: 1, minWidth: 0 }}>
                   <span className="sandbox-slider-hint" style={{ display: "block", marginBottom: 3 }}>
                     Zone from km
                   </span>
-                  <KmInput value={zoneA} min={fromKm} max={toKm} onCommit={setZoneFromKm} />
+                  <KmInput value={shownZoneFromKm} min={fromKm} max={toKm} onCommit={setZoneFromKm} disabled={owners.speedZone !== null} />
                 </label>
                 <label style={{ flex: 1, minWidth: 0 }}>
                   <span className="sandbox-slider-hint" style={{ display: "block", marginBottom: 3 }}>
                     Zone to km
                   </span>
-                  <KmInput value={zoneB} min={fromKm} max={toKm} onCommit={setZoneToKm} />
+                  <KmInput value={shownZoneToKm} min={fromKm} max={toKm} onCommit={setZoneToKm} disabled={owners.speedZone !== null} />
                 </label>
               </div>
             )}
@@ -2066,13 +2347,21 @@ export default function AiSandboxPage() {
             <b>{repRuns}</b>
           </label>
           <div className="sandbox-btn-row">
-            <button className="btn-primary" onClick={runReplications} style={{ marginLeft: 0 }}>
+            <button
+              className="btn-primary"
+              onClick={runReplications}
+              disabled={scenarioEvents.length > 0}
+              style={{ marginLeft: 0 }}
+            >
               {repProgress != null ? "Stop" : "Run"}
             </button>
             {repProgress != null && (
               <span className="sandbox-reps-prog">{(repProgress * 100).toFixed(0)}%</span>
             )}
           </div>
+          {scenarioEvents.length > 0 && (
+            <p className="sandbox-reps-warn">{"Confidence runs don't yet support timed events."}</p>
+          )}
           {repResult && (
             <div className="sandbox-reps-out">
               {([
@@ -2190,11 +2479,13 @@ function KmInput({
   min,
   max,
   onCommit,
+  disabled = false,
 }: {
   value: number;
   min: number;
   max: number;
   onCommit: (km: number) => void;
+  disabled?: boolean;
 }) {
   const [draft, setDraft] = useState<string | null>(null);
 
@@ -2213,6 +2504,7 @@ function KmInput({
       min={min}
       max={max}
       step={0.05}
+      disabled={disabled}
       value={draft ?? String(Number(value.toFixed(2)))}
       onChange={(e) => setDraft(e.target.value)}
       onBlur={commit}

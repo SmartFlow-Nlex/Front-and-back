@@ -53,15 +53,31 @@ export type LngLat = [number, number];
    one. The finer version landed just as close but shivered: its heading changed
    an average of 10.1 degrees per vertex against a motorway that turns
    gradually, which read as a zigzag over smooth tarmac. Coarser bins and a
-   second pass halve that to 6.1 degrees and, unusually, fit slightly better
-   too — the jitter was noise, not detail. Smoothing harder keeps flattening the
-   wobble but starts cutting real curves: four passes reach 4.1 degrees at the
-   cost of pushing the worst case from 82 m to 117 m. */
+   second pass halve that, and, unusually, fit slightly better too — the jitter
+   was noise, not detail. Smoothing harder keeps flattening the wobble but
+   starts cutting real curves.
+
+   `step` is what the pass emits, as opposed to `bin`, which is what it
+   measures. They were the same thing until the road at Dau came out as a
+   staircase: only occupied bins produced a vertex, and since consecutive OSM
+   points on one carriageway are about 78 m apart, a 40 m bin is empty more
+   often than not. Sampling the offsets at a fixed 40 m instead of taking
+   whatever bins happened to be occupied halves the average heading change,
+   6.12 degrees to 3.10, drops the turns over 50 degrees from eleven to three,
+   and brings the worst corner on the corridor down from 97 degrees to 60.
+   Against Mapbox's own tarmac the line also moved closer, from a typical 4.4 m
+   to 2.2 m, and at Dau itself from 6.1 m to 3.3 m.
+
+   The one figure that went the other way is the tail at Bocaue, worst case
+   61 m to 105 m. That is the centreline running up the middle of an
+   interchange where the carriageways fan apart, which is what it is supposed to
+   do and is only measurable now because the line carries 2.7 times as many
+   vertices through it. Checked on the map: the road there draws clean. */
 const PASSES = [
-  { halfWidth: 250, bin: 60, smooth: 2 },  // reference: the chain of exits
-  { halfWidth: 120, bin: 30, smooth: 1 },
-  { halfWidth: 80, bin: 25, smooth: 1 },
-  { halfWidth: 60, bin: 40, smooth: 2 },
+  { halfWidth: 250, bin: 60, smooth: 2, step: 40 },  // reference: the chain of exits
+  { halfWidth: 120, bin: 30, smooth: 1, step: 40 },
+  { halfWidth: 80, bin: 25, smooth: 1, step: 40 },
+  { halfWidth: 60, bin: 40, smooth: 2, step: 40 },
 ];
 
 // Metres per degree near 15°N. The corridor spans half a degree, so a fixed
@@ -85,10 +101,17 @@ function measured(line: LngLat[]) {
 
 type Measured = ReturnType<typeof measured>;
 
-/** Distance along the reference of the closest point to `p`, and how far off. */
-function projectOn(ref: Measured, p: LngLat): { s: number; off: number } {
+/**
+ * Distance along the reference of the closest point to `p`, how far off it is,
+ * and which SIDE it is on -- signed positive to the left of travel.
+ *
+ * The sign is what lets a bin be reduced to one number. Without it the only
+ * way to summarise a bin is to average its coordinates, and a coordinate
+ * average has no idea that the points came from two separate carriageways.
+ */
+function projectOn(ref: Measured, p: LngLat): { s: number; off: number; side: number } {
   const [qx, qy] = toXY(p);
-  let best = { s: 0, off: Infinity };
+  let best = { s: 0, off: Infinity, side: 0 };
   for (let i = 1; i < ref.xy.length; i++) {
     const [ax, ay] = ref.xy[i - 1];
     const vx = ref.xy[i][0] - ax;
@@ -98,14 +121,50 @@ function projectOn(ref: Measured, p: LngLat): { s: number; off: number } {
     let t = ((qx - ax) * vx + (qy - ay) * vy) / len2;
     t = t < 0 ? 0 : t > 1 ? 1 : t;
     const off = Math.hypot(qx - (ax + t * vx), qy - (ay + t * vy));
-    if (off < best.off) best = { off, s: ref.cum[i - 1] + t * Math.sqrt(len2) };
+    if (off < best.off) {
+      const len = Math.sqrt(len2);
+      best = {
+        off,
+        s: ref.cum[i - 1] + t * len,
+        side: ((qx - ax) * -vy + (qy - ay) * vx) / len,
+      };
+    }
   }
   return best;
+}
+
+/** The point `lateral` metres to the left of the reference, `s` metres along. */
+function pointOnRef(ref: Measured, s: number, lateral: number): LngLat {
+  let i = 1;
+  while (i < ref.cum.length - 1 && ref.cum[i] < s) i++;
+  const [ax, ay] = ref.xy[i - 1];
+  const vx = ref.xy[i][0] - ax;
+  const vy = ref.xy[i][1] - ay;
+  const len = Math.hypot(vx, vy) || 1;
+  const t = (s - ref.cum[i - 1]) / len;
+  return fromXY([ax + t * vx + (lateral * -vy) / len, ay + t * vy + (lateral * vx) / len]);
 }
 
 function median(values: number[]): number {
   const sorted = [...values].sort((a, b) => a - b);
   return sorted[sorted.length >> 1];
+}
+
+/**
+ * The mean of the middle 60% of a bin's offsets.
+ *
+ * Trimmed rather than a plain mean because a ramp inside the half-width would
+ * drag it; averaged rather than a median because with both carriageways in the
+ * bin a median picks whichever has more points that time, and the centreline is
+ * meant to run BETWEEN them -- the ribbons are drawn with line-offset and put
+ * themselves back on the tarmac from there.
+ */
+function trimmedMean(values: number[]): number {
+  if (values.length < 5) return median(values);
+  const sorted = [...values].sort((a, b) => a - b);
+  const cut = Math.floor(sorted.length * 0.2);
+  const keep = sorted.slice(cut, sorted.length - cut);
+  return keep.reduce((a, b) => a + b, 0) / keep.length;
 }
 
 /**
@@ -129,10 +188,13 @@ function median(values: number[]): number {
  * the road, and putting such a vertex back on the chord loses nothing real.
  * Three passes, because flattening one spike can expose the next.
  *
- * It does NOT fix the broader case, where the median flips between the two
- * carriageways across several bins and the line hooks out and back over a few
- * hundred metres. That needs the binning to track one carriageway rather than
- * take a median, and is a change to the fit rather than a clean-up after it.
+ * It never fixed the broader case, where the fit flipped between the two
+ * carriageways across several bins and the line hooked out and back over a few
+ * hundred metres -- that was the staircase at Dau, and it needed the binning
+ * changed rather than a clean-up after it. `resample` now summarises a bin as a
+ * single signed offset and emits vertices at a fixed step, so neither the flip
+ * nor the short legs that amplified it can arise. This is kept as a cheap guard
+ * on whatever the passes still leave behind.
  */
 function despike(line: LngLat[], maxOffsetM = 14, passes = 3): LngLat[] {
   if (line.length < 3) return line;
@@ -159,34 +221,64 @@ function despike(line: LngLat[], maxOffsetM = 14, passes = 3): LngLat[] {
   return out;
 }
 
-/** One resampling pass: raw points, measured against `reference`. */
+/**
+ * One resampling pass: raw points, measured against `reference`.
+ *
+ * Each bin is reduced to a single number -- how far the road sits to the left
+ * of the reference there -- and the vertex is then placed back on the reference
+ * at that offset. The previous version took the median of longitude and the
+ * median of latitude INDEPENDENTLY, which is what put the staircase in the road
+ * at Dau: the two medians can come from different carriageways, so where the
+ * carriageways pull apart at an interchange one bin lands on the northbound
+ * track and the next on the southbound, and the line walks between them. An
+ * offset cannot do that, because there is only one number to pick.
+ *
+ * The vertices are also emitted at a FIXED step rather than one per occupied
+ * bin. There are about 78 m between consecutive OSM points on one carriageway,
+ * so a 40 m bin is empty more often than not, and the survivors landed 7 m
+ * apart in one place and 50 m apart in the next. On a short leg, ordinary
+ * lateral noise becomes a large angle -- a 7 m leg turned a 2 m wobble into an
+ * 89-degree corner, and an offset ribbon on a corner that sharp splays wide on
+ * the outside and crosses itself on the inside. Even spacing makes that
+ * impossible rather than merely unlikely.
+ *
+ * Smoothing now runs over the offsets rather than over the finished
+ * coordinates, which is the same 1-2-1 kernel applied to the thing that is
+ * actually noisy. Smoothing coordinates also pulls real curves straight.
+ */
 function resample(raw: LngLat[], reference: LngLat[], pass: (typeof PASSES)[number]): LngLat[] {
   const ref = measured(reference);
-  const bins = new Map<number, LngLat[]>();
+  const bins = new Map<number, number[]>();
 
   for (const p of raw) {
-    const { s, off } = projectOn(ref, p);
+    const { s, off, side } = projectOn(ref, p);
     if (off > pass.halfWidth) continue; // ramp, frontage road, service loop
     const key = Math.round(s / pass.bin);
     const bucket = bins.get(key);
-    if (bucket) bucket.push(p);
-    else bins.set(key, [p]);
+    if (bucket) bucket.push(side);
+    else bins.set(key, [side]);
   }
 
   const keys = [...bins.keys()].sort((a, b) => a - b);
-  let line: LngLat[] = keys.map((k) => {
-    const pts = bins.get(k)!;
-    // Median, not mean: the bin holds both carriageways and the occasional
-    // stray, and a median lands on the road where a mean can land between.
-    return [median(pts.map((q) => q[0])), median(pts.map((q) => q[1]))];
-  });
+  if (keys.length < 2) return [];
 
+  // Distance along the reference, and how far left of it the road runs there.
+  let knots: [number, number][] = keys.map((k) => [k * pass.bin, trimmedMean(bins.get(k)!)]);
   for (let i = 0; i < pass.smooth; i++) {
-    line = line.map((q, j, a) =>
-      j === 0 || j === a.length - 1
-        ? q
-        : ([(a[j - 1][0] + 2 * q[0] + a[j + 1][0]) / 4, (a[j - 1][1] + 2 * q[1] + a[j + 1][1]) / 4] as LngLat),
+    knots = knots.map((kn, j, a) =>
+      j === 0 || j === a.length - 1 ? kn : [kn[0], (a[j - 1][1] + 2 * kn[1] + a[j + 1][1]) / 4],
     );
+  }
+
+  const line: LngLat[] = [];
+  let j = 0;
+  const end = knots[knots.length - 1][0];
+  for (let s = knots[0][0]; s <= end; s += pass.step) {
+    while (j < knots.length - 2 && knots[j + 1][0] < s) j++;
+    const [as, ao] = knots[j];
+    const [bs, bo] = knots[j + 1];
+    const t = bs === as ? 0 : (s - as) / (bs - as);
+    line.push(pointOnRef(ref, s, ao + t * (bo - ao)));
   }
   return line;
 }

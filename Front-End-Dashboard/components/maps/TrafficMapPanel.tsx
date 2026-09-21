@@ -308,6 +308,38 @@ export default function TrafficMapPanel({ title, subtitle, badge, endpoint, laye
        counts as much as its start. */
     const queuePins: { at: [number, number]; line: [number, number][]; level: number }[] = [];
 
+    /* What the exit PLATES are coloured from, which is not the same thing on
+       both maps.
+
+       The live map has jams: individual queues with their own geometry, so an
+       exit is red when a queue is standing on it. The forecast has none -- it
+       carries a predicted state per SEGMENT, which is what paints its ribbons
+       -- so `queuePins` is empty there and every plate came out plain. The
+       forecast map was drawing a red road past a white exit name and saying
+       nothing about which exit the congestion was at, while the live map beside
+       it named its own in red.
+
+       So the forecast plates read the levelled corridor segments instead. A
+       segment runs between two exits and the whole of it is drawn congested,
+       so both of its ends take the colour -- which is what the picture already
+       says.
+
+       Bumped whenever either source is rebuilt, so the per-exit levels below
+       can be worked out once rather than on every frame of a pan. */
+    const segmentState: { line: [number, number][]; level: number }[] = [];
+    let stateVersion = 0;
+
+    const setSegmentState = (fc: GeoJSON.FeatureCollection) => {
+      segmentState.length = 0;
+      for (const f of fc.features ?? []) {
+        const lvl = Number((f.properties as { level?: unknown })?.level ?? NO_READING);
+        // NO_READING is -1: nobody forecast that stretch, which is not a claim.
+        if (!(lvl >= 1) || f.geometry?.type !== "LineString") continue;
+        segmentState.push({ line: f.geometry.coordinates as [number, number][], level: lvl });
+      }
+      stateVersion++;
+    };
+
     /* map.on("load") is asynchronous, so a theme switch or an unmount can tear
        the effect down before it fires. Everything started in there — the
        animation frame and the poll — has to check this, or it runs on a map
@@ -337,6 +369,7 @@ export default function TrafficMapPanel({ title, subtitle, badge, endpoint, laye
          opens the same card. */
       const marks: GeoJSON.Feature[] = [];
       queuePins.length = 0;
+      stateVersion++;
 
       const out = {
         ...kept,
@@ -571,6 +604,7 @@ export default function TrafficMapPanel({ title, subtitle, badge, endpoint, laye
       let lastFeedSig = "";
 
       const corridorAtLoad = corridorWithState(data);
+      setSegmentState(corridorAtLoad);
       lastCorridorSig = signature(corridorAtLoad);
       lastFeedSig = signature(data);
       map.addSource("nlex-corridor", {
@@ -1651,6 +1685,15 @@ export default function TrafficMapPanel({ title, subtitle, badge, endpoint, laye
         const plateW = new Map<HTMLElement, number>();
         let measuredTier: string | null = null;
 
+        /* The worst state standing on each exit, worked out once per change of
+           the feed rather than once per pin per frame. The live map compares an
+           exit against a handful of short jam lines, which is cheap either way;
+           the forecast map compares it against thirty-eight corridor segments
+           of a hundred vertices each, and doing that on every mousemove of a
+           pan is three quarters of a million distance tests a second. */
+        const plateLevel = new Map<HTMLElement, number>();
+        let levelVersion = -1;
+
         /* How far an exit is from a queue, on the GROUND, in metres.
 
            The colour on a plate used to come from the same pixel test that
@@ -1724,18 +1767,27 @@ export default function TrafficMapPanel({ title, subtitle, badge, endpoint, laye
              zoom, because the road does not. */
           const coversPin = (q: { x: number; y: number }) =>
             queuePts.some((k) => near(k.p, q, gap));
-          const queueLevelOn = (at: [number, number]) =>
-            queuePins.reduce(
-              (worst, k) => (metresToQueue(at, k.line) <= EXIT_QUEUE_M ? Math.max(worst, k.level) : worst),
-              -1,
-            );
+          if (levelVersion !== stateVersion) {
+            const source = isRealtimeEndpoint ? queuePins : segmentState;
+            for (const pin of plazaPins) {
+              plateLevel.set(
+                pin.el,
+                source.reduce(
+                  (worst, k) =>
+                    metresToQueue(pin.lngLat, k.line) <= EXIT_QUEUE_M ? Math.max(worst, k.level) : worst,
+                  -1,
+                ),
+              );
+            }
+            levelVersion = stateVersion;
+          }
 
           /* And those exits are considered first. Keeping them in corridor
              order meant a name survived or was dropped according to where it
              happened to fall in the list, so the exits worth naming were as
              likely to go as any other. */
           const ordered = [...plazaPins]
-            .map((pin) => ({ pin, q: map.project(pin.lngLat), level: queueLevelOn(pin.lngLat) }))
+            .map((pin) => ({ pin, q: map.project(pin.lngLat), level: plateLevel.get(pin.el) ?? -1 }))
             .sort((a, b) => Number(b.level >= 0) - Number(a.level >= 0));
 
           if (measuredTier !== tier) {
@@ -2062,6 +2114,7 @@ export default function TrafficMapPanel({ title, subtitle, badge, endpoint, laye
           const corridorSig = signature(corridorNow);
           if (corridorSig !== lastCorridorSig) {
             lastCorridorSig = corridorSig;
+            setSegmentState(corridorNow);
             /* Which tiers are on screen no longer needs tracking here: Mapbox
                calls render() only for images a visible layer is using, so a
                tier with no segments costs nothing on its own. */

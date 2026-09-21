@@ -1559,35 +1559,6 @@ export default function TrafficMapPanel({ title, subtitle, badge, endpoint, laye
            length. */
         const TIER_GAP_PX = { far: 26, mid: 30, near: 34 } as const;
 
-        /* A name opens east or west, and that is the whole of it.
-
-           There was a version of this that also stepped names up and down the
-           corridor to fit more of them in, on the reasoning that a name which
-           has moved is better than a name which is gone. On the map it was
-           worse: the leaders grew long and diagonal, names ended up stacked a
-           good distance from the rings they belonged to, and the reader had to
-           trace a line to find out which exit was which. Two positions, both
-           hard against the ring, stay legible.
-
-           The flip is kept because it is what fixes the case that started all
-           this -- a Waze report landing on a name, which is to say something
-           happening at that exit, which is exactly when the name matters. The
-           name steps across the road instead of being dropped. */
-        const LABEL_H = 15;
-        const STUB_PX = { far: 19, mid: 19, near: 24 } as const;
-        const RING_PX = { far: 9, mid: 11, near: 14 } as const;
-
-        type Box = { x0: number; x1: number; y0: number; y1: number };
-        const overlaps = (a: Box, b: Box) =>
-          a.x0 < b.x1 && b.x0 < a.x1 && a.y0 < b.y1 && b.y0 < a.y1;
-
-        /* Plate widths are read from the DOM rather than guessed from the
-           character count, and cached: they depend on the tier and on nothing
-           else, so this is one layout per zoom band rather than one per frame
-           of a pan. */
-        const plateW = new Map<HTMLElement, number>();
-        let measuredTier: string | null = null;
-
         /* How far an exit is from a queue, on the GROUND, in metres.
 
            The colour on a plate used to come from the same pixel test that
@@ -1675,86 +1646,17 @@ export default function TrafficMapPanel({ title, subtitle, badge, endpoint, laye
             .map((pin) => ({ pin, q: map.project(pin.lngLat), level: queueLevelOn(pin.lngLat) }))
             .sort((a, b) => Number(b.level >= 0) - Number(a.level >= 0));
 
-          if (measuredTier !== tier) {
-            for (const pin of plazaPins) {
-              const plate = pin.el.querySelector(".toll-pin-name") as HTMLElement | null;
-              plateW.set(pin.el, plate?.offsetWidth || 60);
-            }
-            measuredTier = tier;
-          }
-
-          const width = map.getCanvas().clientWidth;
-          const stub = STUB_PX[tier];
-          const ringR = RING_PX[tier];
-
-          /* What a name has to keep off: the reports, every exit's own ring,
-             and the names already placed. Reports are still the thing the
-             reader came to see, so a name gives way to one -- it just gives way
-             by moving rather than by disappearing. */
-          const obstacles: Box[] = reportPins
-            .map((c) => map.project(c))
-            .map((p) => ({ x0: p.x - 13, x1: p.x + 13, y0: p.y - 13, y1: p.y + 13 }));
-          for (const o of ordered) {
-            obstacles.push({
-              x0: o.q.x - ringR, x1: o.q.x + ringR,
-              y0: o.q.y - ringR, y1: o.q.y + ringR,
-            });
-          }
-
-          const plateBox = (q: { x: number; y: number }, side: "east" | "west", w: number): Box => {
-            const x0 = side === "east" ? q.x + stub : q.x - stub - w;
-            return { x0, x1: x0 + w, y0: q.y - LABEL_H / 2, y1: q.y + LABEL_H / 2 };
-          };
+          /* Reports still win outright: a plaza is a landmark the reader can
+             find again by zooming, a report is the thing they came to see, and
+             plazas draw above reports so an exit pin could cover one entirely. */
+          const kept = reportPins.map((c) => map.project(c));
 
           for (const { pin, q, level } of ordered) {
-            const w = plateW.get(pin.el) ?? 60;
-            /* Away from the near edge first, so a name at the side of the map
-               is not the half that gets clipped. */
-            const sides: ("east" | "west")[] = q.x > width * 0.62 ? ["west", "east"] : ["east", "west"];
-
-            let placed: { side: "east" | "west"; box: Box } | null = null;
-            for (const side of sides) {
-              const box = plateBox(q, side, w);
-              if (box.x0 < 4 || box.x1 > width - 4) continue;
-              if (obstacles.some((o) => overlaps(box, o))) continue;
-              placed = { side, box };
-              break;
-            }
-
-            /* Neither side is free, so this one stands down until there is
-               room. Zooming in makes room: the exits spread apart on screen
-               while the plates stay the same size, so a name comes back on its
-               own at the zoom where it fits, rather than at a threshold picked
-               in advance.
-
-               The test is the plate's OWN measured box against the boxes
-               actually on the map, where this used to be a flat 26-34 px
-               proximity rule. That rule was wrong in both directions at once:
-               it dropped names that had room beside a short neighbour, and it
-               kept names that ran straight through a long one. It also let a
-               single Waze report evict a name outright, which meant the name
-               vanished exactly where something was happening.
-
-               Names dropped on the live map, same feed, same views:
-
-                        old   now
-                 z9      11     3
-                 z9.4     9     3
-                 z10      5     0
-                 z10.5    3     0
-                 z11      1     0
-
-               So the only crowding left is at the corridor-wide view, where
-               twenty exits share a few hundred pixels and three of the four
-               around Bocaue give way. One step in and every name is back. */
-            if (!placed) {
+            if (kept.some((k) => near(k, q, gap))) {
               pin.el.style.display = "none";
               continue;
             }
-
             pin.el.style.display = "";
-            pin.el.dataset.side = placed.side;
-            obstacles.push(placed.box);
             pin.el.dataset.ring = coversPin(q) ? "off" : "on";
             /* The name carries the condition, in the same three words and the
                same three colours the legend uses. An exit standing on a queue
@@ -1763,6 +1665,7 @@ export default function TrafficMapPanel({ title, subtitle, badge, endpoint, laye
             if (level >= 3) pin.el.dataset.queue = "congested";
             else if (level >= 1) pin.el.dataset.queue = "slow";
             else delete pin.el.dataset.queue;
+            kept.push(q);
           }
         };
 

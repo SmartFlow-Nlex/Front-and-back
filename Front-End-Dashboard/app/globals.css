@@ -3743,8 +3743,11 @@ body {
   letter-spacing: 0.02em;
   color: var(--text-secondary);
 }
-.ds-rd-caption.top    { margin-bottom: 7px; }
-.ds-rd-caption.bottom { margin-top: 7px; justify-content: flex-end; }
+/* Each caption sits where its traffic STARTS: northbound begins at Balintawak
+   on the left, southbound at Sta. Ines on the right. The arrow beside it then
+   points into the road rather than off the end of it. */
+.ds-rd-caption.top    { margin-bottom: 7px; justify-content: flex-end; }
+.ds-rd-caption.bottom { margin-top: 7px; }
 
 /* The arrow is the quickest read of which way the carriageway runs, so it is
    sized up and given the brand colour rather than sharing the label's weight. */
@@ -3909,36 +3912,58 @@ body {
    leading edge. The track is as wide as the corridor is long and changes with
    the viewport, so a transform of 100% is the only way to cross it without
    measuring it in JavaScript first -- and a transform is the one thing that
-   animates on the compositor, which matters with twenty-four of these running.
-   Animating `left` would lay out the panel on every frame. */
+   animates on the compositor rather than laying the panel out every frame.
+
+   There is no animation declared here. The car's speed changes with the road
+   under it, so its keyframes are built from live data in
+   InteractiveRoadMap.tsx and driven through the Web Animations API. The
+   resting transform parks it off the left edge, so if the animation never
+   starts the car is absent rather than standing at the kerb pretending the
+   corridor is blocked. */
 .ds-rd-car {
   position: absolute;
   left: 0;
   width: 100%;
   height: 8px;
-  animation: rdCarRight var(--dur, 10s) linear infinite;
-  animation-delay: var(--delay, 0s);
+  transform: translateX(-100%);
 }
 
-/* Three lanes, matching the dashed dividers at 33% and 66% of the 32px
-   interior: centres land at about 5, 16 and 27, less half a car. */
+/* One car to a lane, against the dashed dividers at 33% and 66% of the 32px
+   interior: lane centres land at about 5, 16 and 27, less half a car. Separate
+   lanes are also why three cars never have to avoid each other -- they close
+   right up inside a queue, and in the same lane that would be a collision. */
 .ds-rd-car.lane-1 { top: 1px; }
 .ds-rd-car.lane-2 { top: 12px; }
 .ds-rd-car.lane-3 { top: 23px; }
 
-/* Seen from above: a body, a windscreen at the front and a smaller rear window,
-   a highlight along the roof. Without the windows this is a rounded rectangle,
-   and a rounded rectangle on a lane line is just a longer dash -- the two dark
-   bands are the whole difference between a car and a mark on the road. */
+/* Seen from above. The height is the same for everything, because a lane is
+   about eleven pixels and a bus has to fit in it too -- what varies is the
+   LENGTH and the pattern of glass, which is what tells a car from a coach at
+   this size. Without the windows these are all rounded rectangles, and a
+   rounded rectangle on a lane line is just a longer dash. */
 .ds-rd-car::before {
   content: "";
   position: absolute;
   top: 0;
   left: 0;
-  width: 18px;
+  width: var(--len, 18px);
   height: 100%;
   border-radius: 2.5px;
-  background:
+  background: var(--body, var(--car, #eef2f7));
+  box-shadow:
+    0 0 0 0.5px rgb(10 14 20 / 0.5),
+    0 1px 2px rgb(0 0 0 / 0.45);
+}
+
+/* The glasshouse is listed FIRST in each stack, so it paints over the roof
+   highlight and the body colour beneath it. Offsets are measured from the
+   rear, and the front of the vehicle is the right-hand end -- the southbound
+   carriageway mirrors the whole thing so the windscreen still leads. */
+
+/* Car: rear window, a roof, then the windscreen. */
+.ds-rd-car[data-kind="car"] {
+  --len: 18px;
+  --body:
     linear-gradient(
       90deg,
       transparent 0 2.5px,
@@ -3949,27 +3974,69 @@ body {
     ),
     linear-gradient(to bottom, rgb(255 255 255 / 0.38), transparent 55%, rgb(0 0 0 / 0.2)),
     var(--car, #eef2f7);
-  box-shadow:
-    0 0 0 0.5px rgb(10 14 20 / 0.5),
-    0 1px 2px rgb(0 0 0 / 0.45);
 }
 
-.ds-rd-way.dir-sb .ds-rd-car { animation-name: rdCarLeft; }
+/* Van: longer, with one long glasshouse instead of two separate windows. */
+.ds-rd-car[data-kind="van"] {
+  --len: 22px;
+  --body:
+    linear-gradient(
+      90deg,
+      transparent 0 2px,
+      rgb(20 25 33 / 0.38) 2px 9.5px,
+      transparent 9.5px 14px,
+      rgb(20 25 33 / 0.56) 14px 18.5px,
+      transparent 18.5px
+    ),
+    linear-gradient(to bottom, rgb(255 255 255 / 0.34), transparent 55%, rgb(0 0 0 / 0.2)),
+    var(--car, #dfe7f0);
+}
+
+/* Bus: a run of side windows and a deep windscreen across the front. */
+.ds-rd-car[data-kind="bus"] {
+  --len: 28px;
+  --body:
+    linear-gradient(
+      90deg,
+      transparent 0 2px,
+      rgb(20 25 33 / 0.36) 2px 5.5px,
+      transparent 5.5px 7px,
+      rgb(20 25 33 / 0.36) 7px 10.5px,
+      transparent 10.5px 12px,
+      rgb(20 25 33 / 0.36) 12px 15.5px,
+      transparent 15.5px 17px,
+      rgb(20 25 33 / 0.36) 17px 20.5px,
+      transparent 20.5px 23px,
+      rgb(20 25 33 / 0.58) 23px 26.5px,
+      transparent 26.5px
+    ),
+    linear-gradient(to bottom, rgb(255 255 255 / 0.3), transparent 55%, rgb(0 0 0 / 0.22)),
+    var(--car, #f2f5f9);
+}
+
+/* Container truck: a blank box, a hard line where the cab begins, and a short
+   windscreen. The line is what stops it reading as one very long bus. */
+.ds-rd-car[data-kind="truck"] {
+  --len: 26px;
+  --body:
+    linear-gradient(
+      90deg,
+      rgb(20 25 33 / 0.1) 0 18.5px,
+      rgb(20 25 33 / 0.62) 18.5px 19.5px,
+      transparent 19.5px 21px,
+      rgb(20 25 33 / 0.56) 21px 24px,
+      transparent 24px
+    ),
+    linear-gradient(to bottom, rgb(255 255 255 / 0.26), transparent 55%, rgb(0 0 0 / 0.22)),
+    var(--car, #e7edf4);
+}
+
 /* Mirrored, so the windscreen leads in both directions. */
 .ds-rd-way.dir-sb .ds-rd-car::before { transform: scaleX(-1); }
 
-@keyframes rdCarRight {
-  from { transform: translateX(-24px); }
-  to   { transform: translateX(calc(100% + 24px)); }
-}
-@keyframes rdCarLeft {
-  from { transform: translateX(calc(100% + 24px)); }
-  to   { transform: translateX(-24px); }
-}
-
-/* Cars are the one purely decorative thing on the panel, so they are the first
-   thing to go: removed outright rather than frozen, since a row of stationary
-   cars on a clear road would be a claim the panel is not making. */
+/* Removed outright rather than frozen: a car stopped on a clear stretch is a
+   claim the panel is not making, and the bands and the rail say everything
+   there is to say without it. */
 @media (prefers-reduced-motion: reduce) {
   .ds-rd-cars { display: none; }
 }
@@ -9496,7 +9563,7 @@ details[open] > .evidence-summary .evidence-close-label { display: inline; }
    restyled here rather than in the component: .mapboxgl-popup-content carries
    the default white box and padding, and the tip is a bordered triangle that
    has to be recoloured separately or it stays white on a dark card. */
-.map-card .mapboxgl-popup-content {
+.mjp-pop .mapboxgl-popup-content {
   padding: 0;
   border-radius: 10px;
   overflow: hidden;
@@ -9504,7 +9571,7 @@ details[open] > .evidence-summary .evidence-close-label { display: inline; }
   border: 1px solid var(--border-default);
   box-shadow: 0 10px 28px rgb(0 0 0 / 0.22);
 }
-.map-card .mapboxgl-popup-tip {
+.mjp-pop .mapboxgl-popup-tip {
   border-top-color: var(--bg-surface);
   border-bottom-color: var(--bg-surface);
 }
@@ -9600,7 +9667,9 @@ details[open] > .evidence-summary .evidence-close-label { display: inline; }
      as a stray mark. */
   left: 19px;
   top: 50%;
-  transform: translateY(-50%);
+  /* --callout-dy is set per pin by declutterPlazas when the name has to step
+     off the road to clear a report or another name. Zero is the usual case. */
+  transform: translateY(calc(-50% + var(--callout-dy, 0px)));
   padding: 2px 6.5px 2.5px;
   border-radius: 5px;
   font-size: 9.5px;
@@ -9621,15 +9690,19 @@ details[open] > .evidence-summary .evidence-close-label { display: inline; }
   box-shadow: 0 1px 3px rgb(15 23 42 / 0.07);
 }
 
-/* The stub, running from the ring into the plate with no gap at either end. */
+/* The leader, running from the ring into the plate with no gap at either end.
+   Pinned at the plate and swung about that end, so a name that has stepped off
+   the road still points at the ring it belongs to. Straight out to the side is
+   the ordinary case and the rotation is then zero. */
 .custom-toll-marker .toll-pin-name::before {
   content: "";
   position: absolute;
   right: 100%;
   top: 50%;
-  width: 9px;
+  width: var(--leader-len, 9px);
   height: 1.5px;
-  transform: translateY(-50%);
+  transform-origin: right center;
+  transform: translateY(-50%) rotate(var(--leader-rot, 0deg));
   background: #0e7490;
   opacity: 0.75;
 }
@@ -9685,9 +9758,9 @@ details[open] > .evidence-summary .evidence-close-label { display: inline; }
 }
 
 /* A callout near the right edge opens west instead, so the name is not the
-   half that gets clipped. Mirrored outright -- text, leader and elbow -- so a
-   flipped one reads as the same object pointing the other way rather than as a
-   different kind of label. */
+   half that gets clipped -- and it opens west too when east is taken. Mirrored
+   outright, text and leader, so a flipped one reads as the same object pointing
+   the other way rather than as a different kind of label. */
 .custom-toll-marker[data-side="west"] .toll-pin-name {
   left: auto;
   right: 19px;
@@ -9699,6 +9772,7 @@ details[open] > .evidence-summary .evidence-close-label { display: inline; }
 .custom-toll-marker[data-side="west"] .toll-pin-name::before {
   right: auto;
   left: 100%;
+  transform-origin: left center;
 }
 
 /* An exit standing on a queue keeps its name and gives up its ring: the queue's

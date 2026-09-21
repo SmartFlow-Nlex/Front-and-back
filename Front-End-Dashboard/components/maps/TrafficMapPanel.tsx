@@ -1107,15 +1107,21 @@ export default function TrafficMapPanel({ title, subtitle, badge, endpoint, laye
         };
       };
 
-      const jamCard = sideCard("map-card");
+      /* `mjp-pop`, not `map-card`. Mapbox puts the popup's class on its OUTER
+         wrapper, and .map-card is the dashboard's generic surface -- background,
+         border, radius, shadow -- so the wrapper took a full card of its own and
+         .map-card .mapboxgl-popup-content painted a second one inside it. What
+         the reader saw was a white panel sitting behind and above the card,
+         offset by the popup's own tip and spacing. One class, one surface. */
+      const jamCard = sideCard("mjp-pop");
       /* Declared here rather than beside the plaza markers below, because the
          queue handler closes it: whichever is declared second would otherwise
          be out of scope for the other. */
-      const plazaCard = sideCard("map-card");
+      const plazaCard = sideCard("mjp-pop");
       /* One card for every report rather than one per marker: they are only
          ever shown one at a time, and sharing it means a report's summary is
          placed by the same rule as everything else on this map. */
-      const reportCard = sideCard("map-card");
+      const reportCard = sideCard("mjp-pop");
 
       const km = (m: number) =>
         m >= 1000 ? `${(m / 1000).toFixed(m >= 10000 ? 0 : 1)} km` : `${Math.round(m)} m`;
@@ -1553,6 +1559,40 @@ export default function TrafficMapPanel({ title, subtitle, badge, endpoint, laye
            length. */
         const TIER_GAP_PX = { far: 26, mid: 30, near: 34 } as const;
 
+        /* How a name is placed when something is already where it wants to go.
+           Tried in this order, and the FIRST clear placement wins.
+
+           Nothing is hidden any more. An exit that was dropped was dropped for
+           the one reason that made it worth reading -- a Waze report sitting on
+           it, which is to say something was happening there -- and the reader
+           was left with an unlabelled ring exactly where they most needed the
+           name. A label that has moved eighteen pixels and kept its leader is
+           still telling the truth about where its exit is; a label that is not
+           drawn is not.
+
+           East and west are tried before any vertical step, because the
+           corridor runs north-north-west: a flip across the road separates two
+           neighbouring exits by the width of both plates, where a step along it
+           has to clear their whole height. */
+        const DY_STEPS = [0, -17, 17, -34, 34, -51, 51, -68, 68] as const;
+        const LABEL_H = 15;
+        /* The gap the leader spans, matching .toll-pin-name's `left` in
+           globals.css less the stub it already draws. */
+        const LEADER_PX = 9;
+        const STUB_PX = { far: 19, mid: 19, near: 24 } as const;
+        const RING_PX = { far: 9, mid: 11, near: 14 } as const;
+
+        type Box = { x0: number; x1: number; y0: number; y1: number };
+        const overlaps = (a: Box, b: Box) =>
+          a.x0 < b.x1 && b.x0 < a.x1 && a.y0 < b.y1 && b.y0 < a.y1;
+
+        /* Plate widths are read from the DOM rather than guessed from the
+           character count, and cached: they depend on the tier and on nothing
+           else, so this is one layout per zoom band rather than one per frame
+           of a pan. */
+        const plateW = new Map<HTMLElement, number>();
+        let measuredTier: string | null = null;
+
         /* How far an exit is from a queue, on the GROUND, in metres.
 
            The colour on a plate used to come from the same pixel test that
@@ -1640,17 +1680,80 @@ export default function TrafficMapPanel({ title, subtitle, badge, endpoint, laye
             .map((pin) => ({ pin, q: map.project(pin.lngLat), level: queueLevelOn(pin.lngLat) }))
             .sort((a, b) => Number(b.level >= 0) - Number(a.level >= 0));
 
-          /* Reports still win outright: a plaza is a landmark the reader can
-             find again by zooming, a report is the thing they came to see, and
-             plazas draw above reports so an exit pin could cover one entirely. */
-          const kept = reportPins.map((c) => map.project(c));
+          if (measuredTier !== tier) {
+            for (const pin of plazaPins) {
+              const plate = pin.el.querySelector(".toll-pin-name") as HTMLElement | null;
+              plateW.set(pin.el, plate?.offsetWidth || 60);
+            }
+            measuredTier = tier;
+          }
+
+          const width = map.getCanvas().clientWidth;
+          const stub = STUB_PX[tier];
+          const ringR = RING_PX[tier];
+
+          /* What a name has to keep off: the reports, every exit's own ring,
+             and the names already placed. Reports are still the thing the
+             reader came to see, so a name gives way to one -- it just gives way
+             by moving rather than by disappearing. */
+          const obstacles: Box[] = reportPins
+            .map((c) => map.project(c))
+            .map((p) => ({ x0: p.x - 13, x1: p.x + 13, y0: p.y - 13, y1: p.y + 13 }));
+          for (const o of ordered) {
+            obstacles.push({
+              x0: o.q.x - ringR, x1: o.q.x + ringR,
+              y0: o.q.y - ringR, y1: o.q.y + ringR,
+            });
+          }
+
+          const plateBox = (
+            q: { x: number; y: number },
+            side: "east" | "west",
+            dy: number,
+            w: number,
+          ): Box => {
+            const x0 = side === "east" ? q.x + stub : q.x - stub - w;
+            return { x0, x1: x0 + w, y0: q.y + dy - LABEL_H / 2, y1: q.y + dy + LABEL_H / 2 };
+          };
 
           for (const { pin, q, level } of ordered) {
-            if (kept.some((k) => near(k, q, gap))) {
-              pin.el.style.display = "none";
-              continue;
+            const w = plateW.get(pin.el) ?? 60;
+            /* Away from the near edge first, so a name at the side of the map
+               is not the half that gets clipped. */
+            const sides: ("east" | "west")[] = q.x > width * 0.62 ? ["west", "east"] : ["east", "west"];
+
+            let placed: { side: "east" | "west"; dy: number; box: Box } | null = null;
+            for (const dy of DY_STEPS) {
+              for (const side of sides) {
+                const box = plateBox(q, side, dy, w);
+                if (box.x0 < 4 || box.x1 > width - 4) continue;
+                if (obstacles.some((o) => overlaps(box, o))) continue;
+                placed = { side, dy, box };
+                break;
+              }
+              if (placed) break;
             }
+            /* Nowhere clear: it is drawn anyway, in its first choice. Twenty
+               exits on eight hundred pixels of corridor cannot all be given
+               clear air, and a crowded name is still readable where an absent
+               one is not. */
+            if (!placed) {
+              placed = { side: sides[0], dy: 0, box: plateBox(q, sides[0], 0, w) };
+            }
+
             pin.el.style.display = "";
+            pin.el.dataset.side = placed.side;
+            pin.el.style.setProperty("--callout-dy", `${placed.dy}px`);
+            /* The leader follows. It is one bar pinned at the plate and swung
+               about that end, so however far the name has stepped off the road
+               the line still lands on the ring it belongs to -- which is the
+               whole reason a name is allowed to move at all. */
+            pin.el.style.setProperty("--leader-len", `${Math.hypot(LEADER_PX, placed.dy)}px`);
+            pin.el.style.setProperty(
+              "--leader-rot",
+              `${((Math.atan2(placed.dy, LEADER_PX) * 180) / Math.PI) * (placed.side === "east" ? 1 : -1)}deg`,
+            );
+            obstacles.push(placed.box);
             pin.el.dataset.ring = coversPin(q) ? "off" : "on";
             /* The name carries the condition, in the same three words and the
                same three colours the legend uses. An exit standing on a queue
@@ -1659,7 +1762,6 @@ export default function TrafficMapPanel({ title, subtitle, badge, endpoint, laye
             if (level >= 3) pin.el.dataset.queue = "congested";
             else if (level >= 1) pin.el.dataset.queue = "slow";
             else delete pin.el.dataset.queue;
-            kept.push(q);
           }
         };
 

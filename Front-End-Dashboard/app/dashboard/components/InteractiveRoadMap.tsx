@@ -11,41 +11,180 @@ import { cachedJson } from "../../../lib/cached-json";
 
 import { useNlexExits, accessLabel, displayExitName, type NlexExit } from "../../../lib/nlex-exits";
 
-/* Traffic on the carriageway.
+/* Twelve vehicles per carriageway, across three lanes, and they drive the road
+ * they are on.
  *
- * Decoration, deliberately: both carriageways run this same set at this same
- * pace, whatever the road is doing, so nothing about the cars can be read as a
- * measurement. What is measured is the coloured band underneath them and the
- * figures beside it. Their job is to make the strip read as a ROAD rather than
- * a progress bar, and to say which way it runs without the reader having to
- * decode an arrow.
+ * Twelve cars at a fixed pace were decoration and had to say so, because a
+ * stream of traffic running at the same speed over a red stretch contradicts
+ * the red stretch. A car that CRAWLS where the band is red and runs where the
+ * road is clear says the same thing the colours say, in the one language that
+ * needs no key at all -- a reader watching it hesitate at Meycauayan has read
+ * the panel without reading anything.
  *
- * Fixed rather than generated, so a re-render cannot reshuffle them mid-drive,
- * and so the two carriageways carry identical traffic -- anything else would
- * invite a comparison that means nothing.
+ * They all share ONE speed profile, built once from the bands, and differ only
+ * in where they start. That is what keeps them honest: every car slows over
+ * the same stretch, so none can be seen sailing through a queue another is
+ * stuck in. It also gives the bunching for free -- a constant head start in
+ * TIME is a shrinking gap in SPACE wherever the road is slow, so they close up
+ * inside a queue and string out again on clear tarmac, which is what traffic
+ * does.
  *
- * The delays are NEGATIVE: a CSS animation given a negative delay starts part
- * way through, so the road is already full of cars on the first frame instead
- * of filling up from the left over ten seconds.
+ * Measured on the running panel: a car crosses a red band at 0.51% of the
+ * track per second against 4.26% on clear road, so the crawl is 8.4x slower
+ * than the run.
  *
- * The paints are all neutral greys and whites. Red, amber and green are spoken
- * for by the status palette, and a yellow car on a green stretch would be the
- * one thing on this panel that looks like a reading and is not.
+ * The speeds are not measurements. This panel knows a queue's class, not the
+ * speed of the traffic in it, so the figures below are chosen for order and
+ * legibility: red slower than amber slower than clear. The measurements are
+ * the band, and the metres and delay on the rail above it.
  */
-const CARS = [
-  { lane: 1, dur: 11.0, delay: -0.0, paint: "#eef2f7" },
-  { lane: 1, dur: 11.0, delay: -3.6, paint: "#c3cfdd" },
-  { lane: 1, dur: 11.0, delay: -7.4, paint: "#dfe7f0" },
-  { lane: 1, dur: 13.5, delay: -5.1, paint: "#aebdd0" },
-  { lane: 2, dur: 9.5, delay: -1.1, paint: "#dfe7f0" },
-  { lane: 2, dur: 9.5, delay: -4.3, paint: "#f4f7fb" },
-  { lane: 2, dur: 9.5, delay: -7.7, paint: "#b9c6d6" },
-  { lane: 2, dur: 12.0, delay: -2.6, paint: "#cdd8e5" },
-  { lane: 3, dur: 8.0, delay: -0.5, paint: "#f4f7fb" },
-  { lane: 3, dur: 8.0, delay: -3.1, paint: "#aebdd0" },
-  { lane: 3, dur: 8.0, delay: -5.7, paint: "#dfe7f0" },
-  { lane: 3, dur: 10.5, delay: -8.2, paint: "#c3cfdd" },
+const CAR_SPEED: Record<string, number> = { "seg-red": 0.12, "seg-orange": 0.4 };
+
+/* Twelve of them, and not twelve of the same thing: an expressway carries
+ * buses and container trucks as well as cars, and a strip of identical dashes
+ * reads as a pattern where a mixed stream reads as traffic.
+ *
+ * No motorcycles. NLEX does not allow them on the mainline, and a panel about
+ * this road should not show something that cannot be on it.
+ *
+ * The heavy vehicles are all in one lane, which is both how they are driven
+ * and what makes the spacing work. Vehicles in a lane share a profile and
+ * differ only in phase, so the gap between two of them is smallest in the
+ * slowest zone, and it has to stay wider than the vehicle in front. Worked out
+ * for the worst case -- a queue present, so there is a slow zone at all, and
+ * the track at its narrowest 940 px:
+ *
+ *   lane 1   5 cars      gap 27 px   car 18 px
+ *   lane 2   4 mixed     gap 34 px   van 22 px
+ *   lane 3   3 heavy     gap 45 px   bus 28 px
+ *
+ * so they close right up in a queue, which is the point, and still cannot
+ * overlap. A fifth heavy vehicle in lane 3 would break that.
+ *
+ * Those are bounds, not readings. Measured on the running panel with the
+ * queues that happened to be live, the tightest gap seen was 86 px behind an
+ * 18 px car, with no overlap at any sampled frame.
+ */
+const CAR_LANES = [
+  // Lane 1 -- light traffic, closest spacing.
+  { lane: 1, phase: 0.0, kind: "car", paint: "#eef2f7" },
+  { lane: 1, phase: 0.2, kind: "car", paint: "#b9c6d6" },
+  { lane: 1, phase: 0.4, kind: "car", paint: "#dfe7f0" },
+  { lane: 1, phase: 0.6, kind: "car", paint: "#aebdd0" },
+  { lane: 1, phase: 0.8, kind: "car", paint: "#cdd8e5" },
+  // Lane 2 -- cars and vans.
+  { lane: 2, phase: 0.09, kind: "car", paint: "#f4f7fb" },
+  { lane: 2, phase: 0.34, kind: "van", paint: "#c3cfdd" },
+  { lane: 2, phase: 0.59, kind: "car", paint: "#dfe7f0" },
+  { lane: 2, phase: 0.84, kind: "van", paint: "#aebdd0" },
+  // Lane 3 -- buses and container trucks.
+  { lane: 3, phase: 0.17, kind: "truck", paint: "#e7edf4" },
+  { lane: 3, phase: 0.5, kind: "bus", paint: "#cbd6e3" },
+  { lane: 3, phase: 0.83, kind: "truck", paint: "#b9c6d6" },
 ] as const;
+
+/** Milliseconds for one clear run of the whole corridor. */
+const CAR_CLEAR_MS = 17000;
+
+/* A little past each end, so the car arrives and leaves rather than popping
+   into existence at the kerb. */
+const CAR_IN = -0.04;
+const CAR_OUT = 1.04;
+
+/* A queue can be drawn narrower than the car is long -- a 9% band on one of
+   nineteen blocks is about six pixels, and a car cannot visibly slow over
+   less than its own length. The slow zone is widened to this minimum about
+   the band's own centre. It is a drawing accommodation, not a claim: the
+   band keeps its true width, and it is the band that is being measured. */
+const CAR_MIN_ZONE = 0.018;
+
+type Band = { pct: number; colorClass: string } | null;
+
+/**
+ * The car's run, as Web Animations keyframes plus the track position at each
+ * one, built from the SAME bands the carriageway draws.
+ *
+ * Linear keyframes with uneven offsets: every piece of road is crossed at a
+ * constant speed, and the speed changes where the colour does. That is what
+ * makes the car appear to brake and pull away rather than ease about.
+ */
+function carJourney(bands: Band[], dir: "NB" | "SB") {
+  const n = bands.length || 1;
+  const zones: { a: number; b: number; speed: number }[] = [];
+
+  bands.forEach((band, i) => {
+    if (!band) return;
+    const speed = CAR_SPEED[band.colorClass];
+    if (!speed) return;
+    const w = band.pct / 100 / n;
+    /* Anchored where the band is drawn: the block's left edge going north,
+       its right edge going south, because a block is the road ahead of its
+       exit and the two directions run opposite ways along one axis. */
+    const a = dir === "NB" ? i / n : (i + 1) / n - w;
+    const mid = a + w / 2;
+    const half = Math.max(w, CAR_MIN_ZONE) / 2;
+    zones.push({ a: mid - half, b: mid + half, speed });
+  });
+
+  const edges = new Set<number>([CAR_IN, CAR_OUT]);
+  for (const z of zones) {
+    if (z.a > CAR_IN && z.a < CAR_OUT) edges.add(z.a);
+    if (z.b > CAR_IN && z.b < CAR_OUT) edges.add(z.b);
+  }
+  const xs = [...edges].sort((p, q) => p - q);
+
+  const pieces: { from: number; to: number; speed: number }[] = [];
+  for (let i = 1; i < xs.length; i++) {
+    const mid = (xs[i - 1] + xs[i]) / 2;
+    // Slowest wins where two queues overlap: the car is held by the worse one.
+    const speed = zones.reduce((sp, z) => (mid >= z.a && mid < z.b ? Math.min(sp, z.speed) : sp), 1);
+    pieces.push({ from: xs[i - 1], to: xs[i], speed });
+  }
+
+  const total = pieces.reduce((sum, pc) => sum + (pc.to - pc.from) / pc.speed, 0);
+  const order = dir === "NB" ? pieces : [...pieces].reverse();
+
+  const stops = [{ offset: 0, x: dir === "NB" ? CAR_IN : CAR_OUT }];
+  let t = 0;
+  for (const pc of order) {
+    t += (pc.to - pc.from) / pc.speed;
+    stops.push({ offset: Math.min(1, t / total), x: dir === "NB" ? pc.to : pc.from });
+  }
+
+  return {
+    stops,
+    keyframes: stops.map((st) => ({ offset: st.offset, transform: `translateX(${st.x * 100}%)` })),
+    durationMs: CAR_CLEAR_MS * total,
+  };
+}
+
+type Journey = ReturnType<typeof carJourney>;
+
+/** Where on the track the car is, at animation progress `p`. */
+function xAtProgress(stops: Journey["stops"], p: number) {
+  for (let i = 1; i < stops.length; i++) {
+    if (p <= stops[i].offset) {
+      const a = stops[i - 1];
+      const b = stops[i];
+      const t = b.offset === a.offset ? 0 : (p - a.offset) / (b.offset - a.offset);
+      return a.x + t * (b.x - a.x);
+    }
+  }
+  return stops[stops.length - 1].x;
+}
+
+/** The progress at which the car stands at `x`. The inverse of the above. */
+function progressAtX(stops: Journey["stops"], x: number) {
+  for (let i = 1; i < stops.length; i++) {
+    const a = stops[i - 1];
+    const b = stops[i];
+    if (x >= Math.min(a.x, b.x) && x <= Math.max(a.x, b.x)) {
+      const t = b.x === a.x ? 0 : (x - a.x) / (b.x - a.x);
+      return a.offset + t * (b.offset - a.offset);
+    }
+  }
+  return 0;
+}
 
 
 
@@ -403,6 +542,104 @@ export default function InteractiveRoadMap() {
   const { isDark } = useChartTheme();
   const palette = mapPalette(isDark);
 
+  /* The coloured band on one block: how much of it is queued, and in what
+     condition. Read BOTH by the band that is drawn and by the car that has to
+     slow over it, so the two cannot drift apart -- a car crawling past clear
+     tarmac, or running straight through a red band, would be worse than no car
+     at all. */
+  const jamBand = (r: (typeof rows)[number], dir: "NB" | "SB"): Band => {
+    const data = dir === "NB" ? r.nb : r.sb;
+    if ((dir === "NB" ? r.nbAccess : r.sbAccess) === "No Access") return null;
+    const stretchM = dir === "NB" ? r.nbStretchM : r.sbStretchM;
+    const queueM = data.queueMeters;
+    const share =
+      queueM != null && stretchM != null && stretchM > 0 ? Math.min(1, queueM / stretchM) : null;
+    if (share == null) return null;
+    /* A floor of 9%, because these blocks are not to scale -- they are even
+       width for uneven stretches -- so an exact share was never on offer here.
+       What the band promises is that a queue is on this stretch and roughly how
+       much of it; the metres and the delay are in the rail above, which does
+       not round anything. */
+    return { pct: Math.max(9, Math.round(share * 100)), colorClass: data.colorClass };
+  };
+
+  /* One plan per carriageway, rebuilt only when the congestion picture really
+     changes. `rows` is a fresh array on every poll, so keying the animation on
+     it restarted the car every fifteen seconds. */
+  const bands = useMemo(
+    () => ({ NB: rows.map((r) => jamBand(r, "NB")), SB: rows.map((r) => jamBand(r, "SB")) }),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [rows],
+  );
+  const bandsRef = useRef(bands);
+  bandsRef.current = bands;
+  const carSig = useMemo(() => JSON.stringify(bands), [bands]);
+  const carPlan = useMemo(
+    () => ({
+      NB: carJourney(bandsRef.current.NB, "NB"),
+      SB: carJourney(bandsRef.current.SB, "SB"),
+    }),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [carSig],
+  );
+
+  const carEls = useRef<Record<"NB" | "SB", (HTMLElement | null)[]>>({ NB: [], SB: [] });
+  const carAnims = useRef<Partial<Record<"NB" | "SB", { anims: Animation[]; plan: Journey }>>>({});
+
+  useEffect(() => {
+    /* Driven from the Web Animations API rather than a CSS keyframes rule,
+       because the keyframes depend on live data: a rule would have to be
+       written into a <style> tag and reparsed on every change. This stays on
+       the compositor either way -- it is still a transform. */
+    const reduced =
+      typeof window !== "undefined" &&
+      window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
+    const running = carAnims.current;
+
+    for (const dir of ["NB", "SB"] as const) {
+      const els = carEls.current[dir].filter((el): el is HTMLElement => el != null);
+      const previous = running[dir];
+      if (!els.length || reduced) {
+        previous?.anims.forEach((a) => a.cancel());
+        delete running[dir];
+        continue;
+      }
+
+      /* Carried over by POSITION, not by time. The picture changes when a jam
+         appears or clears, and the run is a different length either side of
+         that -- keeping the time fraction would teleport the cars down the
+         corridor at the exact moment the reader is looking at them. The lead
+         car is the one tracked; the others keep their spacing from it. */
+      const wasAt = previous
+        ? xAtProgress(
+            previous.plan.stops,
+            previous.anims[0]?.effect?.getComputedTiming().progress ?? 0,
+          )
+        : null;
+      previous?.anims.forEach((a) => a.cancel());
+
+      const plan = carPlan[dir];
+      const base = wasAt == null ? 0 : progressAtX(plan.stops, wasAt);
+      const anims = els.map((el, i) => {
+        const anim = el.animate(plan.keyframes, {
+          duration: plan.durationMs,
+          iterations: Infinity,
+          easing: "linear",
+        });
+        anim.currentTime = ((base + (CAR_LANES[i]?.phase ?? 0)) % 1) * plan.durationMs;
+        return anim;
+      });
+      running[dir] = { anims, plan };
+    }
+
+    return () => {
+      for (const dir of ["NB", "SB"] as const) {
+        running[dir]?.anims.forEach((a) => a.cancel());
+        delete running[dir];
+      }
+    };
+  }, [carPlan]);
+
   const carriageway = (
     dir: "NB" | "SB",
     pick: (r: (typeof rows)[number]) => { data: TrafficRecord; access: string | null },
@@ -436,18 +673,7 @@ export default function InteractiveRoadMap() {
              draws it, instead of the whole block taking the colour. A 213 m
              queue in an 8 km stretch was turning the entire stretch red.
              The block keeps the road; this is what is happening on it. */
-          const stretchM = dir === "NB" ? r.nbStretchM : r.sbStretchM;
-          const queueM = noRamp ? null : data.queueMeters;
-          const share =
-            queueM != null && stretchM != null && stretchM > 0
-              ? Math.min(1, queueM / stretchM)
-              : null;
-          /* A floor of 9%, because these blocks are not to scale -- they are
-             even width for uneven stretches -- so an exact share was never on
-             offer here. What the band promises is that a queue is on this
-             stretch and roughly how much of it; the metres and the delay are
-             in the rail above, which does not round anything. */
-          const bandPct = share == null ? null : Math.max(9, Math.round(share * 100));
+          const band = jamBand(r, dir);
 
           return (
             <span
@@ -475,14 +701,14 @@ export default function InteractiveRoadMap() {
                   : undefined
               }
             >
-              {bandPct != null && (
+              {band && (
                 /* Anchored at the exit this queue belongs to: northbound that
                    is the block's left edge, southbound its right, because the
                    block for an exit is the road ahead of it in that direction
                    and the two run opposite ways along one shared axis. */
                 <i
-                  className={`ds-rd-jam ${data.colorClass}`}
-                  style={{ width: `${bandPct}%`, [dir === "NB" ? "left" : "right"]: 0 }}
+                  className={`ds-rd-jam ${band.colorClass}`}
+                  style={{ width: `${band.pct}%`, [dir === "NB" ? "left" : "right"]: 0 }}
                   /* Focusable as well as hoverable: the detail is only
                      reachable by pointer otherwise, and it is the one place
                      the queue's length and cost are stated. */
@@ -512,13 +738,15 @@ export default function InteractiveRoadMap() {
       <div className="ds-rd-lanes" />
       <div className="ds-rd-flow" />
       <div className="ds-rd-cars" aria-hidden="true">
-        {CARS.map((c, i) => (
+        {CAR_LANES.map((c, i) => (
           <i
-            key={i}
+            key={`${c.lane}-${c.phase}`}
             className={`ds-rd-car lane-${c.lane}`}
-            style={
-              { "--dur": `${c.dur}s`, "--delay": `${c.delay}s`, "--car": c.paint } as React.CSSProperties
-            }
+            data-kind={c.kind}
+            style={{ "--car": c.paint } as React.CSSProperties}
+            ref={(el) => {
+              carEls.current[dir][i] = el;
+            }}
           />
         ))}
       </div>

@@ -103,8 +103,9 @@ YOY_LAG = 364  # 52 weeks — keeps day-of-week aligned across the year boundary
 # An incident needs a vehicle to happen to, so the count is partly a function of
 # how many vehicles there were — the rest of the feature set describes *when* a
 # day is, but nothing described *how busy* it was. Measured on the joined series
-# (2,398 days, 2020-01-01..2026-07-25): Pearson r = +0.720 against daily
-# incidents, and the relationship is monotonic across volume quintiles —
+# (2,398 days, 2020-01-01..2026-07-25 — a since-changed state of the table; on
+# what it holds now, 2022-01-01..2025-12-31, r = +0.469): Pearson r = +0.720
+# against daily incidents, and the relationship is monotonic across volume quintiles —
 # 16.2 incidents/day in the lowest fifth rising to 36.6 in the highest. Volume
 # alone regresses to R2 = 0.518, against 0.0016 for rainfall.
 #
@@ -231,8 +232,15 @@ DAILY_RAIN_SQL = """
 
 # Observed daily vehicle volume. Read from gold.ml_predictive_volume rather than
 # gold.daily_traffic_volume so history and forecast come from one table on one
-# scale — the two series correlate at 0.9998 but differ by a constant factor of
-# ~4.4, and mixing them would put a step change in the middle of the feature.
+# scale. The original justification here — that the two "correlate at 0.9998 but
+# differ by a constant factor of ~4.4" — does NOT hold for the tables as they
+# stand (checked 2026-09-21, 2022-01-01..2025-12-31): daily correlation is +0.04
+# and the ratio swings 2.7x..16x; only the monthly means sit near 4.4x apart.
+# They are different measurements. actual_volume is exactly the daily sum of
+# plaza Entries (nlex_traffic_volume, type='Entries', vehicle_class='Total';
+# r = 1.0000, ratio 1.0000 on all 1,461 days) and tracks daily incidents at
+# r = +0.47, whereas gold.daily_traffic_volume tracks them at +0.17 — so it is
+# NOT a substitute for extending the series past where Entries data ends.
 #
 # split_label = '80_20': the traffic module now stores each date TWICE in this
 # table (an '80_20' row and a '90_10' row, one per train/test split protocol
@@ -333,10 +341,16 @@ def load_daily_rain(conn) -> pd.DataFrame:
 
 
 def load_daily_volume(conn) -> pd.DataFrame:
-    """Observed daily vehicle volume, inner-joined onto the incident series in
-    main(). Coverage is exact — 2,398 volume days against 2,398 incident days
-    over 2020-01-01..2026-07-25, no gaps and no non-positive readings — so this
-    costs no training rows and needs no imputation."""
+    """Observed daily vehicle volume (plaza Entries, all classes), left-joined onto
+    the incident series in main() only when it covers every incident day.
+
+    Coverage is NOT guaranteed to match the incident tables and has diverged: as
+    of 2026-09-21 this is 2022-01-01..2025-12-31 (1,461 days) — the last day
+    gold.fact_traffic_hourly holds — against incident data through 2026-06-30.
+    main() handles that by dropping the volume features for the run rather than
+    truncating the incident series or imputing volume; see the comment there. An
+    earlier version of this docstring claimed exact coverage (2,398 days over
+    2020-01-01..2026-07-25); that described a previous state of the table."""
     df = pd.read_sql(DAILY_VOLUME_SQL, conn)
     df["d"] = pd.to_datetime(df["d"])
     return df
@@ -1421,17 +1435,51 @@ def main() -> None:
         print(f"  rainfall joined from hourly_weather ({len(rain_daily)} days, "
               f"latest {rain_daily['d'].max().date()})")
 
+        volume_gap = None
         if not args.no_volume:
             vol_daily = load_daily_volume(conn)
-            # Inner join: a day with no volume reading has no exposure figure to
-            # reason from, and imputing one would invent the very quantity being
-            # tested. Coverage is currently exact, so this drops nothing.
-            before = len(daily)
-            daily = daily.merge(vol_daily, on="d", how="inner")
-            VOLUME_BY_DATE = dict(zip(vol_daily["d"].dt.date, vol_daily["volume"]))
-            print(f"  volume joined from gold.ml_predictive_volume ({len(vol_daily)} days, "
-                  f"latest {vol_daily['d'].max().date()}"
-                  f"{f'; {before - len(daily)} incident day(s) dropped for want of a reading' if before != len(daily) else ''})")
+            # Volume is an OPTIONAL feature, never a filter on the incident series.
+            # A day with no volume reading has no exposure figure to reason from,
+            # and imputing one would invent the very quantity being tested — and
+            # not a marginal one: log_volume and volume_ratio_7 carry ~73% of the
+            # volume-aware champion's feature importance, so a filled-in value
+            # would put a fabricated feature behind most of the fit and behind the
+            # whole validation window. So volume is used only when it covers EVERY
+            # incident day. When it does not, the run drops the volume features
+            # (exactly what --no-volume does) and trains on the incident data's own
+            # full range, instead of truncating the series to the volume table's
+            # horizon. That truncation is what an inner join here used to do,
+            # silently: the comment above it claimed coverage was exact, but the
+            # volume source (gold.fact_traffic_hourly -> nlex_traffic_volume ->
+            # gold.ml_predictive_volume) ends 2025-12-31 while the incident tables
+            # run to 2026-06-30, so 180 days / 22,826 events never reached a model.
+            covered = daily["d"].isin(vol_daily["d"])
+            if covered.all():
+                daily = daily.merge(vol_daily, on="d", how="left")
+                VOLUME_BY_DATE = dict(zip(vol_daily["d"].dt.date, vol_daily["volume"]))
+                print(f"  volume joined from gold.ml_predictive_volume ({len(vol_daily)} days, "
+                      f"latest {vol_daily['d'].max().date()}; covers all {len(daily)} incident days)")
+            else:
+                missing = daily.loc[~covered, "d"]
+                volume_gap = {
+                    "reason": "volume source does not cover every incident day; volume features dropped "
+                              "for this run rather than imputed or the incident series truncated",
+                    "volume_first_date": str(vol_daily["d"].min().date()),
+                    "volume_last_date": str(vol_daily["d"].max().date()),
+                    "incident_first_date": str(daily["d"].min().date()),
+                    "incident_last_date": str(daily["d"].max().date()),
+                    "incident_days_without_volume": int(len(missing)),
+                    "first_missing_date": str(missing.min().date()),
+                    "last_missing_date": str(missing.max().date()),
+                }
+                args.no_volume = True
+                FEATURE_COLS = [c for c in FEATURE_COLS if c not in VOLUME_COLS]
+                EXOG_COLS = [c for c in EXOG_COLS if c not in VOLUME_COLS]
+                print(f"  WARNING: volume covers {vol_daily['d'].min().date()}..{vol_daily['d'].max().date()} but the "
+                      f"incident series runs {daily['d'].min().date()}..{daily['d'].max().date()} "
+                      f"({len(missing)} incident days, {missing.min().date()}..{missing.max().date()}, have no volume reading).")
+                print("  Volume features DROPPED for this run (as --no-volume); training on the full incident range. "
+                      "The primary columns are therefore volume-free and no volume-free twin is stored.")
         else:
             print("  volume features DISABLED (--no-volume)")
 
@@ -1585,6 +1633,10 @@ def main() -> None:
         }
         if degraded:
             metadata["warning"] = "No model beat the naive seasonal (MASE<=1.0) baseline; champion is a fallback pick."
+        if volume_gap:
+            # Why uses_volume is false on a run that was not started with
+            # --no-volume, so a volume-free table is never mistaken for a choice.
+            metadata["volume_gap"] = volume_gap
 
         print(_t("Writing ml_daily_actuals, ml_predictive_incidents, ml_training_metadata (one transaction)..."))
         conn = ensure_live_conn(conn)

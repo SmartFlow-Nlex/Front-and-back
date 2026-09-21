@@ -98,7 +98,7 @@ const CAR_OUT = 1.04;
    band keeps its true width, and it is the band that is being measured. */
 const CAR_MIN_ZONE = 0.018;
 
-type Band = { pct: number; colorClass: string } | null;
+type Band = { pct: number; colorClass: string; anchor: "left" | "right" } | null;
 
 /**
  * The car's run, as Web Animations keyframes plus the track position at each
@@ -550,7 +550,30 @@ export default function InteractiveRoadMap() {
   const jamBand = (r: (typeof rows)[number], dir: "NB" | "SB"): Band => {
     const data = dir === "NB" ? r.nb : r.sb;
     if ((dir === "NB" ? r.nbAccess : r.sbAccess) === "No Access") return null;
-    const stretchM = dir === "NB" ? r.nbStretchM : r.sbStretchM;
+
+    /* Normally the block is the road AHEAD of this exit in this direction, and
+       the queue is anchored at the exit it belongs to: the left edge going
+       north, the right edge going south.
+
+       The two ends of the corridor have no road ahead of them. Northbound,
+       Sta. Ines is where the corridor stops; southbound, Balintawak is. With
+       no stretch to measure against there was no band, so the rail said
+       "Sta. Ines NB CONGESTED, 184 m queued, jam level 4 of 5" over a block it
+       drew green -- the panel contradicting itself at the one exit a reader
+       would look at hardest.
+
+       A queue at a terminal exit is on the APPROACH to it, which is the only
+       road there is, so that is what the band is measured against and it is
+       anchored at the arriving end. The two stretches are already to hand:
+       going north the approach is the southbound stretch back to the previous
+       exit, and going south it is the northbound one. */
+    const ahead = dir === "NB" ? r.nbStretchM : r.sbStretchM;
+    const approach = dir === "NB" ? r.sbStretchM : r.nbStretchM;
+    const terminal = ahead == null;
+    const stretchM = ahead ?? approach;
+    const anchor: "left" | "right" =
+      terminal ? (dir === "NB" ? "right" : "left") : dir === "NB" ? "left" : "right";
+
     const queueM = data.queueMeters;
     const share =
       queueM != null && stretchM != null && stretchM > 0 ? Math.min(1, queueM / stretchM) : null;
@@ -560,7 +583,7 @@ export default function InteractiveRoadMap() {
        What the band promises is that a queue is on this stretch and roughly how
        much of it; the metres and the delay are in the rail above, which does
        not round anything. */
-    return { pct: Math.max(9, Math.round(share * 100)), colorClass: data.colorClass };
+    return { pct: Math.max(9, Math.round(share * 100)), colorClass: data.colorClass, anchor };
   };
 
   /* One plan per carriageway, rebuilt only when the congestion picture really
@@ -695,11 +718,12 @@ export default function InteractiveRoadMap() {
               className={`ds-rd-seg ${noRamp ? "no-ramp" : "seg-green"} ${
                 activeStation === r.exit.exit_name ? "is-active" : ""
               }`}
-              title={
-                data.queue
-                  ? `${displayExitName(r.exit.exit_name)} ${dir} — ${data.queue}${data.delay ? `, ${data.delay}` : ""}`
-                  : undefined
-              }
+              /* No `title`. The browser drew its own black tooltip over the
+                 road a second after the pointer stopped, saying the same thing
+                 the rail above had already said the moment it arrived -- two
+                 answers to one hover, the slower one landing on the carriageway
+                 the reader was looking at. The band carries an aria-label for
+                 anyone not using a pointer. */
             >
               {band && (
                 /* Anchored at the exit this queue belongs to: northbound that
@@ -708,7 +732,7 @@ export default function InteractiveRoadMap() {
                    and the two run opposite ways along one shared axis. */
                 <i
                   className={`ds-rd-jam ${band.colorClass}`}
-                  style={{ width: `${band.pct}%`, [dir === "NB" ? "left" : "right"]: 0 }}
+                  style={{ width: `${band.pct}%`, [band.anchor]: 0 }}
                   /* Focusable as well as hoverable: the detail is only
                      reachable by pointer otherwise, and it is the one place
                      the queue's length and cost are stated. */

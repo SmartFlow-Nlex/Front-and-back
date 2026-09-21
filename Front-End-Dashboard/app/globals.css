@@ -9667,9 +9667,7 @@ details[open] > .evidence-summary .evidence-close-label { display: inline; }
      as a stray mark. */
   left: 19px;
   top: 50%;
-  /* --callout-dy is set per pin by declutterPlazas when the name has to step
-     off the road to clear a report or another name. Zero is the usual case. */
-  transform: translateY(calc(-50% + var(--callout-dy, 0px)));
+  transform: translateY(-50%);
   padding: 2px 6.5px 2.5px;
   border-radius: 5px;
   font-size: 9.5px;
@@ -9690,19 +9688,17 @@ details[open] > .evidence-summary .evidence-close-label { display: inline; }
   box-shadow: 0 1px 3px rgb(15 23 42 / 0.07);
 }
 
-/* The leader, running from the ring into the plate with no gap at either end.
-   Pinned at the plate and swung about that end, so a name that has stepped off
-   the road still points at the ring it belongs to. Straight out to the side is
-   the ordinary case and the rotation is then zero. */
+/* The stub, running from the ring into the plate with no gap at either end.
+   Level and short: a name only ever opens east or west of its own ring, so
+   the leader never has to reach. */
 .custom-toll-marker .toll-pin-name::before {
   content: "";
   position: absolute;
   right: 100%;
   top: 50%;
-  width: var(--leader-len, 9px);
+  width: 9px;
   height: 1.5px;
-  transform-origin: right center;
-  transform: translateY(-50%) rotate(var(--leader-rot, 0deg));
+  transform: translateY(-50%);
   background: #0e7490;
   opacity: 0.75;
 }
@@ -9772,7 +9768,6 @@ details[open] > .evidence-summary .evidence-close-label { display: inline; }
 .custom-toll-marker[data-side="west"] .toll-pin-name::before {
   right: auto;
   left: 100%;
-  transform-origin: left center;
 }
 
 /* An exit standing on a queue keeps its name and gives up its ring: the queue's

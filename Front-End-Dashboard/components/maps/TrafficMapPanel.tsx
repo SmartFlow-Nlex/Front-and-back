@@ -1559,26 +1559,21 @@ export default function TrafficMapPanel({ title, subtitle, badge, endpoint, laye
            length. */
         const TIER_GAP_PX = { far: 26, mid: 30, near: 34 } as const;
 
-        /* How a name is placed when something is already where it wants to go.
-           Tried in this order, and the FIRST clear placement wins.
+        /* A name opens east or west, and that is the whole of it.
 
-           Nothing is hidden any more. An exit that was dropped was dropped for
-           the one reason that made it worth reading -- a Waze report sitting on
-           it, which is to say something was happening there -- and the reader
-           was left with an unlabelled ring exactly where they most needed the
-           name. A label that has moved eighteen pixels and kept its leader is
-           still telling the truth about where its exit is; a label that is not
-           drawn is not.
+           There was a version of this that also stepped names up and down the
+           corridor to fit more of them in, on the reasoning that a name which
+           has moved is better than a name which is gone. On the map it was
+           worse: the leaders grew long and diagonal, names ended up stacked a
+           good distance from the rings they belonged to, and the reader had to
+           trace a line to find out which exit was which. Two positions, both
+           hard against the ring, stay legible.
 
-           East and west are tried before any vertical step, because the
-           corridor runs north-north-west: a flip across the road separates two
-           neighbouring exits by the width of both plates, where a step along it
-           has to clear their whole height. */
-        const DY_STEPS = [0, -17, 17, -34, 34, -51, 51, -68, 68] as const;
+           The flip is kept because it is what fixes the case that started all
+           this -- a Waze report landing on a name, which is to say something
+           happening at that exit, which is exactly when the name matters. The
+           name steps across the road instead of being dropped. */
         const LABEL_H = 15;
-        /* The gap the leader spans, matching .toll-pin-name's `left` in
-           globals.css less the stub it already draws. */
-        const LEADER_PX = 9;
         const STUB_PX = { far: 19, mid: 19, near: 24 } as const;
         const RING_PX = { far: 9, mid: 11, near: 14 } as const;
 
@@ -1706,14 +1701,9 @@ export default function TrafficMapPanel({ title, subtitle, badge, endpoint, laye
             });
           }
 
-          const plateBox = (
-            q: { x: number; y: number },
-            side: "east" | "west",
-            dy: number,
-            w: number,
-          ): Box => {
+          const plateBox = (q: { x: number; y: number }, side: "east" | "west", w: number): Box => {
             const x0 = side === "east" ? q.x + stub : q.x - stub - w;
-            return { x0, x1: x0 + w, y0: q.y + dy - LABEL_H / 2, y1: q.y + dy + LABEL_H / 2 };
+            return { x0, x1: x0 + w, y0: q.y - LABEL_H / 2, y1: q.y + LABEL_H / 2 };
           };
 
           for (const { pin, q, level } of ordered) {
@@ -1722,37 +1712,48 @@ export default function TrafficMapPanel({ title, subtitle, badge, endpoint, laye
                is not the half that gets clipped. */
             const sides: ("east" | "west")[] = q.x > width * 0.62 ? ["west", "east"] : ["east", "west"];
 
-            let placed: { side: "east" | "west"; dy: number; box: Box } | null = null;
-            for (const dy of DY_STEPS) {
-              for (const side of sides) {
-                const box = plateBox(q, side, dy, w);
-                if (box.x0 < 4 || box.x1 > width - 4) continue;
-                if (obstacles.some((o) => overlaps(box, o))) continue;
-                placed = { side, dy, box };
-                break;
-              }
-              if (placed) break;
+            let placed: { side: "east" | "west"; box: Box } | null = null;
+            for (const side of sides) {
+              const box = plateBox(q, side, w);
+              if (box.x0 < 4 || box.x1 > width - 4) continue;
+              if (obstacles.some((o) => overlaps(box, o))) continue;
+              placed = { side, box };
+              break;
             }
-            /* Nowhere clear: it is drawn anyway, in its first choice. Twenty
-               exits on eight hundred pixels of corridor cannot all be given
-               clear air, and a crowded name is still readable where an absent
-               one is not. */
+
+            /* Neither side is free, so this one stands down until there is
+               room. Zooming in makes room: the exits spread apart on screen
+               while the plates stay the same size, so a name comes back on its
+               own at the zoom where it fits, rather than at a threshold picked
+               in advance.
+
+               The test is the plate's OWN measured box against the boxes
+               actually on the map, where this used to be a flat 26-34 px
+               proximity rule. That rule was wrong in both directions at once:
+               it dropped names that had room beside a short neighbour, and it
+               kept names that ran straight through a long one. It also let a
+               single Waze report evict a name outright, which meant the name
+               vanished exactly where something was happening.
+
+               Names dropped on the live map, same feed, same views:
+
+                        old   now
+                 z9      11     3
+                 z9.4     9     3
+                 z10      5     0
+                 z10.5    3     0
+                 z11      1     0
+
+               So the only crowding left is at the corridor-wide view, where
+               twenty exits share a few hundred pixels and three of the four
+               around Bocaue give way. One step in and every name is back. */
             if (!placed) {
-              placed = { side: sides[0], dy: 0, box: plateBox(q, sides[0], 0, w) };
+              pin.el.style.display = "none";
+              continue;
             }
 
             pin.el.style.display = "";
             pin.el.dataset.side = placed.side;
-            pin.el.style.setProperty("--callout-dy", `${placed.dy}px`);
-            /* The leader follows. It is one bar pinned at the plate and swung
-               about that end, so however far the name has stepped off the road
-               the line still lands on the ring it belongs to -- which is the
-               whole reason a name is allowed to move at all. */
-            pin.el.style.setProperty("--leader-len", `${Math.hypot(LEADER_PX, placed.dy)}px`);
-            pin.el.style.setProperty(
-              "--leader-rot",
-              `${((Math.atan2(placed.dy, LEADER_PX) * 180) / Math.PI) * (placed.side === "east" ? 1 : -1)}deg`,
-            );
             obstacles.push(placed.box);
             pin.el.dataset.ring = coversPin(q) ? "off" : "on";
             /* The name carries the condition, in the same three words and the

@@ -1,0 +1,968 @@
+{
+  "provenance": {
+    "generated_on": "2026-09-22",
+    "generator": "app/dashboard/ai-sandbox/scenarios/tools/build_calibration.py",
+    "source": "client CSV exports, 2022-01-01 .. 2026-06-30",
+    "source_folder": "OneDrive_2026-09-08/shared files",
+    "source_files": [
+      {
+        "file": "accident_data_2022.csv",
+        "rows": 4609
+      },
+      {
+        "file": "accident_data_2023.csv",
+        "rows": 5115
+      },
+      {
+        "file": "accident_data_2024.csv",
+        "rows": 4663
+      },
+      {
+        "file": "accident_data_2025.csv",
+        "rows": 5047
+      },
+      {
+        "file": "accident_data_2026.csv",
+        "rows": 2391
+      },
+      {
+        "file": "breakdown_data_2022.csv",
+        "rows": 32729
+      },
+      {
+        "file": "breakdown_data_2023.csv",
+        "rows": 32065
+      },
+      {
+        "file": "breakdown_data_2024.csv",
+        "rows": 33923
+      },
+      {
+        "file": "breakdown_data_2025.csv",
+        "rows": 37472
+      },
+      {
+        "file": "breakdown_data_2026.csv",
+        "rows": 20750
+      }
+    ],
+    "csv_row_totals": {
+      "accident": 21825,
+      "breakdown": 156939
+    },
+    "population_row_counts": {
+      "accident_etl_accepted": 21821,
+      "breakdown_etl_accepted": 156925,
+      "accident_silver_events": 21804,
+      "breakdown_silver_events": 156901,
+      "accident_mainline_lane_events": 13527,
+      "breakdown_mainline_lane_events": 13277,
+      "breakdown_soft_shoulder_events": 21866
+    },
+    "silver_reproduction_note": "The ETL + silver rules below reproduce the database's silver row counts recorded on 2026-09-21 (21,804 accidents / 156,901 breakdowns) exactly. The database itself was unreachable when this file was generated, so no live query was run.",
+    "population_rules": [
+      "ETL accept: StartKM/1000 present and in [0, 89]; event date present",
+      "silver accident: SiteCleared present; EventStatus in (FINALIZED, AVAILABLE); one row per EventNumber (latest file wins)",
+      "silver breakdown: EventStatus = FINALIZED; one row per EventNumber",
+      "scenario populations: accidents and in-lane breakdowns logged in Lane1-4 / Main Line; shoulder breakdowns logged as Soft Shoulder. Toll-plaza, ramp, E-Lane, E-Parking and named-place events are excluded.",
+      "Angle Collision, Hit Toll Plaza Equipment, Hit Objects On The Road, Head-On, Hit Pedestrian, Hit Animal and Others are not part of any scenario family and are not calibrated."
+    ],
+    "exclusion_rule": "keep 0 < minutes <= 1440; every excluded value is counted per family under `excluded` (missing / negative / zero / over_1440)",
+    "quantile_method": "numpy.percentile, linear interpolation; min and max are the observed extremes after exclusion",
+    "existing_mttc_rule_cited": [
+      "Back-End/scripts/medallion/10-bronze-accident-breakdown.sql:124-125 (accident clearance_min: NULL outside 0-1440, zeros kept)",
+      "Back-End/src/services/incident-events.service.ts:48-49 (breakdown RESPONSE_MIN / SERVICE_MIN: NULL outside 0-1440, zeros kept)"
+    ],
+    "known_limitations": [
+      "Breakdown durations are per-deployment service_time_min (on scene only). They exclude the wait before the patrol arrives, so they understate total obstruction time.",
+      "Only about 31% of breakdown events have any deployment record.",
+      "Accident event_start_date is heavily rounded (36% on a multiple of 5 minutes) and 19% of accident clearances are exactly 0 minutes.",
+      "Timestamps are naive (no timezone) in the CSVs."
+    ]
+  },
+  "chainage_offset": {
+    "rows": [
+      {
+        "app_exit": "Balintawak",
+        "app_km": 0.0,
+        "event_label": "Balintawak",
+        "events": 1248,
+        "chainage_km": 11.89,
+        "iqr_km": 0.0,
+        "offset_km": 11.89
+      },
+      {
+        "app_exit": "Paso De Blas Valenzuela",
+        "app_km": 3.44,
+        "event_label": "Valenzuela",
+        "events": 503,
+        "chainage_km": 15.3,
+        "iqr_km": 0.0,
+        "offset_km": 11.86
+      },
+      {
+        "app_exit": "Meycauayan",
+        "app_km": 8.21,
+        "event_label": "Meycauayan",
+        "events": 682,
+        "chainage_km": 20.13,
+        "iqr_km": 0.0,
+        "offset_km": 11.92
+      },
+      {
+        "app_exit": "Marilao",
+        "app_km": 11.73,
+        "event_label": "Marilao",
+        "events": 194,
+        "chainage_km": 23.85,
+        "iqr_km": 0.0,
+        "offset_km": 12.12
+      },
+      {
+        "app_exit": "Cdv/Ph Arena",
+        "app_km": 14.05,
+        "event_label": "CDV",
+        "events": 262,
+        "chainage_km": 25.9,
+        "iqr_km": 0.0,
+        "offset_km": 11.85
+      },
+      {
+        "app_exit": "Bocaue Barrier",
+        "app_km": 15.2,
+        "event_label": "Bocaue Barrier",
+        "events": 2333,
+        "chainage_km": 27.2,
+        "iqr_km": 0.0,
+        "offset_km": 12.0
+      },
+      {
+        "app_exit": "Bocaue Interchange",
+        "app_km": 15.82,
+        "event_label": "Bocaue",
+        "events": 650,
+        "chainage_km": 27.75,
+        "iqr_km": 0.0,
+        "offset_km": 11.93
+      },
+      {
+        "app_exit": "Balagtas",
+        "app_km": 21.09,
+        "event_label": "Balagtas",
+        "events": 551,
+        "chainage_km": 33.84,
+        "iqr_km": 0.0,
+        "offset_km": 12.75
+      },
+      {
+        "app_exit": "Sta. Rita Guiguinto",
+        "app_km": 26.55,
+        "event_label": "Sta. Rita",
+        "events": 224,
+        "chainage_km": 38.5,
+        "iqr_km": 0.0,
+        "offset_km": 11.95
+      },
+      {
+        "app_exit": "Pulilan",
+        "app_km": 33.33,
+        "event_label": "Pulilan",
+        "events": 280,
+        "chainage_km": 45.37,
+        "iqr_km": 0.0,
+        "offset_km": 12.04
+      },
+      {
+        "app_exit": "San Simon",
+        "app_km": 44.91,
+        "event_label": "San Simon",
+        "events": 344,
+        "chainage_km": 56.96,
+        "iqr_km": 0.0,
+        "offset_km": 12.05
+      },
+      {
+        "app_exit": "San Fernando",
+        "app_km": 53.78,
+        "event_label": "San Fernando",
+        "events": 1182,
+        "chainage_km": 65.84,
+        "iqr_km": 0.0,
+        "offset_km": 12.06
+      },
+      {
+        "app_exit": "Mexico",
+        "app_km": 60.78,
+        "event_label": "Mexico",
+        "events": 305,
+        "chainage_km": 72.87,
+        "iqr_km": 0.0,
+        "offset_km": 12.09
+      },
+      {
+        "app_exit": "Angeles",
+        "app_km": 69.15,
+        "event_label": "Angeles",
+        "events": 220,
+        "chainage_km": 81.3,
+        "iqr_km": 0.0,
+        "offset_km": 12.15
+      },
+      {
+        "app_exit": "Dau",
+        "app_km": 71.05,
+        "event_label": "Dau",
+        "events": 166,
+        "chainage_km": 83.3,
+        "iqr_km": 0.0,
+        "offset_km": 12.25
+      },
+      {
+        "app_exit": "Sta. Ines",
+        "app_km": 76.25,
+        "event_label": "Sta. Ines",
+        "events": 147,
+        "chainage_km": 88.2,
+        "iqr_km": 0.0,
+        "offset_km": 11.95
+      },
+      {
+        "app_exit": "Tabang Guiguinto",
+        "app_km": 20.69,
+        "event_label": "Tabang",
+        "events": 114,
+        "chainage_km": 36.6,
+        "iqr_km": 0.0,
+        "offset_km": 15.91
+      }
+    ],
+    "median_offset_km": 12.04,
+    "min_offset_km": 11.85,
+    "max_offset_km": 15.91,
+    "rule": "median over all listed places of (median event chainage of events logged at that place - app km); every listed place has IQR < 1 km"
+  },
+  "families": {
+    "minor_collision": {
+      "label": "Minor collision (rear-end + side-swipe + hit-and-run)",
+      "duration_kind": "clearance_min",
+      "duration_definition": "SiteCleared - event_start_date, minutes (per accident event)",
+      "population": "accident events with TypeOfEvent in (Rear End, Side Swipe, Hit and Run) logged in a mainline lane",
+      "n_events": 8820,
+      "n_values_before_exclusion": 8820,
+      "n": 7835,
+      "excluded": {
+        "missing": 0,
+        "negative": 275,
+        "zero": 704,
+        "over_1440": 6
+      },
+      "min": 1.0,
+      "p10": 2.0,
+      "p25": 3.0,
+      "p50": 5.0,
+      "p75": 17.0,
+      "p90": 48.0,
+      "p99": 127.0,
+      "max": 1215.0,
+      "reference": {
+        "not_used_by_sampler": true,
+        "including_zeros_existing_rule": {
+          "n": 8539,
+          "p10": 1.0,
+          "p25": 2.0,
+          "p50": 4.0,
+          "p75": 14.0,
+          "p90": 46.0,
+          "p99": 125.0
+        },
+        "blockage_min_positive": {
+          "n": 7074,
+          "excluded": {
+            "missing": 0,
+            "negative": 317,
+            "zero": 1428,
+            "over_1440": 1
+          },
+          "min": 1.0,
+          "p10": 2.0,
+          "p25": 2.0,
+          "p50": 4.0,
+          "p75": 7.0,
+          "p90": 20.0,
+          "p99": 90.0,
+          "max": 606.0
+        },
+        "lane_distribution": {
+          "all": {
+            "Lane1": 4070,
+            "Lane2": 1822,
+            "Lane3": 1232,
+            "Lane4": 830,
+            "Main Line": 866
+          },
+          "NB": {
+            "Lane1": 1761,
+            "Lane2": 947,
+            "Lane3": 652,
+            "Lane4": 435,
+            "Main Line": 395
+          },
+          "SB": {
+            "Lane1": 2154,
+            "Lane2": 688,
+            "Lane3": 519,
+            "Lane4": 388,
+            "Main Line": 399
+          }
+        }
+      }
+    },
+    "minor_collision_rear_end": {
+      "label": "Minor collision: rear_end",
+      "duration_kind": "clearance_min",
+      "duration_definition": "SiteCleared - event_start_date, minutes (per accident event)",
+      "population": "TypeOfEvent = Rear End, logged in a mainline lane",
+      "n_events": 6246,
+      "n_values_before_exclusion": 6246,
+      "n": 5650,
+      "excluded": {
+        "missing": 0,
+        "negative": 214,
+        "zero": 377,
+        "over_1440": 5
+      },
+      "min": 1.0,
+      "p10": 2.0,
+      "p25": 3.0,
+      "p50": 5.0,
+      "p75": 18.0,
+      "p90": 49.0,
+      "p99": 126.0,
+      "max": 1215.0,
+      "reference": {
+        "not_used_by_sampler": true,
+        "including_zeros_existing_rule": {
+          "n": 6027,
+          "p10": 1.0,
+          "p25": 2.0,
+          "p50": 4.0,
+          "p75": 15.0,
+          "p90": 47.0,
+          "p99": 125.0
+        },
+        "blockage_min_positive": {
+          "n": 5288,
+          "excluded": {
+            "missing": 0,
+            "negative": 255,
+            "zero": 702,
+            "over_1440": 1
+          },
+          "min": 1.0,
+          "p10": 2.0,
+          "p25": 2.0,
+          "p50": 4.0,
+          "p75": 7.0,
+          "p90": 21.0,
+          "p99": 89.13,
+          "max": 421.0
+        },
+        "lane_distribution": {
+          "all": {
+            "Lane1": 3545,
+            "Lane2": 1288,
+            "Lane3": 745,
+            "Lane4": 443,
+            "Main Line": 225
+          },
+          "NB": {
+            "Lane1": 1540,
+            "Lane2": 744,
+            "Lane3": 397,
+            "Lane4": 226,
+            "Main Line": 112
+          },
+          "SB": {
+            "Lane1": 1928,
+            "Lane2": 476,
+            "Lane3": 318,
+            "Lane4": 217,
+            "Main Line": 100
+          }
+        }
+      }
+    },
+    "minor_collision_sideswipe": {
+      "label": "Minor collision: sideswipe",
+      "duration_kind": "clearance_min",
+      "duration_definition": "SiteCleared - event_start_date, minutes (per accident event)",
+      "population": "TypeOfEvent = Side Swipe, logged in a mainline lane",
+      "n_events": 2331,
+      "n_values_before_exclusion": 2331,
+      "n": 2056,
+      "excluded": {
+        "missing": 0,
+        "negative": 52,
+        "zero": 222,
+        "over_1440": 1
+      },
+      "min": 1.0,
+      "p10": 2.0,
+      "p25": 3.0,
+      "p50": 5.0,
+      "p75": 14.0,
+      "p90": 43.0,
+      "p99": 128.0,
+      "max": 700.0,
+      "reference": {
+        "not_used_by_sampler": true,
+        "including_zeros_existing_rule": {
+          "n": 2278,
+          "p10": 1.0,
+          "p25": 2.0,
+          "p50": 4.0,
+          "p75": 11.0,
+          "p90": 40.0,
+          "p99": 123.0
+        },
+        "blockage_min_positive": {
+          "n": 1710,
+          "excluded": {
+            "missing": 0,
+            "negative": 58,
+            "zero": 563,
+            "over_1440": 0
+          },
+          "min": 1.0,
+          "p10": 2.0,
+          "p25": 2.0,
+          "p50": 4.0,
+          "p75": 7.0,
+          "p90": 17.0,
+          "p99": 85.0,
+          "max": 606.0
+        },
+        "lane_distribution": {
+          "all": {
+            "Lane1": 464,
+            "Lane2": 472,
+            "Lane3": 430,
+            "Lane4": 363,
+            "Main Line": 602
+          },
+          "NB": {
+            "Lane1": 189,
+            "Lane2": 173,
+            "Lane3": 226,
+            "Lane4": 198,
+            "Main Line": 263
+          },
+          "SB": {
+            "Lane1": 200,
+            "Lane2": 188,
+            "Lane3": 177,
+            "Lane4": 158,
+            "Main Line": 286
+          }
+        }
+      }
+    },
+    "minor_collision_hit_and_run": {
+      "label": "Minor collision: hit_and_run",
+      "duration_kind": "clearance_min",
+      "duration_definition": "SiteCleared - event_start_date, minutes (per accident event)",
+      "population": "TypeOfEvent = Hit and Run, logged in a mainline lane",
+      "n_events": 243,
+      "n_values_before_exclusion": 243,
+      "n": 129,
+      "excluded": {
+        "missing": 0,
+        "negative": 9,
+        "zero": 105,
+        "over_1440": 0
+      },
+      "min": 1.0,
+      "p10": 2.0,
+      "p25": 4.0,
+      "p50": 13.0,
+      "p75": 40.0,
+      "p90": 66.6,
+      "p99": 212.24,
+      "max": 484.0,
+      "reference": {
+        "not_used_by_sampler": true,
+        "including_zeros_existing_rule": {
+          "n": 234,
+          "p10": 0.0,
+          "p25": 0.0,
+          "p50": 2.0,
+          "p75": 17.25,
+          "p90": 50.0,
+          "p99": 143.36
+        },
+        "blockage_min_positive": {
+          "n": 76,
+          "excluded": {
+            "missing": 0,
+            "negative": 4,
+            "zero": 163,
+            "over_1440": 0
+          },
+          "min": 1.0,
+          "p10": 1.0,
+          "p25": 3.0,
+          "p50": 5.0,
+          "p75": 26.0,
+          "p90": 60.0,
+          "p99": 224.5,
+          "max": 484.0
+        },
+        "lane_distribution": {
+          "all": {
+            "Lane1": 61,
+            "Lane2": 62,
+            "Lane3": 57,
+            "Lane4": 24,
+            "Main Line": 39
+          },
+          "NB": {
+            "Lane1": 32,
+            "Lane2": 30,
+            "Lane3": 29,
+            "Lane4": 11,
+            "Main Line": 20
+          },
+          "SB": {
+            "Lane1": 26,
+            "Lane2": 24,
+            "Lane3": 24,
+            "Lane4": 13,
+            "Main Line": 13
+          }
+        }
+      }
+    },
+    "multi_vehicle_collision": {
+      "label": "Multi-vehicle collision",
+      "duration_kind": "clearance_min",
+      "duration_definition": "SiteCleared - event_start_date, minutes (per accident event)",
+      "population": "TypeOfEvent = Multiple Collision, logged in a mainline lane",
+      "n_events": 2257,
+      "n_values_before_exclusion": 2257,
+      "n": 2106,
+      "excluded": {
+        "missing": 0,
+        "negative": 88,
+        "zero": 63,
+        "over_1440": 0
+      },
+      "min": 1.0,
+      "p10": 3.0,
+      "p25": 5.0,
+      "p50": 13.0,
+      "p75": 43.0,
+      "p90": 70.0,
+      "p99": 156.9,
+      "max": 1421.0,
+      "reference": {
+        "not_used_by_sampler": true,
+        "including_zeros_existing_rule": {
+          "n": 2169,
+          "p10": 3.0,
+          "p25": 5.0,
+          "p50": 12.0,
+          "p75": 42.0,
+          "p90": 68.0,
+          "p99": 155.64
+        },
+        "blockage_min_positive": {
+          "n": 2066,
+          "excluded": {
+            "missing": 0,
+            "negative": 97,
+            "zero": 94,
+            "over_1440": 0
+          },
+          "min": 1.0,
+          "p10": 3.0,
+          "p25": 4.0,
+          "p50": 7.0,
+          "p75": 16.0,
+          "p90": 42.0,
+          "p99": 113.0,
+          "max": 603.0
+        },
+        "lane_distribution": {
+          "all": {
+            "Lane1": 1524,
+            "Lane2": 324,
+            "Lane3": 135,
+            "Lane4": 99,
+            "Main Line": 175
+          },
+          "NB": {
+            "Lane1": 624,
+            "Lane2": 241,
+            "Lane3": 83,
+            "Lane4": 49,
+            "Main Line": 75
+          },
+          "SB": {
+            "Lane1": 885,
+            "Lane2": 73,
+            "Lane3": 46,
+            "Lane4": 50,
+            "Main Line": 88
+          }
+        }
+      }
+    },
+    "self_accident": {
+      "label": "Self accident",
+      "duration_kind": "clearance_min",
+      "duration_definition": "SiteCleared - event_start_date, minutes (per accident event)",
+      "population": "TypeOfEvent = Self Accident, logged in a mainline lane",
+      "n_events": 1425,
+      "n_values_before_exclusion": 1425,
+      "n": 1197,
+      "excluded": {
+        "missing": 0,
+        "negative": 46,
+        "zero": 168,
+        "over_1440": 14
+      },
+      "min": 1.0,
+      "p10": 8.0,
+      "p25": 30.0,
+      "p50": 56.0,
+      "p75": 95.0,
+      "p90": 162.4,
+      "p99": 535.16,
+      "max": 1424.0,
+      "reference": {
+        "not_used_by_sampler": true,
+        "including_zeros_existing_rule": {
+          "n": 1365,
+          "p10": 0.0,
+          "p25": 14.0,
+          "p50": 47.0,
+          "p75": 86.0,
+          "p90": 150.0,
+          "p99": 495.4
+        },
+        "blockage_min_positive": {
+          "n": 957,
+          "excluded": {
+            "missing": 0,
+            "negative": 61,
+            "zero": 402,
+            "over_1440": 5
+          },
+          "min": 1.0,
+          "p10": 4.0,
+          "p25": 15.0,
+          "p50": 40.0,
+          "p75": 73.0,
+          "p90": 126.4,
+          "p99": 444.84,
+          "max": 1127.0
+        },
+        "lane_distribution": {
+          "all": {
+            "Lane1": 438,
+            "Lane2": 313,
+            "Lane3": 349,
+            "Lane4": 145,
+            "Main Line": 180
+          },
+          "NB": {
+            "Lane1": 225,
+            "Lane2": 111,
+            "Lane3": 125,
+            "Lane4": 64,
+            "Main Line": 75
+          },
+          "SB": {
+            "Lane1": 172,
+            "Lane2": 161,
+            "Lane3": 176,
+            "Lane4": 69,
+            "Main Line": 79
+          }
+        }
+      }
+    },
+    "breakdown_in_lane": {
+      "label": "Breakdown in a lane",
+      "duration_kind": "service_time_min_per_deployment_record",
+      "duration_definition": "service_time_min of each deployment record (arrival -> departure), minutes. One breakdown event can have several records; each is one value. Events without any deployment record contribute nothing.",
+      "population": "breakdown events logged in a mainline lane (Lane1-4 / Main Line)",
+      "n_events": 13277,
+      "n_events_with_deployment_records": 6996,
+      "n_values_before_exclusion": 8577,
+      "n": 6302,
+      "excluded": {
+        "missing": 2,
+        "negative": 0,
+        "zero": 2271,
+        "over_1440": 2
+      },
+      "min": 1.0,
+      "p10": 6.0,
+      "p25": 10.0,
+      "p50": 16.0,
+      "p75": 30.0,
+      "p90": 56.0,
+      "p99": 189.99,
+      "max": 1086.0,
+      "reference": {
+        "not_used_by_sampler": true,
+        "including_zeros_existing_rule": {
+          "n": 8573,
+          "p10": 0.0,
+          "p25": 0.0,
+          "p50": 11.0,
+          "p75": 23.0,
+          "p90": 47.0,
+          "p99": 166.0
+        },
+        "response_time_min_positive": {
+          "n": 6901,
+          "excluded": {
+            "missing": 2,
+            "negative": 0,
+            "zero": 1673,
+            "over_1440": 1
+          },
+          "min": 1.0,
+          "p10": 8.0,
+          "p25": 14.0,
+          "p50": 23.0,
+          "p75": 35.0,
+          "p90": 54.0,
+          "p99": 144.0,
+          "max": 733.0
+        },
+        "response_time_min_note": "dispatch -> arrival. NOT part of the calibrated duration. The obstacle exists from the breakdown until the patrol departs, i.e. response + service.",
+        "lane_distribution": {
+          "all": {
+            "Lane1": 2153,
+            "Lane2": 1186,
+            "Lane3": 5830,
+            "Lane4": 3958,
+            "Main Line": 150
+          },
+          "NB": {
+            "Lane1": 945,
+            "Lane2": 422,
+            "Lane3": 2095,
+            "Lane4": 2138,
+            "Main Line": 54
+          },
+          "SB": {
+            "Lane1": 907,
+            "Lane2": 486,
+            "Lane3": 2413,
+            "Lane4": 1810,
+            "Main Line": 62
+          }
+        },
+        "service_by_cause": {
+          "electrical": {
+            "n": 209,
+            "excluded": {
+              "missing": 0,
+              "negative": 0,
+              "zero": 78,
+              "over_1440": 0
+            },
+            "min": 1.0,
+            "p10": 5.8,
+            "p25": 9.0,
+            "p50": 14.0,
+            "p75": 25.0,
+            "p90": 39.6,
+            "p99": 117.12,
+            "max": 160.0
+          },
+          "engine": {
+            "n": 2713,
+            "excluded": {
+              "missing": 1,
+              "negative": 0,
+              "zero": 839,
+              "over_1440": 0
+            },
+            "min": 1.0,
+            "p10": 6.0,
+            "p25": 9.0,
+            "p50": 13.0,
+            "p75": 23.0,
+            "p90": 41.8,
+            "p99": 108.88,
+            "max": 395.0
+          },
+          "fuel": {
+            "n": 295,
+            "excluded": {
+              "missing": 0,
+              "negative": 0,
+              "zero": 104,
+              "over_1440": 0
+            },
+            "min": 1.0,
+            "p10": 5.0,
+            "p25": 9.0,
+            "p50": 13.0,
+            "p75": 22.0,
+            "p90": 36.6,
+            "p99": 73.2,
+            "max": 97.0
+          },
+          "mechanical": {
+            "n": 1757,
+            "excluded": {
+              "missing": 0,
+              "negative": 0,
+              "zero": 661,
+              "over_1440": 1
+            },
+            "min": 1.0,
+            "p10": 8.0,
+            "p25": 12.0,
+            "p50": 19.0,
+            "p75": 36.0,
+            "p90": 68.4,
+            "p99": 244.4,
+            "max": 1086.0
+          },
+          "tire": {
+            "n": 1139,
+            "excluded": {
+              "missing": 1,
+              "negative": 0,
+              "zero": 474,
+              "over_1440": 1
+            },
+            "min": 1.0,
+            "p10": 6.0,
+            "p25": 11.0,
+            "p50": 21.0,
+            "p75": 44.0,
+            "p90": 84.0,
+            "p99": 262.2,
+            "max": 806.0
+          }
+        },
+        "service_by_vehicle": {
+          "bus": {
+            "n": 198,
+            "excluded": {
+              "missing": 0,
+              "negative": 0,
+              "zero": 99,
+              "over_1440": 0
+            },
+            "min": 1.0,
+            "p10": 10.0,
+            "p25": 15.0,
+            "p50": 26.5,
+            "p75": 46.0,
+            "p90": 63.0,
+            "p99": 131.17,
+            "max": 244.0
+          },
+          "car": {
+            "n": 2166,
+            "excluded": {
+              "missing": 2,
+              "negative": 0,
+              "zero": 452,
+              "over_1440": 0
+            },
+            "min": 1.0,
+            "p10": 5.0,
+            "p25": 8.0,
+            "p50": 11.0,
+            "p75": 19.0,
+            "p90": 34.0,
+            "p99": 94.05,
+            "max": 252.0
+          },
+          "truck": {
+            "n": 3835,
+            "excluded": {
+              "missing": 0,
+              "negative": 0,
+              "zero": 1689,
+              "over_1440": 2
+            },
+            "min": 1.0,
+            "p10": 8.0,
+            "p25": 12.0,
+            "p50": 19.0,
+            "p75": 36.0,
+            "p90": 70.0,
+            "p99": 217.32,
+            "max": 1086.0
+          }
+        },
+        "variant_mapping_note": "cause: MainCause Tire/Engine/Mechanical/Fuel; electrical = SubCause in Battery, Electrical, Alternator, Starter, Wiring, Spark Plug, Contact Point. vehicle: Truck->truck, Bus->bus, Sedan/Car+AUV+SUV+Van+Pick-Up->car; PUV, Owner-Type Jeepney, Motorcycle, Heavy Equipment excluded. These mappings are assumptions."
+      }
+    },
+    "breakdown_shoulder": {
+      "label": "Breakdown on the shoulder",
+      "duration_kind": "service_time_min_per_deployment_record",
+      "duration_definition": "service_time_min of each deployment record (arrival -> departure), minutes. One breakdown event can have several records; each is one value. Events without any deployment record contribute nothing.",
+      "population": "breakdown events with SubLocation = Soft Shoulder",
+      "n_events": 21866,
+      "n_events_with_deployment_records": 6199,
+      "n_values_before_exclusion": 6492,
+      "n": 5622,
+      "excluded": {
+        "missing": 0,
+        "negative": 0,
+        "zero": 869,
+        "over_1440": 1
+      },
+      "min": 1.0,
+      "p10": 6.0,
+      "p25": 9.0,
+      "p50": 14.0,
+      "p75": 22.0,
+      "p90": 40.0,
+      "p99": 153.79,
+      "max": 1370.0,
+      "reference": {
+        "not_used_by_sampler": true,
+        "including_zeros_existing_rule": {
+          "n": 6491,
+          "p10": 0.0,
+          "p25": 7.0,
+          "p50": 12.0,
+          "p75": 20.0,
+          "p90": 37.0,
+          "p99": 145.0
+        },
+        "response_time_min_positive": {
+          "n": 5871,
+          "excluded": {
+            "missing": 0,
+            "negative": 0,
+            "zero": 621,
+            "over_1440": 0
+          },
+          "min": 1.0,
+          "p10": 9.0,
+          "p25": 14.0,
+          "p50": 20.0,
+          "p75": 31.0,
+          "p90": 50.0,
+          "p99": 156.0,
+          "max": 498.0
+        },
+        "response_time_min_note": "dispatch -> arrival. NOT part of the calibrated duration. The obstacle exists from the breakdown until the patrol departs, i.e. response + service."
+      }
+    }
+  }
+}

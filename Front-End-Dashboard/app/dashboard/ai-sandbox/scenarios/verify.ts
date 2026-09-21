@@ -36,8 +36,11 @@ import {
   boundaryTimes,
   composeInterventions,
   createEngineBinding,
+  MANUAL_CLOSURE_MESSAGE,
+  SAME_STRETCH_TOL_M,
   describeOwner,
   describeResolution,
+  describeYield,
   eventProblems,
   eventProgress,
   eventState,
@@ -53,6 +56,7 @@ import {
   schedulePhases,
   stepToScenarioTime,
   type EngineBinding,
+  type ManualClosure,
   type ManualControls,
   type ManualInterventions,
   type NewEventSpec,
@@ -349,7 +353,11 @@ function rawN(family: BreakdownFamilyKey, cause: BreakdownCause | null, vehicle:
   return c.n;
 }
 type Expected = { key: string; level: string; n: number; p99: number };
-/** Expected cap source for a breakdown variant, from the raw file. */
+/**
+ * Expected cap source for a breakdown variant, from the raw file. The quantile level is the first of cause x
+ * vehicle, cause, vehicle, family with at least MIN_N events; the CAP is then the first with at least CAP_MIN_N
+ * events in the order resolved level, VEHICLE, CAUSE, family.
+ */
 function expectedBreakdownCap(family: BreakdownFamilyKey, cause: BreakdownCause, vehicle: VehicleKind): Expected | null {
   const order = [
     { level: "cause_vehicle", key: causeVehicleKey(family, cause, vehicle), n: rawN(family, cause, vehicle) },
@@ -357,13 +365,15 @@ function expectedBreakdownCap(family: BreakdownFamilyKey, cause: BreakdownCause,
     { level: "vehicle", key: vehicleKey(family, vehicle), n: rawN(family, null, vehicle) },
     { level: "family", key: family, n: rawN(family, null, null) },
   ];
-  const entryExists = order.map((o) => o.level === "family" || o.n >= MIN_N);
-  const resolvedAt = entryExists.indexOf(true);
-  for (let i = resolvedAt; i < order.length; i++) {
-    if (!entryExists[i] || order[i].n < CAP_MIN_N) continue;
-    const s = rawStats.get(order[i].key);
-    if (s === undefined) throw new Error(`no raw entry for ${order[i].key}`);
-    return { key: order[i].key, level: order[i].level, n: s.n, p99: s.p99 };
+  const resolved = order.find((o) => o.level === "family" || o.n >= MIN_N);
+  if (resolved === undefined) return null;
+  const capOrder = [resolved, order[2], order[1], order[3]];
+  for (const o of capOrder) {
+    if (o.level !== "family" && o.n < MIN_N) continue; // no entry exists for that cell
+    if (o.n < CAP_MIN_N) continue;
+    const s = rawStats.get(o.key);
+    if (s === undefined) throw new Error(`no raw entry for ${o.key}`);
+    return { key: o.key, level: o.level, n: s.n, p99: s.p99 };
   }
   return null;
 }
@@ -391,23 +401,34 @@ for (const family of BREAKDOWN_FAMILIES) {
     }
   }
 }
-check("cap: all 30 breakdown variants take their cap from the first chain level with n >= CAP_MIN_N (independent walk of the raw counts)", capWalkOk);
+check("cap: all 30 breakdown variants take their cap from the first of resolved level, vehicle, cause, family with n >= CAP_MIN_N (independent walk of the raw counts)", capWalkOk);
 check("cap: every breakdown chain runs from the chosen entry to the family, over existing entries only", chainShapeOk);
 check("cap: the real file has variants capped by their own level AND by an ancestor", capFromSelf > 0 && capFromAncestor > 0, `self ${capFromSelf}, ancestor ${capFromAncestor}`);
 
-// The named case: tire x truck (in-lane) has 456 events, so it is capped from its ancestor, not from its own p99.
+// The named cases. Tire x truck (in-lane) has 456 events, so it is capped from an ancestor: the VEHICLE level (truck), not its own p99 and not the tire cause level.
 const ttOwn = cal.hierarchy[causeVehicleKey("breakdown_in_lane", "tire", "truck")];
 const tireCause = cal.hierarchy[causeKey("breakdown_in_lane", "tire")];
+const truckVehicle = cal.hierarchy[vehicleKey("breakdown_in_lane", "truck")];
+const carVehicle = cal.hierarchy[vehicleKey("breakdown_in_lane", "car")];
+const mechCause = cal.hierarchy[causeKey("breakdown_in_lane", "mechanical")];
+const carMech = resolveDuration({ family: "breakdown_in_lane", vehicle: "car", cause: "mechanical" }, { kind: "sampled", seed: 1 });
+check(
+  "in-lane car x mechanical (n = 278) caps from VEHICLE: car, not from the mechanical cause level",
+  carVehicle !== undefined && mechCause !== undefined && carMech.level === "cause_vehicle" && carMech.n < CAP_MIN_N &&
+    carMech.capLevel === "vehicle" && carMech.capKey === vehicleKey("breakdown_in_lane", "car") && carMech.capN === carVehicle.n &&
+    carMech.capMinutes === carVehicle.quantiles.p99 && carMech.capMinutes !== mechCause.quantiles.p99,
+  `cap ${carMech.capMinutes} from ${carMech.capLevel}`,
+);
 const tt = resolveDuration(tireTruck, { kind: "sampled", seed: 1 });
 check("tire x truck (in-lane): quantiles from cause x vehicle (n < CAP_MIN_N)", ttOwn !== undefined && ttOwn.n < CAP_MIN_N && tt.level === "cause_vehicle" && tt.n === ttOwn.n);
 check(
-  "tire x truck (in-lane): the cap comes from the tire cause level, not its own p99",
-  ttOwn !== undefined && tireCause !== undefined && tireCause.n >= CAP_MIN_N &&
-    tt.capLevel === "cause" && tt.capKey === causeKey("breakdown_in_lane", "tire") && tt.capN === tireCause.n &&
-    tt.capMinutes === tireCause.quantiles.p99 && tt.capMinutes !== ttOwn.quantiles.p99,
+  "tire x truck (in-lane): the cap comes from the truck vehicle level, not its own p99 and not the tire cause level",
+  ttOwn !== undefined && tireCause !== undefined && truckVehicle !== undefined && truckVehicle.n >= CAP_MIN_N &&
+    tt.capLevel === "vehicle" && tt.capKey === vehicleKey("breakdown_in_lane", "truck") && tt.capN === truckVehicle.n &&
+    tt.capMinutes === truckVehicle.quantiles.p99 && tt.capMinutes !== ttOwn.quantiles.p99 && tt.capMinutes !== tireCause.quantiles.p99,
 );
-if (ttOwn !== undefined && tireCause !== undefined) {
-  // Every sampled draw is min(raw draw from the tire x truck quantiles, the tire-cause p99); capped iff raw exceeded it.
+if (ttOwn !== undefined && truckVehicle !== undefined) {
+  // Every sampled draw is min(raw draw from the tire x truck quantiles, the truck-vehicle p99); capped iff raw exceeded it.
   // Some raw draws fall between the two p99s: capped here, and NOT capped under the old own-p99 rule when the own p99 is the higher.
   let perSeedOk = true;
   let cappedBetween = 0;
@@ -416,14 +437,14 @@ if (ttOwn !== undefined && tireCause !== undefined) {
   for (let s = 1; s <= seeds; s++) {
     const raw = inverseCdf(ttOwn.quantiles, makeRng(s)());
     const d = resolveDuration(tireTruck, { kind: "sampled", seed: s });
-    if (d.minutes !== Math.min(raw, tireCause.quantiles.p99) || d.capped !== raw > tireCause.quantiles.p99) perSeedOk = false;
+    if (d.minutes !== Math.min(raw, truckVehicle.quantiles.p99) || d.capped !== raw > truckVehicle.quantiles.p99) perSeedOk = false;
     if (d.capped) cappedAll++;
     if (d.capped && raw <= ttOwn.quantiles.p99) cappedBetween++;
   }
-  check("tire x truck (in-lane): every sampled draw is min(its own draw, the tire-cause p99), capped exactly above it", perSeedOk);
+  check("tire x truck (in-lane): every sampled draw is min(its own draw, the truck-vehicle p99), capped exactly above it", perSeedOk);
   check(
-    "tire x truck (in-lane): the ancestor cap really differs from the own-p99 rule (draws below its own p99 are capped when the cause p99 is lower)",
-    tireCause.quantiles.p99 < ttOwn.quantiles.p99 ? cappedBetween > 0 : cappedBetween === 0,
+    "tire x truck (in-lane): the ancestor cap really differs from the own-p99 rule (draws below its own p99 are capped when the vehicle p99 is lower)",
+    truckVehicle.quantiles.p99 < ttOwn.quantiles.p99 ? cappedBetween > 0 : cappedBetween === 0,
     `capped below own p99: ${cappedBetween} of ${seeds}, capped in all: ${cappedAll}`,
   );
 }
@@ -462,7 +483,16 @@ const at1 = selectFromCalibration(cal, tireTruck, 1);
 check("capMinN 400: tire x truck (456 events) caps from its own level", at400.cap !== null && at400.cap.level === "cause_vehicle" && ttOwn !== undefined && at400.cap.minutes === ttOwn.quantiles.p99);
 const atExact = ttOwn === undefined ? null : selectFromCalibration(cal, tireTruck, ttOwn.n);
 const atExactPlus1 = ttOwn === undefined ? null : selectFromCalibration(cal, tireTruck, ttOwn.n + 1);
-check("capMinN exactly equal to a level's n includes that level (>=), one more excludes it", atExact !== null && atExact.cap !== null && atExact.cap.level === "cause_vehicle" && atExactPlus1 !== null && atExactPlus1.cap !== null && atExactPlus1.cap.level === "cause");
+check("capMinN exactly equal to a level's n includes that level (>=), one more excludes it", atExact !== null && atExact.cap !== null && atExact.cap.level === "cause_vehicle" && atExactPlus1 !== null && atExactPlus1.cap !== null && atExactPlus1.cap.level === "vehicle");
+// The cause level only matters to the cap when there is no vehicle entry to stop at first: a synthetic calibration.
+const noVehicleEntries: Partial<Record<HierarchyKey, CalibrationEntry>> = {};
+if (ttOwn !== undefined && tireCause !== undefined) {
+  noVehicleEntries[causeVehicleKey("breakdown_in_lane", "tire", "truck")] = ttOwn;
+  noVehicleEntries[causeKey("breakdown_in_lane", "tire")] = tireCause;
+}
+const selNoVehicle = selectFromCalibration(asCal(noVehicleEntries), tireTruck);
+check("cap chain: with no vehicle entry, the cause level is the next stop (cause x vehicle, cause, family)", selNoVehicle.chain.map((l) => l.level).join() === "cause_vehicle,cause,family" && selNoVehicle.cap !== null && selNoVehicle.cap.level === "cause" && tireCause !== undefined && selNoVehicle.cap.minutes === tireCause.quantiles.p99);
+check("cap chain: with all three levels it runs resolved level, vehicle, cause, family (the real file, tire x truck)", selectCalibration(tireTruck).chain.map((l) => l.level).join() === "cause_vehicle,vehicle,cause,family");
 check("capMinN 1: the chosen entry is always its own cap source", at1.cap !== null && at1.cap.key === at1.entry.key);
 check("capMinN above every level: no cap source, so a sampled draw is uncapped", at1e6.cap === null);
 const famOnly = selectFromCalibration(asCal({}), tireTruck);
@@ -648,13 +678,15 @@ const road600: Road = { laneCount: 4, segmentLengthM: 600, ...frame };
 const idle: ManualControls = { closedLanes: [false, false, false, false], closurePoint: 330, closureEnd: 600, showClosurePreview: false, speedLimitKmh: null, speedZone: [180, 480] };
 const abs = (minutesAfterWarmup: number): number => frame.warmupS + minutesAfterWarmup * 60;
 
-function must(events: readonly ScenarioEvent[], spec: NewEventSpec, seq: number, road: Road = road600): { events: readonly ScenarioEvent[]; event: ScenarioEvent } {
-  const r = addEvent(events, spec, road, seq);
+/** No lane closed by hand. */
+const noClosure: ManualClosure = { closedLanes: [false, false, false, false], closurePoint: 330, closureEnd: 600 };
+function must(events: readonly ScenarioEvent[], spec: NewEventSpec, seq: number, road: Road = road600, manual: ManualClosure = noClosure): { events: readonly ScenarioEvent[]; event: ScenarioEvent } {
+  const r = addEvent(events, spec, road, seq, manual);
   if (!r.ok) throw new Error(`fixture: addEvent refused: ${r.reason}`);
   return { events: r.events, event: r.event };
 }
-function refused(events: readonly ScenarioEvent[], spec: NewEventSpec, seq: number, road: Road = road600): string | null {
-  const r = addEvent(events, spec, road, seq);
+function refused(events: readonly ScenarioEvent[], spec: NewEventSpec, seq: number, road: Road = road600, manual: ManualClosure = noClosure): string | null {
+  const r = addEvent(events, spec, road, seq, manual);
   return r.ok ? null : r.reason;
 }
 const manualMinutes = (minutes: number): DurationMode => ({ kind: "manual", minutes });
@@ -794,19 +826,65 @@ check("event: phases tile the whole duration, start at 0, ascend, are labelled w
 // --- operator controls while a scenario owns a lever
 {
   const { event } = must([], collisionSpec("minor_collision", 1, 330, 0, manualMinutes(10)), 1);
-  const manual: ManualControls = { closedLanes: [false, false, true, false], closurePoint: 100, closureEnd: 200, showClosurePreview: true, speedLimitKmh: null, speedZone: [180, 480] };
-  const during = composeInterventions({ ...manual, incidents: [] }, [event], abs(1), road600);
-  check("lock: an extra lane the operator closes is kept, ON the scenario's stretch", during.interventions.closedLanes.join() === "true,false,true,false" && during.interventions.closurePoint === 230 && during.interventions.closureEnd === 370);
-  check("lock: the operator cannot move the stretch while it is owned (their stretch and preview are ignored)", during.interventions.closurePoint !== manual.closurePoint && during.interventions.showClosurePreview === false);
-  const reopen = composeInterventions({ ...manual, closedLanes: [false, false, false, false], incidents: [] }, [event], abs(1), road600);
+  const clean: ManualControls = { closedLanes: [false, false, false, false], closurePoint: 100, closureEnd: 200, showClosurePreview: true, speedLimitKmh: null, speedZone: [180, 480] };
+  // The operator has no closure when the event takes the stretch; they close lane 3 while it owns it.
+  const taken = composeInterventions({ ...clean, incidents: [] }, [event], abs(1), road600);
+  const rode: ManualControls = { ...clean, closedLanes: [false, false, true, false] };
+  const during = composeInterventions({ ...rode, incidents: [] }, [event], abs(1.1), road600, taken.owners);
+  check("lock: a lane the operator closes WHILE the event owns the stretch is kept, on the scenario's stretch", taken.owners.closure !== null && during.interventions.closedLanes.join() === "true,false,true,false" && during.interventions.closurePoint === 230 && during.interventions.closureEnd === 370);
+  check("lock: the operator cannot move the stretch while it is owned (their stretch and preview are ignored)", during.interventions.closurePoint !== rode.closurePoint && during.interventions.showClosurePreview === false);
+  const reopen = composeInterventions({ ...clean, incidents: [] }, [event], abs(1.1), road600, taken.owners);
   check("lock: the operator cannot reopen a lane the scenario blocks (it stays closed with their state open)", reopen.interventions.closedLanes[0] === true && scenarioLockedLanes(reopen.owners, 4).join() === "true,false,false,false");
-  const both = composeInterventions({ ...manual, closedLanes: [true, false, false, false], incidents: [] }, [event], abs(1), road600);
+  const both = composeInterventions({ ...clean, closedLanes: [true, false, false, false], incidents: [] }, [event], abs(1.1), road600, taken.owners);
   check("lock: closing the same lane as the scenario changes nothing", both.interventions.closedLanes.join() === "true,false,false,false");
-  const after = composeInterventions({ ...manual, incidents: [] }, [event], abs(11), road600);
+  const after = composeInterventions({ ...rode, incidents: [] }, [event], abs(11), road600, during.owners);
   check("lock: when the event ends the operator's lanes, stretch and preview come back exactly", after.interventions.closedLanes.join() === "false,false,true,false" && after.interventions.closurePoint === 100 && after.interventions.closureEnd === 200 && after.interventions.showClosurePreview === true && after.owners.closure === null);
   check("lock: the owner reads \"<event> — <phase>\"", during.owners.closure !== null && describeOwner(during.owners.closure) === `${event.name} — Lane blocked: awaiting response` && event.name === "Minor collision #1");
+
+  // No carry-over: a closure the operator ALREADY has elsewhere is never moved onto the event's stretch; the event stands aside.
+  const elsewhere: ManualControls = { ...clean, closedLanes: [false, false, true, false] };
+  const yielded = composeInterventions({ ...elsewhere, incidents: [] }, [event], abs(1), road600);
+  const y0 = yielded.owners.yielded[0];
+  check(
+    "no carry-over: an operator closure already on another stretch is left exactly as it is, and the event yields",
+    yielded.interventions.closedLanes.join() === "false,false,true,false" && yielded.interventions.closurePoint === 100 && yielded.interventions.closureEnd === 200 && yielded.owners.closure === null &&
+      yielded.owners.yielded.length === 1 && y0.resource === "closure_stretch" && y0.eventId === event.id,
+  );
+  check("no carry-over: the event row says why", describeYield(y0) === "Closure suspended — operator lane closure active");
+  const stillYielding = composeInterventions({ ...elsewhere, incidents: [] }, [event], abs(2), road600, yielded.owners);
+  check("no carry-over: it keeps yielding for as long as the operator's closure stands", stillYielding.owners.closure === null && stillYielding.owners.yielded.length === 1);
+  const released = composeInterventions({ ...clean, incidents: [] }, [event], abs(3), road600, yielded.owners);
+  check("no carry-over: the moment the operator clears their closure the event takes the stretch, for the rest of its blocking phase", released.owners.closure !== null && released.interventions.closurePoint === 230 && released.interventions.closedLanes.join() === "true,false,false,false");
+  const sameStretch = composeInterventions({ ...elsewhere, closurePoint: 230, closureEnd: 370, incidents: [] }, [event], abs(1), road600);
+  check("no carry-over: an operator closure on exactly the event's stretch is no conflict (nothing moves)", sameStretch.owners.closure !== null && sameStretch.owners.yielded.length === 0 && sameStretch.interventions.closedLanes.join() === "true,false,true,false");
+  const nearlySame = composeInterventions({ ...elsewhere, closurePoint: 230 + SAME_STRETCH_TOL_M - 0.01, closureEnd: 370, incidents: [] }, [event], abs(1), road600);
+  const notSame = composeInterventions({ ...elsewhere, closurePoint: 230 + SAME_STRETCH_TOL_M + 0.01, closureEnd: 370, incidents: [] }, [event], abs(1), road600);
+  check("no carry-over: 'the same stretch' means within the tolerance at each end", nearlySame.owners.closure !== null && notSame.owners.closure === null);
+  const noLimit = composeInterventions({ ...clean, incidents: [] }, [must([], shoulderSpec(330, 0, manualMinutes(20)), 1).event], abs(1), road600).owners;
+  // Only the yield differs between these two (same operator limit, nothing else owned): the event running, then finished.
+  const yieldEvent = must([], shoulderSpec(330, 0, manualMinutes(20)), 1).event;
+  const limited = { ...clean, speedLimitKmh: 50, incidents: [] };
+  const whileYielding = composeInterventions(limited, [yieldEvent], abs(1), road600).owners;
+  const afterYield = composeInterventions(limited, [yieldEvent], abs(30), road600).owners;
+  check("ownership: the key changes when an event starts or stops yielding, nothing else changing (a suspended row must re-render)", whileYielding.yielded.length === 1 && afterYield.yielded.length === 0 && ownershipKey(whileYielding) !== ownershipKey(afterYield) && ownershipKey(noLimit) !== ownershipKey(whileYielding));
+  const shoulderY = composeInterventions({ ...clean, speedLimitKmh: 50, incidents: [] }, [must([], shoulderSpec(330, 0, manualMinutes(20)), 1).event], abs(1), road600).owners.yielded[0];
+  check("speed zone: while the operator's limit suspends a shoulder event, its row says \"Gawk slowdown suspended — operator speed limit active\"", shoulderY.resource === "speed_zone" && describeYield(shoulderY) === "Gawk slowdown suspended — operator speed limit active");
 }
 
+// --- adding an event while the operator has a closure of their own elsewhere
+{
+  const elsewhere: ManualClosure = { closedLanes: [false, false, true, false], closurePoint: 100, closureEnd: 200 };
+  const minor = collisionSpec("minor_collision", 1, 330, 5, manualMinutes(10));
+  check("manual closure: an event that needs the closure stretch is refused with exactly the stated message", refused([], minor, 1, road600, elsewhere) === "Clear your manual lane closure first — this event needs the closure stretch." && MANUAL_CLOSURE_MESSAGE === "Clear your manual lane closure first — this event needs the closure stretch.");
+  check("manual closure: ... for every closure family", (["minor_collision", "multi_vehicle_collision", "self_accident"] as const).every((f) => refused([], collisionSpec(f, 1, 330, 5, manualMinutes(10)), 1, road600, elsewhere) === MANUAL_CLOSURE_MESSAGE));
+  check("manual closure: events that do not use the closure stretch are not affected", refused([], inLaneSpec("truck", 3, 330, 5, manualMinutes(10)), 1, road600, elsewhere) === null && refused([], shoulderSpec(330, 5, manualMinutes(10)), 1, road600, elsewhere) === null);
+  check("manual closure: no lane closed by hand means no conflict, whatever stretch is set", refused([], minor, 1, road600, { ...elsewhere, closedLanes: [false, false, false, false] }) === null);
+  check("manual closure: a closure on exactly the event's stretch (230 to 370 m) is accepted", refused([], minor, 1, road600, { ...elsewhere, closurePoint: 230, closureEnd: 370 }) === null);
+  check("manual closure: the tolerance at each end decides", refused([], minor, 1, road600, { ...elsewhere, closurePoint: 230.4, closureEnd: 370 }) === null && refused([], minor, 1, road600, { ...elsewhere, closurePoint: 230, closureEnd: 370.6 }) === MANUAL_CLOSURE_MESSAGE);
+  const multi = collisionSpec("multi_vehicle_collision", 1, 330, 5, manualMinutes(10));
+  check("manual closure: an event with several closure phases is judged on the stretch it takes first (multi-vehicle: 230 to 430 m)", refused([], multi, 1, road600, { ...elsewhere, closurePoint: 230, closureEnd: 430 }) === null && refused([], multi, 1, road600, { ...elsewhere, closurePoint: 230, closureEnd: 390 }) === MANUAL_CLOSURE_MESSAGE);
+  check("manual closure: an invalid event is refused for its own reason first", (refused([], collisionSpec("minor_collision", 9, 330, 5, manualMinutes(10)), 1, road600, elsewhere) ?? "").includes("does not exist"));
+}
 // --- conflicts: an exclusive lever cannot be held twice, and nothing is merged
 {
   const a = must([], collisionSpec("multi_vehicle_collision", 1, 330, 10, manualMinutes(40)), 1);
@@ -814,25 +892,25 @@ check("event: phases tile the whole duration, start at 0, ascend, are labelled w
   check("conflict: two collisions with overlapping closures are refused, naming BOTH events", overlap !== null && overlap.includes("Self accident #2") && overlap.includes("Multi-vehicle collision #1") && overlap.includes("closure stretch") && overlap.includes("Nothing was changed"), overlap ?? "was accepted");
   const first = a.event;
   const blockingEnd = first.phases.filter((p) => !p.skipped && p.lanesBlocked > 0).reduce((m, p) => Math.max(m, first.startS + p.offsetS + p.durationS), 0);
-  const touching = addEvent(a.events, collisionSpec("self_accident", 2, 200, blockingEnd / 60 + 1e-9, manualMinutes(30)), road600, 2);
+  const touching = addEvent(a.events, collisionSpec("self_accident", 2, 200, blockingEnd / 60 + 1e-9, manualMinutes(30)), road600, 2, noClosure);
   check("conflict: an event starting as the other lets go of the stretch is accepted", touching.ok);
   // Exactly touching, with numbers that are exact in floating point: 5 min minor collision from +10 min blocks [600, 840) s.
   const exactA = must([], collisionSpec("minor_collision", 1, 330, 10, manualMinutes(5)), 1);
   const exactWindow = resourceWindows(exactA.event)[0];
   check("conflict: (fixture) that window is exactly [600, 840) seconds", exactWindow.fromS === 600 && exactWindow.toS === 840);
-  check("conflict: an event starting at exactly the second the other's window ends is accepted; one a second earlier is refused", addEvent(exactA.events, collisionSpec("minor_collision", 2, 200, 14, manualMinutes(5)), road600, 2).ok && refused(exactA.events, collisionSpec("minor_collision", 2, 200, 14 - 1 / 60, manualMinutes(5)), 2) !== null);
-  const inClearing = addEvent(a.events, collisionSpec("minor_collision", 2, 200, blockingEnd / 60 + 0.5, manualMinutes(5)), road600, 3);
+  check("conflict: an event starting at exactly the second the other's window ends is accepted; one a second earlier is refused", addEvent(exactA.events, collisionSpec("minor_collision", 2, 200, 14, manualMinutes(5)), road600, 2, noClosure).ok && refused(exactA.events, collisionSpec("minor_collision", 2, 200, 14 - 1 / 60, manualMinutes(5)), 2) !== null);
+  const inClearing = addEvent(a.events, collisionSpec("minor_collision", 2, 200, blockingEnd / 60 + 0.5, manualMinutes(5)), road600, 3, noClosure);
   check("conflict: the clearing phase holds nothing, so another collision may start in it", inClearing.ok && first.endS > blockingEnd + 30);
   const during = refused(a.events, collisionSpec("minor_collision", 2, 200, blockingEnd / 60 - 0.5, manualMinutes(5)), 4);
   check("conflict: the same half a minute earlier, inside the blocking phases, is refused", during !== null);
-  const shoulderAlong = addEvent(a.events, shoulderSpec(300, 12, manualMinutes(30)), road600, 5);
+  const shoulderAlong = addEvent(a.events, shoulderSpec(300, 12, manualMinutes(30)), road600, 5, noClosure);
   check("conflict: a shoulder breakdown may run alongside a collision (a different lever)", shoulderAlong.ok);
   const s1 = must([], shoulderSpec(330, 5, manualMinutes(20)), 1);
   const s2 = refused(s1.events, shoulderSpec(200, 10, manualMinutes(20)), 2);
   check("conflict: two shoulder breakdowns overlapping are refused, naming both and the speed zone", s2 !== null && s2.includes("Breakdown on the shoulder #1") && s2.includes("Breakdown on the shoulder #2") && s2.includes("speed zone"));
-  check("conflict: a refusal returns no events (nothing to apply) and does not change the stored list", addEvent(a.events, collisionSpec("self_accident", 2, 200, 20, manualMinutes(30)), road600, 2).ok === false && a.events.length === 1);
+  check("conflict: a refusal returns no events (nothing to apply) and does not change the stored list", addEvent(a.events, collisionSpec("self_accident", 2, 200, 20, manualMinutes(30)), road600, 2, noClosure).ok === false && a.events.length === 1);
   check("event: a shoulder breakdown has no lane, whatever lane it was given", must([], { ...shoulderSpec(330, 0, manualMinutes(5)), lane: 2 }, 1).event.lane === null && must([], inLaneSpec("car", 3, 330, 0, manualMinutes(5)), 1).event.lane === 3);
-  check("event: an id already in use is rejected (the caller's counter must not repeat)", throws(() => addEvent(a.events, collisionSpec("minor_collision", 2, 200, 100, manualMinutes(5)), road600, 1)) && throws(() => addEvent([], inLaneSpec("car", 3, 330, 0, manualMinutes(5)), road600, 0)));
+  check("event: an id already in use is rejected (the caller's counter must not repeat)", throws(() => addEvent(a.events, collisionSpec("minor_collision", 2, 200, 100, manualMinutes(5)), road600, 1, noClosure)) && throws(() => addEvent([], inLaneSpec("car", 3, 330, 0, manualMinutes(5)), road600, 0, noClosure)));
   check("conflict: an event whose phases all round to nothing is refused", refused([], inLaneSpec("car", 3, 330, 0, manualMinutes(1e-9)), 1) !== null);
   check("conflict: bad input is refused with a reason, not thrown (negative start, zero duration, lane that does not exist)", refused([], inLaneSpec("car", 3, 330, -1, manualMinutes(5)), 1) !== null && refused([], inLaneSpec("car", 3, 330, 0, manualMinutes(0)), 1) !== null && refused([], inLaneSpec("car", 5, 330, 0, manualMinutes(5)), 1) !== null && refused([], inLaneSpec("car", 3, 9999, 0, manualMinutes(5)), 1) !== null);
   check("conflict: resource windows: a collision's is its blocking phases, a shoulder's the whole event, an in-lane breakdown holds none", resourceWindows(first).length === 1 && resourceWindows(first)[0].resource === "closure_stretch" && resourceWindows(first)[0].toS === blockingEnd && resourceWindows(s1.event)[0].resource === "speed_zone" && resourceWindows(must([], inLaneSpec("car", 3, 330, 0, manualMinutes(5)), 1).event).length === 0);
@@ -892,7 +970,7 @@ const engineIv = (len: number, lanes: number): Partial<Interventions> => ({ clos
 const newSim = (len = 600, lanes = 4): TrafficSim => new TrafficSim({ length: len, laneCount: lanes, inflowVehPerHour: 4500, seed: 12345, warmupS: 60 }, engineIv(len, lanes));
 const incidentKeyOf = (l: readonly { lane: number; x: number }[]): string => l.map((i) => `${i.lane}:${i.x}`).sort().join("|");
 function engineInSync(ts: TrafficSim, controls: ManualControls, events: readonly ScenarioEvent[], binding: EngineBinding): boolean {
-  const want = composeInterventions({ ...controls, incidents: binding.operatorIncidents(ts) }, events, ts.time, roadOf(ts, frame)).interventions;
+  const want = composeInterventions({ ...controls, incidents: binding.operatorIncidents(ts) }, events, ts.time, roadOf(ts, frame), binding.previousOwners()).interventions;
   const iv = ts.interventions;
   return iv.closedLanes.join() === want.closedLanes.join() && iv.closurePoint === want.closurePoint && iv.closureEnd === want.closureEnd && iv.speedLimitKmh === want.speedLimitKmh && iv.speedZone[0] === want.speedZone[0] && iv.speedZone[1] === want.speedZone[1] && incidentKeyOf(iv.incidents) === incidentKeyOf(want.incidents);
 }
@@ -956,6 +1034,29 @@ function engineInSync(ts: TrafficSim, controls: ManualControls, events: readonly
 }
 
 {
+  // On the real engine: a closure the operator already has is never displaced; a lane closed while the event owns the stretch stays.
+  const events = must([], collisionSpec("minor_collision", 1, 330, 0, manualMinutes(10)), 1).events;
+  const ts = newSim();
+  const b = createEngineBinding();
+  const elsewhere: ManualControls = { ...idle, closedLanes: [false, false, true, false], closurePoint: 100, closureEnd: 200 };
+  const rode: ManualControls = { ...idle, closedLanes: [false, false, true, false], closurePoint: 100, closureEnd: 200 };
+  ts.time = abs(1);
+  b.apply(ts, elsewhere, events, frame);
+  b.apply(ts, elsewhere, events, frame);
+  const iv = () => `${ts.interventions.closedLanes.join()}|${ts.interventions.closurePoint}|${ts.interventions.closureEnd}`;
+  check("engine: an operator closure on another stretch is left exactly as it was, and the event yields (applied repeatedly)", iv() === "false,false,true,false|100|200" && b.previousOwners().yielded.length === 1 && b.previousOwners().closure === null);
+  b.apply(ts, idle, events, frame);
+  check("engine: the operator clears their closure and the event takes the stretch", iv() === "true,false,false,false|230|370" && b.previousOwners().yielded.length === 0);
+  b.apply(ts, rode, events, frame);
+  check("engine: a lane the operator closes WHILE the event owns the stretch stays, on the event's stretch (the event keeps it)", iv() === "true,false,true,false|230|370" && b.previousOwners().closure !== null);
+  ts.time = abs(11);
+  b.apply(ts, rode, events, frame);
+  check("engine: when the event ends the operator's lane and stretch are back exactly", iv() === "false,false,true,false|100|200");
+  b.reset();
+  check("engine: a reset forgets who held what", b.previousOwners().closure === null && b.previousOwners().yielded.length === 0);
+}
+
+{
   const ts = newSim();
   ts.interventions.closureDraft = { from: 100, to: 200 };
   createEngineBinding().apply(ts, idle, [], frame);
@@ -971,15 +1072,18 @@ function engineInSync(ts: TrafficSim, controls: ManualControls, events: readonly
     const ref = newSim();
     const b = createEngineBinding();
     const bRef = createEngineBinding();
-    const controls: ManualControls = { closedLanes: [false, false, true, false], closurePoint: 100, closureEnd: 200, showClosurePreview: false, speedLimitKmh: null, speedZone: [180, 480] };
+    // The operator has no closure when the event starts, and closes lane 3 while it runs (a lane closed while it owns the stretch stays).
+    const controls: ManualControls = { closedLanes: [false, false, false, false], closurePoint: 100, closureEnd: 200, showClosurePreview: false, speedLimitKmh: null, speedZone: [180, 480] };
+    const closedLater: ManualControls = { ...controls, closedLanes: [false, false, true, false] };
     ts.addIncident(0, 50);
     ref.addIncident(0, 50);
     ts.time = abs(2);
     ref.time = abs(2);
     b.apply(ts, controls, events, frame);
     const during = incidentKeyOf(ts.interventions.incidents) + ts.interventions.closedLanes.join() + ts.interventions.speedLimitKmh;
-    b.apply(ts, controls, removeEvent(events, "ev1"), frame);
-    bRef.apply(ref, controls, [], frame);
+    b.apply(ts, closedLater, events, frame);
+    b.apply(ts, closedLater, removeEvent(events, "ev1"), frame);
+    bRef.apply(ref, closedLater, [], frame);
     const a = JSON.stringify([ts.interventions.closedLanes, ts.interventions.closurePoint, ts.interventions.closureEnd, ts.interventions.speedLimitKmh, ts.interventions.speedZone, incidentKeyOf(ts.interventions.incidents)]);
     const r = JSON.stringify([ref.interventions.closedLanes, ref.interventions.closurePoint, ref.interventions.closureEnd, ref.interventions.speedLimitKmh, ref.interventions.speedZone, incidentKeyOf(ref.interventions.incidents)]);
     if (a !== r) ok = false;

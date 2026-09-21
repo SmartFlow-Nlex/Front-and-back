@@ -29,8 +29,8 @@ import {
                (0,min) (.10,p10) (.25,p25) (.50,p50) (.75,p75) (.90,p90)
                (.99,p99) (1,max), where min and max are the observed extremes
                after exclusions. Seeded, so the same seed gives the same number.
-               Capped by default at the p99 of the first level in the fallback
-               chain with at least CAP_MIN_N events (not always the entry's own
+               Capped by default at the p99 of the first level in the cap
+               chain (see selectBreakdown) with at least CAP_MIN_N events (not always the entry's own
                p99: a thin cell would give a noisy cap); reported as `capped`.
      p50     - the median.
      p90     - the 90th percentile.
@@ -416,9 +416,11 @@ export type CalibrationSelection = {
   /** Levels tried first and passed over, in order, with why. Empty when the first choice was used. */
   readonly skipped: readonly SkippedLevel[];
   /**
-   * The chosen entry followed by every entry below it in the fallback order that
-   * exists, ending at the family. The quantiles come from the first link; the cap
-   * comes from the first link with enough events (see `cap`).
+   * The CAP chain: the chosen entry, then (for a breakdown) the vehicle level, then
+   * the cause level, then the family, keeping only entries that exist and dropping
+   * repeats. The quantiles come from the first link; the cap comes from the first
+   * link with enough events (see `cap`). This is not the quantile fallback order:
+   * see selectBreakdown.
    */
   readonly chain: readonly ChainLink[];
   /** The cap for a sampled draw: the first link of `chain` with n >= CAP_MIN_N. Null when no link has that many. */
@@ -467,15 +469,31 @@ function selectBreakdown(cal: Calibration, family: BreakdownFamilyKey, cause: Br
     { level: "cause", key: causeKey(family, cause), n: cellN(cal, family, cause, null) },
     { level: "vehicle", key: vehicleKey(family, vehicle), n: cellN(cal, family, null, vehicle) },
   ];
-  // Levels with no entry are passed over: reported as skipped while nothing has been chosen yet, and simply absent from the chain after.
+  // The QUANTILES come from the first of cause x vehicle, cause, vehicle that has an entry (else the family).
+  // Levels passed over on the way are reported as skipped, with why.
   const skipped: SkippedLevel[] = [];
-  const chain: ChainLink[] = [];
+  let resolved: ChainLink | null = null;
   for (const t of tries) {
     const entry = cal.hierarchy[t.key];
-    if (entry !== undefined) chain.push({ entry, level: t.level });
-    else if (chain.length === 0) skipped.push({ level: t.level, key: t.key, n: t.n, reason: t.n === null ? "no_cell" : "below_min_n" });
+    if (entry !== undefined) {
+      resolved = { entry, level: t.level };
+      break;
+    }
+    skipped.push({ level: t.level, key: t.key, n: t.n, reason: t.n === null ? "no_cell" : "below_min_n" });
   }
-  chain.push({ entry: cal.entries[family], level: "family" });
+  /* The CAP is walked in a different order: the resolved level, then VEHICLE, then CAUSE, then the family.
+   * Obstruction time is driven mainly by what has to be recovered (ASSUMPTIONS.SAMPLED_CAP), so a thin
+   * cause x vehicle cell inherits its vehicle's cap; the cause level pools cars and trucks and is
+   * dominated by the trucks, which is the wrong ceiling for a car. */
+  const link = (key: HierarchyKey, level: CalibrationLevel): ChainLink | null => {
+    const entry = cal.hierarchy[key];
+    return entry === undefined ? null : { entry, level };
+  };
+  const familyLink: ChainLink = { entry: cal.entries[family], level: "family" };
+  const chain: ChainLink[] = [];
+  for (const l of [resolved, link(vehicleKey(family, vehicle), "vehicle"), link(causeKey(family, cause), "cause"), familyLink]) {
+    if (l !== null && !chain.some((c) => c.entry.key === l.entry.key)) chain.push(l);
+  }
   return withCap(chain, skipped, capMinN);
 }
 
@@ -486,10 +504,11 @@ function selectBreakdown(cal: Calibration, family: BreakdownFamilyKey, cause: Br
  * least hierarchyMinN usable events. Every other family uses its own entry (a minor
  * collision, its label's). Quantiles always come from that entry.
  *
- * The CAP comes from the first entry in the chain (the chosen one, then the levels
- * below it, ending at the family; a minor collision's chain is its label, then
- * minor_collision) with at least capMinN usable events, because a p99 needs enough
- * tail observations to be stable (ASSUMPTIONS.CAP_MIN_N).
+ * The CAP comes from the first entry in the cap chain with at least capMinN usable
+ * events, because a p99 needs enough tail observations to be stable
+ * (ASSUMPTIONS.CAP_MIN_N). For a breakdown the chain is the chosen entry, then the
+ * vehicle level, then the cause level, then the family; a minor collision's is its
+ * label, then minor_collision.
  *
  * Pure: takes the calibration (and capMinN), so a test can hand it a modified one.
  */
@@ -584,7 +603,7 @@ export type DurationMode =
 export type SampleOptions = {
   /**
    * Cap on a SAMPLED duration, in minutes.
-   *   undefined - the p99 of the first level in the fallback chain with at least CAP_MIN_N events (the default)
+   *   undefined - the p99 of the first level in the cap chain with at least CAP_MIN_N events (the default)
    *   a number  - that cap
    *   null      - no cap
    * Never applied to p50, p90 or manual, which are deliberate choices.
@@ -613,7 +632,7 @@ function checkCap(cap: number | null): number | null {
 
 /**
  * One duration from one entry. The cap is explicit (null = none) and applies to a
- * sampled draw only; `resolveDuration` is what picks it from the fallback chain.
+ * sampled draw only; `resolveDuration` is what picks it from the cap chain.
  */
 export function drawDuration(entry: CalibrationEntry, mode: DurationMode, capMinutes: number | null): DrawnDuration {
   const medianShare = entry.responseShare === null ? null : entry.responseShare.quantiles.p50;

@@ -17,6 +17,7 @@ import {
   createEngineBinding,
   describeOwner,
   describeResolution,
+  describeYield,
   eventProgress,
   formatClock,
   nextBoundaryAfter,
@@ -1320,7 +1321,8 @@ export default function AiSandboxPage() {
     const sim = simRef.current;
     if (!sim) return { ok: false, reason: "The simulation has not started yet." };
     const seq = scenarioSeqRef.current + 1;
-    const r = addEvent(scenarioEventsRef.current, spec, roadOf(sim, scenarioFrame), seq);
+    // The operator's own closure matters here: an event that needs the closure stretch is refused while they have one elsewhere.
+    const r = addEvent(scenarioEventsRef.current, spec, roadOf(sim, scenarioFrame), seq, { closedLanes, closurePoint: closureM, closureEnd: closureEndM });
     if (!r.ok) return r;
     scenarioSeqRef.current = seq;
     scenarioEventsRef.current = r.events;
@@ -2086,6 +2088,9 @@ export default function AiSandboxPage() {
                     {e.phases.map((ph) => (
                       <span key={ph.id} style={{ display: "block", opacity: ph.skipped ? 0.65 : 1 }}>{ph.text}</span>
                     ))}
+                    {owners.yielded.filter((y) => y.eventId === e.id).map((y) => (
+                      <b key={y.resource} style={{ display: "block", marginTop: 4 }}>{describeYield(y)}</b>
+                    ))}
                     <button className="btn-muted" style={{ marginTop: 6 }} onClick={() => removeScenarioEvent(e.id)}>
                       Remove
                     </button>
@@ -2103,12 +2108,6 @@ export default function AiSandboxPage() {
                 </button>
               </div>
             </div>
-          )}
-          {owners.yielded.length > 0 && (
-            <p className="sandbox-live-note warn">
-              {owners.yielded.map((y) => y.eventName).join(", ")} {owners.yielded.length === 1 ? "is" : "are"} not applying{" "}
-              {owners.yielded.length === 1 ? "its" : "their"} speed zone: a speed limit is set below.
-            </p>
           )}
 
           <span className="sandbox-mini-label">Close a lane (traffic must merge out)</span>

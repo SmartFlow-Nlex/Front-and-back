@@ -1,5 +1,5 @@
 import type { Interventions } from "../simulation";
-import { ASSUMPTIONS, closureStretch, incidentSlotsFor, operatorLaneToEngineIndex } from "./assumptions";
+import { ASSUMPTIONS, closureStretch, incidentSlotsFor, operatorLaneToEngineIndex, type ClosureStretch } from "./assumptions";
 import { TEMPLATE_BY_FAMILY, assertNever, phaseOffsetFractions, type FamilyKey, type PhaseDef, type ScenarioVariant, type VehicleKind } from "./catalogue";
 import { resolveDuration, type CalibrationLevel, type DurationMode, type ResolvedDuration } from "./sampler";
 
@@ -64,6 +64,27 @@ export type ManualControls = {
 
 /** Everything the operator has set by hand, including the incidents they placed. */
 export type ManualInterventions = ManualControls & { readonly incidents: readonly Incident[] };
+
+/** The part of the operator's settings a closure event has to be checked against. */
+export type ManualClosure = Pick<ManualControls, "closedLanes" | "closurePoint" | "closureEnd">;
+
+/** Why an event that needs the closure stretch is refused while the operator has a closure of their own elsewhere. */
+export const MANUAL_CLOSURE_MESSAGE = "Clear your manual lane closure first — this event needs the closure stretch.";
+
+/** Two stretches closer than this (metres, at each end) are the same stretch. */
+export const SAME_STRETCH_TOL_M = 0.5;
+
+/**
+ * True when the operator has a closure of their own (any lane closed by hand) on a
+ * stretch that is not `stretch`. The engine has ONE closure stretch, so an event
+ * that needs it cannot run alongside such a closure; lanes are never moved from the
+ * operator's stretch onto the event's. A closure on the very same stretch is no
+ * conflict: nothing would move.
+ */
+export function manualClosureConflicts(manual: ManualClosure, stretch: { readonly closurePointM: number; readonly closureEndM: number }): boolean {
+  if (!manual.closedLanes.some(Boolean)) return false;
+  return Math.abs(manual.closurePoint - stretch.closurePointM) > SAME_STRETCH_TOL_M || Math.abs(manual.closureEnd - stretch.closureEndM) > SAME_STRETCH_TOL_M;
+}
 
 /** Seconds since the end of warm-up: the clock event schedules are written in. Negative during warm-up. */
 export function scenarioTimeS(simTimeS: number, road: Pick<Road, "warmupS">): number {
@@ -399,14 +420,24 @@ function conflictMessage(existing: readonly ScenarioEvent[], candidate: Scenario
    Adding and removing events
 ───────────────────────────────────────────────────────────────────────────── */
 
+/** The closure stretch an event takes in its first lane-blocking phase; null for an event with no closure. */
+function firstClosureStretch(event: ScenarioEvent, road: Road): ClosureStretch | null {
+  const phase = event.phases.find((p) => !p.skipped && p.lanesBlocked > 0 && p.wreckLengthM !== null);
+  if (phase === undefined || phase.wreckLengthM === null) return null;
+  return closureStretch(road.metresAt(event.positionKm), phase.wreckLengthM, road.segmentLengthM);
+}
+
 /**
  * Store a new event, or refuse it and say why. The duration is resolved here,
  * once. `seq` numbers the event for its name and id ("Breakdown in a lane #2"),
  * and the caller keeps it counting up, so a name is never reused.
- * Refused when the event cannot run on `road` (see eventProblems) or when it needs
- * a single-instance lever another event holds at an overlapping time.
+ * Refused when the event cannot run on `road` (see eventProblems), when it needs
+ * the closure stretch while the operator has a manual closure on a different
+ * stretch (MANUAL_CLOSURE_MESSAGE; judged against the stretch of its first
+ * lane-blocking phase), or when it needs a single-instance lever another event
+ * holds at an overlapping time.
  */
-export function addEvent(events: readonly ScenarioEvent[], spec: NewEventSpec, road: Road, seq: number): AddResult {
+export function addEvent(events: readonly ScenarioEvent[], spec: NewEventSpec, road: Road, seq: number, manual: ManualClosure): AddResult {
   if (!Number.isInteger(seq) || seq < 1) throw new RangeError(`seq must be a positive integer, got ${seq}`);
   const template = TEMPLATE_BY_FAMILY[spec.variant.family];
   const name = `${template.displayName} #${seq}`;
@@ -439,6 +470,8 @@ export function addEvent(events: readonly ScenarioEvent[], spec: NewEventSpec, r
   }
   const problems = eventProblems(event, road);
   if (problems.length > 0) return { ok: false, reason: `Cannot add "${name}": ${problems.join("; ")}.` };
+  const first = firstClosureStretch(event, road);
+  if (first !== null && manualClosureConflicts(manual, first)) return { ok: false, reason: MANUAL_CLOSURE_MESSAGE };
   const conflict = conflictMessage(events, event);
   if (conflict !== null) return { ok: false, reason: conflict };
   return { ok: true, events: [...events, event], event };
@@ -510,7 +543,24 @@ export type IncidentOwnership = Owner & {
   readonly lane: number;
   readonly x: number;
 };
-export type YieldedEvent = Owner & { readonly resource: "speed_zone"; readonly reason: "operator_limit_active" };
+/** An event that would have taken a lever but stands aside because the operator is using it. */
+export type YieldedEvent = Owner &
+  (
+    | { readonly resource: "speed_zone"; readonly reason: "operator_limit_active" }
+    | { readonly resource: "closure_stretch"; readonly reason: "operator_closure_active" }
+  );
+
+/** For the event's row: what is suspended and why. */
+export function describeYield(y: YieldedEvent): string {
+  switch (y.resource) {
+    case "speed_zone":
+      return "Gawk slowdown suspended — operator speed limit active";
+    case "closure_stretch":
+      return "Closure suspended — operator lane closure active";
+    default:
+      return assertNever(y);
+  }
+}
 export type InvalidEvent = { readonly eventId: string; readonly eventName: string; readonly problems: readonly string[] };
 /** Two events claiming the same exclusive lever at once. addEvent never allows it; if it ever occurs the earlier event wins and the other is listed here. */
 export type SuppressedEvent = { readonly eventId: string; readonly eventName: string; readonly resource: ExclusiveResource; readonly heldBy: string };
@@ -543,7 +593,7 @@ export function ownershipKey(o: Ownership): string {
   const c = o.closure === null ? "-" : `${o.closure.eventId}/${o.closure.phaseId}/${o.closure.lanes.join(",")}`;
   const z = o.speedZone === null ? "-" : `${o.speedZone.eventId}/${o.speedZone.phaseId}`;
   const i = o.incidents.map((x) => `${x.key}@${x.lane}:${x.x}`).join(";");
-  const y = o.yielded.map((x) => x.eventId).join(",");
+  const y = o.yielded.map((x) => `${x.eventId}/${x.resource}`).join(",");
   const v = o.invalid.map((x) => x.eventId).join(",");
   const s = o.suppressed.map((x) => x.eventId).join(",");
   return [c, z, i, y, v, s].join("|");
@@ -585,17 +635,30 @@ function ownerOf(event: ScenarioEvent, phase: ScheduledPhase): Owner {
  *     nothing; they are listed in `owners.invalid`.
  *   - Closure stretch: while a collision event is in a phase that blocks lanes, its
  *     lanes and its stretch replace the operator's stretch. Its lanes are always
- *     closed. The operator's own closed lanes are kept ON TOP (never fewer lanes
- *     than the scenario blocks, extra ones allowed), on the event's stretch.
+ *     closed. Lanes the operator closes WHILE it owns the stretch are kept on top
+ *     (never fewer lanes than the scenario blocks, extra ones allowed), on the
+ *     event's stretch. Nothing is carried over: if the operator already has a
+ *     closure on a different stretch when the event would take over, the event
+ *     YIELDS instead (`previous` says who already held the stretch a moment ago; an
+ *     event that did keeps it, and the operator's lanes are then the ones closed
+ *     while it owned it).
  *   - Speed zone: a shoulder breakdown's zone and limit replace the operator's for
  *     the event's duration, unless the operator has a limit set, in which case the
  *     event yields.
  *   - Incidents: the operator's, then one per obstacle slot for each in-lane
  *     breakdown that is running.
  *   - Zero-length phases are never current, so they change nothing.
- * Nothing here reads a clock or the engine, and nothing is mutated.
+ * Nothing here reads a clock or the engine, and nothing is mutated. `previous` is the
+ * ownership the last composition returned (NO_OWNERS at the start of a run); it only
+ * decides who KEEPS the closure stretch, see above.
  */
-export function composeInterventions(manual: ManualInterventions, events: readonly ScenarioEvent[], simTimeS: number, road: Road): Composition {
+export function composeInterventions(
+  manual: ManualInterventions,
+  events: readonly ScenarioEvent[],
+  simTimeS: number,
+  road: Road,
+  previous: Ownership = NO_OWNERS,
+): Composition {
   const t = scenarioTimeS(simTimeS, road);
   const ordered = [...events].sort((a, b) => a.startS - b.startS || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
 
@@ -624,6 +687,11 @@ export function composeInterventions(manual: ManualInterventions, events: readon
         if (base === null || stretch === null) break;
         if (closure !== null) {
           suppressed.push({ eventId: event.id, eventName: event.name, resource: "closure_stretch", heldBy: closure.eventId });
+          break;
+        }
+        const keeping = previous.closure !== null && previous.closure.eventId === event.id;
+        if (!keeping && manualClosureConflicts(manual, stretch)) {
+          yielded.push({ ...ownerOf(event, phase), resource: "closure_stretch", reason: "operator_closure_active" });
           break;
         }
         closure = {
@@ -711,7 +779,11 @@ export type EngineBinding = {
   operatorIncidents(sim: EngineLike): readonly Incident[];
   /** Remove the operator's incidents only; a running scenario's are left in place. */
   clearOperatorIncidents(sim: EngineLike): void;
-  /** Forget which incidents are scenario-owned. Call when the engine it was bound to is replaced. */
+  /** Whether an incident in the engine's list is one a scenario put there (for drawing it differently). */
+  isScenarioIncident(incident: Incident): boolean;
+  /** The ownership the last apply produced. */
+  previousOwners(): Ownership;
+  /** Forget which incidents are scenario-owned and who held what. Call when the engine it was bound to is replaced. */
   reset(): void;
 };
 
@@ -786,6 +858,7 @@ export function stepToScenarioTime(
  */
 export function createEngineBinding(): EngineBinding {
   const owned = new Map<string, Incident>();
+  let previous: Ownership = NO_OWNERS;
 
   const isOwned = (i: Incident): boolean => {
     for (const o of owned.values()) if (o === i) return true;
@@ -796,7 +869,8 @@ export function createEngineBinding(): EngineBinding {
   return {
     apply(sim, controls, events, frame) {
       const road = roadOf(sim, frame);
-      const composition = composeInterventions({ ...controls, incidents: operatorIncidents(sim) }, events, sim.time, road);
+      const composition = composeInterventions({ ...controls, incidents: operatorIncidents(sim) }, events, sim.time, road, previous);
+      previous = composition.owners;
       const next = composition.interventions;
       // Field by field: closureDraft belongs to the operator's click-to-place mode and must survive.
       sim.interventions.closedLanes = next.closedLanes;
@@ -831,8 +905,11 @@ export function createEngineBinding(): EngineBinding {
     clearOperatorIncidents(sim) {
       sim.interventions.incidents = sim.interventions.incidents.filter((i) => isOwned(i));
     },
+    isScenarioIncident: isOwned,
+    previousOwners: () => previous,
     reset() {
       owned.clear();
+      previous = NO_OWNERS;
     },
   };
 }

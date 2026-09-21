@@ -83,6 +83,8 @@ export default function TrafficMapPanel({ title, subtitle, badge, endpoint, laye
   const flyToHandlerRef = useRef<((e: Event) => void) | null>(null);
   const resetViewHandlerRef = useRef<(() => void) | null>(null);
   const showReportHandlerRef = useRef<((e: Event) => void) | null>(null);
+  const exitNamesHandlerRef = useRef<((e: Event) => void) | null>(null);
+  const exitNamesAskHandlerRef = useRef<(() => void) | null>(null);
   const flowFrameRef = useRef<number | null>(null);
   /* Read inside the animation frame rather than closed over, so pausing does
      not have to tear the map down and rebuild it. */
@@ -242,6 +244,36 @@ export default function TrafficMapPanel({ title, subtitle, badge, endpoint, laye
         map.flyTo({ center: [d.lon, d.lat], zoom: 13, duration: 900 });
       }
     };
+
+    /* Which exits are NAMED is decided by the live map, for both panels.
+
+       The two are here to be compared, and they could not be while each chose
+       its own: they agreed on how many names to show and disagreed on which,
+       so at one view the live map named Sta. Rita and Bocaue Interchange while
+       the forecast named Tabang, Tambubong and CDV/PH Arena. Thirteen against
+       fourteen, five of them different places, and no pair of panels the
+       reader could lay side by side.
+
+       The live map is the one that decides because it is the more crowded of
+       the two -- it carries the Waze reports, which take room a name would
+       otherwise have -- so a name it can fit is one the forecast can fit as
+       well. The other way round would have the forecast promising names its
+       neighbour has no room for. */
+    let mirrorNames: Set<string> | null = null;
+    const onExitNames = (e: Event) => {
+      const d = (e as CustomEvent<string[]>).detail;
+      if (!Array.isArray(d)) return;
+      mirrorNames = new Set(d);
+      replaceExitNames?.(mirrorNames);
+    };
+    /* Set by the plaza block once the map has loaded; until then the event is
+       recorded and applied when the pins exist. */
+    let replaceExitNames: ((names: Set<string>) => void) | null = null;
+
+    if (!endpoint.includes("real-time")) {
+      window.addEventListener("nlex:exitnames", onExitNames);
+      exitNamesHandlerRef.current = onExitNames;
+    }
 
     window.addEventListener("nlex:flyto", onFlyTo);
     window.addEventListener("nlex:resetview", onResetView);
@@ -1693,6 +1725,33 @@ export default function TrafficMapPanel({ title, subtitle, badge, endpoint, laye
            pan is three quarters of a million distance tests a second. */
         const plateLevel = new Map<HTMLElement, number>();
         let levelVersion = -1;
+        let lastNamesSig = "";
+        let lastDrawnNames: string[] = [];
+
+        /* The order names are placed in, and it deliberately knows nothing
+           about traffic.
+
+           These two panels exist to be compared, and they could not be: the
+           order used to put exits with congestion first, congestion differs
+           between the live feed and the forecast, so at one view the live map
+           named Sta. Rita and Bocaue Interchange while the forecast named
+           Tabang, Tambubong and CDV/PH Arena. Thirteen names against fourteen,
+           and five of them not the same places -- the reader had no pair of
+           panels to lay side by side. Congestion still shows, in the colour of
+           the plate and of the rule; it just no longer decides who gets a name.
+
+           Plain corridor order will not do either, because the earlier exits
+           would win every time and the names would collect at the Balintawak
+           end. This walks the corridor by bit-reversed index -- 0, 16, 8, 4,
+           12, 2, 18 ... -- which is the same trick a progressive image uses to
+           come in evenly rather than top to bottom. Whatever number of names
+           survives, they are spread along the road, and the sequence is fixed,
+           so both panels drop the same ones. */
+        const spreadKey = (i: number) => {
+          let r = 0;
+          for (let b = 0; b < 5; b++) r = (r << 1) | ((i >> b) & 1);
+          return r;
+        };
 
         /* How far an exit is from a queue, on the GROUND, in metres.
 
@@ -1782,13 +1841,22 @@ export default function TrafficMapPanel({ title, subtitle, badge, endpoint, laye
             levelVersion = stateVersion;
           }
 
-          /* And those exits are considered first. Keeping them in corridor
-             order meant a name survived or was dropped according to where it
-             happened to fall in the list, so the exits worth naming were as
-             likely to go as any other. */
-          const ordered = [...plazaPins]
+          /* On the forecast panel, an exit the live map did not name is not a
+             candidate at all -- it is not merely placed last. Leaving it in
+             would have it take the room a mirrored name needs and then be
+             dropped anyway. Before the live map has said anything, nothing is
+             filtered and the panel names what it can. */
+          const candidates =
+            mirrorNames && !isRealtimeEndpoint
+              ? plazaPins.filter((pin) => mirrorNames!.has(pin.name))
+              : plazaPins;
+          for (const pin of plazaPins) {
+            if (!candidates.includes(pin)) pin.el.style.display = "none";
+          }
+
+          const ordered = [...candidates]
             .map((pin) => ({ pin, q: map.project(pin.lngLat), level: plateLevel.get(pin.el) ?? -1 }))
-            .sort((a, b) => Number(b.level >= 0) - Number(a.level >= 0));
+            .sort((a, b) => spreadKey(a.pin.index) - spreadKey(b.pin.index));
 
           if (measuredTier !== tier) {
             /* Shown first, then measured. A hidden element measures zero, so a
@@ -1909,10 +1977,55 @@ export default function TrafficMapPanel({ title, subtitle, badge, endpoint, laye
             else if (level >= 1) pin.el.dataset.queue = "slow";
             else delete pin.el.dataset.queue;
           }
+
+          /* Published only when the set actually changes. declutterPlazas runs
+             on every frame of a pan, and re-running the forecast panel sixty
+             times a second to tell it the same thing would cost more than the
+             placement it is reporting. */
+          if (isRealtimeEndpoint) {
+            const drawn = ordered
+              .filter((o) => o.pin.el.style.display !== "none")
+              .map((o) => o.pin.name);
+            lastDrawnNames = drawn;
+            const sig = drawn.join("|");
+            if (sig !== lastNamesSig) {
+              lastNamesSig = sig;
+              window.dispatchEvent(new CustomEvent("nlex:exitnames", { detail: drawn }));
+            }
+          }
         };
+
+        /* Applied when the live panel speaks, rather than waiting for the next
+           pan: the two panels are read together and one of them changing a
+           beat later is exactly the sort of thing that looks like a fault. */
+        replaceExitNames = () => declutterPlazas();
 
         rethinkPlazaPins = declutterPlazas;
         declutterPlazas();
+
+        /* The two panels do not finish loading together, and the live one
+           announces its names exactly once -- so whichever map is slower missed
+           it. Measured on a cold load: the live panel published fourteen names
+           at 13.4 s and the forecast panel, still building its pins, heard
+           nothing and drew all twenty. Re-sending the identical list by hand
+           afterwards brought it straight to fourteen, so the wiring was right
+           and only the timing was wrong.
+
+           So the follower asks once it has pins to move, and the leader answers
+           with whatever it last drew. Either order of arrival now ends up in
+           the same place, and neither panel has to guess how long the other
+           takes. */
+        if (isRealtimeEndpoint) {
+          const onAsk = () => {
+            if (lastDrawnNames.length) {
+              window.dispatchEvent(new CustomEvent("nlex:exitnames", { detail: lastDrawnNames }));
+            }
+          };
+          window.addEventListener("nlex:exitnames?", onAsk);
+          exitNamesAskHandlerRef.current = onAsk;
+        } else {
+          window.dispatchEvent(new CustomEvent("nlex:exitnames?"));
+        }
         map.on("zoom", declutterPlazas);
         map.on("move", declutterPlazas);
       }
@@ -2153,6 +2266,14 @@ export default function TrafficMapPanel({ title, subtitle, badge, endpoint, laye
       if (resetViewHandlerRef.current) {
         window.removeEventListener("nlex:resetview", resetViewHandlerRef.current);
         resetViewHandlerRef.current = null;
+      }
+      if (exitNamesHandlerRef.current) {
+        window.removeEventListener("nlex:exitnames", exitNamesHandlerRef.current);
+        exitNamesHandlerRef.current = null;
+      }
+      if (exitNamesAskHandlerRef.current) {
+        window.removeEventListener("nlex:exitnames?", exitNamesAskHandlerRef.current);
+        exitNamesAskHandlerRef.current = null;
       }
       map.remove();
       mapRef.current = null;

@@ -287,8 +287,14 @@ export default function TrafficMapPanel({ title, subtitle, badge, endpoint, laye
     /* Where each queue begins, for the plaza declutter further down. Queues
        start at interchanges, so their markers land under the exit pins almost
        by definition -- which is why congestion only appeared once the reader
-       had zoomed in far enough to separate them. */
-    const queuePins: { at: [number, number]; level: number }[] = [];
+       had zoomed in far enough to separate them.
+
+       The whole line is kept, not only the head. Two different questions get
+       asked of it below and they need different things: whether a queue is
+       COVERING an exit pin is about pixels and only the marker matters, but
+       whether an exit IS congested is about the ground and the queue's body
+       counts as much as its start. */
+    const queuePins: { at: [number, number]; line: [number, number][]; level: number }[] = [];
 
     /* map.on("load") is asynchronous, so a theme switch or an unmount can tear
        the effect down before it fires. Everything started in there — the
@@ -353,6 +359,7 @@ export default function TrafficMapPanel({ title, subtitle, badge, endpoint, laye
           if (head) {
             queuePins.push({
               at: head as [number, number],
+              line: snapped.coords as [number, number][],
               level: Number((f.properties as { level?: unknown })?.level ?? 0),
             });
             marks.push({
@@ -956,13 +963,17 @@ export default function TrafficMapPanel({ title, subtitle, badge, endpoint, laye
             "circle-color": markColour,
             // A red dot on an orange road needs the ring more than the fill:
             // the white edge is what separates it from what it stands on.
-            "circle-radius": ["interpolate", ["linear"], ["zoom"], 8, 7, 11, 8.5, 13, 6.5, 14.2, 0],
-            "circle-stroke-width": ["interpolate", ["linear"], ["zoom"], 8, 2.5, 13, 3, 14.2, 0],
+            "circle-radius": ["interpolate", ["linear"], ["zoom"], 8, 7, 11, 8.5, 11.8, 7, 13.2, 0],
+            "circle-stroke-width": ["interpolate", ["linear"], ["zoom"], 8, 2.5, 11.8, 3, 13.2, 0],
             "circle-stroke-color": PALETTE.casing,
-            // Handed over to the line by z14.2: at that zoom a 200 m queue is
-            // about thirty pixels, which needs no marker to be found.
-            "circle-opacity": ["interpolate", ["linear"], ["zoom"], 13, 1, 14.2, 0],
-            "circle-stroke-opacity": ["interpolate", ["linear"], ["zoom"], 13, 1, 14.2, 0],
+            // Handed over to the line by z13.2. The marker exists to make a
+            // short queue findable across 78 km of corridor, and it stops
+            // earning its place the moment the queue can be seen without it --
+            // at z13 a 200 m queue is already eleven pixels of coloured road.
+            // Past that the dot is not helping the reader find the queue, it
+            // is standing on the queue it points at.
+            "circle-opacity": ["interpolate", ["linear"], ["zoom"], 11.8, 1, 13.2, 0],
+            "circle-stroke-opacity": ["interpolate", ["linear"], ["zoom"], 11.8, 1, 13.2, 0],
             "circle-translate": MARK_SHIFT(dir),
           },
         });
@@ -1542,6 +1553,48 @@ export default function TrafficMapPanel({ title, subtitle, badge, endpoint, laye
            length. */
         const TIER_GAP_PX = { far: 26, mid: 30, near: 34 } as const;
 
+        /* How far an exit is from a queue, on the GROUND, in metres.
+
+           The colour on a plate used to come from the same pixel test that
+           decides whether two pins overlap, and those are different questions.
+           Thirty pixels is thirty metres zoomed in and more than a kilometre
+           zoomed out, so Harbor Link wore "slow" for a queue measured 700 m up
+           the road and shed it again on the way in: the map claiming traffic
+           until the reader looked closely enough to catch it out.
+
+           Fixed 15N scaling, the same projection lib/corridor-shape.ts uses,
+           so a distance measured here and a distance measured there are the
+           same number.
+
+           Measured to the nearest point of the whole queue, not to its head.
+           A queue that begins three kilometres back and ends at this
+           interchange is on this interchange, and the head is the only part of
+           it that is not. */
+        const M_LON = 111320 * Math.cos((15 * Math.PI) / 180);
+        const M_LAT = 110574;
+        const metresToQueue = (p: [number, number], line: [number, number][]) => {
+          const px = p[0] * M_LON;
+          const py = p[1] * M_LAT;
+          if (line.length === 1) return Math.hypot(px - line[0][0] * M_LON, py - line[0][1] * M_LAT);
+          let best = Infinity;
+          for (let i = 1; i < line.length; i++) {
+            const ax = line[i - 1][0] * M_LON;
+            const ay = line[i - 1][1] * M_LAT;
+            const dx = line[i][0] * M_LON - ax;
+            const dy = line[i][1] * M_LAT - ay;
+            const len2 = dx * dx + dy * dy;
+            const t = len2 ? Math.max(0, Math.min(1, ((px - ax) * dx + (py - ay) * dy) / len2)) : 0;
+            best = Math.min(best, Math.hypot(px - (ax + t * dx), py - (ay + t * dy)));
+          }
+          return best;
+        };
+
+        /* Close enough that the queue is AT this interchange rather than on the
+           stretch beyond it. The exits either side are kilometres away, so
+           nothing hangs on the exact figure: it only has to be wider than a
+           junction and narrower than the gap between two exits. */
+        const EXIT_QUEUE_M = 450;
+
         const declutterPlazas = () => {
           const tier = plazaTier(map.getZoom());
           for (const pin of plazaPins) pin.el.dataset.tier = tier;
@@ -1562,31 +1615,43 @@ export default function TrafficMapPanel({ title, subtitle, badge, endpoint, laye
           /* The worst queue standing on this exit, or -1 for none. Worst
              rather than nearest: if two are on one interchange, the name should
              carry the one that matters. */
-          const queueLevelAt = (q: { x: number; y: number }) =>
-            queuePts.reduce((worst, k) => (near(k.p, q, gap) ? Math.max(worst, k.level) : worst), -1);
-          const onQueue = (q: { x: number; y: number }) => queueLevelAt(q) >= 0;
+          /* Two tests, deliberately measured in different units.
+
+             coversPin is PIXELS: is a queue marker sitting on top of this ring?
+             That is a question about the screen, and it has to move with the
+             zoom, because what overlaps at one zoom is clear at the next.
+
+             queueLevelOn is METRES: is this exit actually standing on a queue?
+             That is a question about the road, and it must NOT move with the
+             zoom, because the road does not. */
+          const coversPin = (q: { x: number; y: number }) =>
+            queuePts.some((k) => near(k.p, q, gap));
+          const queueLevelOn = (at: [number, number]) =>
+            queuePins.reduce(
+              (worst, k) => (metresToQueue(at, k.line) <= EXIT_QUEUE_M ? Math.max(worst, k.level) : worst),
+              -1,
+            );
 
           /* And those exits are considered first. Keeping them in corridor
              order meant a name survived or was dropped according to where it
              happened to fall in the list, so the exits worth naming were as
              likely to go as any other. */
           const ordered = [...plazaPins]
-            .map((pin) => ({ pin, q: map.project(pin.lngLat) }))
-            .sort((a, b) => Number(onQueue(b.q)) - Number(onQueue(a.q)));
+            .map((pin) => ({ pin, q: map.project(pin.lngLat), level: queueLevelOn(pin.lngLat) }))
+            .sort((a, b) => Number(b.level >= 0) - Number(a.level >= 0));
 
           /* Reports still win outright: a plaza is a landmark the reader can
              find again by zooming, a report is the thing they came to see, and
              plazas draw above reports so an exit pin could cover one entirely. */
           const kept = reportPins.map((c) => map.project(c));
 
-          for (const { pin, q } of ordered) {
+          for (const { pin, q, level } of ordered) {
             if (kept.some((k) => near(k, q, gap))) {
               pin.el.style.display = "none";
               continue;
             }
             pin.el.style.display = "";
-            const level = queueLevelAt(q);
-            pin.el.dataset.ring = level >= 0 ? "off" : "on";
+            pin.el.dataset.ring = coversPin(q) ? "off" : "on";
             /* The name carries the condition, in the same three words and the
                same three colours the legend uses. An exit standing on a queue
                is the one the reader is looking for, and it was reading exactly

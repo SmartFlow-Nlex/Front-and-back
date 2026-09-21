@@ -1624,10 +1624,21 @@ export default function TrafficMapPanel({ title, subtitle, badge, endpoint, laye
            name needs to stay separate. */
         const PLATE_PAD = { far: 10, mid: 6, near: 3 } as const;
         const LABEL_H = 15;
-        /* A leader passing under someone else's plate reads as a line struck
-           through it, so leaders are collided with too -- as a thin band rather
-           than at the plate's full height. */
-        const LEAD_H = 6;
+        /* How much height a leader claims.
+
+           It is not the thickness of the rule, which is a pixel and a half. It
+           is how far another leader has to be before the two stop reading as a
+           pair. Four exits within a few pixels of each other at Bocaue each ran
+           a long rule out to the same side, and four near-parallel lines an
+           inch apart read as a bundle of wires laid over the map rather than as
+           four names pointing at four places. Claiming real height forces them
+           apart or makes the extra ones stand down, and either is better than
+           the bundle.
+
+           It shrinks as the view tightens, because by then the exits have
+           separated on their own and a tall band would only cost names that
+           had room. */
+        const LEAD_H = { far: 17, mid: 12, near: 8 } as const;
 
         type Box = { x0: number; x1: number; y0: number; y1: number };
         const overlaps = (a: Box, b: Box) =>
@@ -1748,6 +1759,7 @@ export default function TrafficMapPanel({ title, subtitle, badge, endpoint, laye
           const base = LEAD_BASE[tier];
           const tries = LEAD_TRIES[tier];
           const pad = PLATE_PAD[tier];
+          const leadH = LEAD_H[tier];
 
           /* What a callout has to stay clear of: the reports, every exit ring,
              and the callouts already placed. Reports are still the thing the
@@ -1776,8 +1788,8 @@ export default function TrafficMapPanel({ title, subtitle, badge, endpoint, laye
               rule: {
                 x0: side === "east" ? q.x : plateX,
                 x1: side === "east" ? plateX + w : q.x,
-                y0: q.y - LEAD_H / 2,
-                y1: q.y + LEAD_H / 2,
+                y0: q.y - leadH / 2,
+                y1: q.y + leadH / 2,
               },
             };
           };

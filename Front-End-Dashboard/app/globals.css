@@ -9672,24 +9672,33 @@ details[open] > .evidence-summary .evidence-close-label { display: inline; }
   left: var(--lead, 32px);
   top: 50%;
   transform: translateY(-50%);
-  padding: 2px 6.5px 2.5px;
+  /* Default leader colour; the congested and slow rules below override it
+     so the line matches the plate it lands on. */
+  --callout-line: #0e7490;
+  padding: 2.5px 7px 3px;
   border-radius: 5px;
-  font-size: 9.5px;
-  font-weight: 600;
-  letter-spacing: 0.022em;
+  font-size: 10px;
+  font-weight: 650;
+  letter-spacing: 0.015em;
   line-height: 1.3;
   white-space: nowrap;
   pointer-events: none;
   color: var(--text-primary);
   /* A plate rather than a text shadow: the shadow had to be stacked three deep
      to survive the basemap, which thickened the letterforms and left a grey
-     smear around every name. Lighter than the first plate -- this is map
-     labelling, and it was competing with the road it annotates. */
-  background: color-mix(in srgb, var(--bg-surface) 86%, transparent);
-  backdrop-filter: blur(6px) saturate(1.15);
-  -webkit-backdrop-filter: blur(6px) saturate(1.15);
-  border: 1px solid color-mix(in srgb, var(--border-default) 55%, transparent);
-  box-shadow: 0 1px 3px rgb(15 23 42 / 0.07);
+     smear around every name.
+
+     Opaque, where it used to be translucent. A name set out on a leader is
+     read at a glance and from a distance, and letting the basemap through
+     behind it put roads and place names between the letters -- the blur was
+     there to rescue exactly that, and not having the problem beats hiding it.
+     It also costs a backdrop-filter, which is the expensive part of drawing
+     twenty of these on a map that pans. */
+  background: var(--bg-surface);
+  border: 1px solid color-mix(in srgb, var(--border-default) 75%, transparent);
+  box-shadow:
+    0 1px 2px rgb(15 23 42 / 0.1),
+    0 3px 10px rgb(15 23 42 / 0.07);
 }
 
 /* The leader, running from the ring into the plate with no gap at either end.
@@ -9705,9 +9714,15 @@ details[open] > .evidence-summary .evidence-close-label { display: inline; }
   height: 1.5px;
   transform: translateY(-50%);
   /* Solid rather than a tinted line. A rule at three-quarter opacity vanished
-     into a dark basemap at the very zooms where names are furthest from their
-     rings and the rule is the only thing joining them. */
-  background: #14899f;
+     into the basemap at the very zooms where names are furthest from their
+     rings and the rule is the only thing joining them.
+
+     Cased in the surface colour, the way a road is cased on a map: a pixel and
+     a half of teal disappears against a motorway, a town name or a coastline,
+     and the casing is what lifts it off whatever it happens to cross. It also
+     means one rule reads clearly where it passes another. */
+  background: var(--callout-line);
+  box-shadow: 0 0 0 1.25px var(--bg-surface);
   opacity: 1;
 }
 
@@ -9722,7 +9737,8 @@ details[open] > .evidence-summary .evidence-close-label { display: inline; }
   width: 1.5px;
   height: 7px;
   transform: translateY(-50%);
-  background: #14899f;
+  background: var(--callout-line);
+  box-shadow: 0 0 0 1.25px var(--bg-surface);
   opacity: 1;
 }
 
@@ -9823,8 +9839,10 @@ details[open] > .evidence-summary .evidence-close-label { display: inline; }
   background: color-mix(in srgb, #e04434 13%, var(--bg-surface));
   font-weight: 700;
 }
-.custom-toll-marker[data-queue="slow"] .toll-pin-name::before { background: #e08a2e; opacity: 1; }
-.custom-toll-marker[data-queue="congested"] .toll-pin-name::before { background: #e04434; opacity: 1; }
+/* The leader carries the state as well as the plate, so a red name is joined
+   to its ring by a red line and the pair reads as one object. */
+.custom-toll-marker[data-queue="slow"] .toll-pin-name { --callout-line: #e08a2e; }
+.custom-toll-marker[data-queue="congested"] .toll-pin-name { --callout-line: #e04434; }
 
 :root[data-theme="dark"] .custom-toll-marker[data-queue="slow"] .toll-pin-name { color: #fbbf24; }
 :root[data-theme="dark"] .custom-toll-marker[data-queue="congested"] .toll-pin-name { color: #fca5a5; }

@@ -14,12 +14,12 @@ import {
   NO_OWNERS,
   addEvent,
   applyAtBoundary,
+  canvasMarks,
   createEngineBinding,
+  describeActiveEvents,
+  describeBoundary,
   describeOwner,
-  describeResolution,
-  describeYield,
-  eventProgress,
-  formatClock,
+  effectiveState,
   nextBoundaryAfter,
   ownershipKey,
   removeEvent,
@@ -27,6 +27,8 @@ import {
   scenarioLockedLanes,
   scenarioTimeS,
   stepToScenarioTime,
+  type CanvasMark,
+  type Incident,
   type ManualControls,
   type NewEventSpec,
   type Ownership,
@@ -34,6 +36,7 @@ import {
   type RoadFrame,
   type ScenarioEvent,
 } from "./scenarios/adapter";
+import ScenarioPanel, { type SkipView } from "./components/ScenarioPanel";
 
 const BACKEND = process.env.NEXT_PUBLIC_BACKEND_URL ?? "http://localhost:4000";
 
@@ -294,8 +297,8 @@ export default function AiSandboxPage() {
    * out of the way. Corridor starts open because nothing else means anything
    * until the route is set. */
   const [openSection, setOpenSection] =
-    useState<"corridor" | "interventions" | "baseline" | "confidence" | null>("corridor");
-  const toggleSection = (id: "corridor" | "interventions" | "baseline" | "confidence") =>
+    useState<"corridor" | "interventions" | "scenarios" | "baseline" | "confidence" | null>("corridor");
+  const toggleSection = (id: "corridor" | "interventions" | "scenarios" | "baseline" | "confidence") =>
     setOpenSection((cur) => (cur === id ? null : id));
   const [spanAnchorKm, setSpanAnchorKm] = useState<number | null>(null);
   /* The chips are a reframing tool, reached for occasionally, but nineteen of
@@ -456,8 +459,20 @@ export default function AiSandboxPage() {
    * incidents only. */
   const [scenarioEvents, setScenarioEvents] = useState<readonly ScenarioEvent[]>([]);
   const [owners, setOwners] = useState<Ownership>(NO_OWNERS);
+  /* The live-apply effect runs on every render, so it must not call a state setter each time
+   * even for an unchanged value: React counts passive effects that schedule an update, and
+   * fifty in a row without a quiet one raises "Maximum update depth exceeded". Ownership is
+   * published only when its key changes, tracked here. */
+  const ownersKeyRef = useRef(ownershipKey(NO_OWNERS));
+  const publishOwners = useCallback((next: Ownership) => {
+    const key = ownershipKey(next);
+    if (key === ownersKeyRef.current) return;
+    ownersKeyRef.current = key;
+    setOwners(next);
+  }, []);
   const [scenarioBinding] = useState(createEngineBinding);
-  const [skipProgress, setSkipProgress] = useState<number | null>(null);
+  /** A skip to the next phase in progress: what it skips through and where the engine has got to. */
+  const [skip, setSkip] = useState<SkipView | null>(null);
   /** When (on the scenario clock) the animation loop next has to re-apply. -Infinity: at the next step. */
   const scenarioDueRef = useRef(-Infinity);
   const scenarioSeqRef = useRef(0);
@@ -469,6 +484,8 @@ export default function AiSandboxPage() {
    * (which is not re-created when these change) always sees the latest.
    */
   const scenarioCtxRef = useRef<{ controls: ManualControls; events: readonly ScenarioEvent[]; frame: RoadFrame } | null>(null);
+  /** What the canvas draws for scenario events: where each is, its phase, and which incidents in the engine are the scenarios'. */
+  const scenarioOverlayRef = useRef<ScenarioOverlay | null>(null);
   /** Lanes a running scenario is blocking: shown closed, and the operator cannot reopen them. */
   const lockedLanes = scenarioLockedLanes(owners, laneCount);
   /**
@@ -928,6 +945,12 @@ export default function AiSandboxPage() {
   const scenarioRoad: Road = { laneCount, segmentLengthM: segLengthM, ...scenarioFrame };
   // Seconds since the end of warm-up, as of the last metrics refresh (a few times a second), for the events list.
   const scenarioNowS = scenarioTimeS(metrics?.elapsedS ?? 0, scenarioFrame);
+  /* What is actually on the road: the operator's settings with any running scenario laid over
+   * them. The readouts below (recommendation, before/after, baseline, the assistant's context)
+   * read THIS, not the operator's settings alone. */
+  const eff = effectiveState({ closedLanes, speedLimitKmh: speedLimit }, owners, scenarioEvents, scenarioNowS, laneCount);
+  const effIncidentCount = incidentCount + eff.scenarioIncidents;
+  const activeScenarioText = describeActiveEvents(eff.active);
 
   /* ── Confidence run ──────────────────────────────────────────────────────
    *
@@ -1006,14 +1029,15 @@ export default function AiSandboxPage() {
     const sim = simRef.current;
     if (!sim) return;
     scenarioCtxRef.current = { controls: manualControls, events: scenarioEvents, frame: scenarioFrame };
+    scenarioOverlayRef.current = { events: scenarioEvents, frame: scenarioFrame, isScenarioIncident: scenarioBinding.isScenarioIncident };
     const { owners: next } = scenarioBinding.apply(sim, manualControls, scenarioEvents, scenarioFrame);
     const now = scenarioTimeS(sim.time, scenarioFrame);
     const due = nextBoundaryAfter(scenarioEvents, roadOf(sim, scenarioFrame), now);
     scenarioDueRef.current = due === null ? Infinity : due;
-    setOwners((cur) => (ownershipKey(cur) === ownershipKey(next) ? cur : next));
+    publishOwners(next);
     // manualControls and scenarioFrame are rebuilt from the values listed on every render.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [closedLanes, speedLimit, closureM, closureEndM, zoneM, closureKm, closureEndKm, placingClosure, scenarioEvents, direction, fromKm, toKm, scenarioBinding]);
+  }, [closedLanes, speedLimit, closureM, closureEndM, zoneM, closureKm, closureEndKm, placingClosure, scenarioEvents, direction, fromKm, toKm, scenarioBinding, publishOwners]);
 
   // Animation + physics loop.
   useEffect(() => {
@@ -1045,10 +1069,7 @@ export default function AiSandboxPage() {
           if (ctx) {
             const r = applyAtBoundary(scenarioBinding, sim, ctx.controls, ctx.events, ctx.frame, scenarioDueRef.current);
             scenarioDueRef.current = r.dueS;
-            if (r.composition !== null) {
-              const next = r.composition.owners;
-              setOwners((cur) => (ownershipKey(cur) === ownershipKey(next) ? cur : next));
-            }
+            if (r.composition !== null) publishOwners(r.composition.owners);
           }
           simAccRef.current -= SIM_DT;
           guard++;
@@ -1060,11 +1081,11 @@ export default function AiSandboxPage() {
           setMetrics(sim.metrics());
         }
       }
-      render(ctx, canvas, sim, locationRef.current, marksRef.current, maxLaneRef.current, exitsRef.current);
+      render(ctx, canvas, sim, locationRef.current, marksRef.current, maxLaneRef.current, exitsRef.current, scenarioOverlayRef.current);
     };
     rafRef.current = requestAnimationFrame(loop);
     return () => cancelAnimationFrame(rafRef.current);
-  }, [running, simSpeed, scenarioBinding]);
+  }, [running, simSpeed, scenarioBinding, publishOwners]);
 
   // Incident placement: arm "placing" mode, then let the user click the
   // simulation to choose exactly where (which lane / how far along) the
@@ -1185,9 +1206,10 @@ export default function AiSandboxPage() {
             // The model reasons in 1-indexed lane numbers, the sim in 0-indexed
             // array positions. Convert on the way out and back again in
             // applyPlan() so the two never mix.
-            closedLanes: closedLanes.map((c, i) => (c ? i + 1 : 0)).filter(Boolean),
-            speedLimitKmh: speedLimit,
-            incidentCount,
+            // What is actually on the road (operator + running scenario), in the existing fields.
+            closedLanes: eff.closedLanes.map((c, i) => (c ? i + 1 : 0)).filter(Boolean),
+            speedLimitKmh: eff.speedLimitKmh,
+            incidentCount: effIncidentCount,
             exits: EXITS.map((x) => ({ exit_id: x.exit_id, exit_name: displayExitName(x.exit_name) })),
           },
         }),
@@ -1336,25 +1358,26 @@ export default function AiSandboxPage() {
 
   /* Skip to the next phase boundary of any scenario event. The engine is stepped
    * without rendering, in ~25 ms slices so the page stays responsive, and the
-   * metrics are refreshed once at the end. Pressing the button again while it runs
-   * stops it; a rebuild stops it too. */
+   * metrics are refreshed once at the end. The panel shows the simulated minutes
+   * done and left and a Cancel (cancelSkip); a rebuild stops it too. */
+  const cancelSkip = () => {
+    if (skipRef.current) skipRef.current.cancel = true;
+  };
   const skipToNextPhase = () => {
     const sim = simRef.current;
     if (!sim) return;
-    if (skipRef.current) {
-      skipRef.current.cancel = true;
-      return;
-    }
+    if (skipRef.current) return;
     const road = roadOf(sim, scenarioFrame);
     const from = scenarioTimeS(sim.time, road);
     const target = nextBoundaryAfter(scenarioEventsRef.current, road, from);
     if (target === null) return;
     const token = { cancel: false };
     skipRef.current = token;
-    setSkipProgress(0);
+    const what = describeBoundary(scenarioEventsRef.current, road, target, from);
+    setSkip({ label: what ? what.label : "the next phase", intervalStartS: what ? what.intervalStartS : from, targetS: target, nowS: from });
     const finish = () => {
       skipRef.current = null;
-      setSkipProgress(null);
+      setSkip(null);
       simAccRef.current = 0;
     };
     const pump = () => {
@@ -1364,7 +1387,8 @@ export default function AiSandboxPage() {
       }
       const r = stepToScenarioTime(sim, scenarioFrame, target, SIM_DT, 25, () => performance.now());
       if (!r.reached) {
-        setSkipProgress((scenarioTimeS(sim.time, scenarioFrame) - from) / (target - from));
+        const now = scenarioTimeS(sim.time, scenarioFrame);
+        setSkip((cur) => (cur ? { ...cur, nowS: now } : cur));
         setTimeout(pump, 0);
         return;
       }
@@ -1373,8 +1397,7 @@ export default function AiSandboxPage() {
       if (ctx) {
         const applied = applyAtBoundary(scenarioBinding, sim, ctx.controls, ctx.events, ctx.frame, -Infinity);
         scenarioDueRef.current = applied.dueS;
-        const next = applied.composition ? applied.composition.owners : NO_OWNERS;
-        setOwners((cur) => (ownershipKey(cur) === ownershipKey(next) ? cur : next));
+        publishOwners(applied.composition ? applied.composition.owners : NO_OWNERS);
       }
       setMetrics(sim.metrics());
       finish();
@@ -1382,26 +1405,9 @@ export default function AiSandboxPage() {
     setTimeout(pump, 0);
   };
 
-  /* No "Add event" panel exists yet, so while developing, events can be driven
-   * from the browser console:
-   *   sandboxScenarios.add({ variant: { family: "self_accident" }, lane: 1, positionKm: <km>,
-   *                          startMinutes: 1, duration: { kind: "p50" } })
-   *   sandboxScenarios.skip() · .remove("ev1") · .list()
-   * Development builds only. */
-  useEffect(() => {
-    if (process.env.NODE_ENV !== "development") return;
-    Object.defineProperty(window, "sandboxScenarios", {
-      value: { add: addScenarioEvent, remove: removeScenarioEvent, skip: skipToNextPhase, list: () => scenarioEventsRef.current },
-      configurable: true,
-    });
-    return () => {
-      Reflect.deleteProperty(window, "sandboxScenarios");
-    };
-  });
-
   const captureBaseline = () => {
     if (!metrics) return;
-    const closed = closedLanes
+    const closed = eff.closedLanes
       .map((c, i) => (c ? `L${i + 1}` : null))
       .filter(Boolean)
       .join(", ");
@@ -1414,8 +1420,10 @@ export default function AiSandboxPage() {
       takenWith:
         [
           closed ? `${closed} closed` : null,
-          speedLimit != null ? `${speedLimit} km/h zone` : null,
-          incidentCount > 0 ? `${incidentCount} incident${incidentCount === 1 ? "" : "s"}` : null,
+          eff.speedLimitKmh != null ? `${eff.speedLimitKmh} km/h zone` : null,
+          effIncidentCount > 0 ? `${effIncidentCount} incident${effIncidentCount === 1 ? "" : "s"}` : null,
+          // The scenario events running when it was taken, and the phase each was in.
+          ...activeScenarioText,
         ]
           .filter(Boolean)
           .join(" · ") || "a clear road",
@@ -1424,20 +1432,21 @@ export default function AiSandboxPage() {
 
   /* What each folded section reports. These must read as the state itself, not
    * as a label — "L1 closed, Km 0.27-0.60" is the reason folding is safe. */
-  const closedLaneList = closedLanes
+  const closedLaneList = eff.closedLanes
     .map((c, i) => (c ? `L${i + 1}` : null))
     .filter(Boolean)
     .join(", ");
   const interventionSummary =
     [
       closedLaneList ? `${closedLaneList} closed` : null,
-      closedLaneList ? `Km ${closureAtKm.toFixed(2)}–${closureEndAtKm.toFixed(2)}` : null,
-      incidentCount > 0 ? `${incidentCount} incident${incidentCount === 1 ? "" : "s"}` : null,
-      speedLimit != null ? `${speedLimit} km/h zone` : null,
+      closedLaneList ? `Km ${shownClosureFromKm.toFixed(2)}–${shownClosureToKm.toFixed(2)}` : null,
+      effIncidentCount > 0 ? `${effIncidentCount} incident${effIncidentCount === 1 ? "" : "s"}` : null,
+      eff.speedLimitKmh != null ? `${eff.speedLimitKmh} km/h zone` : null,
+      ...activeScenarioText,
     ]
       .filter(Boolean)
       .join(" · ") || "none applied";
-  const anyIntervention = closedLanes.some(Boolean) || speedLimit != null || incidentCount > 0;
+  const anyIntervention = eff.closedLanes.some(Boolean) || eff.speedLimitKmh != null || effIncidentCount > 0;
 
   /* Baseline capture is a three-step procedure and the panel now says so.
    * Throughput is counted over the run so far, so a snapshot taken seconds
@@ -1451,7 +1460,7 @@ export default function AiSandboxPage() {
   const activeStep = stepDone.findIndex((d) => !d) + 1; // 0 once all are done
   const stepCls = (n: number) =>
     `sandbox-step${stepDone[n - 1] ? " is-done" : activeStep === n ? " is-now" : ""}`;
-  const recommendation = getRecommendation(metrics, baseline, closedLanes, incidentCount, speedLimit);
+  const recommendation = getRecommendation(metrics, baseline, [...eff.closedLanes], effIncidentCount, eff.speedLimitKmh);
 
   // How wide the selected stretch of road actually is. Null when the corridor
   // lane table does not cover it — see lib/nlex-lanes.ts, which is deliberately
@@ -1670,6 +1679,7 @@ export default function AiSandboxPage() {
             <span><i style={{ background: CLASS_META[2].color }} /> Class 2 · medium</span>
             <span><i style={{ background: CLASS_META[3].color }} /> Class 3 · heavy</span>
             <span><i style={{ background: "#dc2626" }} /> stopped / incident</span>
+            <span><i style={{ background: "#f59e0b" }} /> scenario event</span>
           </div>
 
           {/* Before / after. The deltas exist as small tinted text on the metric
@@ -2065,51 +2075,6 @@ export default function AiSandboxPage() {
             summary={interventionSummary}
           >
 
-          {scenarioEvents.length > 0 && (
-            <div>
-              <span className="sandbox-mini-label">Scenario events · timed from the end of warm-up</span>
-              {scenarioEvents.map((e) => {
-                const p = eventProgress(e, scenarioNowS);
-                const bad = owners.invalid.find((i) => i.eventId === e.id);
-                const status = bad
-                  ? `not running: ${bad.problems.join("; ")}`
-                  : p.state === "pending"
-                    ? `starts in ${formatClock(p.startsInS)}`
-                    : p.state === "done"
-                      ? "finished"
-                      : p.phase
-                        ? `${p.phase.label} · ${formatClock(p.phaseRemainingS ?? 0)} left`
-                        : "running";
-                return (
-                  <div key={e.id} className={`sandbox-live-note${bad ? " warn" : ""}`}>
-                    <b>{e.name}</b> · {status}
-                    <br />
-                    {describeResolution(e)}
-                    {e.phases.map((ph) => (
-                      <span key={ph.id} style={{ display: "block", opacity: ph.skipped ? 0.65 : 1 }}>{ph.text}</span>
-                    ))}
-                    {owners.yielded.filter((y) => y.eventId === e.id).map((y) => (
-                      <b key={y.resource} style={{ display: "block", marginTop: 4 }}>{describeYield(y)}</b>
-                    ))}
-                    <button className="btn-muted" style={{ marginTop: 6 }} onClick={() => removeScenarioEvent(e.id)}>
-                      Remove
-                    </button>
-                  </div>
-                );
-              })}
-              <div className="sandbox-btn-row">
-                <button
-                  className="btn-muted"
-                  onClick={skipToNextPhase}
-                  disabled={skipProgress === null && nextBoundaryAfter(scenarioEvents, scenarioRoad, scenarioNowS) === null}
-                  title="Fast-forward without drawing to the next phase change of any event. Press again to stop."
-                >
-                  {skipProgress === null ? "Skip to next phase" : `Skipping… ${Math.round(skipProgress * 100)}% (stop)`}
-                </button>
-              </div>
-            </div>
-          )}
-
           <span className="sandbox-mini-label">Close a lane (traffic must merge out)</span>
           <div className="sandbox-lane-toggles">
             {Array.from({ length: laneCount }, (_, i) => (
@@ -2233,6 +2198,37 @@ export default function AiSandboxPage() {
             )}
           </div>
 
+          </RailSection>
+
+          <RailSection
+            title="Scenario events"
+            open={openSection === "scenarios"}
+            onToggle={() => toggleSection("scenarios")}
+            summary={
+              scenarioEvents.length === 0
+                ? "none"
+                : `${scenarioEvents.length} event${scenarioEvents.length === 1 ? "" : "s"} · ${activeScenarioText.length > 0 ? activeScenarioText[0] : "none running"}`
+            }
+          >
+            <ScenarioPanel
+              events={scenarioEvents}
+              owners={owners}
+              road={scenarioRoad}
+              nowS={scenarioNowS}
+              laneCount={laneCount}
+              fromKm={fromKm}
+              toKm={toKm}
+              kmAtPct={(pct) => kmAt((spanM * pct) / 100)}
+              pctAtKm={(km) => (spanM > 0 ? (mAt(km) / spanM) * 100 : 0)}
+              manualClosure={{ closedLanes, closurePoint: closureM, closureEnd: closureEndM }}
+              nextSeq={scenarioSeqRef.current + 1}
+              onAdd={addScenarioEvent}
+              onRemove={removeScenarioEvent}
+              skip={skip}
+              canSkip={nextBoundaryAfter(scenarioEvents, scenarioRoad, scenarioNowS) !== null}
+              onSkip={skipToNextPhase}
+              onCancelSkip={cancelSkip}
+            />
           </RailSection>
 
           <RailSection
@@ -2700,6 +2696,81 @@ function ClosureHint({
   );
 }
 
+/** What render() needs to draw scenario events. */
+type ScenarioOverlay = {
+  events: readonly ScenarioEvent[];
+  frame: RoadFrame;
+  /** True for an incident in the engine's list that a scenario put there. */
+  isScenarioIncident: (i: Incident) => boolean;
+};
+
+/** A hazard triangle for a scenario event; `faint` for one that has not started. */
+function drawScenarioMarker(ctx: CanvasRenderingContext2D, x: number, y: number, r: number, faint: boolean) {
+  ctx.save();
+  ctx.globalAlpha = faint ? 0.55 : 1;
+  ctx.fillStyle = "#f59e0b";
+  ctx.strokeStyle = "#1f2937";
+  ctx.lineWidth = 1.5;
+  ctx.beginPath();
+  ctx.moveTo(x, y - r);
+  ctx.lineTo(x + r * 1.05, y + r * 0.85);
+  ctx.lineTo(x - r * 1.05, y + r * 0.85);
+  ctx.closePath();
+  ctx.fill();
+  ctx.stroke();
+  ctx.fillStyle = "#1f2937";
+  ctx.font = "bold 10px system-ui";
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.fillText("!", x, y + r * 0.2);
+  ctx.restore();
+}
+
+/** A label per scenario event at its location: name, phase and time left; stacked so two never sit on top of each other. */
+function drawScenarioLabels(
+  ctx: CanvasRenderingContext2D,
+  marks: readonly CanvasMark[],
+  g: { xPx: (m: number) => number; roadTop: number; laneH: number; roadH: number; cssW: number; r: number },
+) {
+  const placed: { x0: number; x1: number; y0: number; y1: number }[] = [];
+  ctx.save();
+  ctx.font = "700 11px Inter, system-ui, sans-serif";
+  ctx.textAlign = "left";
+  ctx.textBaseline = "top";
+  for (const m of marks) {
+    const x = g.xPx(m.xM);
+    const shoulder = m.lane === null;
+    const laneY = shoulder ? g.roadTop + g.roadH - 3 : g.roadTop + (m.lane ?? 0) * g.laneH + g.laneH * 0.5;
+    const faint = m.state === "pending";
+    // An in-lane breakdown's obstacles are drawn as incidents once it starts; everything else gets a marker here.
+    if (m.kind !== "incident" || faint) drawScenarioMarker(ctx, x, laneY, g.r, faint);
+    const text = `${m.name} · ${m.text}`;
+    const w = ctx.measureText(text).width + 14;
+    const h = 18;
+    const lx = Math.max(4, Math.min(x - w / 2, g.cssW - w - 4));
+    // Above the marker; but the canvas prints its own header along the top edge of the road, so near the top go below it.
+    let ly = laneY - g.r - h - 3;
+    if (ly < g.roadTop + 20) ly = laneY + g.r + 3;
+    for (let tries = 0; tries < 6; tries++) {
+      const clash = placed.some((p) => lx < p.x1 && lx + w > p.x0 && ly < p.y1 && ly + h > p.y0);
+      if (!clash) break;
+      ly += h + 3;
+    }
+    placed.push({ x0: lx, x1: lx + w, y0: ly, y1: ly + h });
+    ctx.fillStyle = "rgba(15,23,42,0.9)";
+    roundRect(ctx, lx, ly, w, h, 4);
+    ctx.fill();
+    ctx.strokeStyle = faint ? "rgba(148,163,184,0.8)" : "#f59e0b";
+    ctx.lineWidth = 1.5;
+    ctx.setLineDash(faint ? [4, 3] : []);
+    ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.fillStyle = faint ? "#cbd5e1" : "#fde68a";
+    ctx.fillText(text, lx + 7, ly + 3.5);
+  }
+  ctx.restore();
+}
+
 function render(
   ctx: CanvasRenderingContext2D,
   canvas: HTMLCanvasElement,
@@ -2710,6 +2781,7 @@ function render(
   marks: { fromKm: number; toKm: number; direction: "NB" | "SB" },
   maxLaneH: number,
   exits: { name: string; km: number }[],
+  overlay: ScenarioOverlay | null,
 ) {
   const dpr = window.devicePixelRatio || 1;
   const cssW = canvas.clientWidth;
@@ -3011,6 +3083,11 @@ function render(
   // incidents
   for (const inc of sim.interventions.incidents) {
     const y = roadTop + inc.lane * laneH + laneH * 0.5;
+    // A scenario's obstacle is amber and triangular, so it cannot be mistaken for one the operator dropped.
+    if (overlay && overlay.isScenarioIncident(inc)) {
+      drawScenarioMarker(ctx, xPx(inc.x), y, Math.min(9, laneH * 0.36), false);
+      continue;
+    }
     ctx.fillStyle = "#dc2626";
     ctx.beginPath();
     ctx.arc(xPx(inc.x), y, Math.min(8, laneH * 0.32), 0, Math.PI * 2);
@@ -3020,6 +3097,18 @@ function render(
     ctx.textAlign = "center";
     ctx.textBaseline = "middle";
     ctx.fillText("!", xPx(inc.x), y);
+  }
+
+  // scenario events: a marker where each one is and a label with its phase and the time left in it
+  if (overlay) {
+    drawScenarioLabels(ctx, canvasMarks(overlay.events, roadOf(sim, overlay.frame), sim.time), {
+      xPx,
+      roadTop,
+      laneH,
+      roadH,
+      cssW,
+      r: Math.min(9, laneH * 0.36),
+    });
   }
 
   // direction arrow

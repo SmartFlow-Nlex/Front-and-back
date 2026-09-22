@@ -482,8 +482,13 @@ const LEVEL_TEXT: Readonly<Record<CalibrationLevel, string>> = {
   cause: "cause",
   vehicle: "vehicle",
   label: "collision type",
-  family: "the whole family",
+  family: "family",
 };
+
+/** A calibration level in words. */
+export function describeLevel(level: CalibrationLevel): string {
+  return LEVEL_TEXT[level];
+}
 
 /** Seconds as m:ss, or h:mm:ss from an hour up. */
 export function formatClock(totalS: number): string {
@@ -912,4 +917,150 @@ export function createEngineBinding(): EngineBinding {
       previous = NO_OWNERS;
     },
   };
+}
+
+/* ─────────────────────────────────────────────────────────────────────────────
+   Views for the UI. Everything the Add panel, the event rows, the readouts and
+   the canvas show is built here from the stored events, so it is tested without
+   a browser and the components only lay it out.
+───────────────────────────────────────────────────────────────────────────── */
+
+export type ResolutionView = {
+  /** "47 min · sampled". */
+  readonly headline: string;
+  /** "Level: cause × vehicle · n = 1,446"; null for a duration the operator typed in (no calibration behind it). */
+  readonly calibration: string | null;
+  /** "Low sample (n = 129)" when the entry behind the duration has fewer than LOW_SAMPLE_N events. */
+  readonly lowSample: string | null;
+  /** "Capped at 217.2 min (from cause × vehicle)" when a sampled draw hit the cap. */
+  readonly capped: string | null;
+  /** What was drawn before the cap, and what the cap is. Present exactly when `capped` is. */
+  readonly cappedDetail: string | null;
+};
+
+/** The resolved duration as the operator reads it. Built from the stored resolution only. */
+export function resolutionView(r: ResolvedDuration): ResolutionView {
+  const how = r.mode === "sampled" ? "sampled" : r.mode === "p50" ? "median" : r.mode === "p90" ? "90th percentile" : "entered by you";
+  const calibrated = r.mode !== "manual";
+  const capped = r.capped && r.capMinutes !== null && r.capLevel !== null && r.capN !== null;
+  return {
+    headline: `${fmtMinutes(r.minutes)} · ${how}`,
+    calibration: calibrated ? `Level: ${LEVEL_TEXT[r.level]} · n = ${r.n.toLocaleString("en-US")}` : null,
+    lowSample: calibrated && r.lowSample ? `Low sample (n = ${r.n.toLocaleString("en-US")})` : null,
+    capped: capped && r.capMinutes !== null && r.capLevel !== null ? `Capped at ${fmtMinutes(r.capMinutes)} (from ${LEVEL_TEXT[r.capLevel]})` : null,
+    cappedDetail:
+      capped && r.capLevel !== null && r.capN !== null
+        ? `Drew ${fmtMinutes(r.uncappedMinutes)}. The cap is the 99th percentile of the ${LEVEL_TEXT[r.capLevel]} level (n = ${r.capN.toLocaleString("en-US")}).`
+        : null,
+  };
+}
+
+/** A running event, with the phase it is in and whether it is standing aside for something the operator has set. */
+export type ActiveEvent = { readonly eventId: string; readonly name: string; readonly phaseLabel: string; readonly suspended: boolean };
+
+/**
+ * What is actually on the road, as the readouts (recommendation, before/after,
+ * baseline, the assistant's context) should see it: the operator's settings with
+ * the scenario's laid over them. Not the operator's settings alone.
+ */
+export type EffectiveState = {
+  readonly closedLanes: readonly boolean[];
+  readonly speedLimitKmh: number | null;
+  /** Events with an obstacle on the road now (a truck is one, however many engine slots it takes). */
+  readonly scenarioIncidents: number;
+  /** Events that are running and valid, with the phase each is in. */
+  readonly active: readonly ActiveEvent[];
+};
+
+export function effectiveState(
+  manual: Pick<ManualControls, "closedLanes" | "speedLimitKmh">,
+  owners: Ownership,
+  events: readonly ScenarioEvent[],
+  scenarioT: number,
+  laneCount: number,
+): EffectiveState {
+  const locked = scenarioLockedLanes(owners, laneCount);
+  const invalid = new Set(owners.invalid.map((i) => i.eventId));
+  const suspended = new Set(owners.yielded.map((y) => y.eventId));
+  const active: ActiveEvent[] = [];
+  for (const e of events) {
+    if (invalid.has(e.id) || eventState(e, scenarioT) !== "active") continue;
+    const phase = phaseAt(e, scenarioT);
+    active.push({ eventId: e.id, name: e.name, phaseLabel: phase === null ? "running" : phase.label, suspended: suspended.has(e.id) });
+  }
+  return {
+    closedLanes: Array.from({ length: laneCount }, (_, i) => Boolean(manual.closedLanes[i]) || locked[i]),
+    speedLimitKmh: owners.speedZone === null ? manual.speedLimitKmh : owners.speedZone.limitKmh,
+    scenarioIncidents: new Set(owners.incidents.map((i) => i.eventId)).size,
+    active,
+  };
+}
+
+/** "Minor collision #1 — Lane blocked: awaiting response", one per running event; a suspended one says so. */
+export function describeActiveEvents(active: readonly ActiveEvent[]): readonly string[] {
+  return active.map((a) => `${a.name} — ${a.phaseLabel}${a.suspended ? " (suspended)" : ""}`);
+}
+
+/**
+ * What a "skip to next phase" to `targetS` is skipping through, for its progress
+ * line: the event and phase that end at that boundary, and when that interval began
+ * (the start of the phase, so time already spent in it counts as done). A skip to an
+ * event's start has no phase yet: it is the wait for the event, from `nowS`.
+ */
+export function describeBoundary(events: readonly ScenarioEvent[], road: Road, targetS: number, nowS: number): { readonly label: string; readonly intervalStartS: number } | null {
+  const eps = 1e-9;
+  for (const e of events) {
+    if (eventProblems(e, road).length > 0) continue;
+    if (Math.abs(e.startS - targetS) < eps) return { label: `Waiting for ${e.name} to start`, intervalStartS: nowS };
+  }
+  for (const e of events) {
+    if (eventProblems(e, road).length > 0) continue;
+    const ends = Math.abs(e.endS - targetS) < eps || e.phases.some((p) => !p.skipped && Math.abs(e.startS + p.offsetS - targetS) < eps);
+    if (!ends) continue;
+    const phase = phaseAt(e, nowS);
+    return phase === null ? { label: e.name, intervalStartS: nowS } : { label: `${e.name} — ${phase.label}`, intervalStartS: e.startS + phase.offsetS };
+  }
+  return null;
+}
+
+export type CanvasMark = {
+  readonly eventId: string;
+  readonly name: string;
+  readonly kind: "incident" | "closure" | "speed_zone";
+  readonly state: "pending" | "active";
+  /** Metres along the stretch, in the direction of travel. */
+  readonly xM: number;
+  /** Engine lane index; null for a shoulder breakdown, which is beside the road. */
+  readonly lane: number | null;
+  /** The phase label and time left in it, or when the event starts. */
+  readonly text: string;
+};
+
+/** One mark per event that has not finished and can run on this road, for the canvas to label. Pure; the canvas calls it each frame. */
+export function canvasMarks(events: readonly ScenarioEvent[], road: Road, simTimeS: number): readonly CanvasMark[] {
+  const t = scenarioTimeS(simTimeS, road);
+  const marks: CanvasMark[] = [];
+  for (const e of events) {
+    if (eventProblems(e, road).length > 0) continue;
+    const state = eventState(e, t);
+    if (state === "done") continue;
+    const effect = effectOf(e.variant.family);
+    const lane = e.lane === null ? null : operatorLaneToEngineIndex(e.lane, road.laneCount);
+    const phase = phaseAt(e, t);
+    marks.push({
+      eventId: e.id,
+      name: e.name,
+      kind: effect === "incident" ? "incident" : effect === "closure" ? "closure" : "speed_zone",
+      state: state === "pending" ? "pending" : "active",
+      xM: road.metresAt(e.positionKm),
+      lane,
+      text:
+        state === "pending"
+          ? `Starts in ${formatClock(e.startS - t)}`
+          : phase === null
+            ? "Running"
+            : `${phase.label} · ${formatClock(e.startS + phase.offsetS + phase.durationS - t)} left`,
+    });
+  }
+  return marks;
 }

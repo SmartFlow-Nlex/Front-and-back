@@ -422,3 +422,26 @@ export function defaultOperatorLane(template: ScenarioTemplate, laneCount: numbe
       return assertNever(d);
   }
 }
+
+/* ─────────────────────────────────────────────────────────────────────────────
+   Families the engine cannot represent yet
+   Offered in the Add panel so the operator can see they exist, disabled. Each
+   needs something simulation.ts does not have: a weather or surface effect, a
+   blocked-everything closure with recovery, or a timed lane closure that is not
+   an incident. Nothing here reaches the engine.
+───────────────────────────────────────────────────────────────────────────── */
+export const REQUIRES_ENGINE_UPDATE = "Requires engine update";
+
+export type UnsupportedFamily = {
+  readonly id: "rain" | "flood" | "overturn" | "scheduled_roadworks";
+  readonly displayName: string;
+  /** What the engine would need. */
+  readonly needs: string;
+};
+
+export const UNSUPPORTED_FAMILIES: readonly UnsupportedFamily[] = [
+  { id: "rain", displayName: "Heavy rain", needs: "a reduced-grip and visibility model: the engine has one fixed set of driver parameters" },
+  { id: "flood", displayName: "Flooding", needs: "a partial-width, reduced-speed surface: the engine has closures and one speed zone, not a wet lane" },
+  { id: "overturn", displayName: "Overturned vehicle", needs: "a multi-lane obstruction with a recovery sequence: the engine's obstacles are 5 m stalled vehicles" },
+  { id: "scheduled_roadworks", displayName: "Scheduled roadworks", needs: "a planned, repeating lane closure with its own calendar: the engine has one closure stretch" },
+];

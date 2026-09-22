@@ -6170,6 +6170,74 @@ body:has(.sandbox-main.is-expanded) {
 }
 /* A lane a scenario event is blocking: shown closed, and the operator cannot reopen it. */
 .sandbox-lane-toggles button:disabled { cursor: not-allowed; }
+
+/* ── Scenario events: the Add panel and the event list ─────────────────────── */
+.sandbox-scn-families { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+.sandbox-scn-fam {
+  text-align: left;
+  border: 1px solid #d7deec;
+  background: var(--bg-surface);
+  border-radius: var(--radius-sm);
+  padding: 7px 8px;
+  font-size: 0.78rem;
+  font-weight: 700;
+  line-height: 1.25;
+  color: var(--text-primary);
+  cursor: pointer;
+}
+.sandbox-scn-fam.active { background: var(--color-info-bg); border-color: var(--color-info-border); color: var(--color-info); }
+.sandbox-scn-fam:disabled { opacity: 0.6; cursor: not-allowed; }
+.sandbox-scn-fam small { display: block; margin-top: 2px; font-size: 0.66rem; font-weight: 600; color: var(--text-muted); }
+.sandbox-scn-desc { margin: 8px 0 0; font-size: 0.72rem; line-height: 1.4; color: var(--text-muted); }
+/* Controls sit on the same baseline even when one label wraps, and number boxes match the selects beside them. */
+.sandbox-scn-row { display: flex; align-items: flex-end; gap: 8px; }
+.sandbox-scn-row > label { flex: 1; min-width: 0; }
+.sandbox-scn label > .sandbox-km-input { display: block; width: 100%; height: 40px; margin-top: 6px; padding: 0 10px; font-size: 0.88rem; box-sizing: border-box; }
+.sandbox-scn .btn-primary:disabled { opacity: 0.45; cursor: not-allowed; }
+.sandbox-scn-res {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  margin-top: 8px;
+  font-size: 0.78rem;
+  line-height: 1.35;
+  color: var(--text-secondary);
+}
+.sandbox-scn-res b { color: var(--text-primary); font-size: 0.9rem; }
+.sandbox-scn-badges { display: flex; flex-wrap: wrap; gap: 6px; }
+.sandbox-scn-badge {
+  font-style: normal;
+  font-size: 0.68rem;
+  font-weight: 700;
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px solid;
+}
+.sandbox-scn-badge.low { background: var(--color-warning-bg); border-color: var(--color-warning-border); color: var(--color-warning); }
+.sandbox-scn-badge.cap { background: var(--color-info-bg); border-color: var(--color-info-border); color: var(--color-info); }
+.sandbox-scn-detail { font-size: 0.7rem; color: var(--text-muted); }
+.sandbox-scn-phases { list-style: none; margin: 6px 0 0; padding: 0; font-size: 0.76rem; line-height: 1.5; color: var(--text-secondary); }
+.sandbox-scn-phases li { padding-left: 10px; border-left: 2px solid var(--border-default); }
+.sandbox-scn-phases li.is-now { border-left-color: var(--color-info); color: var(--text-primary); font-weight: 700; }
+.sandbox-scn-phases li.is-skipped { opacity: 0.6; }
+.sandbox-scn-bar { position: relative; height: 8px; margin-top: 6px; border-radius: 4px; background: #e5eaf3; overflow: hidden; }
+.sandbox-scn-bar > i { position: absolute; left: 0; top: 0; bottom: 0; background: var(--color-info); }
+.sandbox-scn-bar > b { position: absolute; top: 0; bottom: 0; width: 2px; background: var(--bg-surface); }
+.sandbox-scn-event { margin-top: 8px; padding: 9px 10px; border: 1px solid var(--border-default); border-radius: var(--radius-sm); display: flex; flex-direction: column; }
+.sandbox-scn-event.is-invalid { border-color: var(--color-warning-border); background: var(--color-warning-bg); }
+.sandbox-scn-event-head { display: flex; align-items: center; gap: 8px; }
+.sandbox-scn-event-head b { font-size: 0.86rem; }
+.sandbox-scn-event-head .btn-muted { margin-left: auto; padding: 3px 9px; font-size: 0.72rem; }
+.sandbox-scn-meta { margin-top: 4px; font-size: 0.72rem; color: var(--text-muted); }
+.sandbox-scn-chip { font-size: 0.66rem; font-weight: 700; padding: 2px 8px; border-radius: 999px; background: #e7ecf5; color: #3b4f6b; }
+.sandbox-scn-chip.active { background: var(--color-info-bg); color: var(--color-info); }
+.sandbox-scn-chip.done { background: #ddf3e7; color: #1d7a4c; }
+.sandbox-scn-chip.bad { background: var(--color-warning-bg); color: var(--color-warning); }
+.sandbox-scn-note { margin-top: 6px; font-size: 0.74rem; font-weight: 700; color: var(--color-warning); }
+.sandbox-scn-skip { display: flex; flex-direction: column; gap: 4px; padding: 9px 10px; border: 1px solid var(--color-info-border); border-radius: var(--radius-sm); background: var(--color-info-bg); font-size: 0.78rem; color: var(--text-secondary); }
+.sandbox-scn-skip-head { display: flex; align-items: center; gap: 8px; }
+.sandbox-scn-skip-head b { color: var(--text-primary); }
+.sandbox-scn-cancel { margin-left: auto; font-weight: 800; }
 /* In the full-screen bar the toggles sit in an unsized flex row, so `flex: 1`
    collapsed them to slivers and the closed state was hard to see on the dark
    background. Give them a real size and a dark-bar palette. */

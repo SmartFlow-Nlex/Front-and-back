@@ -34,13 +34,17 @@ import {
   addEvent,
   applyAtBoundary,
   boundaryTimes,
+  canvasMarks,
   composeInterventions,
   createEngineBinding,
   MANUAL_CLOSURE_MESSAGE,
   SAME_STRETCH_TOL_M,
+  describeActiveEvents,
+  describeBoundary,
   describeOwner,
   describeResolution,
   describeYield,
+  effectiveState,
   eventProblems,
   eventProgress,
   eventState,
@@ -50,6 +54,7 @@ import {
   phaseAt,
   removeEvent,
   resourceWindows,
+  resolutionView,
   roadOf,
   scenarioLockedLanes,
   scenarioTimeS,
@@ -60,6 +65,7 @@ import {
   type ManualControls,
   type ManualInterventions,
   type NewEventSpec,
+  type Ownership,
   type Road,
   type RoadFrame,
   type ScenarioEvent,
@@ -76,6 +82,8 @@ import {
   causeKey,
   causeVehicleKey,
   defaultOperatorLane,
+  REQUIRES_ENGINE_UPDATE,
+  UNSUPPORTED_FAMILIES,
   defaultVariant,
   phaseOffsetFractions,
   vehicleKey,
@@ -1186,6 +1194,130 @@ function engineInSync(ts: TrafficSim, controls: ManualControls, events: readonly
   check("format: clock shows m:ss and h:mm:ss", formatClock(0) === "0:00" && formatClock(75) === "1:15" && formatClock(3725) === "1:02:05" && formatClock(-5) === "0:00");
 }
 
+// --- the families the engine cannot represent yet
+check(
+  "unsupported families: rain, flood, overturn and scheduled roadworks, each with what the engine lacks, none clashing with a supported family",
+  UNSUPPORTED_FAMILIES.map((u) => u.id).join() === "rain,flood,overturn,scheduled_roadworks" && REQUIRES_ENGINE_UPDATE === "Requires engine update" &&
+    new Set(UNSUPPORTED_FAMILIES.map((u) => u.displayName)).size === 4 && UNSUPPORTED_FAMILIES.every((u) => u.displayName.trim().length > 0 && u.needs.trim().length > 20 && !FAMILIES.some((f) => String(f) === u.id)),
+);
+
+// --- the resolved duration as the operator reads it
+{
+  const p50 = resolutionView(must([], inLaneSpec("truck", 3, 330, 0, { kind: "p50" }), 1).event.resolved);
+  const engineTruck = cal.hierarchy[causeVehicleKey("breakdown_in_lane", "engine", "truck")];
+  check("resolution view: a median names the level and n, and carries no badge", engineTruck !== undefined && p50.headline === `${Number(engineTruck.quantiles.p50.toFixed(1))} min · median` && p50.calibration === `Level: cause × vehicle · n = ${engineTruck.n.toLocaleString("en-US")}` && p50.lowSample === null && p50.capped === null && p50.cappedDetail === null);
+  const hnrView = resolutionView(must([], { variant: { family: "minor_collision", label: "hit_and_run" }, lane: 1, positionKm: kmOf(330), startMinutes: 0, duration: { kind: "p50" } }, 1).event.resolved);
+  check("resolution view: hit-and-run shows the badge \"Low sample (n = 129)\"", hnrView.lowSample === "Low sample (n = 129)" && hnrView.calibration === "Level: collision type · n = 129");
+  const manualHnr = resolutionView(must([], { variant: { family: "minor_collision", label: "hit_and_run" }, lane: 1, positionKm: kmOf(330), startMinutes: 0, duration: manualMinutes(20) }, 1).event.resolved);
+  check("resolution view: a duration the operator typed claims no calibration and no badge", manualHnr.headline === "20 min · entered by you" && manualHnr.calibration === null && manualHnr.lowSample === null && manualHnr.capped === null);
+  let cappedEvent: ScenarioEvent | undefined;
+  for (let seed = 1; seed <= 400 && cappedEvent === undefined; seed++) {
+    const e = must([], { variant: { family: "breakdown_in_lane", vehicle: "car", cause: "mechanical" }, lane: 3, positionKm: kmOf(330), startMinutes: 0, duration: { kind: "sampled", seed } }, 1).event;
+    if (e.resolved.capped) cappedEvent = e;
+  }
+  const cv = cappedEvent === undefined ? null : resolutionView(cappedEvent.resolved);
+  check(
+    "resolution view: a capped draw says \"Capped at X min (from <level>)\" and what it drew; in-lane car x mechanical caps from the vehicle level",
+    cappedEvent !== undefined && cv !== null && cv.capped === `Capped at ${Number(cappedEvent.resolved.capMinutes?.toFixed(1))} min (from vehicle)` && cv.cappedDetail !== null && cv.cappedDetail.startsWith("Drew ") && cv.cappedDetail.includes("(n = 2,047)") && cv.lowSample === "Low sample (n = 278)" === (278 < MIN_N),
+    cv === null ? "no capped draw in 400 seeds" : cv.capped ?? "",
+  );
+}
+
+// --- what the readouts see: the operator's settings with the scenario laid over them
+{
+  const manual = { closedLanes: [false, false, true, false], speedLimitKmh: null };
+  const truckEvent = must([], inLaneSpec("truck", 3, 330, 0, manualMinutes(10)), 1).event;
+  const collisionEvent = must([truckEvent].length ? [truckEvent] : [], collisionSpec("multi_vehicle_collision", 1, 200, 20, manualMinutes(30)), 2);
+  const events = collisionEvent.events;
+  const at = (min: number) => {
+    const c = composeInterventions({ ...idle, closedLanes: manual.closedLanes, incidents: [] }, events, abs(min), road600);
+    return effectiveState(manual, c.owners, events, min * 60, 4);
+  };
+  const early = at(1);
+  check("effective state: a truck stall is ONE scenario incident (three engine slots), the operator's own lane is kept, nothing else driven", early.scenarioIncidents === 1 && early.closedLanes.join() === "false,false,true,false" && early.speedLimitKmh === null && early.active.length === 1 && early.active[0].name === "Breakdown in a lane #1" && early.active[0].phaseLabel === "Waiting for responder");
+  // With no closure of their own the operator's lane 3 closed WHILE the event owns the stretch would ride on it; here they have none, so it owns it.
+  const cleanManual = { closedLanes: [false, false, false, false], speedLimitKmh: null };
+  const runClosure = composeInterventions({ ...idle, incidents: [] }, events, abs(21), road600);
+  const later = effectiveState(cleanManual, runClosure.owners, events, 21 * 60, 4);
+  check("effective state: a running closure adds its lanes; only running events are listed, each with its phase", later.closedLanes.join() === "true,true,false,false" && later.scenarioIncidents === 0 && later.active.map((a) => a.name).join() === "Multi-vehicle collision #2" && describeActiveEvents(later.active)[0] === "Multi-vehicle collision #2 — Lanes blocked: awaiting response");
+  // The operator has a closure elsewhere: the event stands aside, and the readout must not claim it is acting.
+  const standingAside = at(21);
+  check("effective state: an event that stands aside for the operator's closure is listed as suspended, and adds no lane", standingAside.closedLanes.join() === "false,false,true,false" && standingAside.active[0].suspended && describeActiveEvents(standingAside.active)[0] === "Multi-vehicle collision #2 — Lanes blocked: awaiting response (suspended)");
+  const shoulderEvents = must([], shoulderSpec(330, 0, manualMinutes(10)), 1).events;
+  const sc = composeInterventions({ ...idle, incidents: [] }, shoulderEvents, abs(1), road600);
+  check("effective state: a shoulder breakdown's speed zone shows as the limit in force", effectiveState({ closedLanes: [false, false, false, false], speedLimitKmh: null }, sc.owners, shoulderEvents, 60, 4).speedLimitKmh === 70);
+  const bad = composeInterventions({ ...idle, closedLanes: [false, false], incidents: [] }, events, abs(1), { ...road600, laneCount: 2 });
+  check("effective state: an event the road no longer suits is not listed as running", effectiveState({ closedLanes: [false, false], speedLimitKmh: null }, bad.owners, events, 60, 2).active.every((a) => a.name !== "Multi-vehicle collision #2") && bad.owners.invalid.length >= 1);
+}
+
+// --- what a skip is skipping through
+{
+  const multi = must([], collisionSpec("multi_vehicle_collision", 1, 330, 2, manualMinutes(40)), 1);
+  const e = multi.event;
+  const first = describeBoundary(multi.events, road600, e.startS, 0);
+  const tow = e.phases[1];
+  const inBlocked = describeBoundary(multi.events, road600, e.startS + tow.offsetS, e.startS + 30);
+  const atEnd = describeBoundary(multi.events, road600, e.endS, e.startS + e.phases[2].offsetS + 5);
+  check("skip label: to an event's start it is the wait for it, from now", first !== null && first.label === "Waiting for Multi-vehicle collision #1 to start" && first.intervalStartS === 0);
+  check("skip label: through a phase it names the phase and counts from its start (time already in it is done)", inBlocked !== null && inBlocked.label === "Multi-vehicle collision #1 — Lanes blocked: awaiting response" && inBlocked.intervalStartS === e.startS);
+  check("skip label: to the event's end it is the last phase", atEnd !== null && atEnd.label === "Multi-vehicle collision #1 — Scene clearing: lanes reopened" && near(atEnd.intervalStartS, e.startS + e.phases[2].offsetS, 1e-9));
+  check("skip label: a time that is no boundary has none", describeBoundary(multi.events, road600, 12345.678, 0) === null);
+}
+
+// --- what the canvas labels
+{
+  const { events } = must(must(must([], inLaneSpec("bus", 3, 150, 1, manualMinutes(10)), 1).events, shoulderSpec(450, 0, manualMinutes(10)), 2).events, collisionSpec("self_accident", 2, 300, 12, manualMinutes(30)), 3);
+  const m0 = canvasMarks(events, road600, abs(0.5));
+  check("canvas marks: before start an event is marked as pending with when it starts; a running one shows its phase and time left", m0.length === 3 && m0.find((m) => m.eventId === "ev1")?.state === "pending" && m0.find((m) => m.eventId === "ev1")?.text === "Starts in 0:30" && m0.find((m) => m.eventId === "ev2")?.state === "active" && (m0.find((m) => m.eventId === "ev2")?.text ?? "").startsWith("Waiting for responder · "));
+  check("canvas marks: position, engine lane (shoulder: none) and kind", m0.find((m) => m.eventId === "ev1")?.xM === 150 && m0.find((m) => m.eventId === "ev1")?.lane === 2 && m0.find((m) => m.eventId === "ev1")?.kind === "incident" && m0.find((m) => m.eventId === "ev2")?.lane === null && m0.find((m) => m.eventId === "ev2")?.kind === "speed_zone" && m0.find((m) => m.eventId === "ev3")?.kind === "closure" && m0.find((m) => m.eventId === "ev3")?.lane === 1);
+  check("canvas marks: finished events are not marked, and neither is an event the road no longer suits", canvasMarks(events, road600, abs(200)).length === 0 && canvasMarks(events, { ...road600, laneCount: 2 }, abs(0.5)).every((m) => m.eventId !== "ev1"));
+}
+
+// --- the live-apply effect re-applies on every render: the composition must settle, or the page loops
+{
+  let s = 20260922;
+  const rnd = (): number => { s = (Math.imul(s ^ (s >>> 15), 1 | s) + 0x6d2b79f5) | 0; return ((s ^ (s >>> 14)) >>> 0) / 4294967296; };
+  const pickOne = <T,>(a: readonly T[]): T => a[Math.floor(rnd() * a.length)];
+  const variants: readonly ScenarioVariant[] = [
+    { family: "breakdown_in_lane", vehicle: "truck", cause: "engine" },
+    { family: "breakdown_shoulder", vehicle: "car", cause: "engine" },
+    { family: "minor_collision", label: "rear_end" },
+    { family: "multi_vehicle_collision" },
+    { family: "self_accident" },
+  ];
+  let notSettled = 0;
+  const trials = 1500;
+  for (let trial = 0; trial < trials; trial++) {
+    let evs: readonly ScenarioEvent[] = [];
+    const n = 1 + Math.floor(rnd() * 4);
+    for (let i = 1; i <= n; i++) {
+      const v = pickOne(variants);
+      const r = addEvent(evs, { variant: v, lane: v.family === "breakdown_shoulder" ? null : 1 + Math.floor(rnd() * 4), positionKm: kmOf(20 + rnd() * 560), startMinutes: Math.floor(rnd() * 10), duration: manualMinutes(2 + Math.floor(rnd() * 40)) }, road600, i, noClosure);
+      if (r.ok) evs = r.events;
+    }
+    const cp = rnd() < 0.5 ? 330 : 100 + rnd() * 200;
+    const manual: ManualInterventions = {
+      closedLanes: [rnd() < 0.3, rnd() < 0.3, rnd() < 0.3, rnd() < 0.3],
+      closurePoint: cp,
+      closureEnd: cp + 50 + rnd() * 100,
+      showClosurePreview: false,
+      speedLimitKmh: rnd() < 0.3 ? 50 : null,
+      speedZone: [180, 480],
+      incidents: [],
+    };
+    const t = 60 + rnd() * 3000;
+    let prev: Ownership = NO_OWNERS;
+    const keys: string[] = [];
+    for (let k = 0; k < 6; k++) {
+      prev = composeInterventions(manual, evs, t, road600, prev).owners;
+      keys.push(ownershipKey(prev));
+    }
+    // From the second apply on, every result is the same: a fixed point that holds.
+    if (!keys.slice(1).every((x) => x === keys[1])) notSettled++;
+  }
+  check(`compose settles: re-applying the same inputs with the previous ownership fed back is a fixed point after one apply (${trials} random states: events, operator closures and limits)`, notSettled === 0, `${notSettled} did not settle`);
+}
+
 // --- the page uses the adapter and nothing else to write scenario state; the engine and replicate() are untouched
 {
   const pageSource = readFileSync(new URL("../page.tsx", import.meta.url), "utf8");
@@ -1193,6 +1325,16 @@ function engineInSync(ts: TrafficSim, controls: ManualControls, events: readonly
   check("page: the confidence run says why it is off while events exist", (pageSource.match(/Confidence runs don't yet support timed events\./g) ?? []).length === 1);
   check("page: replicate() is still called exactly once (at its one call site), and the confidence run refuses while events exist", (pageSource.match(/= replicate\(/g) ?? []).length === 1 && /if \(scenarioEvents\.length > 0\) return;/.test(pageSource));
   check("engine source does not mention the adapter or scenario events", !/adapter|ScenarioEvent|composeInterventions/.test(engineSource));
+  // phase 3: the readouts read the EFFECTIVE state, and the assistant is told it through its existing fields only
+  check("page: ownership state is set in ONE place, and only when its key changed (a setter called on every render of the live-apply effect raised React's maximum-update-depth warning)", (pageSource.match(/\bsetOwners\(/g) ?? []).length === 1 && /const publishOwners = useCallback\(\(next: Ownership\) => \{\s*const key = ownershipKey\(next\);\s*if \(key === ownersKeyRef\.current\) return;/.test(pageSource) && !/TEMP-DEBUG/.test(pageSource));
+  check("page: the console hook is gone now that the panel exists (nothing is exposed on window)", !/sandboxScenarios/.test(pageSource) && !/Object\.defineProperty\(window/.test(pageSource));
+  check("page: recommendation, before/after, baseline and folded summary read the effective state", /getRecommendation\(metrics, baseline, \[\.\.\.eff\.closedLanes\], effIncidentCount, eff\.speedLimitKmh\)/.test(pageSource) && /const anyIntervention = eff\.closedLanes\.some\(Boolean\) \|\| eff\.speedLimitKmh != null \|\| effIncidentCount > 0;/.test(pageSource) && /\.\.\.activeScenarioText,\s*\]\s*\.filter\(Boolean\)\s*\.join\(" · "\) \|\| "a clear road"/.test(pageSource) && /\.\.\.activeScenarioText,\s*\]\s*\.filter\(Boolean\)\s*\.join\(" · "\) \|\| "none applied"/.test(pageSource));
+  const ctxStart = pageSource.indexOf("context: {");
+  const ctxEnd = pageSource.indexOf("exits: EXITS.map", ctxStart);
+  const ctxSource = pageSource.slice(ctxStart, ctxEnd);
+  const ctxKeys = [...ctxSource.matchAll(/^\s+(\w+):/gm)].map((m) => m[1]);
+  check("page: the assistant's context carries the effective closed lanes, speed limit and incident count, in the EXISTING fields only", /^\s+laneCount,$/m.test(ctxSource) && ctxKeys.join() === "segmentLengthM,closedLanes,speedLimitKmh,incidentCount" && /closedLanes: eff\.closedLanes\.map/.test(pageSource) && /speedLimitKmh: eff\.speedLimitKmh,/.test(pageSource) && /incidentCount: effIncidentCount,/.test(pageSource), ctxKeys.join());
+  check("page: scenario incidents are drawn differently from the operator's, and each event is labelled on the canvas", /overlay\.isScenarioIncident\(inc\)/.test(pageSource) && /drawScenarioLabels\(ctx, canvasMarks\(/.test(pageSource));
 }
 
 /* ───────────────────────────── report ───────────────────────────── */

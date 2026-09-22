@@ -2219,7 +2219,6 @@ export default function AiSandboxPage() {
               fromKm={fromKm}
               toKm={toKm}
               kmAtPct={(pct) => kmAt((spanM * pct) / 100)}
-              pctAtKm={(km) => (spanM > 0 ? (mAt(km) / spanM) * 100 : 0)}
               manualClosure={{ closedLanes, closurePoint: closureM, closureEnd: closureEndM }}
               nextSeq={scenarioSeqRef.current + 1}
               onAdd={addScenarioEvent}

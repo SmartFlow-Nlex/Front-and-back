@@ -60,9 +60,8 @@ type Props = {
   laneCount: number;
   fromKm: number;
   toKm: number;
-  /** Km for a percentage along the stretch in the direction of travel, and back. */
+  /** Km for a percentage along the stretch in the direction of travel: used only for a template's default placement. */
   kmAtPct: (pct: number) => number;
-  pctAtKm: (km: number) => number;
   manualClosure: ManualClosure;
   /** The number the next stored event will get. */
   nextSeq: number;
@@ -245,7 +244,7 @@ function EventRow({ event, owners, nowS, onRemove }: { event: ScenarioEvent; own
 }
 
 export default function ScenarioPanel(props: Props) {
-  const { events, owners, road, nowS, laneCount, fromKm, toKm, kmAtPct, pctAtKm, manualClosure, nextSeq } = props;
+  const { events, owners, road, nowS, laneCount, fromKm, toKm, kmAtPct, manualClosure, nextSeq } = props;
   const [family, setFamily] = useState<FamilyKey>("breakdown_in_lane");
   const template: ScenarioTemplate = getTemplate(family);
   const [vehicle, setVehicle] = useState<VehicleKind>("truck");
@@ -371,11 +370,7 @@ export default function ScenarioPanel(props: Props) {
       </div>
       <div className="sandbox-scn-row">
         <label>
-          Position (% of stretch)
-          <NumberField value={pctAtKm(kmNow)} min={0} max={100} step={1} decimals={1} scn="pct" onCommit={(pct) => setPosKm(kmAtPct(pct))} />
-        </label>
-        <label>
-          or Km
+          Position (km)
           <NumberField value={kmNow} min={fromKm} max={toKm} step={0.05} decimals={2} scn="km" onCommit={setPosKm} />
         </label>
       </div>

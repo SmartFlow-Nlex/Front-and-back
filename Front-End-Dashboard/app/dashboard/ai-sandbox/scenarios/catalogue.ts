@@ -4,11 +4,12 @@ import {
   type BreakdownFamilyKey,
   type ClosureFamilyKey,
   type FamilyKey,
+  type NoCalibrationFamilyKey,
   type PhaseIdOf,
   type VehicleKind,
 } from "./assumptions";
 
-export type { BreakdownCause, BreakdownFamilyKey, ClosureFamilyKey, FamilyKey, PhaseIdOf, VehicleKind } from "./assumptions";
+export type { BreakdownCause, BreakdownFamilyKey, ClosureFamilyKey, FamilyKey, NoCalibrationFamilyKey, PhaseIdOf, VehicleKind } from "./assumptions";
 
 /* ══════════════════════════════════════════════════════════════════════════════
    SCENARIO CATALOGUE
@@ -69,7 +70,8 @@ export type HierarchyKey =
   | `${BreakdownFamilyKey}__cause_${BreakdownCause}`
   | `${BreakdownFamilyKey}__vehicle_${VehicleKind}`
   | `${BreakdownFamilyKey}__cause_${BreakdownCause}__vehicle_${VehicleKind}`;
-export type EntryKey = CalibrationKey | HierarchyKey;
+/** A real calibration.json key, or — for a family in NO_CALIBRATION_FAMILIES — that family's own name, standing in for "no entry". */
+export type EntryKey = CalibrationKey | HierarchyKey | NoCalibrationFamilyKey;
 
 export function causeKey<F extends BreakdownFamilyKey, C extends BreakdownCause>(family: F, cause: C): `${F}__cause_${C}` {
   return `${family}__cause_${cause}`;
@@ -125,6 +127,14 @@ type TemplateCommon<F extends FamilyKey> = {
   readonly defaultPlacement: Placement;
   /** Engine levers this scenario pulls. */
   readonly resources: readonly EngineResource[];
+  /**
+   * "calibrated" - this family has a calibration.json entry; Sampled / Median /
+   *   90th percentile are offered, as well as Manual.
+   * "manual_only" - no NLEX category exists for this family (see
+   *   ASSUMPTIONS.NO_CALIBRATION_FAMILIES); ONLY Manual duration is offered, and
+   *   the template has no `calibrationKey`.
+   */
+  readonly durationSource: "calibrated" | "manual_only";
 };
 
 export type VehicleOption = { readonly id: VehicleKind; readonly label: string; readonly engineClass: 1 | 2 | 3 };
@@ -157,13 +167,18 @@ export type MultiVehicleCollisionTemplate = TemplateCommon<"multi_vehicle_collis
 export type SelfAccidentTemplate = TemplateCommon<"self_accident"> & {
   readonly calibrationKey: "self_accident";
 };
+/** No calibrationKey: see TemplateCommon.durationSource and ASSUMPTIONS.NO_CALIBRATION_FAMILIES. */
+export type OverturnedVehicleTemplate = TemplateCommon<"overturned_vehicle"> & {
+  readonly durationSource: "manual_only";
+};
 
 export type ScenarioTemplate =
   | BreakdownInLaneTemplate
   | BreakdownShoulderTemplate
   | MinorCollisionTemplate
   | MultiVehicleCollisionTemplate
-  | SelfAccidentTemplate;
+  | SelfAccidentTemplate
+  | OverturnedVehicleTemplate;
 
 export type TemplateOf<F extends FamilyKey> = Extract<ScenarioTemplate, { readonly family: F }>;
 
@@ -173,7 +188,8 @@ export type ScenarioVariant =
   | { readonly family: "breakdown_shoulder"; readonly vehicle: VehicleKind; readonly cause: BreakdownCause }
   | { readonly family: "minor_collision"; readonly label: CollisionLabel }
   | { readonly family: "multi_vehicle_collision" }
-  | { readonly family: "self_accident" };
+  | { readonly family: "self_accident" }
+  | { readonly family: "overturned_vehicle" };
 
 export function assertNever(value: never): never {
   throw new Error(`Unhandled case: ${JSON.stringify(value)}`);
@@ -263,6 +279,7 @@ const BREAKDOWN_IN_LANE: BreakdownInLaneTemplate = {
   defaultVehicle: "truck",
   defaultCause: "engine",
   calibrationKey: "breakdown_in_lane",
+  durationSource: "calibrated",
 };
 
 const BREAKDOWN_SHOULDER: BreakdownShoulderTemplate = {
@@ -280,6 +297,7 @@ const BREAKDOWN_SHOULDER: BreakdownShoulderTemplate = {
   defaultVehicle: "car",
   defaultCause: "engine",
   calibrationKey: "breakdown_shoulder",
+  durationSource: "calibrated",
 };
 
 const MINOR_COLLISION: MinorCollisionTemplate = {
@@ -301,6 +319,7 @@ const MINOR_COLLISION: MinorCollisionTemplate = {
   ],
   defaultLabel: "rear_end",
   calibrationKey: "minor_collision",
+  durationSource: "calibrated",
 };
 
 const MULTI_VEHICLE_COLLISION: MultiVehicleCollisionTemplate = {
@@ -317,6 +336,7 @@ const MULTI_VEHICLE_COLLISION: MultiVehicleCollisionTemplate = {
   defaultPlacement: DEFAULT_PLACEMENT,
   resources: ["closure_stretch"],
   calibrationKey: "multi_vehicle_collision",
+  durationSource: "calibrated",
 };
 
 const SELF_ACCIDENT: SelfAccidentTemplate = {
@@ -333,6 +353,23 @@ const SELF_ACCIDENT: SelfAccidentTemplate = {
   defaultPlacement: DEFAULT_PLACEMENT,
   resources: ["closure_stretch"],
   calibrationKey: "self_accident",
+  durationSource: "calibrated",
+};
+
+const OVERTURNED_VEHICLE: OverturnedVehicleTemplate = {
+  family: "overturned_vehicle",
+  displayName: "Overturned vehicle",
+  description:
+    "A vehicle has rolled or come to rest on its side, blocking a lane until it is righted and towed. NLEX's own accident logs have no category for this (no \"Overturned\" or \"Rollover\" event type exists in the data), so there is no calibrated duration to sample from: the operator enters the duration directly. Modelled through the engine's single closure stretch, like the other collision families, so it cannot overlap another collision.",
+  phases: buildAccidentPhases("overturned_vehicle", {
+    blocked: "Vehicle overturned: awaiting response",
+    tow: "Righting and tow in progress",
+    clearing: "Scene clearing: lane reopened",
+  }),
+  defaultLane: { kind: "operator_lane", lane: 1 },
+  defaultPlacement: DEFAULT_PLACEMENT,
+  resources: ["closure_stretch"],
+  durationSource: "manual_only",
 };
 
 /** In the order they should be offered. */
@@ -342,6 +379,7 @@ export const SCENARIO_TEMPLATES: readonly ScenarioTemplate[] = [
   MINOR_COLLISION,
   MULTI_VEHICLE_COLLISION,
   SELF_ACCIDENT,
+  OVERTURNED_VEHICLE,
 ];
 
 export const TEMPLATE_BY_FAMILY: { readonly [F in FamilyKey]: TemplateOf<F> } = {
@@ -350,6 +388,7 @@ export const TEMPLATE_BY_FAMILY: { readonly [F in FamilyKey]: TemplateOf<F> } = 
   minor_collision: MINOR_COLLISION,
   multi_vehicle_collision: MULTI_VEHICLE_COLLISION,
   self_accident: SELF_ACCIDENT,
+  overturned_vehicle: OVERTURNED_VEHICLE,
 };
 
 export function getTemplate<F extends FamilyKey>(family: F): TemplateOf<F> {
@@ -369,8 +408,23 @@ export function defaultVariant(family: FamilyKey): ScenarioVariant {
       return { family };
     case "self_accident":
       return { family };
+    case "overturned_vehicle":
+      return { family };
     default:
       return assertNever(family);
+  }
+}
+
+/** A variant whose family has a calibration.json entry (excludes NoCalibrationFamilyKey members). */
+export type CalibratedVariant = Exclude<ScenarioVariant, { readonly family: NoCalibrationFamilyKey }>;
+
+/** `variant` narrowed to CalibratedVariant, or null when its family has no calibration entry (NO_CALIBRATION_FAMILIES). */
+export function calibratedVariantOf(variant: ScenarioVariant): CalibratedVariant | null {
+  switch (variant.family) {
+    case "overturned_vehicle":
+      return null;
+    default:
+      return variant;
   }
 }
 
@@ -379,8 +433,12 @@ export function defaultVariant(family: FamilyKey): ScenarioVariant {
  * minor collision the entry for its own label. For breakdowns this is where the
  * cause x vehicle -> cause -> vehicle -> family fallback ENDS; the sampler's
  * selectCalibration() walks the hierarchy above it.
+ *
+ * Takes a CalibratedVariant, not a plain ScenarioVariant: a family in
+ * NO_CALIBRATION_FAMILIES has no calibration entry to return, so it is excluded
+ * at the type level rather than handled by throwing here.
  */
-export function calibrationKeyFor(variant: ScenarioVariant): CalibrationKey {
+export function calibrationKeyFor(variant: CalibratedVariant): CalibrationKey {
   switch (variant.family) {
     case "breakdown_in_lane":
       return "breakdown_in_lane";
@@ -424,24 +482,29 @@ export function defaultOperatorLane(template: ScenarioTemplate, laneCount: numbe
 }
 
 /* ─────────────────────────────────────────────────────────────────────────────
-   Families the engine cannot represent yet
-   Offered in the Add panel so the operator can see they exist, disabled. Each
-   needs something simulation.ts does not have: a weather or surface effect, a
-   blocked-everything closure with recovery, or a timed lane closure that is not
-   an incident. Nothing here reaches the engine.
+   Families still not built
+   Offered in the Add panel so the operator can see they exist, disabled, with
+   why. None of these need simulation.ts changed (all are buildable on the
+   engine's existing closure_stretch / speed_zone levers) — what's missing is a
+   real duration source (flood, roadworks: NLEX records neither at all) or a
+   capability this adapter doesn't have yet (roadworks: recurrence; flood: one
+   family holding two resources at once; rain: a modifier on other families'
+   duration draws, not a family of its own). Overturned vehicle, which needed
+   only a "no calibration data" family, is built (see
+   ASSUMPTIONS.NO_CALIBRATION_FAMILIES).
 ───────────────────────────────────────────────────────────────────────────── */
-export const REQUIRES_ENGINE_UPDATE = "Requires engine update";
+/** The Add panel's badge on a disabled family. Never "engine": none of these need simulation.ts (see the block comment above) — it's a data or adapter gap. */
+export const NOT_YET_BUILT = "Not yet built";
 
 export type UnsupportedFamily = {
-  readonly id: "rain" | "flood" | "overturn" | "scheduled_roadworks";
+  readonly id: "rain" | "flood" | "scheduled_roadworks";
   readonly displayName: string;
-  /** What the engine would need. */
+  /** Why it isn't built yet: a data gap, an adapter capability gap, or both. Never an engine gap. */
   readonly needs: string;
 };
 
 export const UNSUPPORTED_FAMILIES: readonly UnsupportedFamily[] = [
-  { id: "rain", displayName: "Heavy rain", needs: "a reduced-grip and visibility model: the engine has one fixed set of driver parameters" },
-  { id: "flood", displayName: "Flooding", needs: "a partial-width, reduced-speed surface: the engine has closures and one speed zone, not a wet lane" },
-  { id: "overturn", displayName: "Overturned vehicle", needs: "a multi-lane obstruction with a recovery sequence: the engine's obstacles are 5 m stalled vehicles" },
-  { id: "scheduled_roadworks", displayName: "Scheduled roadworks", needs: "a planned, repeating lane closure with its own calendar: the engine has one closure stretch" },
+  { id: "rain", displayName: "Heavy rain", needs: "not a family of its own: it would be a corridor-wide modifier on other events' calibrated duration, which the adapter does not support yet" },
+  { id: "flood", displayName: "Flooding", needs: "no NLEX data of any kind, and one family would need to hold a partial closure and a speed zone at once, which the adapter does not support yet" },
+  { id: "scheduled_roadworks", displayName: "Scheduled roadworks", needs: "no NLEX data of any kind, and a recurring/planned event, which the adapter's one-off scheduling does not support yet" },
 ];

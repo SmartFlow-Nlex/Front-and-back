@@ -78,17 +78,19 @@ import {
   RESOURCE_SHARING,
   SCENARIO_TEMPLATES,
   TEMPLATE_BY_FAMILY,
+  calibratedVariantOf,
   calibrationKeyFor,
   causeKey,
   causeVehicleKey,
   defaultOperatorLane,
-  REQUIRES_ENGINE_UPDATE,
+  NOT_YET_BUILT,
   UNSUPPORTED_FAMILIES,
   defaultVariant,
   phaseOffsetFractions,
   vehicleKey,
   type BreakdownCause,
   type BreakdownFamilyKey,
+  type CalibratedVariant,
   type CollisionLabel,
   type EngineResource,
   type FamilyKey,
@@ -131,8 +133,19 @@ function throws(fn: () => unknown): boolean {
     return true;
   }
 }
+/** The message of whatever fn() throws, or null if it does not throw. For asserting WHY, not just that. */
+function thrownMessage(fn: () => unknown): string | null {
+  try {
+    fn();
+    return null;
+  } catch (e) {
+    return e instanceof Error ? e.message : String(e);
+  }
+}
 
-const FAMILIES: readonly FamilyKey[] = ["breakdown_in_lane", "breakdown_shoulder", "minor_collision", "multi_vehicle_collision", "self_accident"];
+const FAMILIES: readonly FamilyKey[] = ["breakdown_in_lane", "breakdown_shoulder", "minor_collision", "multi_vehicle_collision", "self_accident", "overturned_vehicle"];
+/** Families with a real calibration.json entry: FAMILIES minus NO_CALIBRATION_FAMILIES. */
+const CALIBRATED_FAMILIES: readonly FamilyKey[] = FAMILIES.filter((f) => !ASSUMPTIONS.NO_CALIBRATION_FAMILIES.value.some((n) => n === f));
 const KNOT_P = [0, 0.1, 0.25, 0.5, 0.75, 0.9, 0.99, 1] as const;
 const MIN_N = ASSUMPTIONS.LOW_SAMPLE_N.value;
 
@@ -393,7 +406,7 @@ let chainShapeOk = true;
 for (const family of BREAKDOWN_FAMILIES) {
   for (const cause of BREAKDOWN_CAUSES) {
     for (const vehicle of BREAKDOWN_VEHICLES) {
-      const variant: ScenarioVariant = { family, vehicle, cause };
+      const variant: CalibratedVariant = { family, vehicle, cause };
       const want = expectedBreakdownCap(family, cause, vehicle);
       const sel = selectCalibration(variant);
       const r = resolveDuration(variant, { kind: "sampled", seed: 99 });
@@ -466,7 +479,7 @@ check("cap: capMinutes null means no cap, and a number is used as given, with no
 check("cap: an explicit cap of 0, a negative cap and NaN are rejected by resolveDuration", throws(() => resolveDuration(tireTruck, { kind: "sampled", seed: 1 }, { capMinutes: 0 })) && throws(() => resolveDuration(tireTruck, { kind: "sampled", seed: 1 }, { capMinutes: -1 })) && throws(() => resolveDuration(tireTruck, { kind: "sampled", seed: 1 }, { capMinutes: Number.NaN })));
 
 // Accident families: minor collision's chain is label -> minor_collision; hit-and-run (n < CAP_MIN_N) inherits the family cap.
-const accidentVariants: readonly { v: ScenarioVariant; key: string; level: string }[] = [
+const accidentVariants: readonly { v: CalibratedVariant; key: string; level: string }[] = [
   { v: { family: "minor_collision", label: "rear_end" }, key: "minor_collision_rear_end", level: "label" },
   { v: { family: "minor_collision", label: "sideswipe" }, key: "minor_collision_sideswipe", level: "label" },
   { v: { family: "minor_collision", label: "hit_and_run" }, key: "minor_collision", level: "family" },
@@ -505,7 +518,7 @@ check("capMinN 1: the chosen entry is always its own cap source", at1.cap !== nu
 check("capMinN above every level: no cap source, so a sampled draw is uncapped", at1e6.cap === null);
 const famOnly = selectFromCalibration(asCal({}), tireTruck);
 check("with no hierarchy entries the chain is the family alone, and it caps (n >= CAP_MIN_N)", famOnly.chain.length === 1 && famOnly.cap !== null && famOnly.cap.key === "breakdown_in_lane");
-check("every shipped variant has a cap source (so 'no level qualifies' is not reachable)", [...BREAKDOWN_FAMILIES.flatMap((family) => BREAKDOWN_CAUSES.flatMap((cause) => BREAKDOWN_VEHICLES.map((vehicle): ScenarioVariant => ({ family, cause, vehicle })))), ...accidentVariants.map((a) => a.v)].every((v) => selectCalibration(v).cap !== null));
+check("every shipped variant has a cap source (so 'no level qualifies' is not reachable)", [...BREAKDOWN_FAMILIES.flatMap((family) => BREAKDOWN_CAUSES.flatMap((cause) => BREAKDOWN_VEHICLES.map((vehicle): CalibratedVariant => ({ family, cause, vehicle })))), ...accidentVariants.map((a) => a.v)].every((v) => selectCalibration(v).cap !== null));
 
 /* ───────────────────────────── 4. catalogue + assumptions ───────────────────────────── */
 const EXPECTED_RESOURCES: Record<FamilyKey, readonly EngineResource[]> = {
@@ -514,10 +527,11 @@ const EXPECTED_RESOURCES: Record<FamilyKey, readonly EngineResource[]> = {
   minor_collision: ["closure_stretch"],
   multi_vehicle_collision: ["closure_stretch"],
   self_accident: ["closure_stretch"],
+  overturned_vehicle: ["closure_stretch"],
 };
 check("one template per family, in the catalogue", SCENARIO_TEMPLATES.length === FAMILIES.length && FAMILIES.every((f) => SCENARIO_TEMPLATES.some((t) => t.family === f)));
 check("display names are unique", new Set(SCENARIO_TEMPLATES.map((t) => t.displayName)).size === SCENARIO_TEMPLATES.length);
-check("PHASE_SPLIT has entries for the three accident families only (breakdown splits come from data)", Object.keys(ASSUMPTIONS.PHASE_SPLIT.value).sort().join() === "minor_collision,multi_vehicle_collision,self_accident");
+check("PHASE_SPLIT has entries for the closure families only (breakdown splits come from data)", Object.keys(ASSUMPTIONS.PHASE_SPLIT.value).sort().join() === "minor_collision,multi_vehicle_collision,overturned_vehicle,self_accident");
 
 for (const t of SCENARIO_TEMPLATES) {
   const f = t.family;
@@ -525,11 +539,17 @@ for (const t of SCENARIO_TEMPLATES) {
   check(`${f}: every phase has a label`, t.phases.every((p) => p.label.trim().length > 0));
   check(`${f}: resources are ${EXPECTED_RESOURCES[f].join("+")}`, [...t.resources].sort().join() === [...EXPECTED_RESOURCES[f]].sort().join());
   check(`${f}: default placement is a valid percentage`, t.defaultPlacement.pct > 0 && t.defaultPlacement.pct < 100);
-  check(`${f}: calibration key exists`, CALIBRATION_KEYS.some((k) => k === t.calibrationKey));
+  if (t.family !== "overturned_vehicle") {
+    check(`${f}: calibration key exists`, CALIBRATION_KEYS.some((k) => k === t.calibrationKey));
+    check(`${f}: durationSource is "calibrated"`, t.durationSource === "calibrated");
+  } else {
+    check(`${f}: a manual_only template has no calibrationKey field`, !("calibrationKey" in t) && t.durationSource === "manual_only");
+  }
   check(`${f}: default lane is valid on a 2..6 lane road`, [2, 3, 4, 5, 6].every((lc) => { const l = defaultOperatorLane(t, lc); return l >= 1 && l <= lc; }));
   check(`${f}: lanes-blocked table covers exactly the phase ids`, Object.keys(ASSUMPTIONS.LANES_BLOCKED.value[f]).sort().join() === t.phases.map((p) => p.id).sort().join());
 }
-for (const f of ["minor_collision", "multi_vehicle_collision", "self_accident"] as const) {
+check("durationSource is calibrated for exactly the families with a calibration entry", SCENARIO_TEMPLATES.filter((t) => t.durationSource === "calibrated").map((t) => t.family).sort().join() === [...CALIBRATED_FAMILIES].sort().join());
+for (const f of ["minor_collision", "multi_vehicle_collision", "self_accident", "overturned_vehicle"] as const) {
   const t = TEMPLATE_BY_FAMILY[f];
   const split = ASSUMPTIONS.PHASE_SPLIT.value[f];
   const offsets = phaseOffsetFractions(t.phases, null);
@@ -578,12 +598,33 @@ for (const f of BREAKDOWN_FAMILIES) {
 }
 
 // variants all resolve to a real base entry
-const variants: ScenarioVariant[] = [];
+const variants: CalibratedVariant[] = [];
 for (const f of BREAKDOWN_FAMILIES) for (const vehicle of TEMPLATE_BY_FAMILY[f].vehicles) for (const cause of TEMPLATE_BY_FAMILY[f].causes) variants.push({ family: f, vehicle: vehicle.id, cause: cause.id });
 for (const label of TEMPLATE_BY_FAMILY.minor_collision.labels) variants.push({ family: "minor_collision", label: label.id });
 variants.push({ family: "multi_vehicle_collision" }, { family: "self_accident" });
 check(`${variants.length} variants (2 x 3 vehicles x 5 causes + 3 labels + 2 single) all resolve to a base entry`, variants.length === 35 && variants.every((v) => CALIBRATION_KEYS.some((k) => k === calibrationKeyFor(v))));
-check("every family default variant resolves", FAMILIES.every((f) => CALIBRATION_KEYS.some((k) => k === calibrationKeyFor(defaultVariant(f)))));
+check("every CALIBRATED family's default variant resolves to a real entry", CALIBRATED_FAMILIES.every((f) => { const v = calibratedVariantOf(defaultVariant(f)); return v !== null && CALIBRATION_KEYS.some((k) => k === calibrationKeyFor(v)); }));
+
+// NO_CALIBRATION_FAMILIES: manual is the only valid mode, and the resolution carries no calibration information
+for (const f of ASSUMPTIONS.NO_CALIBRATION_FAMILIES.value) {
+  const v = defaultVariant(f);
+  // Message text asserted, not just "it throws": a mode with no `minutes` field would throw for the WRONG
+  // reason (checkManualMinutes rejecting `undefined`) if the family/mode guard were ever accidentally removed.
+  const sampledMsg = thrownMessage(() => resolveDuration(v, { kind: "sampled", seed: 1 }));
+  const p50Msg = thrownMessage(() => resolveDuration(v, { kind: "p50" }));
+  const p90Msg = thrownMessage(() => resolveDuration(v, { kind: "p90" }));
+  check(
+    `${f}: sampled, median and 90th percentile are all rejected (no entry to draw from), naming the real reason`,
+    [sampledMsg, p50Msg, p90Msg].every((m) => m !== null && m.includes("no calibration entry") && m.includes("manual")),
+    JSON.stringify([sampledMsg, p50Msg, p90Msg]),
+  );
+  const r = resolveDuration(v, { kind: "manual", minutes: 42 });
+  check(`${f}: a manual duration resolves with no calibration info (mode, minutes, level, n, cap all inert)`, r.mode === "manual" && r.minutes === 42 && r.uncappedMinutes === 42 && !r.capped && r.capMinutes === null && r.responseShare === null && r.level === "none" && r.n === 0 && !r.lowSample && r.skippedLevels.length === 0 && r.capKey === null && r.capLevel === null && r.capN === null && r.calibrationKey === f);
+  check(`${f}: calibratedVariantOf is null (excluded from CalibratedVariant)`, calibratedVariantOf(v) === null);
+  check(`${f}: not in CALIBRATION_KEYS`, !CALIBRATION_KEYS.some((k) => String(k) === f));
+  check(`${f}: a manual duration of 0, negative or NaN is rejected, same as any other family`, throws(() => resolveDuration(v, { kind: "manual", minutes: 0 })) && throws(() => resolveDuration(v, { kind: "manual", minutes: -3 })) && throws(() => resolveDuration(v, { kind: "manual", minutes: Number.NaN })));
+}
+check("NO_CALIBRATION_FAMILIES lists exactly the families whose template says manual_only", [...ASSUMPTIONS.NO_CALIBRATION_FAMILIES.value].sort().join() === SCENARIO_TEMPLATES.filter((t) => t.durationSource === "manual_only").map((t) => t.family).sort().join());
 const labels: readonly CollisionLabel[] = ["rear_end", "sideswipe", "hit_and_run"];
 check("each collision label maps to its own entry", labels.every((l) => calibrationKeyFor({ family: "minor_collision", label: l }) === `minor_collision_${l}`));
 
@@ -704,7 +745,7 @@ const inLaneSpec = (vehicle: VehicleKind, lane: number, posM: number, startMin: 
 const shoulderSpec = (posM: number, startMin: number, duration: DurationMode): NewEventSpec => ({
   variant: { family: "breakdown_shoulder", vehicle: "car", cause: "engine" }, lane: null, positionKm: kmOf(posM), startMinutes: startMin, duration,
 });
-const collisionSpec = (family: "minor_collision" | "multi_vehicle_collision" | "self_accident", lane: number, posM: number, startMin: number, duration: DurationMode): NewEventSpec => ({
+const collisionSpec = (family: "minor_collision" | "multi_vehicle_collision" | "self_accident" | "overturned_vehicle", lane: number, posM: number, startMin: number, duration: DurationMode): NewEventSpec => ({
   variant: family === "minor_collision" ? { family, label: "rear_end" } : { family }, lane, positionKm: kmOf(posM), startMinutes: startMin, duration,
 });
 const ALL_SPECS: readonly { name: string; spec: NewEventSpec }[] = [
@@ -782,7 +823,7 @@ check("event: phases tile the whole duration, start at 0, ascend, are labelled w
   };
   let ok = true;
   let checked = 0;
-  for (const family of ["minor_collision", "multi_vehicle_collision", "self_accident"] as const) {
+  for (const family of ["minor_collision", "multi_vehicle_collision", "self_accident", "overturned_vehicle"] as const) {
     const blocked = new Map(Object.entries(ASSUMPTIONS.LANES_BLOCKED.value[family]));
     const wreck = new Map(Object.entries(ASSUMPTIONS.CLOSURE_LENGTH_M.value[family]));
     for (const opLane of [1, 2, 4]) {
@@ -812,7 +853,7 @@ check("event: phases tile the whole duration, start at 0, ascend, are labelled w
       }
     }
   }
-  check(`collisions: in every phase (${checked} cases: 3 families x 3 lanes x 3 positions, 8 phases per lane and position) the lanes, stretch and owner match the assumption tables, updating as phases advance`, ok && checked === 72);
+  check(`collisions: in every phase (${checked} cases: 4 families x 3 lanes x 3 positions, 11 phases per lane and position: 2+3+3+3) the lanes, stretch and owner match the assumption tables, updating as phases advance`, ok && checked === 99);
 }
 
 // --- shoulder breakdown: the speed zone, unless the operator is using it
@@ -884,7 +925,7 @@ check("event: phases tile the whole duration, start at 0, ascend, are labelled w
   const elsewhere: ManualClosure = { closedLanes: [false, false, true, false], closurePoint: 100, closureEnd: 200 };
   const minor = collisionSpec("minor_collision", 1, 330, 5, manualMinutes(10));
   check("manual closure: an event that needs the closure stretch is refused with exactly the stated message", refused([], minor, 1, road600, elsewhere) === "Clear your manual lane closure first — this event needs the closure stretch." && MANUAL_CLOSURE_MESSAGE === "Clear your manual lane closure first — this event needs the closure stretch.");
-  check("manual closure: ... for every closure family", (["minor_collision", "multi_vehicle_collision", "self_accident"] as const).every((f) => refused([], collisionSpec(f, 1, 330, 5, manualMinutes(10)), 1, road600, elsewhere) === MANUAL_CLOSURE_MESSAGE));
+  check("manual closure: ... for every closure family", (["minor_collision", "multi_vehicle_collision", "self_accident", "overturned_vehicle"] as const).every((f) => refused([], collisionSpec(f, 1, 330, 5, manualMinutes(10)), 1, road600, elsewhere) === MANUAL_CLOSURE_MESSAGE));
   check("manual closure: events that do not use the closure stretch are not affected", refused([], inLaneSpec("truck", 3, 330, 5, manualMinutes(10)), 1, road600, elsewhere) === null && refused([], shoulderSpec(330, 5, manualMinutes(10)), 1, road600, elsewhere) === null);
   check("manual closure: no lane closed by hand means no conflict, whatever stretch is set", refused([], minor, 1, road600, { ...elsewhere, closedLanes: [false, false, false, false] }) === null);
   check("manual closure: a closure on exactly the event's stretch (230 to 370 m) is accepted", refused([], minor, 1, road600, { ...elsewhere, closurePoint: 230, closureEnd: 370 }) === null);
@@ -1072,9 +1113,12 @@ function engineInSync(ts: TrafficSim, controls: ManualControls, events: readonly
 }
 
 {
-  // removing an event restores exactly what it changed, for every family
+  // removing an event restores exactly what it changed, for every family (including overturned_vehicle,
+  // which has no calibration entry of its own — duration is overridden to manual(20) here regardless, as
+  // it already is for every other entry, so that is not a special case for this test).
   let ok = true;
-  for (const { spec } of ALL_SPECS) {
+  const removalSpecs: readonly { name: string; spec: NewEventSpec }[] = [...ALL_SPECS, { name: "overturn", spec: collisionSpec("overturned_vehicle", 1, 330, 5, manualMinutes(20)) }];
+  for (const { spec } of removalSpecs) {
     const events = must([], { ...spec, startMinutes: 0, duration: manualMinutes(20) }, 1).events;
     const ts = newSim();
     const ref = newSim();
@@ -1194,11 +1238,12 @@ function engineInSync(ts: TrafficSim, controls: ManualControls, events: readonly
   check("format: clock shows m:ss and h:mm:ss", formatClock(0) === "0:00" && formatClock(75) === "1:15" && formatClock(3725) === "1:02:05" && formatClock(-5) === "0:00");
 }
 
-// --- the families the engine cannot represent yet
+// --- the families still not built
 check(
-  "unsupported families: rain, flood, overturn and scheduled roadworks, each with what the engine lacks, none clashing with a supported family",
-  UNSUPPORTED_FAMILIES.map((u) => u.id).join() === "rain,flood,overturn,scheduled_roadworks" && REQUIRES_ENGINE_UPDATE === "Requires engine update" &&
-    new Set(UNSUPPORTED_FAMILIES.map((u) => u.displayName)).size === 4 && UNSUPPORTED_FAMILIES.every((u) => u.displayName.trim().length > 0 && u.needs.trim().length > 20 && !FAMILIES.some((f) => String(f) === u.id)),
+  "families still not built: rain, flood and scheduled roadworks, each with why, none clashing with a supported family (overturned vehicle is no longer among them)",
+  UNSUPPORTED_FAMILIES.map((u) => u.id).join() === "rain,flood,scheduled_roadworks" && NOT_YET_BUILT === "Not yet built" &&
+    // "overturn" is not even a valid UnsupportedFamily.id any more: the type itself proves it can't reappear here.
+    new Set(UNSUPPORTED_FAMILIES.map((u) => u.displayName)).size === 3 && UNSUPPORTED_FAMILIES.every((u) => u.displayName.trim().length > 0 && u.needs.trim().length > 20 && !FAMILIES.some((f) => String(f) === u.id)),
 );
 
 // --- the resolved duration as the operator reads it

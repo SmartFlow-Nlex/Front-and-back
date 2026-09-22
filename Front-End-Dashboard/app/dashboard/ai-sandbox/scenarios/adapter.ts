@@ -213,6 +213,8 @@ export function schedulePhases(variant: ScenarioVariant, resolved: ResolvedDurat
       return buildPhases(TEMPLATE_BY_FAMILY.multi_vehicle_collision.phases, resolved, blocked.multi_vehicle_collision, wreck.multi_vehicle_collision);
     case "self_accident":
       return buildPhases(TEMPLATE_BY_FAMILY.self_accident.phases, resolved, blocked.self_accident, wreck.self_accident);
+    case "overturned_vehicle":
+      return buildPhases(TEMPLATE_BY_FAMILY.overturned_vehicle.phases, resolved, blocked.overturned_vehicle, wreck.overturned_vehicle);
     default:
       return assertNever(variant);
   }
@@ -229,6 +231,7 @@ function effectOf(family: FamilyKey): Effect {
     case "minor_collision":
     case "multi_vehicle_collision":
     case "self_accident":
+    case "overturned_vehicle":
       return "closure";
     default:
       return assertNever(family);
@@ -244,6 +247,7 @@ function breakdownVehicle(variant: ScenarioVariant): VehicleKind | null {
     case "minor_collision":
     case "multi_vehicle_collision":
     case "self_accident":
+    case "overturned_vehicle":
       return null;
     default:
       return assertNever(variant);
@@ -483,6 +487,9 @@ const LEVEL_TEXT: Readonly<Record<CalibrationLevel, string>> = {
   vehicle: "vehicle",
   label: "collision type",
   family: "family",
+  // Never actually shown: resolutionView() suppresses the calibration line whenever mode is "manual",
+  // which every draw for a NO_CALIBRATION_FAMILIES member is. Present only so the Record is total.
+  none: "no calibration",
 };
 
 /** A calibration level in words. */

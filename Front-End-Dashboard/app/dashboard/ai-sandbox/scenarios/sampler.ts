@@ -6,12 +6,14 @@ import {
   BREAKDOWN_VEHICLES,
   CALIBRATION_KEYS,
   assertNever,
+  calibratedVariantOf,
   calibrationKeyFor,
   causeKey,
   causeVehicleKey,
   vehicleKey,
   type BreakdownCause,
   type BreakdownFamilyKey,
+  type CalibratedVariant,
   type CalibrationKey,
   type EntryKey,
   type HierarchyKey,
@@ -68,7 +70,7 @@ export type Exclusions = {
 };
 
 export type DurationKind = "clearance_min" | "response_plus_service_min_per_event";
-export type CalibrationLevel = "cause_vehicle" | "cause" | "vehicle" | "label" | "family";
+export type CalibrationLevel = "cause_vehicle" | "cause" | "vehicle" | "label" | "family" | "none";
 
 export type ResponseShareModel = {
   readonly n: number;
@@ -512,7 +514,7 @@ function selectBreakdown(cal: Calibration, family: BreakdownFamilyKey, cause: Br
  *
  * Pure: takes the calibration (and capMinN), so a test can hand it a modified one.
  */
-export function selectFromCalibration(cal: Calibration, variant: ScenarioVariant, capMinN: number = ASSUMPTIONS.CAP_MIN_N.value): CalibrationSelection {
+export function selectFromCalibration(cal: Calibration, variant: CalibratedVariant, capMinN: number = ASSUMPTIONS.CAP_MIN_N.value): CalibrationSelection {
   switch (variant.family) {
     case "breakdown_in_lane":
     case "breakdown_shoulder":
@@ -531,7 +533,7 @@ export function selectFromCalibration(cal: Calibration, variant: ScenarioVariant
   }
 }
 
-export function selectCalibration(variant: ScenarioVariant): CalibrationSelection {
+export function selectCalibration(variant: CalibratedVariant): CalibrationSelection {
   return selectFromCalibration(getCalibration(), variant);
 }
 
@@ -630,6 +632,23 @@ function checkCap(cap: number | null): number | null {
   return cap;
 }
 
+function checkManualMinutes(minutes: number): number {
+  if (!Number.isFinite(minutes) || minutes <= 0) throw new RangeError(`manual minutes must be a positive number, got ${minutes}`);
+  return minutes;
+}
+
+/**
+ * Manual duration for a family with NO calibration entry (ASSUMPTIONS.NO_CALIBRATION_FAMILIES):
+ * there is no entry to draw a share or a cap from, and no other mode is valid.
+ */
+function drawManualOnly(mode: DurationMode): DrawnDuration {
+  if (mode.kind !== "manual") {
+    throw new RangeError(`a family with no calibration entry only accepts a manual duration, got mode "${mode.kind}"`);
+  }
+  const minutes = checkManualMinutes(mode.minutes);
+  return { minutes, responseShare: null, uncappedMinutes: minutes, capped: false, capMinutes: null, mode: mode.kind };
+}
+
 /**
  * One duration from one entry. The cap is explicit (null = none) and applies to a
  * sampled draw only; `resolveDuration` is what picks it from the cap chain.
@@ -649,9 +668,10 @@ export function drawDuration(entry: CalibrationEntry, mode: DurationMode, capMin
       return { minutes: entry.quantiles.p50, responseShare: medianShare, uncappedMinutes: entry.quantiles.p50, capped: false, capMinutes: null, mode: mode.kind };
     case "p90":
       return { minutes: entry.quantiles.p90, responseShare: medianShare, uncappedMinutes: entry.quantiles.p90, capped: false, capMinutes: null, mode: mode.kind };
-    case "manual":
-      if (!Number.isFinite(mode.minutes) || mode.minutes <= 0) throw new RangeError(`manual minutes must be a positive number, got ${mode.minutes}`);
-      return { minutes: mode.minutes, responseShare: medianShare, uncappedMinutes: mode.minutes, capped: false, capMinutes: null, mode: mode.kind };
+    case "manual": {
+      const minutes = checkManualMinutes(mode.minutes);
+      return { minutes, responseShare: medianShare, uncappedMinutes: minutes, capped: false, capMinutes: null, mode: mode.kind };
+    }
     default:
       return assertNever(mode);
   }
@@ -678,9 +698,30 @@ export type ResolvedDuration = DrawnDuration & {
   readonly capN: number | null;
 };
 
-/** Resolve an event's duration: pick its entry through the hierarchy, take the cap from the chain, then draw. */
+/**
+ * Resolve an event's duration: pick its entry through the hierarchy, take the cap from
+ * the chain, then draw. For a family with no calibration entry at all (see
+ * ASSUMPTIONS.NO_CALIBRATION_FAMILIES), there is no hierarchy or cap to pick from:
+ * `mode` must be "manual" (drawManualOnly throws otherwise) and the calibration-shaped
+ * fields are inert (level "none", n 0, nothing skipped, no cap) — never displayed,
+ * since resolutionView() in adapter.ts suppresses them whenever mode is "manual".
+ */
 export function resolveDuration(variant: ScenarioVariant, mode: DurationMode, options?: SampleOptions): ResolvedDuration {
-  const selection = selectCalibration(variant);
+  const calibrated = calibratedVariantOf(variant);
+  if (calibrated === null) {
+    return {
+      ...drawManualOnly(mode),
+      calibrationKey: variant.family,
+      level: "none",
+      n: 0,
+      lowSample: false,
+      skippedLevels: [],
+      capKey: null,
+      capLevel: null,
+      capN: null,
+    };
+  }
+  const selection = selectCalibration(calibrated);
   const requested = options?.capMinutes;
   const fromChain = requested === undefined && mode.kind === "sampled" ? selection.cap : null;
   const capMinutes = requested === undefined ? (fromChain === null ? null : fromChain.minutes) : requested;

@@ -15,7 +15,7 @@ import {
   type ScenarioEvent,
 } from "../scenarios/adapter";
 import {
-  REQUIRES_ENGINE_UPDATE,
+  NOT_YET_BUILT,
   SCENARIO_TEMPLATES,
   UNSUPPORTED_FAMILIES,
   assertNever,
@@ -92,6 +92,8 @@ function variantFor(family: FamilyKey, vehicle: VehicleKind, cause: BreakdownCau
     case "multi_vehicle_collision":
       return { family };
     case "self_accident":
+      return { family };
+    case "overturned_vehicle":
       return { family };
     default:
       return assertNever(family);
@@ -264,6 +266,9 @@ export default function ScenarioPanel(props: Props) {
     setLane(null);
     setPosKm(null);
     setRefusal(null);
+    // A family with no calibration entry only accepts Manual (resolveDuration throws otherwise);
+    // force it here so the panel can never sit on a now-invalid Sampled/Median/90th choice.
+    if (t.durationSource === "manual_only") setChoice("manual");
     switch (t.family) {
       case "breakdown_in_lane":
       case "breakdown_shoulder":
@@ -275,6 +280,7 @@ export default function ScenarioPanel(props: Props) {
         break;
       case "multi_vehicle_collision":
       case "self_accident":
+      case "overturned_vehicle":
         break;
       default:
         assertNever(t);
@@ -313,9 +319,9 @@ export default function ScenarioPanel(props: Props) {
           </button>
         ))}
         {UNSUPPORTED_FAMILIES.map((u) => (
-          <button key={u.id} className="sandbox-scn-fam" data-scn-family={u.id} disabled title={`${REQUIRES_ENGINE_UPDATE}: the engine would need ${u.needs}`}>
+          <button key={u.id} className="sandbox-scn-fam" data-scn-family={u.id} disabled title={`${NOT_YET_BUILT}: ${u.needs}`}>
             {u.displayName}
-            <small>{REQUIRES_ENGINE_UPDATE}</small>
+            <small>{NOT_YET_BUILT}</small>
           </button>
         ))}
       </div>
@@ -376,13 +382,19 @@ export default function ScenarioPanel(props: Props) {
       </div>
 
       <span className="sandbox-mini-label">Duration</span>
-      <div className="sandbox-speed-seg">
-        {DURATION_CHOICES.map((c) => (
-          <button key={c.id} className={choice === c.id ? "active" : ""} data-scn-duration={c.id} onClick={() => setChoice(c.id)}>
-            {c.label}
-          </button>
-        ))}
-      </div>
+      {template.durationSource === "manual_only" ? (
+        <p className="sandbox-scn-desc" data-scn="manual-only-note">
+          No NLEX record of this family exists, so there is nothing to sample from — enter the duration yourself.
+        </p>
+      ) : (
+        <div className="sandbox-speed-seg">
+          {DURATION_CHOICES.map((c) => (
+            <button key={c.id} className={choice === c.id ? "active" : ""} data-scn-duration={c.id} onClick={() => setChoice(c.id)}>
+              {c.label}
+            </button>
+          ))}
+        </div>
+      )}
       {choice === "sampled" && (
         <button className="btn-muted" data-scn="redraw" onClick={() => setSeed(1 + Math.floor(Math.random() * 2147483000))} title="Draw again from the same calibrated distribution">
           Redraw

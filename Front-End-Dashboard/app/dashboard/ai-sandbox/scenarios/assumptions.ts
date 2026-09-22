@@ -23,13 +23,22 @@ export type FamilyKey =
   | "breakdown_shoulder"
   | "minor_collision"
   | "multi_vehicle_collision"
-  | "self_accident";
+  | "self_accident"
+  | "overturned_vehicle";
 
 /** Families that act on the engine through its single closure stretch. */
-export type ClosureFamilyKey = "minor_collision" | "multi_vehicle_collision" | "self_accident";
+export type ClosureFamilyKey = "minor_collision" | "multi_vehicle_collision" | "self_accident" | "overturned_vehicle";
 
 /** Breakdown families: their durations and phase split both come from data. */
 export type BreakdownFamilyKey = "breakdown_in_lane" | "breakdown_shoulder";
+
+/**
+ * Families with NO calibration.json entry, because NLEX's own logs have no
+ * category for them (see NO_CALIBRATION_FAMILIES). Duration is Manual only:
+ * the sampler refuses any other mode for these, and the Add panel never offers
+ * Sampled / Median / 90th for them.
+ */
+export type NoCalibrationFamilyKey = "overturned_vehicle";
 
 /** Phase ids per family. The catalogue attaches the display labels. */
 export type PhaseIdOf = {
@@ -38,6 +47,7 @@ export type PhaseIdOf = {
   readonly minor_collision: "blocked" | "clearing";
   readonly multi_vehicle_collision: "blocked" | "tow" | "clearing";
   readonly self_accident: "blocked" | "tow" | "clearing";
+  readonly overturned_vehicle: "blocked" | "tow" | "clearing";
 };
 
 /** Engine vehicle classes 1 / 2 / 3. */
@@ -131,11 +141,12 @@ export const ASSUMPTIONS = {
       minor_collision: { blocked: 1, clearing: 0 },
       multi_vehicle_collision: { blocked: 2, tow: 1, clearing: 0 },
       self_accident: { blocked: 1, tow: 1, clearing: 0 },
+      overturned_vehicle: { blocked: 1, tow: 1, clearing: 0 },
     },
-    "NOT AVAILABLE in the data: neither export has a lanes-blocked count, only the single lane an event was logged in. The values are the smallest physically plausible ones. An in-lane breakdown blocks the lane it is in for its whole duration (waiting and service alike); a shoulder breakdown blocks none; a collision blocks its own lane; a multi-vehicle collision starts by blocking two lanes and is reduced to the working lane once vehicles are moved. Once the recorded lane-reopen time has passed (see PHASE_SPLIT) no lane is blocked.",
+    "NOT AVAILABLE in the data: neither export has a lanes-blocked count, only the single lane an event was logged in. The values are the smallest physically plausible ones. An in-lane breakdown blocks the lane it is in for its whole duration (waiting and service alike); a shoulder breakdown blocks none; a collision blocks its own lane; a multi-vehicle collision starts by blocking two lanes and is reduced to the working lane once vehicles are moved. Once the recorded lane-reopen time has passed (see PHASE_SPLIT) no lane is blocked. An overturned vehicle is given the self-accident shape (one lane): it is structurally a single-vehicle event like self_accident, not a multi-vehicle one, and there is no NLEX record of it spilling into a second lane more often than a self accident does.",
     {
       evidence:
-        "BlockageCleared (lane reopened) precedes SiteCleared for all but 358 of 21,804 accidents, so a final phase with no lane blocked is supported by the data. In-lane multi-vehicle collisions are logged with a median of 3 vehicles (96% have 3 or more, 25% have 4 or more: 556 of 2,257), which is why two lanes is assumed rather than one.",
+        "BlockageCleared (lane reopened) precedes SiteCleared for all but 358 of 21,804 accidents, so a final phase with no lane blocked is supported by the data. In-lane multi-vehicle collisions are logged with a median of 3 vehicles (96% have 3 or more, 25% have 4 or more: 556 of 2,257), which is why two lanes is assumed rather than one. Overturned vehicle has no evidence of its own: see NO_CALIBRATION_FAMILIES.",
       settledBy: "A lanes-blocked field in the incident export, or operator input.",
     },
   ),
@@ -145,8 +156,9 @@ export const ASSUMPTIONS = {
       minor_collision: { blocked: 40, clearing: 0 },
       multi_vehicle_collision: { blocked: 100, tow: 60, clearing: 0 },
       self_accident: { blocked: 60, tow: 60, clearing: 0 },
+      overturned_vehicle: { blocked: 80, tow: 80, clearing: 0 },
     },
-    "The WRECK LENGTH: how far downstream of the event position the scene extends. NOT AVAILABLE in the data (no export records how much road a scene occupies). Sized to the vehicles involved (4.6 m car, 9 m bus, 14 m truck in the engine) plus a working buffer: two vehicles about 40 m, a multi-vehicle scene about 100 m while lanes are blocked, then a shorter working area while a tow is in progress. Zero where no lane is blocked. The closed stretch is longer than this: it also includes UPSTREAM_BUFFER_M.",
+    "The WRECK LENGTH: how far downstream of the event position the scene extends. NOT AVAILABLE in the data (no export records how much road a scene occupies). Sized to the vehicles involved (4.6 m car, 9 m bus, 14 m truck in the engine) plus a working buffer: two vehicles about 40 m, a multi-vehicle scene about 100 m while lanes are blocked, then a shorter working area while a tow is in progress. Zero where no lane is blocked. The closed stretch is longer than this: it also includes UPSTREAM_BUFFER_M. An overturned vehicle is given a longer footprint than a self accident (80 m against 60 m): a vehicle on its side or roof occupies more than its own length, and righting it needs a crane or heavy wrecker working beside it, not just behind it.",
     { settledBy: "Field measurement or NLEX incident-management guidance." },
   ),
 
@@ -181,12 +193,27 @@ export const ASSUMPTIONS = {
         { id: "tow", share: 0.41 },
         { id: "clearing", share: 0.29 },
       ],
+      overturned_vehicle: [
+        { id: "blocked", share: 0.3 },
+        { id: "tow", share: 0.41 },
+        { id: "clearing", share: 0.29 },
+      ],
     },
-    "ACCIDENT families only. The data gives one total duration per event, not a timeline, so how that total divides into phases is a modelling choice. The lane-blocked share is anchored to the data (below) and only the split of that share into 'awaiting response' and 'tow' is assumed. Breakdown phases are NOT here: they are split by the response share measured in the data (RESPONSE_SHARE_MODEL).",
+    "ACCIDENT families only. The data gives one total duration per event, not a timeline, so how that total divides into phases is a modelling choice. The lane-blocked share is anchored to the data (below) and only the split of that share into 'awaiting response' and 'tow' is assumed. Breakdown phases are NOT here: they are split by the response share measured in the data (RESPONSE_SHARE_MODEL). Overturned vehicle has no clearance-ratio evidence of its own (see NO_CALIBRATION_FAMILIES) and is given self_accident's split verbatim, as the closest analog (a single vehicle needing recovery, not a multi-vehicle scene) — doubly an assumption, since self_accident's own split is itself unvalidated at the phase level.",
     {
       evidence:
-        "Ratio of median lane-blockage time (BlockageCleared - start) to median clearance time (SiteCleared - start), in-lane events, positive values only: minor collision 0.80 (rear-end 0.80, side-swipe 0.80, hit-and-run 0.38 on n=76), multi-vehicle 0.54, self accident 0.71. A ratio of medians is a rough guide, not a median of ratios.",
+        "Ratio of median lane-blockage time (BlockageCleared - start) to median clearance time (SiteCleared - start), in-lane events, positive values only: minor collision 0.80 (rear-end 0.80, side-swipe 0.80, hit-and-run 0.38 on n=76), multi-vehicle 0.54, self accident 0.71. A ratio of medians is a rough guide, not a median of ratios. No equivalent ratio exists for overturned vehicle: NLEX's TypeOfEvent has no such category (see NO_CALIBRATION_FAMILIES).",
       settledBy: "An event timeline (reported / lanes reopened / cleared) in the incident export.",
+    },
+  ),
+
+  NO_CALIBRATION_FAMILIES: assume<readonly NoCalibrationFamilyKey[]>(
+    ["overturned_vehicle"],
+    "These families have NO calibration.json entry: NLEX's own accident export (TypeOfEvent) has no category for them, so there is nothing to sample a duration from, and no p50/p90/n/cap to report. Inventing quantiles for a family with zero real events behind it would be exactly the fake-metric this project has avoided everywhere else, so these families are Manual duration ONLY — the sampler (resolveDuration) throws if asked for sampled/p50/p90, and the Add panel never offers those buttons for them (ScenarioTemplate.durationSource === \"manual_only\"). Their resolved-duration display therefore never shows a calibration line, a low-sample badge or a cap: resolutionView() already suppresses all three whenever mode is \"manual\", which every draw for these families is.",
+    {
+      evidence:
+        "accident_data_*.csv TypeOfEvent value counts (2022-2026, read-only check): Rear End 8,292, Side Swipe 5,091, Self Accident 2,615, Multiple Collision 2,425, Hit Toll Plaza Equipment 1,215, Hit Objects On The Road 914, Hit and Run 469, Angle Collision 414, Others 216, Hit Pedestrian 64, Head-On Collision 46, Hit Animal 39, Pedestrian/Passenger Fell On Moving Vehicle 18. No \"Overturned\" or \"Rollover\" value exists at all, in any year.",
+      settledBy: "An \"Overturned\"/\"Rollover\" TypeOfEvent category appearing in a future NLEX export, or a documented source for how long an overturn actually takes to clear on this corridor.",
     },
   ),
 

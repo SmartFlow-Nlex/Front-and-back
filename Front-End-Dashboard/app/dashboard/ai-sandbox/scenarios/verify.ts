@@ -1765,8 +1765,8 @@ check(
     /const target = data\[direction\];/.test(panelSource) && /addEvent\(events, spec, road, nextSeq, manualClosure\)/.test(panelSource),
   );
   check(
-    "scenario panel: the long-skip guard is Both-mode only (single-direction skip is unchanged) and the threshold is two minutes",
-    /<SkipControl data=\{dd\} warn \/>/.test(panelSource) && /<SkipControl data=\{target\} warn=\{false\} \/>/.test(panelSource) && /export const SKIP_WARN_MS = 120_000;/.test(panelSource),
+    "scenario panel: the long-skip guard applies in EVERY view (the single-direction skip and each Both-mode group use the same SkipControl, no off switch) and the threshold is two minutes",
+    /<SkipControl data=\{dd\} \/>/.test(panelSource) && /<SkipControl data=\{target\} \/>/.test(panelSource) && !/<SkipControl[^>]*warn/.test(panelSource) && /const heavy = plan !== null && estimateMs !== null && estimateMs > SKIP_WARN_MS;/.test(panelSource) && /export const SKIP_WARN_MS = 120_000;/.test(panelSource),
   );
 }
 

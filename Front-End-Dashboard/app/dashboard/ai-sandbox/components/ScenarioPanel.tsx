@@ -54,8 +54,9 @@ export type SkipView = {
 export type AddOutcome = { readonly ok: true; readonly event: ScenarioEvent } | { readonly ok: false; readonly reason: string };
 
 /**
- * Above this, a skip in Both mode asks first. About two minutes of real waiting is where "fast-forward"
+ * Above this, a skip asks first. About two minutes of real waiting is where "fast-forward"
  * stops feeling like one; the estimate is shown either way, but only a long one interrupts.
+ * Applies to every view: a 3 km capped self-accident runs several minutes on one carriageway too.
  */
 export const SKIP_WARN_MS = 120_000;
 
@@ -249,17 +250,16 @@ export function formatWall(ms: number): string {
 }
 
 /**
- * One carriageway's "Skip to next phase". `warn` is true only in Both mode: a skip that the running
- * step cost says will take longer than SKIP_WARN_MS shows its estimate and asks first, instead of
- * quietly holding the tab's CPU for minutes. NB-only/SB-only never warn, so they look and behave as
- * they always have.
+ * One carriageway's "Skip to next phase", in every view (NB-only, SB-only, Both). The estimate is
+ * shown beside the button, and a skip that the running step cost says will take longer than
+ * SKIP_WARN_MS shows it in full and asks first, instead of quietly holding the tab's CPU for minutes.
  */
-function SkipControl({ data, warn }: { data: DirectionScenarioData; warn: boolean }) {
+function SkipControl({ data }: { data: DirectionScenarioData }) {
   const [confirming, setConfirming] = useState(false);
   if (data.skip !== null) return <SkipProgress skip={data.skip} onCancel={data.onCancelSkip} />;
   const plan = data.skipPlan;
   const estimateMs = plan === null ? null : plan.estimateMs;
-  const heavy = warn && plan !== null && estimateMs !== null && estimateMs > SKIP_WARN_MS;
+  const heavy = plan !== null && estimateMs !== null && estimateMs > SKIP_WARN_MS;
   if (confirming && heavy && plan !== null && estimateMs !== null) {
     return (
       <div className="sandbox-scn-skipwarn" data-scn="skip-warn">
@@ -300,7 +300,7 @@ function SkipControl({ data, warn }: { data: DirectionScenarioData; warn: boolea
       >
         Skip to next phase
       </button>
-      {warn && estimateMs !== null && (
+      {estimateMs !== null && (
         <span className={`sandbox-scn-est${heavy ? " is-heavy" : ""}`} data-scn="skip-est">
           ≤ ~{formatWall(estimateMs)}
         </span>
@@ -598,7 +598,7 @@ export default function ScenarioPanel(props: Props) {
                         {dd.events.length} event{dd.events.length === 1 ? "" : "s"}
                       </span>
                     </div>
-                    <SkipControl data={dd} warn />
+                    <SkipControl data={dd} />
                     {dd.events.map((e) => (
                       <EventRow key={e.id} event={e} owners={dd.owners} nowS={dd.nowS} onRemove={() => dd.onRemove(e.id)} showDirection />
                     ))}
@@ -610,7 +610,7 @@ export default function ScenarioPanel(props: Props) {
         : events.length > 0 && (
             <>
               <span className="sandbox-mini-label">Events · timed from the end of warm-up</span>
-              <SkipControl data={target} warn={false} />
+              <SkipControl data={target} />
               {events.map((e) => (
                 <EventRow key={e.id} event={e} owners={target.owners} nowS={target.nowS} onRemove={() => target.onRemove(e.id)} showDirection={false} />
               ))}

@@ -6,7 +6,8 @@ overturned vehicle, a flood, scheduled roadworks, heavy rain — and have each o
 **existing** engine levers (`simulation.ts`'s `Interventions`: `closedLanes`, `closurePoint` /
 `closureEnd`, `incidents`, `speedLimitKmh`, `speedZone`) on a schedule, instead of the operator
 setting those levers by hand. `simulation.ts`, the Back-End and `replicate()` are never modified by
-this feature — it is a layer that composes the engine's own inputs, nothing more.
+this feature — it is a layer that composes the engine's own inputs, nothing more. The same
+folder also carries the NB / SB / Both dual-carriageway view; see [Dual-carriageway view](#dual-carriageway-view-nb--sb--both).
 
 ## Files
 
@@ -19,8 +20,124 @@ this feature — it is a layer that composes the engine's own inputs, nothing mo
 | `verify.ts` | The test suite (see below). Not a framework — a flat script of `check(name, boolean)` calls. |
 | `tools/build_calibration.py` | Regenerates `calibration.json` from the client's raw CSV exports (see below). Read-only on the CSVs. |
 | `calibration.json` | Generated, not hand-edited. Duration quantiles + breakdown response-share quantiles, per family and per hierarchy cell, plus the generator's own provenance (when, from what, what `min_n` it used). |
-| `../components/ScenarioPanel.tsx` | The Add-event panel and the event list. Pure layout: every number, label and badge it shows is built by `adapter.ts`/`catalogue.ts` and just rendered here. |
-| `../page.tsx` | Wiring only: owns the `scenarioEvents` state, drives the two loops (`applyAtBoundary` each animation frame, `stepToScenarioTime` for "skip to next phase"), and feeds the *effective* state (operator settings with the scenario laid over them) into the recommendation / before-after / baseline / assistant-context readouts that already existed. |
+| `../components/ScenarioPanel.tsx` | The Add-event panel and the event list. Pure layout: every number, label and badge it shows is built by `adapter.ts`/`catalogue.ts` and just rendered here. Takes per-direction data: one carriageway (NB-only/SB-only) or two (Both, with an "Add to" picker, grouped lists and the skip guard). |
+| `../useDirectionSim.ts` | One carriageway's whole simulation as a hook (its `TrafficSim`, engine binding, events, interventions, demand, metrics, baseline). Called twice from `page.tsx`, once per direction. |
+| `../bothMetrics.ts` | The corridor totals for Both mode (sum / max / flow-weighted; density has none). Pure. |
+| `../components/DirectionPill.tsx` | The NB / SB pill that names a carriageway on every control, row and readout in Both mode. |
+| `../page.tsx` | Wiring, the carriageway selector and the canvas (`render` for one carriageway, `renderBoth` for two): calls `useDirectionSim` per direction, drives the shared animation loop (`applyAtBoundary` each frame, `stepToScenarioTime` for "skip to next phase" via the hook), and feeds each direction's *effective* state (operator settings with the scenario laid over them) into the recommendation / before-after / baseline / assistant-context readouts. |
+
+## Dual-carriageway view (NB / SB / Both)
+
+A selector above the road chooses **Northbound**, **Southbound** or **Both**. Origin and destination
+now choose the km window only; direction is the selector's job (it used to be derived from which end
+of the route was picked first). NB-only and SB-only run and look as the single-carriageway page always
+did. Both simulates and draws the two together: stacked with a median between them, NB above running
+left to right, SB below running right to left, one shared km axis, and lane 1 (engine index 0,
+`LANE1_IS_INNERMOST`) against the median on both sides (NB is drawn with its lane order reversed to
+make that true).
+
+**How it is built.** `useDirectionSim(direction, shared)` owns one carriageway completely — its own
+`TrafficSim`, its own `createEngineBinding()`, scenario events and ownership, manual interventions,
+demand and plaza-flow fetch, inflow, lane count, metrics and baseline. It is called exactly twice,
+unconditionally; the inactive direction is simply not stepped or drawn. What the two share
+(`SharedRoadInputs`) is the km window, the exit list, the hour of day and the class profile, plus the
+run/pause state, sim speed and the fixed-step accumulator in `page.tsx`. Two separate engine bindings
+matter: a binding closes over private ownership state, so one shared between directions would let each
+side's "who owns the closure right now" overwrite the other's (`verify.ts`'s binding-isolation checks
+pin that applying one never touches the other). A **focus** direction exists only for the few things
+that can address one road at a time — the Command prompt (its request carries no direction), the
+full-screen bar, the "Add to" picker and "Load into simulation"; everything else in Both mode shows
+both carriageways, each named.
+
+### The two carriageways are independent (modelling limitation)
+
+The two `TrafficSim` instances never interact. There is **no cross-median effect of any kind**: an
+incident, closure, speed zone or queue on one carriageway cannot slow, divert or delay anything on the
+other (no rubbernecking delay, no debris crossing, no contraflow, no vehicles switching carriageway,
+no emergency vehicle using the far side). Each direction's inflow is set independently, anchored to its
+own observed volume, and is not conserved between them. Read Both mode as **two independent
+one-carriageway runs shown side by side**, not as a coupled model of a divided highway; the corridor
+totals below are arithmetic on two separate runs.
+
+Each carriageway also has its **own clock**. "Skip to next phase" fast-forwards only the carriageway
+whose events it is skipping, and changing one direction's lane count rebuilds only that direction, so
+after either the two can be at different simulated times. A corridor total then adds, maxes or weights
+readings taken at different moments. Each direction's own tile row, warm-up note and recommendation is
+correct for that direction; the total is not a synchronised snapshot.
+
+### Corridor totals (Both mode)
+
+Computed by `bothMetrics.ts` (pure; every rule is pinned in `verify.ts`, and the page only calls it).
+The Both-mode tiles show the corridor figure on top with the NB and SB values always visible beneath
+it, and print the kind of total in the tile itself.
+
+| Metric | Corridor figure | Rule |
+|---|---|---|
+| Active agents, throughput, CO₂ rate (also stopped count, unmet demand) | **sum** | counts and rates of physically separate traffic add |
+| Longest queue | **max** | a corridor is only as good as its worst queue; two 80 m queues are not one 160 m queue |
+| Average speed | **flow-weighted** | Σ(speed × throughput) / Σ(throughput), weight = `throughputPerMin`. Never a plain mean. Null (shown "—") when neither direction has any flow — it does not fall back to a plain mean |
+| Density | **none** | vehicles per km per lane on two separate carriageways has no meaningful sum or mean; the tile says "no total" and shows the two rows only (travel time is not totalled either) |
+
+The corridor "vs baseline" delta appears only when **both** directions have a baseline, and is built by
+the same rules from the two baselines, so a delta compares like with like.
+
+**Flow-weighting caveat.** Weighting by throughput means a direction that is **blocked has a throughput
+approaching zero, so it carries almost no weight, and the corridor speed reads as the healthy
+direction's speed.** A carriageway that has stopped entirely can therefore leave the headline speed
+looking fine. This is inherent to flow-weighting (which is what was asked for over a plain mean, which
+would let a near-empty carriageway pull the headline instead); it is not a bug and is not compensated
+for. The per-direction rows under every tile, and each carriageway's own recommendation, are what
+expose it — read those, not the corridor speed alone, when one side is closed or queued.
+
+### Seeds
+
+NB uses `12345` — unchanged from before the dual-carriageway work, so NB-only reproduces the previous
+single-carriageway behaviour (checked when it was introduced by building the engine both ways and
+comparing `metrics()` bit for bit). SB uses `12345 + 7919` (`SEED_BY_DIRECTION` in `useDirectionSim.ts`). Different, widely spaced
+seeds rather than a shared one, for the reason `replicate()` already spaces its own seeds by 7919
+(`simulation.ts`): adjacent seeds in the cheap PRNG (`mulberry32`) can correlate. Two further reasons
+here: NB and SB usually differ in inflow, lane count and ramps anyway, so a shared seed would buy no
+real reproducibility; and adjacent seeds would put synchronised arrival "bursts" on both carriageways,
+which an operator watching both at once would see.
+
+### Direction is both an explicit field and a bucket
+
+A `ScenarioEvent` (and the `NewEventSpec` it is made from) carries `direction: "NB" | "SB"` as its own
+field, **and** lives in that direction's own event list (the one held by that direction's
+`useDirectionSim`). Both, deliberately: the field lets a row, a log line or a message name its
+carriageway without knowing which list holds it, and having two records of the same fact means a drift
+between them is detectable instead of silent. Everything downstream is scoped by the bucket — one
+direction's events and manual controls go into `composeInterventions`, so conflicts, resource locks and
+ownership are per carriageway (the same event can exist on both at once; a refusal names its direction,
+e.g. `SB: Cannot add …`, via `conflictMessage` / `manualClosureMessage`).
+
+The consistency rule is `directionBucketsConsistent(byDirection)` in `adapter.ts`: every event in
+bucket X must have `direction === X`. **It is a pure checker that `verify.ts` pins** (including a
+deliberately mismatched case that must return `false`); **nothing calls it at runtime.** At runtime the
+invariant holds by construction, not by enforcement: `addEvent` stamps the direction from the spec and
+never infers or validates it, `addScenarioEvent` in the hook does not compare `spec.direction` with its
+own direction, and the panel keeps them in step by building the spec and choosing which direction's
+`onAdd` to call from the same variable. A new caller that adds events must keep that invariant itself.
+
+### Fast-forward cost and the skip guard
+
+"Skip to next phase" steps the engine without drawing. Measured (Chrome, development machine,
+2026-09-24, Both mode, through the real UI): roughly **2–5 ms of wall time per simulated second at
+600 m and 20–40 ms at 3 km with ramps** on the northbound carriageway while a queue is building; the
+southbound one over km 0–3 was roughly 6–10× cheaper (fewer ramp-fed vehicles). Identical setups varied
+by up to 1.5–2× from run to run. A calibrated-duration event is quick (a median multi-vehicle collision,
+13 simulated minutes, took 2–19 s end to end); a **capped** self accident (535 simulated minutes) took
+50–75 s at 600 m. At 3 km it is an estimate of about 9 minutes: the first phase measured 188 s, the tow
+phase about 277 s (extrapolated from a 240 s window), and the last phase was not measured.
+
+So a skip is guarded, in every view: its estimated wall time is shown beside the button, and one over
+two minutes (`SKIP_WARN_MS`) shows the estimate and asks before starting. The estimate is
+(simulated seconds ÷ `SIM_DT`) × the running cost of one `sim.step()` × `SKIP_COST_FACTOR` (2.5, in
+`page.tsx`). It is a deliberately **pessimistic upper bound, not a forecast**: across 27 timed skip
+intervals the real time was 0.27×–3.98× the bare prediction (median 1.46×, 90th percentile 2.4×). The
+slow end is a queue still growing (step cost rises with the vehicles on the road), the fast end a queue
+draining, so a draining phase is sometimes flagged when it need not be. In the runs used to set it, no
+skip over two minutes went unflagged.
 
 ## Which families are calibrated
 
@@ -70,7 +187,7 @@ cd Back-End
 ./node_modules/.bin/tsx ../Front-End-Dashboard/app/dashboard/ai-sandbox/scenarios/verify.ts
 ```
 
-Read-only, exits 1 on any failure, prints every `FAIL` with its name. As of this write-up: **1,271
+Read-only, exits 1 on any failure, prints every `FAIL` with its name. As of this write-up: **1,317
 checks**. It guards, in order: the sampler reproduces the calibrated quantiles and response shares
 exactly (distribution, cap behaviour, reproducibility per seed); the breakdown hierarchy fallback and
 its cap-source chain; the catalogue/assumptions' internal consistency (phases, shares, lanes,
@@ -82,12 +199,19 @@ phases, a road that stops suiting an event); the real engine loop, rebuild, remo
 every UI view (`resolutionView`, `describeResolution`, `effectiveState`, `describeBoundary`,
 `canvasMarks`); and a 1,500-trial fuzz check that re-composing with the previous ownership fed back
 is always a fixed point after one apply (the live-apply effect re-applies on every render — this is
-what stops that looping).
+what stops that looping). For the dual-carriageway view it also pins the direction bookkeeping
+(`directionBucketsConsistent`, including a case that must fail), that two engine bindings never touch
+each other, every corridor-aggregation rule in `bothMetrics.ts` (including zero flow and unequal
+flow), and — as source checks, since `page.tsx` cannot be imported by a Node script — the structure
+of click routing, the pinned command direction and the Both-mode tile labels; rendered behaviour is
+checked in a browser rather than here.
 
 There is also a strict `tsc` pass (two scratch tsconfigs — one for `scenarios/**` + `components/**`,
 one for `page.tsx` — both extending the project's own `tsconfig.json` with `noUnusedLocals`,
 `noUnusedParameters`, `noImplicitReturns`, `noFallthroughCasesInSwitch` turned on) and `next lint`,
-both expected clean; no `any`, non-null assertion (`!`) or cast (`as X`, except `as const`) belongs
+both expected clean apart from one item that is not this feature's (`LANE_CHANGE_BASE_SEC` at
+`simulation.ts:311` is declared and never read, which strict `tsc` and lint both report; it predates
+this work and `simulation.ts` is not modified by it); no `any`, non-null assertion (`!`) or cast (`as X`, except `as const`) belongs
 anywhere in this feature. New logic should be mutation-tested by hand (temporarily break the logic,
 confirm `verify.ts` actually fails, restore it) rather than trusted on the strength of a passing run
 alone — several early drafts of tests in this feature's history passed against broken code the first
@@ -107,12 +231,14 @@ time they were written.
 - **Timed events and `replicate()`**: the confidence-run / Monte-Carlo path (`replicate()` in
   `simulation.ts`) has no notion of a scenario's timed events — it replays the engine's *current,
   static* `Interventions` many times, which a scenario's phases don't fit (a phase's lanes/zone
-  change over the run). `page.tsx` refuses a confidence run outright while any scenario event exists
-  (`if (scenarioEvents.length > 0) return;`, with an operator-facing note explaining why), rather
+  change over the run). `page.tsx` refuses a confidence run outright while the carriageway has any scenario event
+  (`if (focused.scenarioEvents.length > 0) return;`, with an operator-facing note explaining why) and
+  always in Both mode ("Confidence runs support one carriageway at a time."), rather
   than running something that would silently misrepresent the events. Making a confidence run
   scenario-aware would mean teaching `replicate()` to accept a timed intervention schedule, which is
   a `simulation.ts` change and therefore outside this feature as scoped.
-- **Persistence**: `scenarioEvents` is plain in-memory React state (`useState` in `page.tsx`) with no
+- **Persistence**: each direction's `scenarioEvents` is plain in-memory React state (`useState` in
+  `useDirectionSim.ts`) with no
   save layer under it — a page refresh or navigation away loses every added event. Nothing here
   writes to the Back-End or to browser storage. Worth deciding deliberately (and likely scoping
   separately) before anyone relies on a scenario run surviving a reload.

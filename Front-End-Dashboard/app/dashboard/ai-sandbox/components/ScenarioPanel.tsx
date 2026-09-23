@@ -30,6 +30,7 @@ import {
   type VehicleKind,
 } from "../scenarios/catalogue";
 import { resolveDuration, type DurationMode, type ResolvedDuration } from "../scenarios/sampler";
+import DirectionPill, { DIRECTION_NAME } from "./DirectionPill";
 
 /**
  * The Add-event panel and the event list (phase 3).
@@ -52,21 +53,30 @@ export type SkipView = {
 
 export type AddOutcome = { readonly ok: true; readonly event: ScenarioEvent } | { readonly ok: false; readonly reason: string };
 
-type Props = {
+/**
+ * Above this, a skip in Both mode asks first. About two minutes of real waiting is where "fast-forward"
+ * stops feeling like one; the estimate is shown either way, but only a long one interrupts.
+ */
+export const SKIP_WARN_MS = 120_000;
+
+/** What a skip on one carriageway would do, worked out before it starts. */
+export type SkipPlan = {
+  /** What it skips to, in the words the progress bar will use ("Multi-vehicle collision #1 — ..."). */
+  readonly label: string;
+  /** Simulated seconds between now and that boundary. */
+  readonly simSeconds: number;
+  /** Predicted real time, ms; null until this machine has stepped the sim long enough to know its cost. */
+  readonly estimateMs: number | null;
+};
+
+/** Everything the panel needs about ONE carriageway. In Both mode it is handed two of these. */
+export type DirectionScenarioData = {
   events: readonly ScenarioEvent[];
   owners: Ownership;
   road: Road;
-  /**
-   * Which carriageway this panel's events belong to. Stamped onto every event this panel
-   * creates; the picker in Both mode (see D4) will let the operator change it before Add,
-   * but a value is always required — there is no direction-less event.
-   */
-  direction: Direction;
   /** Seconds after the end of warm-up, as of the last metrics refresh. */
   nowS: number;
   laneCount: number;
-  fromKm: number;
-  toKm: number;
   /** Km for a percentage along the stretch in the direction of travel: used only for a template's default placement. */
   kmAtPct: (pct: number) => number;
   manualClosure: ManualClosure;
@@ -76,8 +86,25 @@ type Props = {
   onRemove: (id: string) => void;
   skip: SkipView | null;
   canSkip: boolean;
+  skipPlan: SkipPlan | null;
   onSkip: () => void;
   onCancelSkip: () => void;
+};
+
+type Props = {
+  /** The carriageways on screen: one in NB-only/SB-only (nothing below changes), two in Both. */
+  directions: readonly Direction[];
+  /**
+   * Which carriageway "Add event" targets: the viewed one, or in Both mode the one picked in the
+   * "Add to" control at the top of the panel (which moves the page's focus with it, so the panel and
+   * the rest of the controls never disagree about which road is meant). Always a real direction —
+   * there is no direction-less event.
+   */
+  focus: Direction;
+  onFocus: (d: Direction) => void;
+  data: Readonly<Record<Direction, DirectionScenarioData>>;
+  fromKm: number;
+  toKm: number;
 };
 
 type DurationChoice = "sampled" | "p50" | "p90" | "manual";
@@ -211,7 +238,91 @@ function SkipProgress({ skip, onCancel }: { skip: SkipView; onCancel: () => void
   );
 }
 
-function EventRow({ event, owners, nowS, onRemove }: { event: ScenarioEvent; owners: Ownership; nowS: number; onRemove: () => void }) {
+/** "45 s", "2 min 40 s", "1 h 12 min": real waiting time, rounded to what a person reads off a warning. */
+export function formatWall(ms: number): string {
+  const s = Math.max(0, Math.round(ms / 1000));
+  if (s < 60) return `${s} s`;
+  const m = Math.floor(s / 60);
+  if (m < 60) return `${m} min${s % 60 >= 1 ? ` ${s % 60} s` : ""}`;
+  const h = Math.floor(m / 60);
+  return `${h} h${m % 60 >= 1 ? ` ${m % 60} min` : ""}`;
+}
+
+/**
+ * One carriageway's "Skip to next phase". `warn` is true only in Both mode: a skip that the running
+ * step cost says will take longer than SKIP_WARN_MS shows its estimate and asks first, instead of
+ * quietly holding the tab's CPU for minutes. NB-only/SB-only never warn, so they look and behave as
+ * they always have.
+ */
+function SkipControl({ data, warn }: { data: DirectionScenarioData; warn: boolean }) {
+  const [confirming, setConfirming] = useState(false);
+  if (data.skip !== null) return <SkipProgress skip={data.skip} onCancel={data.onCancelSkip} />;
+  const plan = data.skipPlan;
+  const estimateMs = plan === null ? null : plan.estimateMs;
+  const heavy = warn && plan !== null && estimateMs !== null && estimateMs > SKIP_WARN_MS;
+  if (confirming && heavy && plan !== null && estimateMs !== null) {
+    return (
+      <div className="sandbox-scn-skipwarn" data-scn="skip-warn">
+        <b>This skip may take up to about {formatWall(estimateMs)} of real time</b>
+        <span>
+          {plan.label}: {minutesText(plan.simSeconds)} simulated minutes. The figure is a cautious upper bound from how fast this
+          machine is stepping now — a queue that is still building makes it slower, one draining makes it faster. The page stays
+          responsive and you can cancel part-way, but this carriageway will not animate until it is done.
+        </span>
+        <div className="sandbox-btn-row" style={{ marginTop: 6 }}>
+          <button
+            className="btn-primary"
+            data-scn="skip-confirm"
+            style={{ marginLeft: 0 }}
+            onClick={() => {
+              setConfirming(false);
+              data.onSkip();
+            }}
+          >
+            Skip anyway
+          </button>
+          <button className="btn-muted" data-scn="skip-decline" onClick={() => setConfirming(false)}>
+            Not now
+          </button>
+        </div>
+      </div>
+    );
+  }
+  return (
+    <div className="sandbox-btn-row" style={{ marginTop: 0 }}>
+      <button
+        className="btn-muted"
+        data-scn="skip"
+        data-scn-skip-est={estimateMs === null ? "" : String(Math.round(estimateMs))}
+        disabled={!data.canSkip}
+        onClick={() => (heavy ? setConfirming(true) : data.onSkip())}
+        title="Fast-forward without drawing to the next phase change of any event."
+      >
+        Skip to next phase
+      </button>
+      {warn && estimateMs !== null && (
+        <span className={`sandbox-scn-est${heavy ? " is-heavy" : ""}`} data-scn="skip-est">
+          ≤ ~{formatWall(estimateMs)}
+        </span>
+      )}
+    </div>
+  );
+}
+
+function EventRow({
+  event,
+  owners,
+  nowS,
+  onRemove,
+  showDirection,
+}: {
+  event: ScenarioEvent;
+  owners: Ownership;
+  nowS: number;
+  onRemove: () => void;
+  /** Both mode: name the carriageway on the row itself, not only on the group it sits in. */
+  showDirection: boolean;
+}) {
   const p = eventProgress(event, nowS);
   const invalid = owners.invalid.find((i) => i.eventId === event.id);
   const yields = owners.yielded.filter((y) => y.eventId === event.id);
@@ -230,6 +341,7 @@ function EventRow({ event, owners, nowS, onRemove }: { event: ScenarioEvent; own
   return (
     <div className={`sandbox-scn-event${invalid ? " is-invalid" : ""}`} data-scn-event={event.id}>
       <div className="sandbox-scn-event-head">
+        {showDirection && <DirectionPill direction={event.direction} />}
         <b>{event.name}</b>
         <span className={`sandbox-scn-chip ${invalid ? "bad" : p.state}`}>{status}</span>
         <button className="btn-muted" data-scn="remove" onClick={onRemove}>
@@ -263,7 +375,12 @@ function EventRow({ event, owners, nowS, onRemove }: { event: ScenarioEvent; own
 }
 
 export default function ScenarioPanel(props: Props) {
-  const { events, owners, road, direction, nowS, laneCount, fromKm, toKm, kmAtPct, manualClosure, nextSeq } = props;
+  const { directions, focus: direction, data, fromKm, toKm } = props;
+  const both = directions.length > 1;
+  // Everything the form and its verdict depend on is the TARGET carriageway's: its events (conflicts and
+  // locks are scoped within a direction), its road, its lane count, its manual closure.
+  const target = data[direction];
+  const { events, road, laneCount, kmAtPct, manualClosure, nextSeq } = target;
   const [family, setFamily] = useState<FamilyKey>("breakdown_in_lane");
   const template: ScenarioTemplate = getTemplate(family);
   const [vehicle, setVehicle] = useState<VehicleKind>("truck");
@@ -325,12 +442,31 @@ export default function ScenarioPanel(props: Props) {
   const previewPhases = preview === null ? [] : schedulePhases(variant, preview);
 
   const add = () => {
-    const r = props.onAdd(spec);
+    const r = target.onAdd(spec);
     setRefusal(r.ok ? null : r.reason);
   };
 
   return (
     <div className="sandbox-scn" data-scn="panel">
+      {both && (
+        <div className="sandbox-dir-pick" data-scn="direction-pick" role="tablist" aria-label="Add the event to which carriageway">
+          <span className="k">Add to</span>
+          <div className="sandbox-dir-seg">
+            {directions.map((d) => (
+              <button
+                key={d}
+                role="tab"
+                aria-selected={direction === d}
+                className={`dir-${d}${direction === d ? " active" : ""}`}
+                data-scn-dir={d}
+                onClick={() => props.onFocus(d)}
+              >
+                {DIRECTION_NAME[d]}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
       <span className="sandbox-mini-label">Add a real-incident scenario</span>
       <div className="sandbox-scn-families">
         {SCENARIO_TEMPLATES.map((t) => (
@@ -443,27 +579,43 @@ export default function ScenarioPanel(props: Props) {
       {refusal !== null && verdict.ok && <p className="sandbox-live-note warn">{refusal}</p>}
       <div className="sandbox-btn-row">
         <button className="btn-primary" data-scn="add" disabled={!verdict.ok} onClick={add} style={{ marginLeft: 0 }}>
-          Add event
+          {both ? `Add to ${DIRECTION_NAME[direction]}` : "Add event"}
         </button>
       </div>
 
-      {events.length > 0 && (
-        <>
-          <span className="sandbox-mini-label">Events · timed from the end of warm-up</span>
-          {props.skip !== null ? (
-            <SkipProgress skip={props.skip} onCancel={props.onCancelSkip} />
-          ) : (
-            <div className="sandbox-btn-row" style={{ marginTop: 0 }}>
-              <button className="btn-muted" data-scn="skip" disabled={!props.canSkip} onClick={props.onSkip} title="Fast-forward without drawing to the next phase change of any event.">
-                Skip to next phase
-              </button>
-            </div>
+      {both
+        ? directions.some((d) => data[d].events.length > 0) && (
+            <>
+              <span className="sandbox-mini-label">Events · timed from the end of warm-up</span>
+              {directions.map((d) => {
+                const dd = data[d];
+                if (dd.events.length === 0) return null;
+                return (
+                  <div key={d} className={`sandbox-scn-group dir-${d}`} data-scn-group={d}>
+                    <div className="sandbox-scn-group-head">
+                      <DirectionPill direction={d} long />
+                      <span>
+                        {dd.events.length} event{dd.events.length === 1 ? "" : "s"}
+                      </span>
+                    </div>
+                    <SkipControl data={dd} warn />
+                    {dd.events.map((e) => (
+                      <EventRow key={e.id} event={e} owners={dd.owners} nowS={dd.nowS} onRemove={() => dd.onRemove(e.id)} showDirection />
+                    ))}
+                  </div>
+                );
+              })}
+            </>
+          )
+        : events.length > 0 && (
+            <>
+              <span className="sandbox-mini-label">Events · timed from the end of warm-up</span>
+              <SkipControl data={target} warn={false} />
+              {events.map((e) => (
+                <EventRow key={e.id} event={e} owners={target.owners} nowS={target.nowS} onRemove={() => target.onRemove(e.id)} showDirection={false} />
+              ))}
+            </>
           )}
-          {events.map((e) => (
-            <EventRow key={e.id} event={e} owners={owners} nowS={nowS} onRemove={() => props.onRemove(e.id)} />
-          ))}
-        </>
-      )}
     </div>
   );
 }

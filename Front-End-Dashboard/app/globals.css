@@ -6198,6 +6198,132 @@ body:has(.sandbox-main.is-expanded) {
 .sandbox-main.is-expanded .sandbox-view-buttons button { color: #ddd6fe; }
 .sandbox-main.is-expanded .sandbox-view-buttons button.active { background: #7c3aed; color: #fff; }
 
+/* ── Both mode: which carriageway is which (Phase D4) ───────────────────────────
+   One identity per direction, used by every pill, panel border, picker and banner so a control's
+   carriageway is read off the control itself. Solid fills with white text, so they hold on the light
+   page, the dark page and the full-screen overlay alike; the letters are always printed too — colour
+   is the second cue, never the only one. All of this is new: NB-only/SB-only render none of it. */
+.sandbox-page { --dir-nb: #0284c7; --dir-sb: #7c3aed; }
+
+.sandbox-dir-pill {
+  display: inline-block;
+  padding: 1px 8px;
+  border-radius: var(--radius-full);
+  font-size: 0.68rem;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  line-height: 1.55;
+  color: #fff;
+  vertical-align: middle;
+  white-space: nowrap;
+  text-transform: none;
+}
+.sandbox-dir-pill.dir-NB { background: var(--dir-nb); }
+.sandbox-dir-pill.dir-SB { background: var(--dir-sb); }
+
+/* A named, coloured block around whatever belongs to ONE carriageway. */
+.sandbox-dir-panel {
+  border: 1px solid var(--border-default);
+  border-left-width: 4px;
+  border-radius: var(--radius-sm);
+  padding: 8px 10px 10px;
+  margin-top: 10px;
+}
+.sandbox-dir-panel.dir-NB { border-left-color: var(--dir-nb); }
+.sandbox-dir-panel.dir-SB { border-left-color: var(--dir-sb); }
+.sandbox-dir-panel-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 2px;
+  font-size: 0.72rem;
+  color: var(--text-muted);
+}
+.sandbox-dir-panel-head .sandbox-dir-pill { font-size: 0.8rem; padding: 2px 11px; }
+
+/* "Add to" / "Commands apply to": a segmented picker whose active segment wears the direction's colour. */
+.sandbox-dir-pick { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin-bottom: 10px; }
+.sandbox-dir-pick .k {
+  font-size: 0.72rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-secondary);
+}
+.sandbox-dir-seg {
+  display: inline-flex;
+  gap: 3px;
+  padding: 3px;
+  border-radius: var(--radius-md);
+  border: 1.5px solid var(--border-strong);
+  background: var(--bg-surface-hover);
+}
+.sandbox-dir-seg button {
+  border: 0;
+  background: transparent;
+  padding: 6px 12px;
+  font-size: 0.8rem;
+  font-weight: 800;
+  border-radius: 7px;
+  cursor: pointer;
+  color: var(--text-secondary);
+}
+.sandbox-dir-seg button.dir-NB.active { background: var(--dir-nb); color: #fff; }
+.sandbox-dir-seg button.dir-SB.active { background: var(--dir-sb); color: #fff; }
+
+/* Metric tiles in Both mode: corridor figure on top, each carriageway's own value beneath. */
+.sandbox-metric-caption { margin: 12px 0 0; font-size: 0.78rem; color: var(--text-secondary); }
+.sandbox-metric-caption b { color: var(--text-primary); }
+.sandbox-metric-tag {
+  display: block;
+  width: fit-content;
+  margin-top: 3px;
+  text-transform: none;
+  letter-spacing: 0;
+  font-size: 0.62rem;
+  font-weight: 700;
+  padding: 0 6px;
+  border-radius: var(--radius-full);
+  background: var(--color-info-bg);
+  color: var(--color-info);
+  border: 1px solid var(--color-info-border);
+  cursor: help;
+}
+.sandbox-metric-val.is-none { font-size: 0.95rem; font-weight: 700; color: var(--text-muted); padding: 4px 0; }
+.sandbox-metric-dirs { margin-top: 6px; padding-top: 6px; border-top: 1px dashed var(--border-default); display: grid; gap: 4px; }
+.sandbox-metric-dir { display: flex; align-items: center; gap: 6px; font-size: 0.78rem; }
+.sandbox-metric-dir .v { font-weight: 700; color: var(--text-primary); }
+.sandbox-metric-dir .d { margin-left: auto; font-size: 0.68rem; font-weight: 700; }
+.sandbox-metric-dir .d.up { color: #16a34a; }
+.sandbox-metric-dir .d.down { color: var(--color-danger); }
+.sandbox-metric-dir .d.muted { color: var(--text-muted); }
+
+/* Events grouped by carriageway, and the guard on a long fast-forward. */
+.sandbox-scn-group { border-left: 4px solid var(--border-strong); padding-left: 8px; margin-top: 10px; }
+.sandbox-scn-group.dir-NB { border-left-color: var(--dir-nb); }
+.sandbox-scn-group.dir-SB { border-left-color: var(--dir-sb); }
+.sandbox-scn-group-head { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; font-size: 0.74rem; color: var(--text-muted); }
+.sandbox-scn-est { margin-left: 8px; font-size: 0.72rem; color: var(--text-muted); }
+.sandbox-scn-est.is-heavy { color: var(--color-warning); font-weight: 700; }
+.sandbox-scn-skipwarn {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 8px 10px;
+  font-size: 0.78rem;
+  color: var(--text-secondary);
+  background: var(--color-warning-bg);
+  border: 1px solid var(--color-warning-border);
+  border-radius: var(--radius-sm);
+}
+.sandbox-scn-skipwarn b { color: var(--color-warning); }
+
+/* Both mode: before/after placeholder for a carriageway with none yet, the command proposal's target, the full-screen bar's "acting on". */
+.sandbox-compare-none { margin: 10px 0 0; font-size: 0.78rem; color: var(--text-muted); }
+.sandbox-main.is-expanded .sandbox-compare-none { display: none; }
+.ai-plan-target { display: flex; align-items: center; gap: 6px; margin: 0 0 6px; font-size: 0.78rem; font-weight: 700; }
+.sandbox-fs-dir { display: inline-flex; align-items: center; gap: 6px; }
+
 .sandbox-mini-label {
   display: block;
   font-size: 0.78rem;

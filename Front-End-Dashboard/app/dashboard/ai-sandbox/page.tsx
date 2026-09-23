@@ -13,6 +13,7 @@ import {
 import {
   applyAtBoundary,
   canvasMarks,
+  describeBoundary,
   describeOwner,
   nextBoundaryAfter,
   roadOf,
@@ -22,7 +23,9 @@ import {
   type RoadFrame,
   type ScenarioEvent,
 } from "./scenarios/adapter";
-import ScenarioPanel from "./components/ScenarioPanel";
+import ScenarioPanel, { type DirectionScenarioData, type SkipPlan } from "./components/ScenarioPanel";
+import DirectionPill, { DIRECTION_NAME } from "./components/DirectionPill";
+import { combineBaselines, combineMetrics } from "./bothMetrics";
 import { useDirectionSim, type DirectionApi, type SharedRoadInputs } from "./useDirectionSim";
 
 const BACKEND = process.env.NEXT_PUBLIC_BACKEND_URL ?? "http://localhost:4000";
@@ -218,6 +221,19 @@ const WARMUP_S = 60;
 
 const SPEED_STEPS = [0.5, 1, 2, 4] as const;
 
+/**
+ * A skip's predicted wall time is (simulated seconds / SIM_DT) x the running cost of one sim.step(),
+ * times this. It is a deliberately PESSIMISTIC upper bound, not a forecast, and the number was set
+ * from measurement: across 27 timed skip intervals (multi-vehicle collision and self accident, median
+ * and capped, 600 m and 3 km, in Both mode) the real time ran from 0.27x to 3.98x the bare step-cost
+ * prediction, median 1.46x, 90th percentile 2.4x. The slow end is a queue still growing — the
+ * cost of a step rises with the vehicles on the road, and the step cost read before the skip is the
+ * cost of the road as it is NOW — plus the ~15-25% the 25 ms slices and setTimeout gaps add. The fast
+ * end is a queue draining. 2.5 covers the 90th percentile: no skip over two minutes went unflagged,
+ * and the price is a draining phase that is flagged when it need not be.
+ */
+const SKIP_COST_FACTOR = 2.5;
+
 /* takenWith records what was on the road at capture time. A baseline is not
  * necessarily a clear road — comparing "one lane closed" against "two lanes
  * closed" is a perfectly good question — so the snapshot has to carry its own
@@ -282,6 +298,8 @@ export default function AiSandboxPage() {
   const lastFrameRef = useRef<number>(0);
   const metricAccRef = useRef<number>(0);
   const simAccRef = useRef<number>(0);
+  /** Running cost of one sim.step(), ms, per direction — what a skip's estimated duration is worked out from. Null until the animation loop has stepped that direction. */
+  const stepCostRef = useRef<Record<Direction, number | null>>({ NB: null, SB: null });
 
   // Corridor exits come from the shared list so this tab, maintenance and the
   // map all offer the same set. See lib/nlex-exits.
@@ -350,18 +368,17 @@ export default function AiSandboxPage() {
   const routeFromKm = Math.min(originExit?.km ?? 0, destExit?.km ?? 0);
   const routeToKm = Math.max(originExit?.km ?? 0, destExit?.km ?? 0);
 
-  /** NB only, SB only, or both carriageways at once (median-separated — see Phase D3 for the canvas). */
+  /** NB only, SB only, or both carriageways at once (median-separated on the canvas — renderBoth). */
   const [view, setView] = useState<Direction | "Both">("NB");
   const activeDirections: readonly Direction[] = view === "Both" ? ["NB", "SB"] : [view];
   /**
-   * Which direction the still-single-direction-shaped panels (Interventions,
-   * Scenario events, Baseline, Confidence run, metric tiles, the canvas, the
-   * GLM command context) read and write, while in Both mode. NB-only/SB-only
-   * needs no choice — the one active direction IS the focus, so those modes
-   * are byte-for-byte the pre-D2 behaviour. Splitting every one of those
-   * panels to show both directions at once in Both mode is Phase D4's job;
-   * D2 proves the two engines run correctly and gives the operator something
-   * sane to look at and control in the meantime, not the final Both-mode UI.
+   * The carriageway the few things that can only address ONE road at a time act on, in Both
+   * mode: the Command prompt (the request fields carry no direction), the full-screen bar, the
+   * "Add to" picker in Scenario events, "Load into simulation", and the km-window sliders' primary
+   * slot. Everything else in Both mode — tiles, Interventions, Baseline, before/after,
+   * recommendations, event lists — shows BOTH carriageways, each named. Clicking a road with a
+   * placing tool armed moves it. NB-only/SB-only needs no choice: the one active direction IS the
+   * focus, so those modes behave as they did before Both mode existed.
    */
   const [focusedDirection, setFocusedDirection] = useState<Direction>("NB");
   const focusDirection: Direction = view === "Both" ? focusedDirection : view;
@@ -476,7 +493,7 @@ export default function AiSandboxPage() {
     return EXITS.reduce((best, x) => (Math.abs(x.km - mid) < Math.abs(best.km - mid) ? x : best));
   })();
 
-  // The canvas draws the FOCUSED direction only (Phase D3 draws both carriageways at once).
+  // Single-direction canvas label (NB-only/SB-only); Both mode labels each carriageway itself in renderBoth.
   const dirLabel = focusDirection === "NB" ? "Northbound" : "Southbound";
 
   const locationLabel = nearestExit
@@ -540,6 +557,8 @@ export default function AiSandboxPage() {
   const [commandBusy, setCommandBusy] = useState(false);
   const [commandError, setCommandError] = useState<string | null>(null);
   const [plan, setPlan] = useState<CommandPlan | null>(null);
+  /** The carriageway a proposal was worked out FOR — fixed when the command is sent, so changing focus while it is on screen cannot redirect Apply to a different road. */
+  const [planDirection, setPlanDirection] = useState<Direction | null>(null);
 
   /* Anchor the inflow to the traffic that actually passes THIS segment.
    *
@@ -612,8 +631,39 @@ export default function AiSandboxPage() {
   const nb = useDirectionSim("NB", sharedRoadInputs);
   const sb = useDirectionSim("SB", sharedRoadInputs);
   const byDirection: Record<Direction, DirectionApi> = { NB: nb, SB: sb };
-  /** The single-direction-shaped panels' data source while Both mode has not yet split them (Phase D4). NB-only/SB-only: this IS the (only) active direction. */
+  /** The carriageway the single-road things act on (see focusedDirection). NB-only/SB-only: this IS the (only) active direction. */
   const focused = byDirection[focusDirection];
+  const both = view === "Both";
+
+  /* ── Which carriageway a control or a click acts on ───────────────────────
+   *
+   * Placement is armed per direction (each direction owns its own placing flags and half-drawn
+   * closure), but only ever ONE thing is armed at a time, on one direction. Arming anything first
+   * disarms everything, so there is never an invisible armed state on the carriageway whose controls
+   * are not on screen — and choosing a different focus while something is armed drops it, for the
+   * same reason. */
+  const [placeNote, setPlaceNote] = useState<string | null>(null);
+  const disarmPlacing = () => {
+    for (const d of [nb, sb]) {
+      d.setPlacingIncident(false);
+      d.setPlacingClosure(false);
+    }
+    setPlaceNote(null);
+  };
+  const chooseFocus = (d: Direction) => {
+    if (d !== focusDirection) disarmPlacing();
+    setFocusedDirection(d);
+  };
+  const armPlacing = (direction: Direction, kind: "incident" | "closure") => {
+    const d = byDirection[direction];
+    const wasOn = kind === "incident" ? d.placingIncident : d.placingClosure;
+    disarmPlacing();
+    if (wasOn) return;
+    if (both) setFocusedDirection(direction);
+    if (kind === "incident") d.setPlacingIncident(true);
+    else d.setPlacingClosure(true);
+  };
+  const placingArmed = activeDirections.some((dn) => byDirection[dn].placingIncident || byDirection[dn].placingClosure);
 
   /* ── Confidence run ──────────────────────────────────────────────────────
    *
@@ -626,17 +676,19 @@ export default function AiSandboxPage() {
    * tens of millions of integration steps and would lock the tab solid. The
    * pump below yields to the browser between simulated seconds.
    *
-   * Runs against the FOCUSED direction only — replicate() takes one static
+   * Runs against the single active direction — replicate() takes one static
    * Interventions snapshot and cannot follow a timed event OR two carriageways
-   * at once (see Phase D4.6 for Both mode's disabled state; this phase keeps
-   * it working exactly as before for NB-only/SB-only). */
+   * at once, so Both mode disables it outright (with a message) rather than
+   * running one road and letting the operator think it covered both. */
   const [repRuns, setRepRuns] = useState(10);
   const [repResult, setRepResult] = useState<ReplicationResult | null>(null);
   const [repProgress, setRepProgress] = useState<number | null>(null);
   const repCancel = useRef(false);
 
   const runReplications = useCallback(() => {
-    // replicate() runs static interventions and cannot follow a timed event.
+    // replicate() runs one static Interventions snapshot on one carriageway: it cannot follow a timed
+    // event, and it cannot run two roads at once (Both mode disables it outright — Phase D4.6).
+    if (both) return;
     if (focused.scenarioEvents.length > 0) return;
     if (repProgress != null) { repCancel.current = true; return; }
     repCancel.current = false;
@@ -679,7 +731,7 @@ export default function AiSandboxPage() {
       setTimeout(pump, 0);
     };
     setTimeout(pump, 0);
-  }, [repProgress, repRuns, segLengthM, classProfile, focused]);
+  }, [both, repProgress, repRuns, segLengthM, classProfile, focused]);
 
   // What the canvas draws for each direction's scenario events: kept in a ref (the render loop runs
   // outside React) and refreshed whenever either direction's own events/binding change — mirrors the
@@ -721,7 +773,11 @@ export default function AiSandboxPage() {
             // would race for the same sim. The other direction (if also active) is unaffected and
             // steps normally here, which is exactly what "skip is per direction" requires.
             if (!sim || d.skipRef.current !== null) continue;
+            const stepStart = performance.now();
             sim.step(SIM_DT);
+            const stepMs = performance.now() - stepStart;
+            const prevCost = stepCostRef.current[direction];
+            stepCostRef.current[direction] = prevCost === null ? stepMs : prevCost + (stepMs - prevCost) * 0.02;
             const sctx = d.scenarioCtxRef.current;
             if (sctx) {
               const r = applyAtBoundary(d.scenarioBinding, sim, sctx.controls, sctx.events, sctx.frame, d.scenarioDueRef.current);
@@ -767,54 +823,62 @@ export default function AiSandboxPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [running, simSpeed, activeDirections.join(), view, focusDirection, nb.simRef, sb.simRef, nb.scenarioBinding, sb.scenarioBinding, nb.publishOwners, sb.publishOwners, nb.setMetrics, sb.setMetrics]);
 
-  // Incident placement: arm "placing" mode, then let the user click the
-  // simulation to choose exactly where (which lane / how far along) the
-  // incident is dropped. One accident per click — re-arm to drop another.
-  // Placement always targets the FOCUSED direction (splitting Interventions
-  // so a click could act on the OTHER carriageway is Phase D4's job, same as
-  // the rest of that rail). What D3 does fix: in Both mode the canvas draws
-  // two carriageways with dualRoadLayout's geometry, not one with
-  // roadLayout's — a click is now read back with whichever geometry actually
-  // drew the pixels under the cursor, and a click that lands in the
-  // non-focused carriageway's band is rejected rather than silently mapped
-  // through the wrong formula.
-  const togglePlacing = () => focused.setPlacingIncident((p) => !p);
-
-  const placeIncidentAt = (e: React.MouseEvent<HTMLCanvasElement>) => {
-    if (!focused.placingIncident && !focused.placingClosure) return;
+  /* Incident placement and closure drawing: arm a mode from a control, then click the road.
+   *
+   * In NB-only/SB-only the click acts on the one carriageway there is. In Both mode it acts on the
+   * carriageway that was CLICKED, and moves focus there (so the controls beside the road follow the
+   * hand): armed on NB, click SB, and the incident lands on SB. A click that maps to no carriageway
+   * at all — the median, the km axis, the ramp gutters, the padding — is refused with a line saying
+   * so, rather than being snapped to the nearest lane.
+   *
+   * The one exception is the SECOND click of a closure: the stretch belongs to the carriageway its
+   * first click was on, and the second click only supplies the end km, which is the same km on either
+   * carriageway (they share one axis) — so it completes the stretch wherever on either road it lands,
+   * instead of throwing away the start because the end went over the median-side lane. */
+  const handleCanvasClick = (e: React.MouseEvent<HTMLCanvasElement>) => {
+    const armed = activeDirections.find((dn) => byDirection[dn].placingIncident || byDirection[dn].placingClosure);
+    if (armed === undefined) return;
     const canvas = canvasRef.current;
-    const sim = focused.simRef.current;
-    if (!canvas || !sim) return;
+    if (!canvas) return;
 
     // Invert the same geometry the renderer uses to map the click back to
-    // (lane, x-in-metres). Keep these formulas in sync with render()/renderBoth().
+    // (carriageway, lane, x-in-metres). Keep these formulas in sync with render()/renderBoth().
     const rect = canvas.getBoundingClientRect();
     const cssW = rect.width;
     const cssH = rect.height;
     const cx = e.clientX - rect.left;
     const cy = e.clientY - rect.top;
-    const L = sim.cfg.length;
-    const lanes = sim.cfg.laneCount;
 
+    let target: Direction;
     let laneH: number;
     let roadTop: number;
-    if (view === "Both") {
-      const otherSim = byDirection[focusDirection === "NB" ? "SB" : "NB"].simRef.current;
-      if (!otherSim) return;
+    if (both) {
+      const simNB = nb.simRef.current;
+      const simSB = sb.simRef.current;
+      if (!simNB || !simSB) return;
       const layout = dualRoadLayout({
         cssW,
         cssH,
-        lanesNB: focusDirection === "NB" ? lanes : otherSim.cfg.laneCount,
-        lanesSB: focusDirection === "SB" ? lanes : otherSim.cfg.laneCount,
-        segLenM: L,
+        lanesNB: simNB.cfg.laneCount,
+        lanesSB: simSB.cfg.laneCount,
+        segLenM: simNB.cfg.length,
         exitCount: exitsRef.current.length,
         maxLaneH: maxLaneRef.current,
       });
+      const inNB = cy >= layout.nbRoadTop && cy <= layout.nbRoadTop + layout.nbRoadH;
+      const inSB = cy >= layout.sbRoadTop && cy <= layout.sbRoadTop + layout.sbRoadH;
+      if (!inNB && !inSB) {
+        setPlaceNote("That is the median, the km axis or the verge — click a lane on either carriageway.");
+        return;
+      }
+      const drafting = byDirection[armed].placingClosure && byDirection[armed].closureDraftKm != null;
+      target = drafting ? armed : inNB ? "NB" : "SB";
       laneH = layout.laneH;
-      roadTop = focusDirection === "NB" ? layout.nbRoadTop : layout.sbRoadTop;
-      const roadH = laneH * lanes;
-      if (cy < roadTop || cy > roadTop + roadH) return; // clicked the other carriageway's band, or the median
+      roadTop = target === "NB" ? layout.nbRoadTop : layout.sbRoadTop;
     } else {
+      target = armed;
+      const sim0 = byDirection[target].simRef.current;
+      if (!sim0) return;
       // Same geometry render() used for this frame, or a click maps to a
       // different lane than the one under the cursor. The ramp gutter is part of
       // that geometry: reserving it moves the road up, and a handler that did not
@@ -822,57 +886,74 @@ export default function AiSandboxPage() {
       // roadTop comes from the shared helper too, so there is no copy of the
       // vertical placement left to drift out of step with the renderer.
       const single = roadLayout({
-        cssW: rect.width,
+        cssW,
         cssH,
-        lanes,
-        segLenM: L,
+        lanes: sim0.cfg.laneCount,
+        segLenM: sim0.cfg.length,
         exitCount: exitsRef.current.length,
         maxLaneH: maxLaneRef.current,
-        rampsAbove: focusDirection === "NB",
+        rampsAbove: target === "NB",
       });
       laneH = single.laneH;
       roadTop = single.roadTop;
     }
 
+    const td = byDirection[target];
+    const sim = td.simRef.current;
+    if (!sim) return;
+    const L = sim.cfg.length;
+    const lanes = sim.cfg.laneCount;
     // The drawn slot (0 at roadTop, downward) is the engine lane index UNLESS this is Both mode's
     // NB carriageway, which draws lane 0 at the BOTTOM of its block (laneSlotTop's reverseLanes) —
     // same inversion the renderer applies, read backwards.
     const drawnSlot = Math.max(0, Math.min(lanes - 1, Math.floor((cy - roadTop) / laneH)));
-    const reverseLanes = view === "Both" && focusDirection === "NB";
-    const lane = reverseLanes ? lanes - 1 - drawnSlot : drawnSlot;
-    const alongFrac = focusDirection === "SB" ? 1 - cx / cssW : cx / cssW;
+    const lane = both && target === "NB" ? lanes - 1 - drawnSlot : drawnSlot;
+    const alongFrac = target === "SB" ? 1 - cx / cssW : cx / cssW;
     const x = Math.max(0, Math.min(L, alongFrac * L));
-    if (focused.placingClosure) {
+    setPlaceNote(null);
+
+    if (byDirection[armed].placingClosure) {
       // Two clicks mark the stretch an operator actually closes — "Km 0.20 to
       // 0.30" — in either order. One click used to move only the start, so the
       // works always ran on to the end of the span.
-      const km = Number(focused.kmAt(x).toFixed(2));
-      if (focused.closureDraftKm == null) {
-        focused.setClosureDraftKm(km);
+      const km = Number(td.kmAt(x).toFixed(2));
+      if (td.closureDraftKm == null) {
+        // First click: the stretch is on THIS carriageway. If the mode was armed on the other one,
+        // hand it over (its own half-drawn state is cleared by the leave-placing effect below).
+        if (target !== armed) {
+          byDirection[armed].setPlacingClosure(false);
+          td.setPlacingClosure(true);
+        }
+        if (both && target !== focusDirection) setFocusedDirection(target);
+        td.setClosureDraftKm(km);
         sim.interventions.closureDraft = { from: x, to: x };
         return;
       }
-      const a = Math.min(focused.closureDraftKm, km);
-      const b = Math.max(Math.max(focused.closureDraftKm, km), Math.min(toKm, a + 0.01));
-      focused.setClosureKm(a);
-      focused.setClosureEndKm(b);
-      focused.setPlacingClosure(false);
+      const a = Math.min(td.closureDraftKm, km);
+      const b = Math.max(Math.max(td.closureDraftKm, km), Math.min(toKm, a + 0.01));
+      td.setClosureKm(a);
+      td.setClosureEndKm(b);
+      td.setPlacingClosure(false);
       return;
     }
-    focused.placeIncident(lane, x);
-    focused.setPlacingIncident(false); // one accident per click; re-arm to drop another
+    td.placeIncident(lane, x);
+    disarmPlacing(); // one accident per click; re-arm to drop another
+    if (both && target !== focusDirection) setFocusedDirection(target);
   };
 
   // Follow the cursor after the first click so the stretch is seen before it is set.
   const previewClosureAt = (e: React.MouseEvent<HTMLCanvasElement>) => {
-    const sim = focused.simRef.current;
+    const drafting = activeDirections.find((dn) => byDirection[dn].placingClosure && byDirection[dn].closureDraftKm != null);
+    if (drafting === undefined) return;
+    const d = byDirection[drafting];
+    const sim = d.simRef.current;
     const canvas = canvasRef.current;
-    if (!sim || !canvas || !focused.placingClosure || focused.closureDraftKm == null) return;
+    if (!sim || !canvas || d.closureDraftKm == null) return;
     const rect = canvas.getBoundingClientRect();
     const L = sim.cfg.length;
     const frac = (e.clientX - rect.left) / rect.width;
-    const x = Math.max(0, Math.min(L, (focusDirection === "SB" ? 1 - frac : frac) * L));
-    const startM = focused.mAt(focused.closureDraftKm);
+    const x = Math.max(0, Math.min(L, (drafting === "SB" ? 1 - frac : frac) * L));
+    const startM = d.mAt(d.closureDraftKm);
     sim.interventions.closureDraft = { from: Math.min(startM, x), to: Math.max(startM, x) };
   };
 
@@ -895,21 +976,18 @@ export default function AiSandboxPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sb.placingClosure, sb.setClosureDraftKm, sb.simRef]);
 
-  // Esc leaves either placing mode, on the focused direction (the one placement is ever armed on).
+  // Esc leaves either placing mode, wherever it is armed.
   useEffect(() => {
-    if (!focused.placingIncident && !focused.placingClosure) return;
+    if (!placingArmed) return;
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") {
-        focused.setPlacingIncident(false);
-        focused.setPlacingClosure(false);
-      }
+      if (e.key === "Escape") disarmPlacing();
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-    // focused is a fresh object every render (it's nb or sb, both fresh per the note above); same
-    // reasoning — only the fields actually read are listed, each itself stable.
+    // disarmPlacing closes over the two hook objects, fresh every render; what it calls (the setters) is
+    // stable, and placingArmed is the only thing that decides whether the listener should exist.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [focused.placingIncident, focused.placingClosure, focused.setPlacingIncident, focused.setPlacingClosure]);
+  }, [placingArmed]);
 
   // Ask the backend to turn the sentence into simulation actions. This only
   // ever produces a PROPOSAL — applyPlan() below is what actually touches the
@@ -918,10 +996,16 @@ export default function AiSandboxPage() {
     const text = command.trim();
     if (!text || commandBusy) return;
 
+    // The direction is pinned NOW: what is sent, what the proposal says it is for, and where Apply
+    // lands are all this one carriageway, whatever focus does while the request is in flight.
+    const sentTo = byDirection[focusDirection];
+    const sentDirection = focusDirection;
+
     setCommandBusy(true);
     setCommandError(null);
     setCommandNote(null);
     setPlan(null);
+    setPlanDirection(null);
 
     try {
       const res = await fetch(`${BACKEND}/api/ai-sandbox/command`, {
@@ -930,20 +1014,19 @@ export default function AiSandboxPage() {
         body: JSON.stringify({
           command: text,
           context: {
-            laneCount: focused.laneCount,
+            laneCount: sentTo.laneCount,
             segmentLengthM: segLengthM,
             // The model reasons in 1-indexed lane numbers, the sim in 0-indexed
             // array positions. Convert on the way out and back again in
             // applyPlan() so the two never mix.
             // What is actually on the road (operator + running scenario), in the existing fields —
             // no new "direction" field (no backend change, per Phase D1 §4): this is always the
-            // FOCUSED direction's effective state. NB-only/SB-only, that's unambiguous. In Both
-            // mode it is whichever carriageway the operator has focused — see the focus switch in
-            // the JSX below, which Phase D4 will make an explicit, required choice rather than a
-            // silent default.
-            closedLanes: focused.eff.closedLanes.map((c, i) => (c ? i + 1 : 0)).filter(Boolean),
-            speedLimitKmh: focused.eff.speedLimitKmh,
-            incidentCount: focused.effIncidentCount,
+            // FOCUSED direction's effective state, captured as `sentTo` above. NB-only/SB-only,
+            // that's unambiguous. In Both mode the Command panel shows which carriageway that is
+            // and lets the operator change it right there; the proposal is then labelled with it.
+            closedLanes: sentTo.eff.closedLanes.map((c, i) => (c ? i + 1 : 0)).filter(Boolean),
+            speedLimitKmh: sentTo.eff.speedLimitKmh,
+            incidentCount: sentTo.effIncidentCount,
             exits: EXITS.map((x) => ({ exit_id: x.exit_id, exit_name: displayExitName(x.exit_name) })),
           },
         }),
@@ -955,6 +1038,7 @@ export default function AiSandboxPage() {
         return;
       }
       setPlan(json.data as CommandPlan);
+      setPlanDirection(sentDirection);
     } catch {
       setCommandError("Could not reach the backend. Is it running on port 4000?");
     } finally {
@@ -965,9 +1049,11 @@ export default function AiSandboxPage() {
   // Apply a confirmed plan to the simulation. Every action was already range-
   // checked server-side; the bounds are re-asserted here because this function
   // is the last thing between model output and sim state. Applies to the
-  // FOCUSED direction only, matching the context runCommand sent.
+  // direction the proposal was made for (planDirection), matching the context runCommand sent.
   const applyPlan = () => {
-    const sim = focused.simRef.current;
+    // The carriageway the proposal was made for, not whatever is focused now.
+    const planTarget = byDirection[planDirection ?? focusDirection];
+    const sim = planTarget.simRef.current;
     if (!plan || !sim) return;
     const applied: string[] = [];
 
@@ -977,7 +1063,7 @@ export default function AiSandboxPage() {
     // resizes the road applies only that and says the rest was dropped.
     const resize = plan.actions.find((a) => a.type === "set_lane_count");
     if (resize && resize.type === "set_lane_count") {
-      focused.setLaneCount(resize.lanes);
+      planTarget.setLaneCount(resize.lanes);
       const dropped = plan.actions.length - 1;
       setCommandNote(
         `Applied: ${resize.lanes} lanes.` +
@@ -997,42 +1083,42 @@ export default function AiSandboxPage() {
         case "close_lane":
         case "open_lane": {
           const shut = a.type === "close_lane";
-          const idx = a.lanes.map((n) => n - 1).filter((i) => i >= 0 && i < focused.laneCount);
-          const held = shut ? [] : idx.filter((i) => focused.lockedLanes[i]);
-          if (held.length > 0 && focused.owners.closure) {
-            notApplied.push(`Lane ${held.map((i) => i + 1).join(", ")} stays closed (driven by ${describeOwner(focused.owners.closure)})`);
+          const idx = a.lanes.map((n) => n - 1).filter((i) => i >= 0 && i < planTarget.laneCount);
+          const held = shut ? [] : idx.filter((i) => planTarget.lockedLanes[i]);
+          if (held.length > 0 && planTarget.owners.closure) {
+            notApplied.push(`Lane ${held.map((i) => i + 1).join(", ")} stays closed (driven by ${describeOwner(planTarget.owners.closure)})`);
           }
           const free = idx.filter((i) => !held.includes(i));
           if (free.length === 0) break;
-          focused.setClosedLanes((prev) => prev.map((c, i) => (free.includes(i) ? shut : c)));
+          planTarget.setClosedLanes((prev) => prev.map((c, i) => (free.includes(i) ? shut : c)));
           applied.push(`${shut ? "Closed" : "Opened"} lane ${free.map((i) => i + 1).join(", ")}`);
           break;
         }
         case "set_speed_limit":
-          if (focused.owners.speedZone) {
-            notApplied.push(`The speed zone is driven by ${describeOwner(focused.owners.speedZone)}`);
+          if (planTarget.owners.speedZone) {
+            notApplied.push(`The speed zone is driven by ${describeOwner(planTarget.owners.speedZone)}`);
             break;
           }
-          focused.setSpeedLimit(a.kmh);
+          planTarget.setSpeedLimit(a.kmh);
           applied.push(a.kmh == null ? "Removed the speed limit" : `Speed limit ${a.kmh} km/h`);
           break;
         case "add_incident": {
           const x = (a.positionPct / 100) * segLengthM;
-          focused.placeIncident(a.lane - 1, x);
+          planTarget.placeIncident(a.lane - 1, x);
           applied.push(`Incident in lane ${a.lane}`);
           break;
         }
         case "clear_incidents":
           // Only the operator's: a running scenario's obstacle stays until its event ends.
-          focused.clearIncidents();
+          planTarget.clearIncidents();
           applied.push("Cleared incidents");
           break;
         case "set_inflow":
-          focused.setInflow(a.vehPerHour);
+          planTarget.setInflow(a.vehPerHour);
           applied.push(`Inflow ${fmt(a.vehPerHour)} veh/h`);
           break;
         case "set_lane_count":
-          focused.setLaneCount(a.lanes);
+          planTarget.setLaneCount(a.lanes);
           applied.push(`${a.lanes} lanes`);
           break;
         case "set_route": {
@@ -1059,20 +1145,69 @@ export default function AiSandboxPage() {
   // per direction there, read here as focused.clearIncidents etc. (see the JSX below).
   const laneOverridden = segmentLanes != null && focused.laneCount !== segmentLanes;
 
-  /* Baseline capture is a three-step procedure and the panel now says so.
-   * Throughput is counted over the run so far, so a snapshot taken seconds
-   * after a rebuild records a near-zero flow — the road has not filled and
-   * nobody has finished the segment yet — and every later comparison then
-   * reads as a miracle. Hence the settling step, which is the one an operator
-   * would never guess at. Reads the FOCUSED direction (see the D2 scoping note
-   * above useDirectionSim) — Phase D4 shows this per direction in Both mode. */
-  const elapsedS = focused.metrics?.elapsedS ?? 0;
-  const warmedUp = elapsedS >= WARMUP_S;
-  const stepDone = [warmedUp, focused.baseline != null, focused.baseline != null && focused.anyIntervention];
-  const activeStep = stepDone.findIndex((d) => !d) + 1; // 0 once all are done
-  const stepCls = (n: number) =>
-    `sandbox-step${stepDone[n - 1] ? " is-done" : activeStep === n ? " is-now" : ""}`;
-  const recommendation = getRecommendation(focused.metrics, focused.baseline, [...focused.eff.closedLanes], focused.effIncidentCount, focused.eff.speedLimitKmh);
+  const recommendations: Record<Direction, ReturnType<typeof getRecommendation>> = {
+    NB: getRecommendation(nb.metrics, nb.baseline, [...nb.eff.closedLanes], nb.effIncidentCount, nb.eff.speedLimitKmh),
+    SB: getRecommendation(sb.metrics, sb.baseline, [...sb.eff.closedLanes], sb.effIncidentCount, sb.eff.speedLimitKmh),
+  };
+  const recommendation = recommendations[focusDirection];
+
+  // Corridor readouts (Both mode only): built from the two directions' own metrics/baselines by the
+  // rules in bothMetrics.ts, so the totals and the per-direction rows can never disagree.
+  const corridor = both && nb.metrics && sb.metrics ? combineMetrics(nb.metrics, sb.metrics) : null;
+  const corridorBase = both && nb.baseline && sb.baseline ? combineBaselines(nb.baseline, sb.baseline) : null;
+  const rowsOf = (value: (m: Metrics) => string, delta?: (m: Metrics, b: Baseline) => number | null): TileRow[] =>
+    (["NB", "SB"] as const).map((dn) => {
+      const d = byDirection[dn];
+      return { direction: dn, value: d.metrics ? value(d.metrics) : "…", delta: delta && d.metrics && d.baseline ? delta(d.metrics, d.baseline) : null };
+    });
+
+  // What a skip on each carriageway would take, before it starts.
+  const scenarioDataFor = (dn: Direction): DirectionScenarioData => {
+    const d = byDirection[dn];
+    const other: Direction = dn === "NB" ? "SB" : "NB";
+    const next = nextBoundaryAfter(d.scenarioEvents, d.scenarioRoad, d.scenarioNowS);
+    let skipPlan: SkipPlan | null = null;
+    if (next !== null) {
+      const what = describeBoundary(d.scenarioEvents, d.scenarioRoad, next, d.scenarioNowS);
+      const cost = stepCostRef.current[dn] ?? stepCostRef.current[other];
+      const simSeconds = Math.max(0, next - d.scenarioNowS);
+      // Two skips at once share the one thread: each takes about twice as long as it would alone.
+      const sharing = byDirection[other].skip !== null ? 2 : 1;
+      skipPlan = {
+        label: what ? what.label : "the next phase",
+        simSeconds,
+        estimateMs: cost === null ? null : (simSeconds / SIM_DT) * cost * SKIP_COST_FACTOR * sharing,
+      };
+    }
+    return {
+      events: d.scenarioEvents,
+      owners: d.owners,
+      road: d.scenarioRoad,
+      nowS: d.scenarioNowS,
+      laneCount: d.laneCount,
+      kmAtPct: (pct) => d.kmAt((d.spanM * pct) / 100),
+      manualClosure: { closedLanes: d.closedLanes, closurePoint: d.manualControls.closurePoint, closureEnd: d.manualControls.closureEnd },
+      nextSeq: d.scenarioSeqRef.current + 1,
+      onAdd: d.addScenarioEvent,
+      onRemove: d.removeScenarioEvent,
+      skip: d.skip,
+      canSkip: next !== null,
+      skipPlan,
+      onSkip: d.skipToNextPhase,
+      onCancelSkip: d.cancelSkip,
+    };
+  };
+  const nbEvents = nb.scenarioEvents.length;
+  const sbEvents = sb.scenarioEvents.length;
+  const scenarioSummary = both
+    ? nbEvents + sbEvents === 0
+      ? "none"
+      : `${nbEvents + sbEvents} event${nbEvents + sbEvents === 1 ? "" : "s"} · NB ${nbEvents} · SB ${sbEvents}`
+    : focused.scenarioEvents.length === 0
+      ? "none"
+      : `${focused.scenarioEvents.length} event${focused.scenarioEvents.length === 1 ? "" : "s"} · ${focused.activeScenarioText.length > 0 ? focused.activeScenarioText[0] : "none running"}`;
+  const baselineSummaryOf = (d: DirectionApi) => (d.baseline ? `${fmt(d.baseline.avgSpeedKmh)} km/h · ${fmt(d.baseline.throughputPerMin)}/min captured` : "not captured");
+  const baselineSummary = both ? `NB ${nb.baseline ? "captured" : "not captured"} · SB ${sb.baseline ? "captured" : "not captured"}` : baselineSummaryOf(focused);
 
   return (
     <section className="ds-content sandbox-page">
@@ -1106,7 +1241,72 @@ export default function AiSandboxPage() {
         onIncidentCoverage={setIncidentCovered}
       />
 
-      {/* Metric tiles: the FOCUSED direction (Phase D4 adds a per-direction + corridor-total view for Both mode — see the D1 report for the flow-weighted-average-speed / max-queue aggregation rules). */}
+      {/* Metric tiles. NB-only/SB-only: one tile per metric, exactly as always. Both mode: the corridor
+          figure on top of each tile with each carriageway's own value under it (per-direction rows,
+          always visible) — see bothMetrics.ts for which metrics sum, which take the max, which are
+          flow-weighted, and which (density) have no total at all. */}
+      {both && (
+        <p className="sandbox-metric-caption" data-metric-caption>
+          Corridor totals with NB and SB beneath. <b>Average speed is flow-weighted</b> — each direction&apos;s speed weighted by its
+          throughput, not a plain mean of the two. Longest queue is the worse of the two; density has no total.
+        </p>
+      )}
+      {both ? (
+        <div className="sandbox-metric-row">
+          <MetricTileBoth
+            label="Active agents"
+            tag="total"
+            tagTitle="Vehicles on the road now, both carriageways added."
+            total={corridor ? fmt(corridor.activeAgents) : "…"}
+            rows={rowsOf((m) => fmt(m.activeAgents))}
+          />
+          <MetricTileBoth
+            label="Avg speed"
+            tag="flow-weighted"
+            tagTitle="Each direction's average speed weighted by its throughput (vehicles per minute) — not the plain mean of the two."
+            total={corridor ? (corridor.flowWeightedAvgSpeedKmh === null ? "—" : `${fmt(corridor.flowWeightedAvgSpeedKmh)} km/h`) : "…"}
+            totalDelta={
+              corridor && corridorBase && corridor.flowWeightedAvgSpeedKmh !== null && corridorBase.flowWeightedAvgSpeedKmh !== null
+                ? pctDelta(corridor.flowWeightedAvgSpeedKmh, corridorBase.flowWeightedAvgSpeedKmh)
+                : null
+            }
+            rows={rowsOf((m) => `${fmt(m.avgSpeedKmh)} km/h`, (m, b) => pctDelta(m.avgSpeedKmh, b.avgSpeedKmh))}
+            goodWhenUp
+          />
+          <MetricTileBoth
+            label="Throughput"
+            tag="total"
+            tagTitle="Vehicles per minute completing the segment, both carriageways added."
+            total={corridor ? `${fmt(corridor.throughputPerMin)}/min` : "…"}
+            totalDelta={corridor && corridorBase ? pctDelta(corridor.throughputPerMin, corridorBase.throughputPerMin) : null}
+            rows={rowsOf((m) => `${fmt(m.throughputPerMin)}/min`, (m, b) => pctDelta(m.throughputPerMin, b.throughputPerMin))}
+            goodWhenUp
+          />
+          <MetricTileBoth
+            label="Longest queue"
+            tag="max"
+            tagTitle="The longer of the two queues. Queues do not add across carriageways: two 80 m queues are not a 160 m one."
+            total={corridor ? `${fmt(corridor.longestQueueM)} m` : "…"}
+            totalDelta={corridor && corridorBase ? pctDelta(corridor.longestQueueM, corridorBase.longestQueueM) : null}
+            rows={rowsOf((m) => `${fmt(m.longestQueueM)} m`, (m, b) => pctDelta(m.longestQueueM, b.longestQueueM))}
+          />
+          <MetricTileBoth
+            label="CO₂ rate"
+            tag="total"
+            tagTitle="kg of CO₂ per minute, both carriageways added."
+            total={corridor ? `${fmt(corridor.co2RatePerMin, 1)} kg/min` : "…"}
+            totalDelta={corridor && corridorBase ? pctDelta(corridor.co2RatePerMin, corridorBase.co2RatePerMin) : null}
+            rows={rowsOf((m) => `${fmt(m.co2RatePerMin, 1)} kg/min`, (m, b) => pctDelta(m.co2RatePerMin, b.co2RatePerMin))}
+          />
+          <MetricTileBoth
+            label="Density"
+            tag="per direction"
+            tagTitle="Vehicles per km per lane on two separate carriageways has no meaningful total or mean, so none is shown."
+            total={null}
+            rows={rowsOf((m) => `${fmt(m.densityPerKmLane)}/km/ln`)}
+          />
+        </div>
+      ) : (
       <div className="sandbox-metric-row">
         <MetricTile label="Active agents" value={focused.metrics ? fmt(focused.metrics.activeAgents) : "…"} />
         <MetricTile
@@ -1133,6 +1333,7 @@ export default function AiSandboxPage() {
         />
         <MetricTile label="Density" value={focused.metrics ? `${fmt(focused.metrics.densityPerKmLane)}/km/ln` : "…"} />
       </div>
+      )}
 
       <div className="sandbox-grid" style={{ marginTop: 14 }}>
         {/* Simulation canvas + recommendation */}
@@ -1185,7 +1386,7 @@ export default function AiSandboxPage() {
             </div>
             {view === "Both" && (
               <>
-                <span className="k" style={{ marginLeft: 10 }}>Controls follow</span>
+                <span className="k" style={{ marginLeft: 10 }} title="The carriageway the Add-event picker, the Command prompt, the full-screen bar and the forecast loader act on. Clicking a road with a placing tool armed moves it.">Focus</span>
                 <div className="sandbox-speed-seg" role="tablist" aria-label="Focused carriageway">
                   {(["NB", "SB"] as const).map((d) => (
                     <button key={d} role="tab" aria-selected={focusedDirection === d} className={focusedDirection === d ? "active" : ""} onClick={() => setFocusedDirection(d)}>
@@ -1196,12 +1397,18 @@ export default function AiSandboxPage() {
               </>
             )}
           </div>
+          {both && placeNote !== null && !expanded && (
+            <p className="sandbox-place-hint" data-place-note>
+              {placeNote}
+            </p>
+          )}
           {view === "Both" && (
             <p className="sandbox-live-note">
-              Both carriageways are drawn and simulated together, median-separated, lane 1 against
-              the median on each side. The controls below still act on one direction at a time —
-              {" "}<b>{focusedDirection}</b>, chosen above — full per-direction controls and a
-              corridor total are coming next.
+              Both carriageways run together, median-separated, lane 1 against the median on each
+              side. Every control, event and readout below belongs to one carriageway and says which.
+              {" "}<b>Focus</b> (<b>{focusedDirection}</b>, chosen above) is the road the Command prompt,
+              the full-screen bar and &ldquo;Load into simulation&rdquo; act on; with a placing tool
+              armed, clicking a lane on either road changes that road and moves focus to it.
             </p>
           )}
 
@@ -1212,6 +1419,12 @@ export default function AiSandboxPage() {
               FOCUSED direction, same as the docked ones (see the note above). */}
           {expanded && (
             <div className="sandbox-fs-bar">
+              {both && (
+                <span className="sandbox-fs-dir" data-fs-dir={focusDirection}>
+                  <span className="k">Acting on</span>
+                  <DirectionPill direction={focusDirection} long />
+                </span>
+              )}
               <span className="k">Close lane</span>
               <div className="sandbox-lane-toggles">
                 {Array.from({ length: focused.laneCount }, (_, i) => (
@@ -1253,19 +1466,13 @@ export default function AiSandboxPage() {
               <button
                 className={`btn-muted ${focused.placingClosure ? "active" : ""}`}
                 disabled={focused.owners.closure !== null}
-                onClick={() => {
-                  focused.setPlacingClosure((v) => !v);
-                  focused.setPlacingIncident(false);
-                }}
+                onClick={() => armPlacing(focusDirection, "closure")}
               >
                 {focused.placingClosure ? (focused.closureDraftKm == null ? "Click start…" : "Click end…") : "Set closed stretch"}
               </button>
               <button
                 className={`btn-muted ${focused.placingIncident ? "active" : ""}`}
-                onClick={() => {
-                  focused.setPlacingIncident((v) => !v);
-                  focused.setPlacingClosure(false);
-                }}
+                onClick={() => armPlacing(focusDirection, "incident")}
               >
                 {focused.placingIncident ? "Click a lane…" : "Drop incident"}
               </button>
@@ -1273,6 +1480,7 @@ export default function AiSandboxPage() {
                 Clear ({focused.incidentCount})
               </button>
               <ClosureHint placing={focused.placingClosure} draftKm={focused.closureDraftKm} anyClosed={focused.closedLanes.some(Boolean)} laneCount={focused.laneCount} dark />
+              {both && placeNote !== null && <span className="k" style={{ textTransform: "none", letterSpacing: 0, color: "#fcd34d" }}>{placeNote}</span>}
             </div>
           )}
 
@@ -1296,7 +1504,7 @@ export default function AiSandboxPage() {
               direction full-height otherwise (render) — see the rAF loop above. */}
           <canvas
             ref={canvasRef}
-            className={`sandbox-canvas ${focused.placingIncident || focused.placingClosure ? "placing" : ""}`}
+            className={`sandbox-canvas ${placingArmed ? "placing" : ""}`}
             style={
               expanded
                 ? undefined
@@ -1310,7 +1518,7 @@ export default function AiSandboxPage() {
                         : focused.laneCount * LANE_PX + CANVAS_PAD * 2,
                   }
             }
-            onClick={placeIncidentAt}
+            onClick={handleCanvasClick}
             onMouseMove={previewClosureAt}
           />
 
@@ -1323,18 +1531,24 @@ export default function AiSandboxPage() {
               demand exceeds what the segment can take, the surplus queues
               upstream where nothing draws it, so the road can report a healthy
               speed precisely because a quarter of the traffic never got on. */}
-          {focused.metrics && !focused.metrics.warm && (
-            <p className="sandbox-live-note">
-              Warming up &mdash; the road is still filling, so these figures are not yet the
-              scenario. {Math.max(0, Math.ceil(WARMUP_S - focused.metrics.elapsedS))}s to go.
-            </p>
-          )}
-          {focused.metrics && focused.metrics.warm && focused.metrics.unmetVehPerHour > 1 && (
-            <p className="sandbox-live-note warn">
-              {Math.round(focused.metrics.unmetVehPerHour).toLocaleString()} veh/h of demand cannot
-              enter: the segment is at capacity and the queue for it forms upstream, outside
-              this model. The speeds shown describe only the traffic that got on.
-            </p>
+          {both ? (
+            activeDirections.map((dn) => <DirectionNotes key={dn} d={byDirection[dn]} direction={dn} />)
+          ) : (
+            <>
+              {focused.metrics && !focused.metrics.warm && (
+                <p className="sandbox-live-note">
+                  Warming up &mdash; the road is still filling, so these figures are not yet the
+                  scenario. {Math.max(0, Math.ceil(WARMUP_S - focused.metrics.elapsedS))}s to go.
+                </p>
+              )}
+              {focused.metrics && focused.metrics.warm && focused.metrics.unmetVehPerHour > 1 && (
+                <p className="sandbox-live-note warn">
+                  {Math.round(focused.metrics.unmetVehPerHour).toLocaleString()} veh/h of demand cannot
+                  enter: the segment is at capacity and the queue for it forms upstream, outside
+                  this model. The speeds shown describe only the traffic that got on.
+                </p>
+              )}
+            </>
           )}
           <div className="sandbox-legend">
             <span><i style={{ background: CLASS_META[1].color }} /> Class 1 · light</span>
@@ -1344,54 +1558,36 @@ export default function AiSandboxPage() {
             <span><i style={{ background: "#f59e0b" }} /> scenario event</span>
           </div>
 
-          {/* Before / after. The deltas exist as small tinted text on the metric
-              tiles, which is easy to miss and impossible to read as a whole.
-              Laid out side by side, the effect of an intervention is one
-              glance rather than four comparisons. */}
-          {focused.baseline && focused.metrics && focused.anyIntervention && (
-            <div className="sandbox-compare">
-              <div className="sandbox-compare-head">
-                <b>Baseline vs now</b>
-                <span>
-                  {focused.baseline.takenWith} &rarr; {focused.interventionSummary}
-                </span>
-              </div>
-              <div className="sandbox-compare-rows">
-                {([
-                  ["Avg speed", focused.baseline.avgSpeedKmh, focused.metrics.avgSpeedKmh, "km/h", true],
-                  ["Throughput", focused.baseline.throughputPerMin, focused.metrics.throughputPerMin, "/min", true],
-                  ["Longest queue", focused.baseline.longestQueueM, focused.metrics.longestQueueM, "m", false],
-                  ["CO₂ rate", focused.baseline.co2RatePerMin, focused.metrics.co2RatePerMin, "kg/min", false],
-                ] as [string, number, number, string, boolean][]).map(
-                  ([label, was, now, unit, higherIsBetter]) => {
-                    const pct = was === 0 ? null : ((now - was) / was) * 100;
-                    // "Better" is not the same as "bigger": a longer queue and
-                    // more CO2 are both worse, so the direction is declared per
-                    // metric rather than assumed from the sign.
-                    const good = pct == null ? null : higherIsBetter ? pct >= 0 : pct <= 0;
-                    return (
-                      <div className="sandbox-compare-row" key={label}>
-                        <span className="l">{label}</span>
-                        <span className="was">{fmt(was, unit === "kg/min" ? 1 : 0)}</span>
-                        <span className="arrow">→</span>
-                        <span className="now">
-                          {fmt(now, unit === "kg/min" ? 1 : 0)} <i>{unit}</i>
-                        </span>
-                        <span className={`d ${good == null ? "" : good ? "good" : "bad"}`}>
-                          {pct == null ? "—" : `${pct > 0 ? "+" : ""}${pct.toFixed(0)}%`}
-                        </span>
-                      </div>
-                    );
-                  },
-                )}
-              </div>
-            </div>
+          {both ? (
+            activeDirections.map((dn) => {
+              const d = byDirection[dn];
+              return d.baseline && d.metrics && d.anyIntervention ? (
+                <CompareBlock key={dn} d={d} direction={dn} />
+              ) : (
+                <p key={dn} className="sandbox-compare-none" data-compare-none={dn}>
+                  <DirectionPill direction={dn} long /> no before/after yet — capture a baseline, then change something on this carriageway.
+                </p>
+              );
+            })
+          ) : (
+            <CompareBlock d={focused} direction={null} />
           )}
 
-          <div className={`sandbox-reco ${recommendation.tone}`}>
-            <strong>Prescriptive recommendation</strong>
-            <p>{recommendation.text}</p>
-          </div>
+          {both ? (
+            activeDirections.map((dn) => (
+              <div key={dn} className={`sandbox-reco ${recommendations[dn].tone}`} data-reco={dn}>
+                <strong>
+                  <DirectionPill direction={dn} long /> Prescriptive recommendation
+                </strong>
+                <p>{recommendations[dn].text}</p>
+              </div>
+            ))
+          ) : (
+            <div className={`sandbox-reco ${recommendation.tone}`}>
+              <strong>Prescriptive recommendation</strong>
+              <p>{recommendation.text}</p>
+            </div>
+          )}
           </div>
         </article>
 
@@ -1761,132 +1957,21 @@ export default function AiSandboxPage() {
             title="Interventions"
             open={openSection === "interventions"}
             onToggle={() => toggleSection("interventions")}
-            summary={focused.interventionSummary}
+            summary={both ? `NB: ${nb.interventionSummary} · SB: ${sb.interventionSummary}` : focused.interventionSummary}
           >
 
-          {/* Every control here acts on the FOCUSED direction (Phase D4 splits this per direction for Both mode). */}
-          <span className="sandbox-mini-label">Close a lane (traffic must merge out)</span>
-          <div className="sandbox-lane-toggles">
-            {Array.from({ length: focused.laneCount }, (_, i) => (
-              <button
-                key={i}
-                className={focused.closedLanes[i] || focused.lockedLanes[i] ? "closed" : ""}
-                onClick={() => focused.toggleLane(i)}
-                disabled={focused.lockedLanes[i]}
-                title={focused.lockedLanes[i] && focused.owners.closure ? `Driven by: ${describeOwner(focused.owners.closure)}` : undefined}
-              >
-                L{i + 1}
-              </button>
-            ))}
-          </div>
-
-          <div style={{ marginTop: 8 }}>
-            <span className="sandbox-mini-label">
-              Closed from Km {focused.shownClosureFromKm.toFixed(2)} to Km {focused.shownClosureToKm.toFixed(2)} ·{" "}
-              {Math.round((focused.shownClosureToKm - focused.shownClosureFromKm) * 1000)} m
-            </span>
-            {focused.owners.closure && (
-              <p className="sandbox-live-note">
-                Driven by: {describeOwner(focused.owners.closure)}. The stretch is locked. You can close more lanes on it; the lanes
-                the event blocks stay closed until it moves on.
-              </p>
-            )}
-            <div style={{ display: "flex", gap: 8, marginTop: 4 }}>
-              <label style={{ flex: 1, minWidth: 0 }}>
-                <span className="sandbox-slider-hint" style={{ display: "block", marginBottom: 3 }}>From km</span>
-                <KmInput value={focused.shownClosureFromKm} min={fromKm} max={toKm} onCommit={focused.commitClosureStart} disabled={focused.owners.closure !== null} />
-              </label>
-              <label style={{ flex: 1, minWidth: 0 }}>
-                <span className="sandbox-slider-hint" style={{ display: "block", marginBottom: 3 }}>To km</span>
-                <KmInput value={focused.shownClosureToKm} min={fromKm} max={toKm} onCommit={focused.commitClosureEnd} disabled={focused.owners.closure !== null} />
-              </label>
-            </div>
-            {/* The instruction that used to sit here ran to three wrapped lines
-                and repeated what the button beside it already says. It is
-                reference material — read once, then never again — so it moves
-                onto the controls it describes as a tooltip. */}
-          </div>
-
-          {/* One row, not two. "Set closed stretch" sat alone above its own
-              hint line, with the incident buttons in a second row below it —
-              three interactive controls spread over two rows and two gaps.
-              They are all "place something on the road", so they read better
-              as one cluster and cost a row less height. */}
-          <div className="sandbox-btn-row sandbox-btn-row-3">
-            <button
-              className={`btn-muted ${focused.placingClosure ? "active" : ""}`}
-              title="Traffic merges out before the start and the lane reopens after the end. Type the Km range above, or press this and click the road twice — start, then end."
-              disabled={focused.owners.closure !== null}
-              onClick={() => {
-                focused.setPlacingClosure((p) => !p);
-                focused.setPlacingIncident(false);
-              }}
-            >
-              {focused.placingClosure ? (focused.closureDraftKm == null ? "Click start…" : "Click end…") : "Set stretch"}
-            </button>
-            <button
-              className={`btn-muted ${focused.placingIncident ? "active" : ""}`}
-              title="Drop a stopped vehicle on a lane to see how traffic behaves around it."
-              onClick={togglePlacing}
-            >
-              {focused.placingIncident ? "Placing…" : "Drop incident"}
-            </button>
-            <button className="btn-muted" onClick={focused.clearIncidents} disabled={focused.incidentCount === 0}>
-              Clear ({focused.incidentCount})
-            </button>
-          </div>
-          <ClosureHint placing={focused.placingClosure} draftKm={focused.closureDraftKm} anyClosed={focused.closedLanes.some(Boolean)} laneCount={focused.laneCount} />
-          {focused.placingIncident && (
-            <p className="sandbox-place-hint">
-              Click a lane on the simulation to drop an incident · Esc to cancel
-            </p>
+          {/* NB-only/SB-only: the controls for the one carriageway, unchanged. Both mode: one full set per
+              carriageway, each in its own named, coloured panel — what a button changes is read off the
+              panel it sits in, not off which direction happens to be focused. */}
+          {both ? (
+            activeDirections.map((dn) => (
+              <DirectionPanel key={dn} direction={dn} note="every control in this panel changes this carriageway only">
+                <InterventionControls d={byDirection[dn]} fromKm={fromKm} toKm={toKm} onArm={(kind) => armPlacing(dn, kind)} both />
+              </DirectionPanel>
+            ))
+          ) : (
+            <InterventionControls d={focused} fromKm={fromKm} toKm={toKm} onArm={(kind) => armPlacing(focusDirection, kind)} both={false} />
           )}
-
-          <div className="sandbox-slider-group">
-            <div className="sandbox-slider-header">
-              <span className="sandbox-slider-label">Speed limit zone</span>
-              <span className="sandbox-slider-value" style={{ color: "#ea580c" }}>
-                {focused.shownSpeedLimit == null ? "off" : `${focused.shownSpeedLimit} km/h`}
-              </span>
-            </div>
-            {focused.owners.speedZone && (
-              <p className="sandbox-live-note">
-                Driven by: {describeOwner(focused.owners.speedZone)}. The zone and its limit are locked until the event ends.
-              </p>
-            )}
-            <input
-              type="range"
-              min={20}
-              max={100}
-              step={5}
-              value={focused.shownSpeedLimit ?? 100}
-              onChange={(e) => focused.setSpeedLimit(Number(e.target.value) >= 100 ? null : Number(e.target.value))}
-              disabled={focused.owners.speedZone !== null}
-              className="sandbox-range capacity"
-              title="Slide to 100 to disable the zone."
-              style={{ "--range-pct": `${(((focused.shownSpeedLimit ?? 100) - 20) / 80) * 100}%` } as React.CSSProperties}
-            />
-            {/* "Slide to 100 to disable" was a whole line spent restating the
-                value readout beside the title, which already says "off" the
-                moment the zone is disabled. It survives as the slider's own
-                tooltip. */}
-            {focused.shownSpeedLimit != null && (
-              <div style={{ display: "flex", gap: 8, marginTop: 6 }}>
-                <label style={{ flex: 1, minWidth: 0 }}>
-                  <span className="sandbox-slider-hint" style={{ display: "block", marginBottom: 3 }}>
-                    Zone from km
-                  </span>
-                  <KmInput value={focused.shownZoneFromKm} min={fromKm} max={toKm} onCommit={focused.setZoneFromKm} disabled={focused.owners.speedZone !== null} />
-                </label>
-                <label style={{ flex: 1, minWidth: 0 }}>
-                  <span className="sandbox-slider-hint" style={{ display: "block", marginBottom: 3 }}>
-                    Zone to km
-                  </span>
-                  <KmInput value={focused.shownZoneToKm} min={fromKm} max={toKm} onCommit={focused.setZoneToKm} disabled={focused.owners.speedZone !== null} />
-                </label>
-              </div>
-            )}
-          </div>
 
           </RailSection>
 
@@ -1894,34 +1979,20 @@ export default function AiSandboxPage() {
             title="Scenario events"
             open={openSection === "scenarios"}
             onToggle={() => toggleSection("scenarios")}
-            summary={
-              focused.scenarioEvents.length === 0
-                ? "none"
-                : `${focused.scenarioEvents.length} event${focused.scenarioEvents.length === 1 ? "" : "s"} · ${focused.activeScenarioText.length > 0 ? focused.activeScenarioText[0] : "none running"}`
-            }
+            summary={scenarioSummary}
           >
-            {/* Events for the FOCUSED direction only — its own bucket (D2 correction #1: an
-                event carries its direction explicitly AND lives in that direction's list).
-                Phase D4 adds the picker (defaulting to the viewed direction, required in Both
-                mode); for now every event this panel creates is stamped with focusDirection. */}
+            {/* Every event names its carriageway (D2 correction #1: it carries its direction explicitly AND
+                lives in that direction's list). NB-only/SB-only: this panel, unchanged, for the one
+                carriageway. Both mode: an "Add to" picker (which also moves the page's focus), both
+                directions' events grouped under their own headings with their own Skip, and the skip
+                guard for long fast-forwards. */}
             <ScenarioPanel
-              events={focused.scenarioEvents}
-              owners={focused.owners}
-              road={focused.scenarioRoad}
-              direction={focusDirection}
-              nowS={focused.scenarioNowS}
-              laneCount={focused.laneCount}
+              directions={activeDirections}
+              focus={focusDirection}
+              onFocus={chooseFocus}
+              data={{ NB: scenarioDataFor("NB"), SB: scenarioDataFor("SB") }}
               fromKm={fromKm}
               toKm={toKm}
-              kmAtPct={(pct) => focused.kmAt((focused.spanM * pct) / 100)}
-              manualClosure={{ closedLanes: focused.closedLanes, closurePoint: focused.manualControls.closurePoint, closureEnd: focused.manualControls.closureEnd }}
-              nextSeq={focused.scenarioSeqRef.current + 1}
-              onAdd={focused.addScenarioEvent}
-              onRemove={focused.removeScenarioEvent}
-              skip={focused.skip}
-              canSkip={nextBoundaryAfter(focused.scenarioEvents, focused.scenarioRoad, focused.scenarioNowS) !== null}
-              onSkip={focused.skipToNextPhase}
-              onCancelSkip={focused.cancelSkip}
             />
           </RailSection>
 
@@ -1929,7 +2000,7 @@ export default function AiSandboxPage() {
             title="Baseline comparison"
             open={openSection === "baseline"}
             onToggle={() => toggleSection("baseline")}
-            summary={focused.baseline ? `${fmt(focused.baseline.avgSpeedKmh)} km/h · ${fmt(focused.baseline.throughputPerMin)}/min captured` : "not captured"}
+            summary={baselineSummary}
           >
           {/* This was a lone "Capture baseline" button whose only explanation
               lived in a title tooltip — invisible unless hovered, so nothing on
@@ -1938,73 +2009,21 @@ export default function AiSandboxPage() {
               feature looks broken rather than misused. The procedure is now the
               UI: three steps that tick themselves off, with the button sitting
               inside the step it belongs to, and only the current step carrying
-              its explanation so the panel stays short. */}
+              its explanation so the panel stays short. Per carriageway in Both
+              mode: each direction has its own warm-up, its own capture and its
+              own before/after. */}
           <p className="sandbox-baseline-lede">
             Measures what an intervention costs, by comparing the road before and after it.
           </p>
-          <ol className="sandbox-steps">
-            <li className={stepCls(1)}>
-              <span className="n">{stepDone[0] ? "✓" : "1"}</span>
-              <div className="t">
-                <b>Let the road settle</b>
-                {activeStep === 1 && (
-                  <i>
-                    Throughput counts vehicles finishing the segment, so it needs about a
-                    minute of running before it means anything.
-                    {focused.metrics ? ` ${Math.ceil(Math.max(0, WARMUP_S - elapsedS))}s to go.` : ""}
-                  </i>
-                )}
-              </div>
-            </li>
-
-            <li className={stepCls(2)}>
-              <span className="n">{stepDone[1] ? "✓" : "2"}</span>
-              <div className="t">
-                <b>Capture the &ldquo;before&rdquo;</b>
-                {focused.baseline ? (
-                  <i>
-                    Recorded {fmt(focused.baseline.avgSpeedKmh)} km/h · {fmt(focused.baseline.throughputPerMin)}/min
-                    with {focused.baseline.takenWith}.
-                  </i>
-                ) : activeStep === 2 ? (
-                  <i>Freezes the current numbers for comparison. Nothing in the simulation changes.</i>
-                ) : null}
-                <div className="sandbox-btn-row">
-                  <button
-                    className="btn-primary"
-                    onClick={focused.captureBaseline}
-                    disabled={!focused.metrics}
-                    style={{ marginLeft: 0 }}
-                  >
-                    {focused.baseline ? "Re-capture" : "Capture baseline"}
-                  </button>
-                  {focused.baseline && (
-                    <button className="btn-muted" onClick={() => focused.setBaseline(null)}>
-                      Clear
-                    </button>
-                  )}
-                </div>
-              </div>
-            </li>
-
-            <li className={stepCls(3)}>
-              <span className="n">{stepDone[2] ? "✓" : "3"}</span>
-              <div className="t">
-                <b>Change something, then read the difference</b>
-                {stepDone[2] ? (
-                  <i>
-                    Comparing {focused.baseline?.takenWith} &rarr; {focused.interventionSummary}. The
-                    before/after table is under the road.
-                  </i>
-                ) : activeStep === 3 ? (
-                  <i>
-                    Close a lane or set a speed limit in Interventions above. A before/after
-                    table then appears under the road.
-                  </i>
-                ) : null}
-              </div>
-            </li>
-          </ol>
+          {both ? (
+            activeDirections.map((dn) => (
+              <DirectionPanel key={dn} direction={dn} note="its own warm-up, baseline and before/after">
+                <BaselineSteps d={byDirection[dn]} />
+              </DirectionPanel>
+            ))
+          ) : (
+            <BaselineSteps d={focused} />
+          )}
           </RailSection>
 
           <RailSection
@@ -2039,7 +2058,7 @@ export default function AiSandboxPage() {
             <button
               className="btn-primary"
               onClick={runReplications}
-              disabled={focused.scenarioEvents.length > 0}
+              disabled={both || focused.scenarioEvents.length > 0}
               style={{ marginLeft: 0 }}
             >
               {repProgress != null ? "Stop" : "Run"}
@@ -2048,8 +2067,12 @@ export default function AiSandboxPage() {
               <span className="sandbox-reps-prog">{(repProgress * 100).toFixed(0)}%</span>
             )}
           </div>
-          {focused.scenarioEvents.length > 0 && (
-            <p className="sandbox-reps-warn">{"Confidence runs don't yet support timed events."}</p>
+          {both ? (
+            <p className="sandbox-reps-warn" data-reps="both-disabled">{"Confidence runs support one carriageway at a time."}</p>
+          ) : (
+            focused.scenarioEvents.length > 0 && (
+              <p className="sandbox-reps-warn">{"Confidence runs don't yet support timed events."}</p>
+            )
           )}
           {repResult && (
             <div className="sandbox-reps-out">
@@ -2087,6 +2110,28 @@ export default function AiSandboxPage() {
               <p className="ai-command-sub">
                 Type natural-language commands to control traffic on the NLEX corridor.
               </p>
+              {/* Both mode: a command is worked out for ONE carriageway (the existing request fields carry no
+                  direction, so the backend cannot tell). It goes to the focused one — a deliberate,
+                  always-visible choice, changeable right here — rather than gating every command behind a
+                  second pick. The proposal below is stamped with the carriageway it was made for. */}
+              {both && (
+                <div className="sandbox-dir-pick" data-cmd="direction" role="tablist" aria-label="Carriageway the command applies to">
+                  <span className="k">Commands apply to</span>
+                  <div className="sandbox-dir-seg">
+                    {activeDirections.map((dn) => (
+                      <button
+                        key={dn}
+                        role="tab"
+                        aria-selected={focusDirection === dn}
+                        className={`dir-${dn}${focusDirection === dn ? " active" : ""}`}
+                        onClick={() => chooseFocus(dn)}
+                      >
+                        {DIRECTION_NAME[dn]}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
               <textarea
                 className="ai-command-input"
                 rows={4}
@@ -2108,6 +2153,11 @@ export default function AiSandboxPage() {
                   the operator presses Apply. */}
               {plan && (
                 <div className="ai-plan">
+                  {both && planDirection !== null && (
+                    <p className="ai-plan-target" data-plan-direction={planDirection}>
+                      <DirectionPill direction={planDirection} long /> proposal — Apply changes this carriageway only
+                    </p>
+                  )}
                   <p className="ai-plan-reply">{plan.reply}</p>
 
                   {plan.actions.length > 0 ? (
@@ -2207,6 +2257,381 @@ function KmInput({
         }
       }}
     />
+  );
+}
+
+/** One carriageway's line inside a Both-mode tile. */
+type TileRow = { readonly direction: Direction; readonly value: string; readonly delta: number | null };
+
+/**
+ * Both mode's metric tile: the corridor figure on top, each carriageway's own value beneath it, always
+ * visible (no hover, no expand — this is read under pressure, and a hidden number is a number missed).
+ * `tag` says what KIND of headline this is, in the tile itself: "flow-weighted" for average speed, "max"
+ * for the longest queue, "per direction" where there is deliberately no total. NB-only/SB-only never
+ * reach this — they keep MetricTile exactly as it was.
+ */
+function MetricTileBoth({
+  label,
+  tag,
+  tagTitle,
+  total,
+  totalDelta,
+  rows,
+  goodWhenUp,
+}: {
+  label: string;
+  tag: string;
+  tagTitle: string;
+  /** The headline, or null where the metric has no corridor total. */
+  total: string | null;
+  totalDelta?: number | null;
+  rows: readonly TileRow[];
+  goodWhenUp?: boolean;
+}) {
+  const tone = (delta: number | null): string => {
+    if (delta == null || Math.abs(delta) < 1) return "muted";
+    return (goodWhenUp ? delta > 0 : delta < 0) ? "up" : "down";
+  };
+  const chip = (delta: number | null): string => (delta == null ? "" : Math.abs(delta) < 1 ? "≈" : `${delta > 0 ? "+" : ""}${delta.toFixed(0)}%`);
+  return (
+    <article className="sandbox-metric is-both" data-metric={label}>
+      <h3>
+        {label}
+        <span className="sandbox-metric-tag" title={tagTitle} data-metric-tag={tag}>{tag}</span>
+      </h3>
+      <div className={`sandbox-metric-val${total === null ? " is-none" : ""}`}>{total ?? "no total"}</div>
+      {totalDelta != null && Math.abs(totalDelta) >= 1 ? (
+        <span className={`sandbox-metric-delta ${tone(totalDelta)}`}>
+          {totalDelta > 0 ? "+" : ""}
+          {totalDelta.toFixed(0)}% vs baseline
+        </span>
+      ) : (
+        <span className="sandbox-metric-delta muted">{totalDelta != null ? "≈ baseline" : " "}</span>
+      )}
+      <div className="sandbox-metric-dirs">
+        {rows.map((r) => (
+          <div className="sandbox-metric-dir" key={r.direction} data-metric-dir={r.direction}>
+            <DirectionPill direction={r.direction} />
+            <span className="v">{r.value}</span>
+            <span className={`d ${tone(r.delta)}`}>{chip(r.delta)}</span>
+          </div>
+        ))}
+      </div>
+    </article>
+  );
+}
+
+/** Both mode: a bordered, coloured, named block around whatever belongs to ONE carriageway. */
+function DirectionPanel({ direction, note, children }: { direction: Direction; note?: string; children: React.ReactNode }) {
+  return (
+    <div className={`sandbox-dir-panel dir-${direction}`} data-dir-panel={direction}>
+      <div className="sandbox-dir-panel-head">
+        <DirectionPill direction={direction} long />
+        {note && <span>{note}</span>}
+      </div>
+      {children}
+    </div>
+  );
+}
+
+/**
+ * The Interventions controls for ONE carriageway. Rendered once (NB-only/SB-only, exactly the markup
+ * this section always had) or twice, each inside its own DirectionPanel (Both). Which road a button
+ * touches is decided by which `d` it was handed, never by what is focused.
+ */
+function InterventionControls({
+  d,
+  fromKm,
+  toKm,
+  onArm,
+  both,
+}: {
+  d: DirectionApi;
+  fromKm: number;
+  toKm: number;
+  onArm: (kind: "incident" | "closure") => void;
+  both: boolean;
+}) {
+  return (
+    <>
+      <span className="sandbox-mini-label">Close a lane (traffic must merge out)</span>
+      <div className="sandbox-lane-toggles">
+        {Array.from({ length: d.laneCount }, (_, i) => (
+          <button
+            key={i}
+            className={d.closedLanes[i] || d.lockedLanes[i] ? "closed" : ""}
+            onClick={() => d.toggleLane(i)}
+            disabled={d.lockedLanes[i]}
+            title={d.lockedLanes[i] && d.owners.closure ? `Driven by: ${describeOwner(d.owners.closure)}` : undefined}
+          >
+            L{i + 1}
+          </button>
+        ))}
+      </div>
+
+      <div style={{ marginTop: 8 }}>
+        <span className="sandbox-mini-label">
+          Closed from Km {d.shownClosureFromKm.toFixed(2)} to Km {d.shownClosureToKm.toFixed(2)} ·{" "}
+          {Math.round((d.shownClosureToKm - d.shownClosureFromKm) * 1000)} m
+        </span>
+        {d.owners.closure && (
+          <p className="sandbox-live-note">
+            Driven by: {describeOwner(d.owners.closure)}. The stretch is locked. You can close more lanes on it; the lanes
+            the event blocks stay closed until it moves on.
+          </p>
+        )}
+        <div style={{ display: "flex", gap: 8, marginTop: 4 }}>
+          <label style={{ flex: 1, minWidth: 0 }}>
+            <span className="sandbox-slider-hint" style={{ display: "block", marginBottom: 3 }}>From km</span>
+            <KmInput value={d.shownClosureFromKm} min={fromKm} max={toKm} onCommit={d.commitClosureStart} disabled={d.owners.closure !== null} />
+          </label>
+          <label style={{ flex: 1, minWidth: 0 }}>
+            <span className="sandbox-slider-hint" style={{ display: "block", marginBottom: 3 }}>To km</span>
+            <KmInput value={d.shownClosureToKm} min={fromKm} max={toKm} onCommit={d.commitClosureEnd} disabled={d.owners.closure !== null} />
+          </label>
+        </div>
+        {/* The instruction that used to sit here ran to three wrapped lines
+            and repeated what the button beside it already says. It is
+            reference material — read once, then never again — so it moves
+            onto the controls it describes as a tooltip. */}
+      </div>
+
+      {/* One row, not two. "Set closed stretch" sat alone above its own
+          hint line, with the incident buttons in a second row below it —
+          three interactive controls spread over two rows and two gaps.
+          They are all "place something on the road", so they read better
+          as one cluster and cost a row less height. */}
+      <div className="sandbox-btn-row sandbox-btn-row-3">
+        <button
+          className={`btn-muted ${d.placingClosure ? "active" : ""}`}
+          title="Traffic merges out before the start and the lane reopens after the end. Type the Km range above, or press this and click the road twice — start, then end."
+          disabled={d.owners.closure !== null}
+          onClick={() => onArm("closure")}
+        >
+          {d.placingClosure ? (d.closureDraftKm == null ? "Click start…" : "Click end…") : "Set stretch"}
+        </button>
+        <button
+          className={`btn-muted ${d.placingIncident ? "active" : ""}`}
+          title="Drop a stopped vehicle on a lane to see how traffic behaves around it."
+          onClick={() => onArm("incident")}
+        >
+          {d.placingIncident ? "Placing…" : "Drop incident"}
+        </button>
+        <button className="btn-muted" onClick={d.clearIncidents} disabled={d.incidentCount === 0}>
+          Clear ({d.incidentCount})
+        </button>
+      </div>
+      <ClosureHint placing={d.placingClosure} draftKm={d.closureDraftKm} anyClosed={d.closedLanes.some(Boolean)} laneCount={d.laneCount} />
+      {d.placingIncident && (
+        <p className="sandbox-place-hint">
+          {both
+            ? "Click a lane on either carriageway — the road you click is the one that changes · Esc to cancel"
+            : "Click a lane on the simulation to drop an incident · Esc to cancel"}
+        </p>
+      )}
+
+      <div className="sandbox-slider-group">
+        <div className="sandbox-slider-header">
+          <span className="sandbox-slider-label">Speed limit zone</span>
+          <span className="sandbox-slider-value" style={{ color: "#ea580c" }}>
+            {d.shownSpeedLimit == null ? "off" : `${d.shownSpeedLimit} km/h`}
+          </span>
+        </div>
+        {d.owners.speedZone && (
+          <p className="sandbox-live-note">
+            Driven by: {describeOwner(d.owners.speedZone)}. The zone and its limit are locked until the event ends.
+          </p>
+        )}
+        <input
+          type="range"
+          min={20}
+          max={100}
+          step={5}
+          value={d.shownSpeedLimit ?? 100}
+          onChange={(e) => d.setSpeedLimit(Number(e.target.value) >= 100 ? null : Number(e.target.value))}
+          disabled={d.owners.speedZone !== null}
+          className="sandbox-range capacity"
+          title="Slide to 100 to disable the zone."
+          style={{ "--range-pct": `${(((d.shownSpeedLimit ?? 100) - 20) / 80) * 100}%` } as React.CSSProperties}
+        />
+        {/* "Slide to 100 to disable" was a whole line spent restating the
+            value readout beside the title, which already says "off" the
+            moment the zone is disabled. It survives as the slider's own
+            tooltip. */}
+        {d.shownSpeedLimit != null && (
+          <div style={{ display: "flex", gap: 8, marginTop: 6 }}>
+            <label style={{ flex: 1, minWidth: 0 }}>
+              <span className="sandbox-slider-hint" style={{ display: "block", marginBottom: 3 }}>
+                Zone from km
+              </span>
+              <KmInput value={d.shownZoneFromKm} min={fromKm} max={toKm} onCommit={d.setZoneFromKm} disabled={d.owners.speedZone !== null} />
+            </label>
+            <label style={{ flex: 1, minWidth: 0 }}>
+              <span className="sandbox-slider-hint" style={{ display: "block", marginBottom: 3 }}>
+                Zone to km
+              </span>
+              <KmInput value={d.shownZoneToKm} min={fromKm} max={toKm} onCommit={d.setZoneToKm} disabled={d.owners.speedZone !== null} />
+            </label>
+          </div>
+        )}
+      </div>
+    </>
+  );
+}
+
+/**
+ * The three-step baseline procedure for ONE carriageway — its own warm-up, its own capture, its own
+ * before/after. (The explanatory lede above it is shared and stays in the section.)
+ *
+ * Baseline capture is a three-step procedure and the panel says so.
+ * Throughput is counted over the run so far, so a snapshot taken seconds
+ * after a rebuild records a near-zero flow — the road has not filled and
+ * nobody has finished the segment yet — and every later comparison then
+ * reads as a miracle. Hence the settling step, which is the one an operator
+ * would never guess at.
+ */
+function BaselineSteps({ d }: { d: DirectionApi }) {
+  const elapsedS = d.metrics?.elapsedS ?? 0;
+  const warmedUp = elapsedS >= WARMUP_S;
+  const stepDone = [warmedUp, d.baseline != null, d.baseline != null && d.anyIntervention];
+  const activeStep = stepDone.findIndex((x) => !x) + 1; // 0 once all are done
+  const stepCls = (n: number) => `sandbox-step${stepDone[n - 1] ? " is-done" : activeStep === n ? " is-now" : ""}`;
+  return (
+    <ol className="sandbox-steps">
+      <li className={stepCls(1)}>
+        <span className="n">{stepDone[0] ? "✓" : "1"}</span>
+        <div className="t">
+          <b>Let the road settle</b>
+          {activeStep === 1 && (
+            <i>
+              Throughput counts vehicles finishing the segment, so it needs about a
+              minute of running before it means anything.
+              {d.metrics ? ` ${Math.ceil(Math.max(0, WARMUP_S - elapsedS))}s to go.` : ""}
+            </i>
+          )}
+        </div>
+      </li>
+
+      <li className={stepCls(2)}>
+        <span className="n">{stepDone[1] ? "✓" : "2"}</span>
+        <div className="t">
+          <b>Capture the &ldquo;before&rdquo;</b>
+          {d.baseline ? (
+            <i>
+              Recorded {fmt(d.baseline.avgSpeedKmh)} km/h · {fmt(d.baseline.throughputPerMin)}/min
+              with {d.baseline.takenWith}.
+            </i>
+          ) : activeStep === 2 ? (
+            <i>Freezes the current numbers for comparison. Nothing in the simulation changes.</i>
+          ) : null}
+          <div className="sandbox-btn-row">
+            <button className="btn-primary" onClick={d.captureBaseline} disabled={!d.metrics} style={{ marginLeft: 0 }}>
+              {d.baseline ? "Re-capture" : "Capture baseline"}
+            </button>
+            {d.baseline && (
+              <button className="btn-muted" onClick={() => d.setBaseline(null)}>
+                Clear
+              </button>
+            )}
+          </div>
+        </div>
+      </li>
+
+      <li className={stepCls(3)}>
+        <span className="n">{stepDone[2] ? "✓" : "3"}</span>
+        <div className="t">
+          <b>Change something, then read the difference</b>
+          {stepDone[2] ? (
+            <i>
+              Comparing {d.baseline?.takenWith} &rarr; {d.interventionSummary}. The
+              before/after table is under the road.
+            </i>
+          ) : activeStep === 3 ? (
+            <i>
+              Close a lane or set a speed limit in Interventions above. A before/after
+              table then appears under the road.
+            </i>
+          ) : null}
+        </div>
+      </li>
+    </ol>
+  );
+}
+
+/**
+ * Before / after. The deltas exist as small tinted text on the metric
+ * tiles, which is easy to miss and impossible to read as a whole.
+ * Laid out side by side, the effect of an intervention is one
+ * glance rather than four comparisons. Per carriageway: in Both mode
+ * each direction gets its own, headed by its own pill.
+ */
+function CompareBlock({ d, direction }: { d: DirectionApi; direction: Direction | null }) {
+  if (!(d.baseline && d.metrics && d.anyIntervention)) return null;
+  // label, was, now, unit, and whether a bigger number is the better outcome.
+  const compareRows: readonly (readonly [string, number, number, string, boolean])[] = [
+    ["Avg speed", d.baseline.avgSpeedKmh, d.metrics.avgSpeedKmh, "km/h", true],
+    ["Throughput", d.baseline.throughputPerMin, d.metrics.throughputPerMin, "/min", true],
+    ["Longest queue", d.baseline.longestQueueM, d.metrics.longestQueueM, "m", false],
+    ["CO₂ rate", d.baseline.co2RatePerMin, d.metrics.co2RatePerMin, "kg/min", false],
+  ];
+  return (
+    <div className="sandbox-compare" data-compare={direction ?? undefined}>
+      <div className="sandbox-compare-head">
+        <b>
+          {direction !== null && <DirectionPill direction={direction} long />} Baseline vs now
+        </b>
+        <span>
+          {d.baseline.takenWith} &rarr; {d.interventionSummary}
+        </span>
+      </div>
+      <div className="sandbox-compare-rows">
+        {compareRows.map(
+          ([label, was, now, unit, higherIsBetter]) => {
+            const pct = was === 0 ? null : ((now - was) / was) * 100;
+            // "Better" is not the same as "bigger": a longer queue and
+            // more CO2 are both worse, so the direction is declared per
+            // metric rather than assumed from the sign.
+            const good = pct == null ? null : higherIsBetter ? pct >= 0 : pct <= 0;
+            return (
+              <div className="sandbox-compare-row" key={label}>
+                <span className="l">{label}</span>
+                <span className="was">{fmt(was, unit === "kg/min" ? 1 : 0)}</span>
+                <span className="arrow">→</span>
+                <span className="now">
+                  {fmt(now, unit === "kg/min" ? 1 : 0)} <i>{unit}</i>
+                </span>
+                <span className={`d ${good == null ? "" : good ? "good" : "bad"}`}>
+                  {pct == null ? "—" : `${pct > 0 ? "+" : ""}${pct.toFixed(0)}%`}
+                </span>
+              </div>
+            );
+          },
+        )}
+      </div>
+    </div>
+  );
+}
+
+/** Both mode's warm-up / unmet-demand notes, one carriageway each, each naming which. */
+function DirectionNotes({ d, direction }: { d: DirectionApi; direction: Direction }) {
+  const m = d.metrics;
+  if (!m) return null;
+  return (
+    <>
+      {!m.warm && (
+        <p className="sandbox-live-note">
+          <DirectionPill direction={direction} /> Warming up &mdash; the road is still filling, so these figures are not yet the
+          scenario. {Math.max(0, Math.ceil(WARMUP_S - m.elapsedS))}s to go.
+        </p>
+      )}
+      {m.warm && m.unmetVehPerHour > 1 && (
+        <p className="sandbox-live-note warn">
+          <DirectionPill direction={direction} /> {Math.round(m.unmetVehPerHour).toLocaleString()} veh/h of demand cannot
+          enter: the segment is at capacity and the queue for it forms upstream, outside
+          this model. The speeds shown describe only the traffic that got on.
+        </p>
+      )}
+    </>
   );
 }
 

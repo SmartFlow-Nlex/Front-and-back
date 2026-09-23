@@ -15,7 +15,8 @@
  */
 import { readFileSync } from "node:fs";
 import calibrationJson from "./calibration.json";
-import { TrafficSim, type Interventions } from "../simulation";
+import { TrafficSim, type Interventions, type Metrics } from "../simulation";
+import { combineBaselines, combineMetrics, flowWeightedSpeed } from "../bothMetrics";
 import {
   ASSUMPTIONS,
   CHAINAGE_DERIVATION,
@@ -1577,8 +1578,9 @@ check(
   );
   check("page: the console hook is gone now that the panel exists (nothing is exposed on window)", !/sandboxScenarios/.test(pageSource) && !/Object\.defineProperty\(window/.test(pageSource));
   check(
-    "page: the recommendation reads the FOCUSED direction's effective state",
-    /getRecommendation\(focused\.metrics, focused\.baseline, \[\.\.\.focused\.eff\.closedLanes\], focused\.effIncidentCount, focused\.eff\.speedLimitKmh\)/.test(pageSource),
+    "page: each direction's recommendation reads that direction's OWN effective state (NB's from nb, SB's from sb — never one direction's numbers under the other's heading)",
+    /NB: getRecommendation\(nb\.metrics, nb\.baseline, \[\.\.\.nb\.eff\.closedLanes\], nb\.effIncidentCount, nb\.eff\.speedLimitKmh\)/.test(pageSource) &&
+      /SB: getRecommendation\(sb\.metrics, sb\.baseline, \[\.\.\.sb\.eff\.closedLanes\], sb\.effIncidentCount, sb\.eff\.speedLimitKmh\)/.test(pageSource),
   );
   check(
     "hook: anyIntervention and the folded before/after / event-list summaries are built from the effective state, per direction",
@@ -1593,11 +1595,12 @@ check(
   check(
     // No new "direction" field (Phase D1 §4 / no backend change): the context always names the
     // FOCUSED direction's effective state through the same 5 fields that existed before D2.
-    "page: the assistant's context carries the FOCUSED direction's effective closed lanes, speed limit and incident count, in the EXISTING fields only",
+    "page: the assistant's context carries the carriageway the command was SENT for (the focused one, pinned at send time as sentTo): its effective closed lanes, speed limit and incident count, in the EXISTING fields only",
     ctxKeys.join() === "laneCount,segmentLengthM,closedLanes,speedLimitKmh,incidentCount" &&
-      /closedLanes: focused\.eff\.closedLanes\.map/.test(pageSource) &&
-      /speedLimitKmh: focused\.eff\.speedLimitKmh,/.test(pageSource) &&
-      /incidentCount: focused\.effIncidentCount,/.test(pageSource),
+      /const sentTo = byDirection\[focusDirection\];/.test(pageSource) &&
+      /closedLanes: sentTo\.eff\.closedLanes\.map/.test(pageSource) &&
+      /speedLimitKmh: sentTo\.eff\.speedLimitKmh,/.test(pageSource) &&
+      /incidentCount: sentTo\.effIncidentCount,/.test(pageSource),
     ctxKeys.join(),
   );
   check("page: scenario incidents are drawn differently from the operator's, and each event is labelled on the canvas", /overlay\.isScenarioIncident\(inc\)/.test(pageSource) && /drawScenarioLabels\(ctx, canvasMarks\(/.test(pageSource));
@@ -1655,15 +1658,115 @@ check(
     "render() (single-direction) still draws its own axis, unreversed — NB-only/SB-only unchanged from before D3",
     /drawAxis: true/.test(pageSource.slice(pageSource.indexOf("function render("), pageSource.indexOf("function renderBoth("))),
   );
-  const clickStart = pageSource.indexOf("const placeIncidentAt = ");
+}
+
+// --- Phase D4 -----------------------------------------------------------------------------------
+// Corridor totals for Both mode (bothMetrics.ts) are pure, so every rule is pinned here directly,
+// including the ones that are easy to get quietly wrong: flow-weighting must not degrade to a plain
+// mean, a direction with no flow must not drag the corridor speed toward zero, and two queues must not add.
+{
+  const m = (o: Partial<Metrics>): Metrics => ({
+    activeAgents: 0, avgSpeedKmh: 0, throughputPerMin: 0, densityPerKmLane: 0, stoppedCount: 0, longestQueueM: 0,
+    co2RatePerMin: 0, avgTravelTimeS: 0, completed: 0, elapsedS: 100, warm: true, unmetVehPerHour: 0, ...o,
+  });
+  const nb = m({ activeAgents: 30, avgSpeedKmh: 100, throughputPerMin: 90, longestQueueM: 40, co2RatePerMin: 8, stoppedCount: 2, unmetVehPerHour: 10, densityPerKmLane: 12 });
+  const sb = m({ activeAgents: 20, avgSpeedKmh: 40, throughputPerMin: 10, longestQueueM: 120, co2RatePerMin: 5, stoppedCount: 7, unmetVehPerHour: 0, densityPerKmLane: 30 });
+  const c = combineMetrics(nb, sb);
+  check("corridor: counts and rates add (agents, throughput, CO2, stopped, unmet demand)", c.activeAgents === 50 && c.throughputPerMin === 100 && c.co2RatePerMin === 13 && c.stoppedCount === 9 && c.unmetVehPerHour === 10);
+  check("corridor: longest queue is the MAX of the two, never their sum", c.longestQueueM === Math.max(nb.longestQueueM, sb.longestQueueM) && c.longestQueueM !== nb.longestQueueM + sb.longestQueueM);
+  const weighted = (100 * 90 + 40 * 10) / 100;
+  check("corridor: average speed is flow-weighted by throughput", c.flowWeightedAvgSpeedKmh !== null && Math.abs(c.flowWeightedAvgSpeedKmh - weighted) < 1e-9, String(c.flowWeightedAvgSpeedKmh));
+  check("corridor: with unequal flows the flow-weighted speed is NOT the plain mean of the two directions (94 vs 70)", c.flowWeightedAvgSpeedKmh !== null && Math.abs(c.flowWeightedAvgSpeedKmh - (100 + 40) / 2) > 20);
+  const eq = flowWeightedSpeed({ avgSpeedKmh: 100, throughputPerMin: 50 }, { avgSpeedKmh: 40, throughputPerMin: 50 });
+  check("corridor: with EQUAL flows the weighted speed equals the plain mean (the weights cancel — the two only differ when flows do)", eq !== null && Math.abs(eq - 70) < 1e-9);
+  const oneDead = flowWeightedSpeed({ avgSpeedKmh: 100, throughputPerMin: 60 }, { avgSpeedKmh: 0, throughputPerMin: 0 });
+  check("corridor: a direction with no flow carries no weight (its speed cannot drag the total)", oneDead === 100);
+  check("corridor: with no flow in either direction there is no weight, so the speed is null — never a plain-mean fallback", flowWeightedSpeed({ avgSpeedKmh: 100, throughputPerMin: 0 }, { avgSpeedKmh: 40, throughputPerMin: 0 }) === null);
+  check("corridor: a negative flow is not a weight either", flowWeightedSpeed({ avgSpeedKmh: 100, throughputPerMin: -5 }, { avgSpeedKmh: 40, throughputPerMin: 10 }) === 40);
+  check("corridor: density and travel time are deliberately absent from the total (not additive across carriageways)", !("densityPerKmLane" in c) && !("avgTravelTimeS" in c));
+  const swapped = combineMetrics(sb, nb);
+  check("corridor: combining is symmetric (NB/SB order changes nothing)", swapped.flowWeightedAvgSpeedKmh === c.flowWeightedAvgSpeedKmh && swapped.longestQueueM === c.longestQueueM && swapped.throughputPerMin === c.throughputPerMin);
+  const bb = combineBaselines(
+    { avgSpeedKmh: 100, throughputPerMin: 90, longestQueueM: 40, co2RatePerMin: 8 },
+    { avgSpeedKmh: 40, throughputPerMin: 10, longestQueueM: 120, co2RatePerMin: 5 },
+  );
+  check("corridor baseline: built by the same rules as the corridor now (sum, max, flow-weighted), so a delta compares like with like",
+    bb.throughputPerMin === 100 && bb.co2RatePerMin === 13 && bb.longestQueueM === 120 && bb.flowWeightedAvgSpeedKmh !== null && Math.abs(bb.flowWeightedAvgSpeedKmh - weighted) < 1e-9);
+}
+
+// Structure of the Both-mode UI that regex can see reliably (rendered behaviour is checked live in the
+// browser): which tile says what, that density has no total, that click routing picks the carriageway
+// from the click and refuses what maps to nothing, that the command proposal is pinned to its carriageway.
+{
+  const pageSource = readFileSync(new URL("../page.tsx", import.meta.url), "utf8");
+  const panelSource = readFileSync(new URL("../components/ScenarioPanel.tsx", import.meta.url), "utf8");
+  const tileTags = [...pageSource.matchAll(/<MetricTileBoth\s+label="([^"]+)"\s+tag="([^"]+)"/g)].map((x) => `${x[1]}=${x[2]}`).join(", ");
+  check(
+    "page: Both-mode tiles label what kind of headline each is (avg speed flow-weighted, queue max, density per direction) — the tag is in the tile, not only in a tooltip",
+    tileTags === "Active agents=total, Avg speed=flow-weighted, Throughput=total, Longest queue=max, CO₂ rate=total, Density=per direction",
+    tileTags,
+  );
+  check("page: the density tile has NO corridor total (total={null})", /label="Density"\s+tag="per direction"[\s\S]{0,260}total=\{null\}/.test(pageSource));
+  check(
+    "page: the corridor totals come from combineMetrics/combineBaselines (one rule set), never re-derived inline",
+    /combineMetrics\(nb\.metrics, sb\.metrics\)/.test(pageSource) && /combineBaselines\(nb\.baseline, sb\.baseline\)/.test(pageSource) && !/nb\.metrics\.avgSpeedKmh \+ sb\.metrics\.avgSpeedKmh/.test(pageSource),
+  );
+  check(
+    "page: NB-only/SB-only still render the plain MetricTile row (Both mode adds MetricTileBoth, it does not replace it)",
+    (pageSource.match(/<MetricTile\s+label=/g) ?? []).length >= 5 && /both \? \(\s*<div className="sandbox-metric-row">/.test(pageSource),
+  );
+
+  const clickStart = pageSource.indexOf("const handleCanvasClick = ");
   const clickEnd = pageSource.indexOf("const previewClosureAt = ");
   const clickSource = pageSource.slice(clickStart, clickEnd);
   check(
-    "click-to-place reads Both mode's actual dual geometry (dualRoadLayout), not the single-direction roadLayout formula, and rejects a click landing in the other carriageway's band or the median",
-    /view === "Both"/.test(clickSource) &&
-      /dualRoadLayout\(\{/.test(clickSource) &&
-      /if \(cy < roadTop \|\| cy > roadTop \+ roadH\) return;/.test(clickSource) &&
-      /const reverseLanes = view === "Both" && focusDirection === "NB";/.test(clickSource),
+    "click routing (Both): the carriageway is read off WHICH band was clicked (NB band, SB band), from dualRoadLayout — not from focus",
+    /dualRoadLayout\(\{/.test(clickSource) && /const inNB = cy >= layout\.nbRoadTop/.test(clickSource) && /const inSB = cy >= layout\.sbRoadTop/.test(clickSource) && /target = drafting \? armed : inNB \? "NB" : "SB";/.test(clickSource),
+  );
+  check(
+    "click routing (Both): a click on the median, the axis or the verge (neither band) is refused with a message, not snapped to the nearest lane",
+    /if \(!inNB && !inSB\) \{\s*setPlaceNote\(/.test(clickSource),
+  );
+  check(
+    "click routing: the action lands on the CLICKED carriageway's own state (td), and focus moves there",
+    /const td = byDirection\[target\];/.test(clickSource) && /td\.placeIncident\(lane, x\);\s*disarmPlacing\(\);[^\n]*\n\s*if \(both && target !== focusDirection\) setFocusedDirection\(target\);/.test(clickSource) &&
+      /td\.setPlacingClosure\(true\);\s*\}\s*if \(both && target !== focusDirection\) setFocusedDirection\(target\);/.test(clickSource) &&
+      !/focused\./.test(clickSource),
+  );
+  check("click routing: NB's drawn slot is un-reversed back to the engine lane (NB is drawn with lane 1 at the bottom)", /const lane = both && target === "NB" \? lanes - 1 - drawnSlot : drawnSlot;/.test(clickSource));
+  check(
+    "click routing: arming anything disarms everything first, and changing focus drops an armed mode (no invisible armed state)",
+    /const armPlacing = [\s\S]{0,400}disarmPlacing\(\);/.test(pageSource) && /const chooseFocus = \(d: Direction\) => \{\s*if \(d !== focusDirection\) disarmPlacing\(\);/.test(pageSource),
+  );
+  check("click routing: Esc disarms wherever the mode is armed", /if \(e\.key === "Escape"\) disarmPlacing\(\);/.test(pageSource));
+
+  check(
+    "confidence run: disabled in Both mode regardless of events, with the stated message; replicate() is still called exactly once and untouched",
+    /disabled=\{both \|\| focused\.scenarioEvents\.length > 0\}/.test(pageSource) &&
+      /Confidence runs support one carriageway at a time\./.test(pageSource) &&
+      /if \(both\) return;\s*if \(focused\.scenarioEvents\.length > 0\) return;/.test(pageSource) &&
+      (pageSource.match(/= replicate\(/g) ?? []).length === 1,
+  );
+  const applyStart = pageSource.indexOf("const applyPlan = ");
+  const applySource = pageSource.slice(applyStart, pageSource.indexOf("// clearIncidents, toggleLane", applyStart));
+  check(
+    "command: the proposal is pinned to the carriageway it was made for (planDirection), and Apply lands there even if focus has moved since",
+    /const \[planDirection, setPlanDirection\] = useState<Direction \| null>\(null\);/.test(pageSource) &&
+      /setPlanDirection\(sentDirection\);/.test(pageSource) &&
+      /const planTarget = byDirection\[planDirection \?\? focusDirection\];/.test(applySource) &&
+      !/focused\./.test(applySource),
+  );
+  check(
+    "scenario panel: Both mode has an explicit 'Add to' carriageway picker and the Add button names the carriageway; the event is stamped with the picked direction",
+    /data-scn="direction-pick"/.test(panelSource) && /`Add to \$\{DIRECTION_NAME\[direction\]\}`/.test(panelSource) && /const spec: NewEventSpec = \{ variant, direction,/.test(panelSource),
+  );
+  check(
+    "scenario panel: conflicts, locks and the next event number are taken from the TARGET carriageway's own events (scoped within a direction)",
+    /const target = data\[direction\];/.test(panelSource) && /addEvent\(events, spec, road, nextSeq, manualClosure\)/.test(panelSource),
+  );
+  check(
+    "scenario panel: the long-skip guard is Both-mode only (single-direction skip is unchanged) and the threshold is two minutes",
+    /<SkipControl data=\{dd\} warn \/>/.test(panelSource) && /<SkipControl data=\{target\} warn=\{false\} \/>/.test(panelSource) && /export const SKIP_WARN_MS = 120_000;/.test(panelSource),
   );
 }
 

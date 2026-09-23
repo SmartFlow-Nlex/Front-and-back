@@ -215,6 +215,12 @@ export function schedulePhases(variant: ScenarioVariant, resolved: ResolvedDurat
       return buildPhases(TEMPLATE_BY_FAMILY.self_accident.phases, resolved, blocked.self_accident, wreck.self_accident);
     case "overturned_vehicle":
       return buildPhases(TEMPLATE_BY_FAMILY.overturned_vehicle.phases, resolved, blocked.overturned_vehicle, wreck.overturned_vehicle);
+    case "flood":
+      return buildPhases(TEMPLATE_BY_FAMILY.flood.phases, resolved, blocked.flood, wreck.flood);
+    case "scheduled_roadworks":
+      return buildPhases(TEMPLATE_BY_FAMILY.scheduled_roadworks.phases, resolved, blocked.scheduled_roadworks, wreck.scheduled_roadworks);
+    case "rain":
+      return buildPhases(TEMPLATE_BY_FAMILY.rain.phases, resolved, blocked.rain, null);
     default:
       return assertNever(variant);
   }
@@ -232,7 +238,11 @@ function effectOf(family: FamilyKey): Effect {
     case "multi_vehicle_collision":
     case "self_accident":
     case "overturned_vehicle":
+    case "flood":
+    case "scheduled_roadworks":
       return "closure";
+    case "rain":
+      return "speed_zone";
     default:
       return assertNever(family);
   }
@@ -248,9 +258,44 @@ function breakdownVehicle(variant: ScenarioVariant): VehicleKind | null {
     case "multi_vehicle_collision":
     case "self_accident":
     case "overturned_vehicle":
+    case "flood":
+    case "scheduled_roadworks":
+    case "rain":
       return null;
     default:
       return assertNever(variant);
+  }
+}
+
+/**
+ * The speed zone and limit a speed_zone-effect variant places at `positionM` on
+ * `road`. Null for a family whose effect is not speed_zone (effectOf would not
+ * have routed it here; the caller breaks rather than applying anything). A
+ * shoulder breakdown's zone is local to its position (GAWK_ZONE_M); rain's is
+ * the WHOLE segment regardless of position (RAIN_ZONE) — positionKm still
+ * drives the event's canvas marker, just not the zone extent.
+ */
+function speedZoneWindow(family: FamilyKey, positionM: number, road: Road): { readonly zone: readonly [number, number]; readonly limitKmh: number } | null {
+  switch (family) {
+    case "breakdown_shoulder": {
+      const zone = ASSUMPTIONS.GAWK_ZONE_M.value;
+      return {
+        zone: [Math.max(0, positionM - zone.upstream), Math.min(road.segmentLengthM, positionM + zone.downstream)],
+        limitKmh: ASSUMPTIONS.GAWK_SPEED_KMH.value.breakdown_shoulder,
+      };
+    }
+    case "rain":
+      return { zone: [0, road.segmentLengthM], limitKmh: ASSUMPTIONS.RAIN_SPEED_KMH.value };
+    case "breakdown_in_lane":
+    case "minor_collision":
+    case "multi_vehicle_collision":
+    case "self_accident":
+    case "overturned_vehicle":
+    case "flood":
+    case "scheduled_roadworks":
+      return null;
+    default:
+      return assertNever(family);
   }
 }
 
@@ -566,7 +611,7 @@ export type YieldedEvent = Owner &
 export function describeYield(y: YieldedEvent): string {
   switch (y.resource) {
     case "speed_zone":
-      return "Gawk slowdown suspended — operator speed limit active";
+      return "Speed zone suspended — operator speed limit active";
     case "closure_stretch":
       return "Closure suspended — operator lane closure active";
     default:
@@ -723,12 +768,9 @@ export function composeInterventions(
           suppressed.push({ eventId: event.id, eventName: event.name, resource: "speed_zone", heldBy: speedZone.eventId });
           break;
         }
-        const zone = ASSUMPTIONS.GAWK_ZONE_M.value;
-        speedZone = {
-          ...ownerOf(event, phase),
-          zone: [Math.max(0, positionM - zone.upstream), Math.min(road.segmentLengthM, positionM + zone.downstream)],
-          limitKmh: ASSUMPTIONS.GAWK_SPEED_KMH.value.breakdown_shoulder,
-        };
+        const window = speedZoneWindow(event.variant.family, positionM, road);
+        if (window === null) break;
+        speedZone = { ...ownerOf(event, phase), zone: window.zone, limitKmh: window.limitKmh };
         break;
       }
       case "incident": {

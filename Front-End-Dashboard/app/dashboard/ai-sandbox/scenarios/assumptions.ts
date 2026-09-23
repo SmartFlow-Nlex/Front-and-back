@@ -24,21 +24,33 @@ export type FamilyKey =
   | "minor_collision"
   | "multi_vehicle_collision"
   | "self_accident"
-  | "overturned_vehicle";
+  | "overturned_vehicle"
+  | "flood"
+  | "scheduled_roadworks"
+  | "rain";
 
-/** Families that act on the engine through its single closure stretch. */
-export type ClosureFamilyKey = "minor_collision" | "multi_vehicle_collision" | "self_accident" | "overturned_vehicle";
+/**
+ * Families that act on the engine through its single closure stretch. Flood and
+ * scheduled_roadworks are single-phase (ASSUMPTIONS.PHASE_SPLIT gives them one
+ * phase at share 1): unlike a collision, there is no separate "response then
+ * clearing" story for either, just closed-then-open.
+ */
+export type ClosureFamilyKey = "minor_collision" | "multi_vehicle_collision" | "self_accident" | "overturned_vehicle" | "flood" | "scheduled_roadworks";
 
 /** Breakdown families: their durations and phase split both come from data. */
 export type BreakdownFamilyKey = "breakdown_in_lane" | "breakdown_shoulder";
 
+/** Families that act on the engine through its single speed zone. */
+export type SpeedZoneFamilyKey = "breakdown_shoulder" | "rain";
+
 /**
  * Families with NO calibration.json entry, because NLEX's own logs have no
- * category for them (see NO_CALIBRATION_FAMILIES). Duration is Manual only:
- * the sampler refuses any other mode for these, and the Add panel never offers
+ * category for them, or (rain) the category exists but the checked split shows
+ * no real effect (see NO_CALIBRATION_FAMILIES). Duration is Manual only: the
+ * sampler refuses any other mode for these, and the Add panel never offers
  * Sampled / Median / 90th for them.
  */
-export type NoCalibrationFamilyKey = "overturned_vehicle";
+export type NoCalibrationFamilyKey = "overturned_vehicle" | "flood" | "scheduled_roadworks" | "rain";
 
 /** Phase ids per family. The catalogue attaches the display labels. */
 export type PhaseIdOf = {
@@ -48,6 +60,9 @@ export type PhaseIdOf = {
   readonly multi_vehicle_collision: "blocked" | "tow" | "clearing";
   readonly self_accident: "blocked" | "tow" | "clearing";
   readonly overturned_vehicle: "blocked" | "tow" | "clearing";
+  readonly flood: "active";
+  readonly scheduled_roadworks: "active";
+  readonly rain: "active";
 };
 
 /** Engine vehicle classes 1 / 2 / 3. */
@@ -142,11 +157,14 @@ export const ASSUMPTIONS = {
       multi_vehicle_collision: { blocked: 2, tow: 1, clearing: 0 },
       self_accident: { blocked: 1, tow: 1, clearing: 0 },
       overturned_vehicle: { blocked: 1, tow: 1, clearing: 0 },
+      flood: { active: 1 },
+      scheduled_roadworks: { active: 1 },
+      rain: { active: 0 },
     },
-    "NOT AVAILABLE in the data: neither export has a lanes-blocked count, only the single lane an event was logged in. The values are the smallest physically plausible ones. An in-lane breakdown blocks the lane it is in for its whole duration (waiting and service alike); a shoulder breakdown blocks none; a collision blocks its own lane; a multi-vehicle collision starts by blocking two lanes and is reduced to the working lane once vehicles are moved. Once the recorded lane-reopen time has passed (see PHASE_SPLIT) no lane is blocked. An overturned vehicle is given the self-accident shape (one lane): it is structurally a single-vehicle event like self_accident, not a multi-vehicle one, and there is no NLEX record of it spilling into a second lane more often than a self accident does.",
+    "NOT AVAILABLE in the data: neither export has a lanes-blocked count, only the single lane an event was logged in. The values are the smallest physically plausible ones. An in-lane breakdown blocks the lane it is in for its whole duration (waiting and service alike); a shoulder breakdown blocks none; a collision blocks its own lane; a multi-vehicle collision starts by blocking two lanes and is reduced to the working lane once vehicles are moved. Once the recorded lane-reopen time has passed (see PHASE_SPLIT) no lane is blocked. An overturned vehicle is given the self-accident shape (one lane): it is structurally a single-vehicle event like self_accident, not a multi-vehicle one, and there is no NLEX record of it spilling into a second lane more often than a self accident does. Flood and scheduled_roadworks block one lane, like the other single-vehicle closure families, and the operator can close more on the same stretch as with any of them; a lane count specific to either is NOT AVAILABLE (no roadworks or flood record exists at all). Rain blocks nothing — it is a speed zone, not a closure.",
     {
       evidence:
-        "BlockageCleared (lane reopened) precedes SiteCleared for all but 358 of 21,804 accidents, so a final phase with no lane blocked is supported by the data. In-lane multi-vehicle collisions are logged with a median of 3 vehicles (96% have 3 or more, 25% have 4 or more: 556 of 2,257), which is why two lanes is assumed rather than one. Overturned vehicle has no evidence of its own: see NO_CALIBRATION_FAMILIES.",
+        "BlockageCleared (lane reopened) precedes SiteCleared for all but 358 of 21,804 accidents, so a final phase with no lane blocked is supported by the data. In-lane multi-vehicle collisions are logged with a median of 3 vehicles (96% have 3 or more, 25% have 4 or more: 556 of 2,257), which is why two lanes is assumed rather than one. Overturned vehicle, flood and scheduled_roadworks have no evidence of their own: see NO_CALIBRATION_FAMILIES.",
       settledBy: "A lanes-blocked field in the incident export, or operator input.",
     },
   ),
@@ -157,8 +175,10 @@ export const ASSUMPTIONS = {
       multi_vehicle_collision: { blocked: 100, tow: 60, clearing: 0 },
       self_accident: { blocked: 60, tow: 60, clearing: 0 },
       overturned_vehicle: { blocked: 80, tow: 80, clearing: 0 },
+      flood: { active: 150 },
+      scheduled_roadworks: { active: 120 },
     },
-    "The WRECK LENGTH: how far downstream of the event position the scene extends. NOT AVAILABLE in the data (no export records how much road a scene occupies). Sized to the vehicles involved (4.6 m car, 9 m bus, 14 m truck in the engine) plus a working buffer: two vehicles about 40 m, a multi-vehicle scene about 100 m while lanes are blocked, then a shorter working area while a tow is in progress. Zero where no lane is blocked. The closed stretch is longer than this: it also includes UPSTREAM_BUFFER_M. An overturned vehicle is given a longer footprint than a self accident (80 m against 60 m): a vehicle on its side or roof occupies more than its own length, and righting it needs a crane or heavy wrecker working beside it, not just behind it.",
+    "The WRECK LENGTH: how far downstream of the event position the scene extends. NOT AVAILABLE in the data (no export records how much road a scene occupies). Sized to the vehicles involved (4.6 m car, 9 m bus, 14 m truck in the engine) plus a working buffer: two vehicles about 40 m, a multi-vehicle scene about 100 m while lanes are blocked, then a shorter working area while a tow is in progress. Zero where no lane is blocked. The closed stretch is longer than this: it also includes UPSTREAM_BUFFER_M. An overturned vehicle is given a longer footprint than a self accident (80 m against 60 m): a vehicle on its side or roof occupies more than its own length, and righting it needs a crane or heavy wrecker working beside it, not just behind it. Flood is longer again (150 m): standing water pools over a stretch of low ground, not a point, and this sandbox has no flood record to size it against — 150 m is simply larger than any single-vehicle wreck length here, not a measurement. Scheduled roadworks (120 m) is a work zone plus an advance-warning taper, the same reasoning as UPSTREAM_BUFFER_M applied to the work area itself rather than the approach to it.",
     { settledBy: "Field measurement or NLEX incident-management guidance." },
   ),
 
@@ -198,23 +218,40 @@ export const ASSUMPTIONS = {
         { id: "tow", share: 0.41 },
         { id: "clearing", share: 0.29 },
       ],
+      flood: [{ id: "active", share: 1 }],
+      scheduled_roadworks: [{ id: "active", share: 1 }],
     },
-    "ACCIDENT families only. The data gives one total duration per event, not a timeline, so how that total divides into phases is a modelling choice. The lane-blocked share is anchored to the data (below) and only the split of that share into 'awaiting response' and 'tow' is assumed. Breakdown phases are NOT here: they are split by the response share measured in the data (RESPONSE_SHARE_MODEL). Overturned vehicle has no clearance-ratio evidence of its own (see NO_CALIBRATION_FAMILIES) and is given self_accident's split verbatim, as the closest analog (a single vehicle needing recovery, not a multi-vehicle scene) — doubly an assumption, since self_accident's own split is itself unvalidated at the phase level.",
+    "CLOSURE families only. The data gives one total duration per event, not a timeline, so how that total divides into phases is a modelling choice. The lane-blocked share is anchored to the data (below) and only the split of that share into 'awaiting response' and 'tow' is assumed. Breakdown phases are NOT here: they are split by the response share measured in the data (RESPONSE_SHARE_MODEL). Overturned vehicle has no clearance-ratio evidence of its own (see NO_CALIBRATION_FAMILIES) and is given self_accident's split verbatim, as the closest analog (a single vehicle needing recovery, not a multi-vehicle scene) — doubly an assumption, since self_accident's own split is itself unvalidated at the phase level. Flood and scheduled_roadworks are single-phase (share 1): neither has a real 'response then clearing' story the way a collision does — a flood is closed for as long as the water stands and then open, and roadworks are closed for the planned window and then open. Splitting either into invented sub-phases would be a phase-level fake-metric with nothing behind it at all, worse than the collision families' at least ratio-anchored split.",
     {
       evidence:
-        "Ratio of median lane-blockage time (BlockageCleared - start) to median clearance time (SiteCleared - start), in-lane events, positive values only: minor collision 0.80 (rear-end 0.80, side-swipe 0.80, hit-and-run 0.38 on n=76), multi-vehicle 0.54, self accident 0.71. A ratio of medians is a rough guide, not a median of ratios. No equivalent ratio exists for overturned vehicle: NLEX's TypeOfEvent has no such category (see NO_CALIBRATION_FAMILIES).",
+        "Ratio of median lane-blockage time (BlockageCleared - start) to median clearance time (SiteCleared - start), in-lane events, positive values only: minor collision 0.80 (rear-end 0.80, side-swipe 0.80, hit-and-run 0.38 on n=76), multi-vehicle 0.54, self accident 0.71. A ratio of medians is a rough guide, not a median of ratios. No equivalent ratio exists for overturned vehicle, flood or scheduled_roadworks: none has any record in NLEX's exports at all (see NO_CALIBRATION_FAMILIES).",
       settledBy: "An event timeline (reported / lanes reopened / cleared) in the incident export.",
     },
   ),
 
   NO_CALIBRATION_FAMILIES: assume<readonly NoCalibrationFamilyKey[]>(
-    ["overturned_vehicle"],
-    "These families have NO calibration.json entry: NLEX's own accident export (TypeOfEvent) has no category for them, so there is nothing to sample a duration from, and no p50/p90/n/cap to report. Inventing quantiles for a family with zero real events behind it would be exactly the fake-metric this project has avoided everywhere else, so these families are Manual duration ONLY — the sampler (resolveDuration) throws if asked for sampled/p50/p90, and the Add panel never offers those buttons for them (ScenarioTemplate.durationSource === \"manual_only\"). Their resolved-duration display therefore never shows a calibration line, a low-sample badge or a cap: resolutionView() already suppresses all three whenever mode is \"manual\", which every draw for these families is.",
+    ["overturned_vehicle", "flood", "scheduled_roadworks", "rain"],
+    "These families have NO calibration.json entry. Overturned vehicle, flood and scheduled_roadworks: NLEX's own exports have no category for them at all, so there is nothing to sample a duration from. Rain: NLEX's accident export DOES record weather (WeatherCondition), but checked against the same population and exclusion rules calibration.json itself uses, the only two levels with enough Rainy events to trust (minor_collision, n=507; minor_collision_rear_end, n=389; both >= LOW_SAMPLE_N) show an IDENTICAL median clearance to Fair weather (5.0 min either way) — every other split has under 200 Rainy events, too thin to read at all. So there is no real effect to calibrate against, not just no data: presenting a p90/p99 gap at that sample size as \"rain slows clearance\" would be exactly the kind of noise CAP_MIN_N exists to guard against. Inventing quantiles, or a modifier that leans on a difference this thin, would be the fake-metric this project has avoided everywhere else, so all four families are Manual duration ONLY — the sampler (resolveDuration) throws if asked for sampled/p50/p90, and the Add panel never offers those buttons for them (ScenarioTemplate.durationSource === \"manual_only\"). Their resolved-duration display therefore never shows a calibration line, a low-sample badge or a cap: resolutionView() already suppresses all three whenever mode is \"manual\", which every draw for these families is.",
     {
       evidence:
-        "accident_data_*.csv TypeOfEvent value counts (2022-2026, read-only check): Rear End 8,292, Side Swipe 5,091, Self Accident 2,615, Multiple Collision 2,425, Hit Toll Plaza Equipment 1,215, Hit Objects On The Road 914, Hit and Run 469, Angle Collision 414, Others 216, Hit Pedestrian 64, Head-On Collision 46, Hit Animal 39, Pedestrian/Passenger Fell On Moving Vehicle 18. No \"Overturned\" or \"Rollover\" value exists at all, in any year.",
-      settledBy: "An \"Overturned\"/\"Rollover\" TypeOfEvent category appearing in a future NLEX export, or a documented source for how long an overturn actually takes to clear on this corridor.",
+        "accident_data_*.csv TypeOfEvent value counts (2022-2026, read-only check): Rear End 8,292, Side Swipe 5,091, Self Accident 2,615, Multiple Collision 2,425, Hit Toll Plaza Equipment 1,215, Hit Objects On The Road 914, Hit and Run 469, Angle Collision 414, Others 216, Hit Pedestrian 64, Head-On Collision 46, Hit Animal 39, Pedestrian/Passenger Fell On Moving Vehicle 18. No \"Overturned\", \"Rollover\", \"Flood\" or \"Roadworks\" value exists at all, in any year. breakdown_data_*.csv has no WeatherCondition column at all, so breakdown_in_lane / breakdown_shoulder cannot carry a rain effect either, even in principle. WeatherCondition on the accident export: Fair 20,558, Rainy 1,249, Stormy 15 (too thin on its own everywhere). Per mainline-lane family, Fair n / Rainy n / Fair p50 / Rainy p50: minor_collision 7,321/507/5.0/5.0; minor_collision_rear_end 5,255/389/5.0/5.0; minor_collision_sideswipe 1,943/112 (Rainy n<200); minor_collision_hit_and_run 123/6; multi_vehicle_collision 1,929/176; self_accident 1,095/102.",
+      settledBy: "An \"Overturned\"/\"Rollover\"/\"Flood\"/\"Roadworks\" category appearing in a future NLEX export, a documented source for how long each actually takes to clear or stay closed on this corridor, or (rain) enough additional Rainy events for the thin levels to reach LOW_SAMPLE_N and show whether a real effect exists once they can be trusted.",
     },
+  ),
+
+  RAIN_SPEED_KMH: assume(
+    60,
+    "The speed a Heavy rain event caps traffic to, for as long as it runs. Unlike GAWK_SPEED_KMH (drivers slowing to look at something beside the road), this is meant to stand in for reduced grip and visibility over the WHOLE simulated stretch, not a local effect near one vehicle — so the speed zone for a rain event is [0, segment length] regardless of where the event is placed (RAIN_ZONE below), and the cap is set lower than the shoulder-breakdown gawk speed (60 against 70). The warehouse holds no observed corridor operating speed at all (see GAWK_SPEED_KMH), and the weather-split check that would have anchored a real number instead found no measurable effect (see NO_CALIBRATION_FAMILIES) — so, like GAWK_SPEED_KMH, this is a round number below the engine's free-flow class-1 speed, not a measurement.",
+    {
+      evidence: "The engine's own free-flow class-1 speed is 108 km/h; GAWK_SPEED_KMH (a narrower, one-vehicle effect) is already set at 70. 60 is lower again because rain is modelled corridor-wide, not local.",
+      settledBy: "Probe / loop-detector speeds during recorded rain events, which do not exist in the warehouse.",
+    },
+  ),
+
+  RAIN_ZONE: assume<"whole_segment">(
+    "whole_segment",
+    "A Heavy rain event's speed zone is the WHOLE simulated stretch (0 to the segment length), not a position-relative zone like GAWK_ZONE_M: rain is corridor-wide by nature, and sizing a local zone around a chosen point would misrepresent that. The event still carries a positionKm, for the canvas label only — it has no effect on the zone's extent.",
+    { settledBy: "Nothing external: a modelling choice about what \"corridor-wide\" should mean in a sandbox of a fixed simulated stretch." },
   ),
 
   BREAKDOWN_DURATION_SCOPE: assume<"response_plus_service_per_event">(
@@ -281,7 +318,7 @@ export const ASSUMPTIONS = {
 
   GAWK_SPEED_KMH: assume<{ readonly breakdown_shoulder: number }>(
     { breakdown_shoulder: 70 },
-    "A stopped vehicle on the shoulder slows passing traffic. There is no measured NLEX speed to calibrate against: the warehouse holds no observed corridor operating speed (four candidate columns were checked and rejected in the sandbox validation, see smartflow_scripts/4_studies_audits/sandbox_validation/README.md). 70 km/h is a moderate cut below the engine's 108 km/h free-flow class-1 speed. Only shoulder breakdowns use a speed zone; collisions are modelled by their closure alone, so no post-collision gawking is represented.",
+    "A stopped vehicle on the shoulder slows passing traffic. There is no measured NLEX speed to calibrate against: the warehouse holds no observed corridor operating speed (four candidate columns were checked and rejected in the sandbox validation, see smartflow_scripts/4_studies_audits/sandbox_validation/README.md). 70 km/h is a moderate cut below the engine's 108 km/h free-flow class-1 speed. Collisions are modelled by their closure alone, so no post-collision gawking is represented. A shoulder breakdown and rain are the only two families that use the engine's single speed zone (SpeedZoneFamilyKey) — a shoulder breakdown's is local to its position (GAWK_ZONE_M), rain's is corridor-wide at a different, lower speed (RAIN_SPEED_KMH) — and, being the same single engine lever, the two cannot run at once (see composeInterventions's speed_zone case).",
     {
       evidence: "The engine's speed zone caps desired speed for every vehicle in the zone, on all lanes. Real gawking mostly affects the lane beside the incident, so this overstates the slowdown in the other lanes.",
       settledBy: "Probe / loop-detector speeds near recorded shoulder events, which do not exist in the warehouse.",

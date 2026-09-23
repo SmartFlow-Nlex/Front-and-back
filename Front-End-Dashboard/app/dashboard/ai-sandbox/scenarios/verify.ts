@@ -143,7 +143,7 @@ function thrownMessage(fn: () => unknown): string | null {
   }
 }
 
-const FAMILIES: readonly FamilyKey[] = ["breakdown_in_lane", "breakdown_shoulder", "minor_collision", "multi_vehicle_collision", "self_accident", "overturned_vehicle"];
+const FAMILIES: readonly FamilyKey[] = ["breakdown_in_lane", "breakdown_shoulder", "minor_collision", "multi_vehicle_collision", "self_accident", "overturned_vehicle", "flood", "scheduled_roadworks", "rain"];
 /** Families with a real calibration.json entry: FAMILIES minus NO_CALIBRATION_FAMILIES. */
 const CALIBRATED_FAMILIES: readonly FamilyKey[] = FAMILIES.filter((f) => !ASSUMPTIONS.NO_CALIBRATION_FAMILIES.value.some((n) => n === f));
 const KNOT_P = [0, 0.1, 0.25, 0.5, 0.75, 0.9, 0.99, 1] as const;
@@ -528,10 +528,13 @@ const EXPECTED_RESOURCES: Record<FamilyKey, readonly EngineResource[]> = {
   multi_vehicle_collision: ["closure_stretch"],
   self_accident: ["closure_stretch"],
   overturned_vehicle: ["closure_stretch"],
+  flood: ["closure_stretch"],
+  scheduled_roadworks: ["closure_stretch"],
+  rain: ["speed_zone"],
 };
 check("one template per family, in the catalogue", SCENARIO_TEMPLATES.length === FAMILIES.length && FAMILIES.every((f) => SCENARIO_TEMPLATES.some((t) => t.family === f)));
 check("display names are unique", new Set(SCENARIO_TEMPLATES.map((t) => t.displayName)).size === SCENARIO_TEMPLATES.length);
-check("PHASE_SPLIT has entries for the closure families only (breakdown splits come from data)", Object.keys(ASSUMPTIONS.PHASE_SPLIT.value).sort().join() === "minor_collision,multi_vehicle_collision,overturned_vehicle,self_accident");
+check("PHASE_SPLIT has entries for the closure families only (breakdown splits come from data)", Object.keys(ASSUMPTIONS.PHASE_SPLIT.value).sort().join() === "flood,minor_collision,multi_vehicle_collision,overturned_vehicle,scheduled_roadworks,self_accident");
 
 for (const t of SCENARIO_TEMPLATES) {
   const f = t.family;
@@ -539,11 +542,13 @@ for (const t of SCENARIO_TEMPLATES) {
   check(`${f}: every phase has a label`, t.phases.every((p) => p.label.trim().length > 0));
   check(`${f}: resources are ${EXPECTED_RESOURCES[f].join("+")}`, [...t.resources].sort().join() === [...EXPECTED_RESOURCES[f]].sort().join());
   check(`${f}: default placement is a valid percentage`, t.defaultPlacement.pct > 0 && t.defaultPlacement.pct < 100);
-  if (t.family !== "overturned_vehicle") {
+  // Branches on durationSource itself (not a re-check: the aggregate check right after this loop already
+  // verifies durationSource classification agrees with NO_CALIBRATION_FAMILIES) so TS narrows `t` to the
+  // union member that actually carries `calibrationKey`, for any current or future manual_only family.
+  if (t.durationSource === "calibrated") {
     check(`${f}: calibration key exists`, CALIBRATION_KEYS.some((k) => k === t.calibrationKey));
-    check(`${f}: durationSource is "calibrated"`, t.durationSource === "calibrated");
   } else {
-    check(`${f}: a manual_only template has no calibrationKey field`, !("calibrationKey" in t) && t.durationSource === "manual_only");
+    check(`${f}: a manual_only template has no calibrationKey field`, !("calibrationKey" in t));
   }
   check(`${f}: default lane is valid on a 2..6 lane road`, [2, 3, 4, 5, 6].every((lc) => { const l = defaultOperatorLane(t, lc); return l >= 1 && l <= lc; }));
   check(`${f}: lanes-blocked table covers exactly the phase ids`, Object.keys(ASSUMPTIONS.LANES_BLOCKED.value[f]).sort().join() === t.phases.map((p) => p.id).sort().join());
@@ -559,6 +564,21 @@ for (const f of ["minor_collision", "multi_vehicle_collision", "self_accident", 
   const lengths: Record<string, number> = ASSUMPTIONS.CLOSURE_LENGTH_M.value[f];
   check(`${f}: wreck length is >0 exactly when lanes are blocked`, Object.keys(lanes).every((id) => (lanes[id] > 0) === (lengths[id] > 0)));
   check(`${f}: last phase blocks no lane (lanes reopen before the scene is cleared)`, lanes[t.phases[t.phases.length - 1].id] === 0);
+}
+// Flood and scheduled roadworks are single-phase closure families (ASSUMPTIONS.PHASE_SPLIT gives each one phase
+// at share 1): there is no "clearing" phase to reopen a lane before the scene ends, so the "last phase blocks no
+// lane" check above does not apply — the phase itself blocks a lane for the whole event, and the closure simply
+// ends when the event does (composeInterventions holds nothing for an event with no current phase).
+for (const f of ["flood", "scheduled_roadworks"] as const) {
+  const t = TEMPLATE_BY_FAMILY[f];
+  const split = ASSUMPTIONS.PHASE_SPLIT.value[f];
+  const offsets = phaseOffsetFractions(t.phases, null);
+  check(`${f}: a single phase, fixed at offset 0`, t.phases.length === 1 && t.phases[0].offset.kind === "fixed" && offsets[0] === 0);
+  check(`${f}: its one phase takes the whole share`, split.length === 1 && split[0].share === 1 && split[0].id === t.phases[0].id);
+  const lanes: Record<string, number> = ASSUMPTIONS.LANES_BLOCKED.value[f];
+  const lengths: Record<string, number> = ASSUMPTIONS.CLOSURE_LENGTH_M.value[f];
+  check(`${f}: wreck length is >0 exactly when lanes are blocked`, Object.keys(lanes).every((id) => (lanes[id] > 0) === (lengths[id] > 0)));
+  check(`${f}: its one phase blocks exactly 1 lane for the whole event`, lanes[t.phases[0].id] === 1);
 }
 for (const f of BREAKDOWN_FAMILIES) {
   const t = TEMPLATE_BY_FAMILY[f];
@@ -587,6 +607,12 @@ for (const f of ["breakdown_in_lane", "minor_collision", "multi_vehicle_collisio
   check(`${f}: default lane is the modal lane in the data (${modal[f]})`, d.kind === "operator_lane" && `Lane${d.lane}` === modal[f], JSON.stringify(d));
 }
 check("breakdown_shoulder: default lane is the outermost", TEMPLATE_BY_FAMILY.breakdown_shoulder.defaultLane.kind === "outermost");
+check(
+  "flood, scheduled roadworks: default lane is operator lane 1 (LANES_BLOCKED gives each just one lane; no data exists to prefer any other)",
+  TEMPLATE_BY_FAMILY.flood.defaultLane.kind === "operator_lane" && TEMPLATE_BY_FAMILY.flood.defaultLane.lane === 1 &&
+    TEMPLATE_BY_FAMILY.scheduled_roadworks.defaultLane.kind === "operator_lane" && TEMPLATE_BY_FAMILY.scheduled_roadworks.defaultLane.lane === 1,
+);
+check("rain: default lane is the outermost, like the other speed-zone family (it blocks no lane, but defaultOperatorLane still needs an index)", TEMPLATE_BY_FAMILY.rain.defaultLane.kind === "outermost");
 for (const f of BREAKDOWN_FAMILIES) {
   const cells = calibrationJson.provenance.hierarchy.cells.filter((c) => c.family === f);
   const top = (level: string): string | null => {
@@ -745,8 +771,11 @@ const inLaneSpec = (vehicle: VehicleKind, lane: number, posM: number, startMin: 
 const shoulderSpec = (posM: number, startMin: number, duration: DurationMode): NewEventSpec => ({
   variant: { family: "breakdown_shoulder", vehicle: "car", cause: "engine" }, lane: null, positionKm: kmOf(posM), startMinutes: startMin, duration,
 });
-const collisionSpec = (family: "minor_collision" | "multi_vehicle_collision" | "self_accident" | "overturned_vehicle", lane: number, posM: number, startMin: number, duration: DurationMode): NewEventSpec => ({
+const collisionSpec = (family: "minor_collision" | "multi_vehicle_collision" | "self_accident" | "overturned_vehicle" | "flood" | "scheduled_roadworks", lane: number, posM: number, startMin: number, duration: DurationMode): NewEventSpec => ({
   variant: family === "minor_collision" ? { family, label: "rear_end" } : { family }, lane, positionKm: kmOf(posM), startMinutes: startMin, duration,
+});
+const rainSpec = (posM: number, startMin: number, duration: DurationMode): NewEventSpec => ({
+  variant: { family: "rain" }, lane: null, positionKm: kmOf(posM), startMinutes: startMin, duration,
 });
 const ALL_SPECS: readonly { name: string; spec: NewEventSpec }[] = [
   { name: "in-lane", spec: inLaneSpec("truck", 3, 330, 5, { kind: "sampled", seed: 7 }) },
@@ -823,7 +852,7 @@ check("event: phases tile the whole duration, start at 0, ascend, are labelled w
   };
   let ok = true;
   let checked = 0;
-  for (const family of ["minor_collision", "multi_vehicle_collision", "self_accident", "overturned_vehicle"] as const) {
+  for (const family of ["minor_collision", "multi_vehicle_collision", "self_accident", "overturned_vehicle", "flood", "scheduled_roadworks"] as const) {
     const blocked = new Map(Object.entries(ASSUMPTIONS.LANES_BLOCKED.value[family]));
     const wreck = new Map(Object.entries(ASSUMPTIONS.CLOSURE_LENGTH_M.value[family]));
     for (const opLane of [1, 2, 4]) {
@@ -853,7 +882,7 @@ check("event: phases tile the whole duration, start at 0, ascend, are labelled w
       }
     }
   }
-  check(`collisions: in every phase (${checked} cases: 4 families x 3 lanes x 3 positions, 11 phases per lane and position: 2+3+3+3) the lanes, stretch and owner match the assumption tables, updating as phases advance`, ok && checked === 99);
+  check(`collisions: in every phase (${checked} cases: 6 families x 3 lanes x 3 positions, 13 phases per lane and position: 2+3+3+3+1+1) the lanes, stretch and owner match the assumption tables, updating as phases advance`, ok && checked === 117);
 }
 
 // --- shoulder breakdown: the speed zone, unless the operator is using it
@@ -917,7 +946,35 @@ check("event: phases tile the whole duration, start at 0, ascend, are labelled w
   const afterYield = composeInterventions(limited, [yieldEvent], abs(30), road600).owners;
   check("ownership: the key changes when an event starts or stops yielding, nothing else changing (a suspended row must re-render)", whileYielding.yielded.length === 1 && afterYield.yielded.length === 0 && ownershipKey(whileYielding) !== ownershipKey(afterYield) && ownershipKey(noLimit) !== ownershipKey(whileYielding));
   const shoulderY = composeInterventions({ ...clean, speedLimitKmh: 50, incidents: [] }, [must([], shoulderSpec(330, 0, manualMinutes(20)), 1).event], abs(1), road600).owners.yielded[0];
-  check("speed zone: while the operator's limit suspends a shoulder event, its row says \"Gawk slowdown suspended — operator speed limit active\"", shoulderY.resource === "speed_zone" && describeYield(shoulderY) === "Gawk slowdown suspended — operator speed limit active");
+  check("speed zone: while the operator's limit suspends a shoulder event, its row says \"Speed zone suspended — operator speed limit active\"", shoulderY.resource === "speed_zone" && describeYield(shoulderY) === "Speed zone suspended — operator speed limit active");
+}
+
+// --- rain: the speed zone spans the WHOLE segment regardless of position, at RAIN_SPEED_KMH, blocking no lane
+{
+  const near0 = must([], rainSpec(20, 0, manualMinutes(30)), 1).event;
+  const nearEnd = must([], rainSpec(580, 0, manualMinutes(30)), 1).event;
+  const c0 = composeInterventions({ ...idle, incidents: [] }, [near0], abs(1), road600);
+  const c1 = composeInterventions({ ...idle, incidents: [] }, [nearEnd], abs(1), road600);
+  check(
+    "rain: the zone is [0, segment length] no matter where positionKm places the event (RAIN_ZONE = whole_segment), at RAIN_SPEED_KMH (60)",
+    c0.interventions.speedZone[0] === 0 && c0.interventions.speedZone[1] === 600 && c0.interventions.speedLimitKmh === 60 && ASSUMPTIONS.RAIN_SPEED_KMH.value === 60 &&
+      c1.interventions.speedZone[0] === 0 && c1.interventions.speedZone[1] === 600 && c1.interventions.speedLimitKmh === 60,
+  );
+  check("rain: no lane is closed", !c0.interventions.closedLanes.some(Boolean) && c0.owners.closure === null);
+  check("rain: it owns the speed zone, not a shoulder breakdown's gawk zone (a different, lower speed)", c0.owners.speedZone !== null && c0.owners.speedZone.eventId === near0.id && ASSUMPTIONS.RAIN_SPEED_KMH.value < ASSUMPTIONS.GAWK_SPEED_KMH.value.breakdown_shoulder);
+  check("rain: has no lane, whatever lane the spec was given (effectOf routes it to speed_zone, same as a shoulder breakdown)", must([], { ...rainSpec(330, 0, manualMinutes(5)), lane: 2 }, 1).event.lane === null);
+
+  const opLimit = composeInterventions({ ...idle, speedLimitKmh: 50, incidents: [] }, [near0], abs(1), road600);
+  check("rain: yields when the operator has a speed limit set, same as a shoulder breakdown yielding", opLimit.interventions.speedLimitKmh === 50 && opLimit.owners.speedZone === null && opLimit.owners.yielded.length === 1 && opLimit.owners.yielded[0].reason === "operator_limit_active" && describeYield(opLimit.owners.yielded[0]) === "Speed zone suspended — operator speed limit active");
+
+  // The engine's single speed zone: rain and a shoulder breakdown cannot both hold it.
+  const rainAlone = must([], rainSpec(330, 5, manualMinutes(20)), 1);
+  const overlap = refused(rainAlone.events, shoulderSpec(200, 10, manualMinutes(20)), 2);
+  check("rain: conflicts with an overlapping shoulder breakdown (the engine's single speed zone), naming both", overlap !== null && overlap.includes("Heavy rain #1") && overlap.includes("Breakdown on the shoulder #2") && overlap.includes("speed zone"));
+  const after = addEvent(rainAlone.events, shoulderSpec(200, 26, manualMinutes(20)), road600, 2, noClosure);
+  check("rain: a shoulder breakdown starting after rain ends is accepted", after.ok);
+  const alongCollision = addEvent(rainAlone.events, collisionSpec("minor_collision", 1, 330, 6, manualMinutes(10)), road600, 2, noClosure);
+  check("rain: a collision may run alongside it (a different lever, closure_stretch)", alongCollision.ok);
 }
 
 // --- adding an event while the operator has a closure of their own elsewhere
@@ -925,7 +982,8 @@ check("event: phases tile the whole duration, start at 0, ascend, are labelled w
   const elsewhere: ManualClosure = { closedLanes: [false, false, true, false], closurePoint: 100, closureEnd: 200 };
   const minor = collisionSpec("minor_collision", 1, 330, 5, manualMinutes(10));
   check("manual closure: an event that needs the closure stretch is refused with exactly the stated message", refused([], minor, 1, road600, elsewhere) === "Clear your manual lane closure first — this event needs the closure stretch." && MANUAL_CLOSURE_MESSAGE === "Clear your manual lane closure first — this event needs the closure stretch.");
-  check("manual closure: ... for every closure family", (["minor_collision", "multi_vehicle_collision", "self_accident", "overturned_vehicle"] as const).every((f) => refused([], collisionSpec(f, 1, 330, 5, manualMinutes(10)), 1, road600, elsewhere) === MANUAL_CLOSURE_MESSAGE));
+  check("manual closure: ... for every closure family", (["minor_collision", "multi_vehicle_collision", "self_accident", "overturned_vehicle", "flood", "scheduled_roadworks"] as const).every((f) => refused([], collisionSpec(f, 1, 330, 5, manualMinutes(10)), 1, road600, elsewhere) === MANUAL_CLOSURE_MESSAGE));
+  check("manual closure: rain does not use the closure stretch, so it is unaffected by one elsewhere", refused([], rainSpec(330, 5, manualMinutes(10)), 1, road600, elsewhere) === null);
   check("manual closure: events that do not use the closure stretch are not affected", refused([], inLaneSpec("truck", 3, 330, 5, manualMinutes(10)), 1, road600, elsewhere) === null && refused([], shoulderSpec(330, 5, manualMinutes(10)), 1, road600, elsewhere) === null);
   check("manual closure: no lane closed by hand means no conflict, whatever stretch is set", refused([], minor, 1, road600, { ...elsewhere, closedLanes: [false, false, false, false] }) === null);
   check("manual closure: a closure on exactly the event's stretch (230 to 370 m) is accepted", refused([], minor, 1, road600, { ...elsewhere, closurePoint: 230, closureEnd: 370 }) === null);
@@ -1113,11 +1171,17 @@ function engineInSync(ts: TrafficSim, controls: ManualControls, events: readonly
 }
 
 {
-  // removing an event restores exactly what it changed, for every family (including overturned_vehicle,
-  // which has no calibration entry of its own — duration is overridden to manual(20) here regardless, as
-  // it already is for every other entry, so that is not a special case for this test).
+  // removing an event restores exactly what it changed, for every family (including the four with no
+  // calibration entry of their own — duration is overridden to manual(20) here regardless, as it already is
+  // for every other entry, so that is not a special case for this test).
   let ok = true;
-  const removalSpecs: readonly { name: string; spec: NewEventSpec }[] = [...ALL_SPECS, { name: "overturn", spec: collisionSpec("overturned_vehicle", 1, 330, 5, manualMinutes(20)) }];
+  const removalSpecs: readonly { name: string; spec: NewEventSpec }[] = [
+    ...ALL_SPECS,
+    { name: "overturn", spec: collisionSpec("overturned_vehicle", 1, 330, 5, manualMinutes(20)) },
+    { name: "flood", spec: collisionSpec("flood", 1, 330, 5, manualMinutes(20)) },
+    { name: "roadworks", spec: collisionSpec("scheduled_roadworks", 1, 330, 5, manualMinutes(20)) },
+    { name: "rain", spec: rainSpec(330, 5, manualMinutes(20)) },
+  ];
   for (const { spec } of removalSpecs) {
     const events = must([], { ...spec, startMinutes: 0, duration: manualMinutes(20) }, 1).events;
     const ts = newSim();
@@ -1238,12 +1302,10 @@ function engineInSync(ts: TrafficSim, controls: ManualControls, events: readonly
   check("format: clock shows m:ss and h:mm:ss", formatClock(0) === "0:00" && formatClock(75) === "1:15" && formatClock(3725) === "1:02:05" && formatClock(-5) === "0:00");
 }
 
-// --- the families still not built
+// --- the families still not built: empty now that rain, flood, scheduled roadworks and overturned vehicle are all built
 check(
-  "families still not built: rain, flood and scheduled roadworks, each with why, none clashing with a supported family (overturned vehicle is no longer among them)",
-  UNSUPPORTED_FAMILIES.map((u) => u.id).join() === "rain,flood,scheduled_roadworks" && NOT_YET_BUILT === "Not yet built" &&
-    // "overturn" is not even a valid UnsupportedFamily.id any more: the type itself proves it can't reappear here.
-    new Set(UNSUPPORTED_FAMILIES.map((u) => u.displayName)).size === 3 && UNSUPPORTED_FAMILIES.every((u) => u.displayName.trim().length > 0 && u.needs.trim().length > 20 && !FAMILIES.some((f) => String(f) === u.id)),
+  "families still not built: none — every family the review asked for is built, and the disabled-badge machinery still compiles and renders nothing",
+  UNSUPPORTED_FAMILIES.length === 0 && NOT_YET_BUILT === "Not yet built" && UNSUPPORTED_FAMILIES.every((u) => u.displayName.trim().length > 0 && u.needs.trim().length > 20 && !FAMILIES.some((f) => String(f) === u.id)),
 );
 
 // --- the resolved duration as the operator reads it
@@ -1329,7 +1391,12 @@ check(
     { family: "minor_collision", label: "rear_end" },
     { family: "multi_vehicle_collision" },
     { family: "self_accident" },
+    { family: "overturned_vehicle" },
+    { family: "flood" },
+    { family: "scheduled_roadworks" },
+    { family: "rain" },
   ];
+  const noLaneFamily = (f: FamilyKey): boolean => f === "breakdown_shoulder" || f === "rain";
   let notSettled = 0;
   const trials = 1500;
   for (let trial = 0; trial < trials; trial++) {
@@ -1337,7 +1404,7 @@ check(
     const n = 1 + Math.floor(rnd() * 4);
     for (let i = 1; i <= n; i++) {
       const v = pickOne(variants);
-      const r = addEvent(evs, { variant: v, lane: v.family === "breakdown_shoulder" ? null : 1 + Math.floor(rnd() * 4), positionKm: kmOf(20 + rnd() * 560), startMinutes: Math.floor(rnd() * 10), duration: manualMinutes(2 + Math.floor(rnd() * 40)) }, road600, i, noClosure);
+      const r = addEvent(evs, { variant: v, lane: noLaneFamily(v.family) ? null : 1 + Math.floor(rnd() * 4), positionKm: kmOf(20 + rnd() * 560), startMinutes: Math.floor(rnd() * 10), duration: manualMinutes(2 + Math.floor(rnd() * 40)) }, road600, i, noClosure);
       if (r.ok) evs = r.events;
     }
     const cp = rnd() < 0.5 ? 330 : 100 + rnd() * 200;

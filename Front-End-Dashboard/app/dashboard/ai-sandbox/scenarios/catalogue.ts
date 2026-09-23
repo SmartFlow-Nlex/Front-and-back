@@ -9,7 +9,7 @@ import {
   type VehicleKind,
 } from "./assumptions";
 
-export type { BreakdownCause, BreakdownFamilyKey, ClosureFamilyKey, FamilyKey, NoCalibrationFamilyKey, PhaseIdOf, VehicleKind } from "./assumptions";
+export type { BreakdownCause, BreakdownFamilyKey, ClosureFamilyKey, FamilyKey, NoCalibrationFamilyKey, PhaseIdOf, SpeedZoneFamilyKey, VehicleKind } from "./assumptions";
 
 /* ══════════════════════════════════════════════════════════════════════════════
    SCENARIO CATALOGUE
@@ -171,6 +171,18 @@ export type SelfAccidentTemplate = TemplateCommon<"self_accident"> & {
 export type OverturnedVehicleTemplate = TemplateCommon<"overturned_vehicle"> & {
   readonly durationSource: "manual_only";
 };
+/** No calibrationKey. Single phase ("active"): see ASSUMPTIONS.PHASE_SPLIT. */
+export type FloodTemplate = TemplateCommon<"flood"> & {
+  readonly durationSource: "manual_only";
+};
+/** No calibrationKey. Single phase ("active"), one planned window — not a recurring schedule (see the file header). */
+export type ScheduledRoadworksTemplate = TemplateCommon<"scheduled_roadworks"> & {
+  readonly durationSource: "manual_only";
+};
+/** No calibrationKey. Speed zone, not closure_stretch — see ASSUMPTIONS.RAIN_ZONE / RAIN_SPEED_KMH. */
+export type RainTemplate = TemplateCommon<"rain"> & {
+  readonly durationSource: "manual_only";
+};
 
 export type ScenarioTemplate =
   | BreakdownInLaneTemplate
@@ -178,7 +190,10 @@ export type ScenarioTemplate =
   | MinorCollisionTemplate
   | MultiVehicleCollisionTemplate
   | SelfAccidentTemplate
-  | OverturnedVehicleTemplate;
+  | OverturnedVehicleTemplate
+  | FloodTemplate
+  | ScheduledRoadworksTemplate
+  | RainTemplate;
 
 export type TemplateOf<F extends FamilyKey> = Extract<ScenarioTemplate, { readonly family: F }>;
 
@@ -189,7 +204,10 @@ export type ScenarioVariant =
   | { readonly family: "minor_collision"; readonly label: CollisionLabel }
   | { readonly family: "multi_vehicle_collision" }
   | { readonly family: "self_accident" }
-  | { readonly family: "overturned_vehicle" };
+  | { readonly family: "overturned_vehicle" }
+  | { readonly family: "flood" }
+  | { readonly family: "scheduled_roadworks" }
+  | { readonly family: "rain" };
 
 export function assertNever(value: never): never {
   throw new Error(`Unhandled case: ${JSON.stringify(value)}`);
@@ -220,6 +238,11 @@ function breakdownPhases(): readonly PhaseDef<"waiting" | "service">[] {
     { id: "waiting", label: "Waiting for responder", offset: { kind: "fixed", fraction: 0 } },
     { id: "service", label: "Service / tow", offset: { kind: "response_share" } },
   ];
+}
+
+/** A family whose whole duration is one phase (rain: not a ClosureFamilyKey, so it can't use buildAccidentPhases). */
+function singlePhase(label: string): readonly PhaseDef<"active">[] {
+  return [{ id: "active", label, offset: { kind: "fixed", fraction: 0 } }];
 }
 
 /**
@@ -372,6 +395,42 @@ const OVERTURNED_VEHICLE: OverturnedVehicleTemplate = {
   durationSource: "manual_only",
 };
 
+const FLOOD: FloodTemplate = {
+  family: "flood",
+  displayName: "Flooding",
+  description:
+    "Standing water makes a lane impassable until it drains. NLEX has no flood record of any kind (no event type, no duration, no lane count), so this is a simplification: modelled as a single lane closed over a longer stretch than a wreck (150 m, against 60-100 m for a collision), for a duration the operator enters directly. A real flood can be a partial-width, reduced-speed hazard rather than a full closure; the engine has no lever for that, so a closed lane is the closest honest approximation with what exists today.",
+  phases: singlePhase("Flooded: lane closed"),
+  defaultLane: { kind: "operator_lane", lane: 1 },
+  defaultPlacement: DEFAULT_PLACEMENT,
+  resources: ["closure_stretch"],
+  durationSource: "manual_only",
+};
+
+const SCHEDULED_ROADWORKS: ScheduledRoadworksTemplate = {
+  family: "scheduled_roadworks",
+  displayName: "Scheduled roadworks",
+  description:
+    "A planned lane closure for maintenance, for a duration the operator enters directly (NLEX has no roadworks record to sample from, and a planned closure would not be something to \"sample\" even if it did). Modelled as a single lane closed over a work-zone-sized stretch (120 m). This is ONE planned window, not a recurring schedule: add it again at a later start time to represent a second occurrence.",
+  phases: singlePhase("Roadworks: lane closed"),
+  defaultLane: { kind: "operator_lane", lane: 1 },
+  defaultPlacement: DEFAULT_PLACEMENT,
+  resources: ["closure_stretch"],
+  durationSource: "manual_only",
+};
+
+const RAIN: RainTemplate = {
+  family: "rain",
+  displayName: "Heavy rain",
+  description:
+    "A speed zone across the WHOLE simulated stretch, for a duration the operator enters directly. NLEX does record weather on accidents, but checked properly (the same population and exclusion rules the calibration file itself uses) it shows no real difference in how long anything takes to clear during rain — so this is not a calibrated slowdown, just a round, assumed speed cap standing in for reduced grip and visibility. No lane is blocked. The engine has a single speed zone, so this cannot run alongside a hand-set speed limit or a shoulder breakdown's gawk zone.",
+  phases: singlePhase("Heavy rain"),
+  defaultLane: { kind: "outermost" },
+  defaultPlacement: DEFAULT_PLACEMENT,
+  resources: ["speed_zone"],
+  durationSource: "manual_only",
+};
+
 /** In the order they should be offered. */
 export const SCENARIO_TEMPLATES: readonly ScenarioTemplate[] = [
   BREAKDOWN_IN_LANE,
@@ -380,6 +439,9 @@ export const SCENARIO_TEMPLATES: readonly ScenarioTemplate[] = [
   MULTI_VEHICLE_COLLISION,
   SELF_ACCIDENT,
   OVERTURNED_VEHICLE,
+  RAIN,
+  FLOOD,
+  SCHEDULED_ROADWORKS,
 ];
 
 export const TEMPLATE_BY_FAMILY: { readonly [F in FamilyKey]: TemplateOf<F> } = {
@@ -389,6 +451,9 @@ export const TEMPLATE_BY_FAMILY: { readonly [F in FamilyKey]: TemplateOf<F> } = 
   multi_vehicle_collision: MULTI_VEHICLE_COLLISION,
   self_accident: SELF_ACCIDENT,
   overturned_vehicle: OVERTURNED_VEHICLE,
+  flood: FLOOD,
+  scheduled_roadworks: SCHEDULED_ROADWORKS,
+  rain: RAIN,
 };
 
 export function getTemplate<F extends FamilyKey>(family: F): TemplateOf<F> {
@@ -410,6 +475,12 @@ export function defaultVariant(family: FamilyKey): ScenarioVariant {
       return { family };
     case "overturned_vehicle":
       return { family };
+    case "flood":
+      return { family };
+    case "scheduled_roadworks":
+      return { family };
+    case "rain":
+      return { family };
     default:
       return assertNever(family);
   }
@@ -422,6 +493,9 @@ export type CalibratedVariant = Exclude<ScenarioVariant, { readonly family: NoCa
 export function calibratedVariantOf(variant: ScenarioVariant): CalibratedVariant | null {
   switch (variant.family) {
     case "overturned_vehicle":
+    case "flood":
+    case "scheduled_roadworks":
+    case "rain":
       return null;
     default:
       return variant;
@@ -483,28 +557,24 @@ export function defaultOperatorLane(template: ScenarioTemplate, laneCount: numbe
 
 /* ─────────────────────────────────────────────────────────────────────────────
    Families still not built
-   Offered in the Add panel so the operator can see they exist, disabled, with
-   why. None of these need simulation.ts changed (all are buildable on the
-   engine's existing closure_stretch / speed_zone levers) — what's missing is a
-   real duration source (flood, roadworks: NLEX records neither at all) or a
-   capability this adapter doesn't have yet (roadworks: recurrence; flood: one
-   family holding two resources at once; rain: a modifier on other families'
-   duration draws, not a family of its own). Overturned vehicle, which needed
-   only a "no calibration data" family, is built (see
-   ASSUMPTIONS.NO_CALIBRATION_FAMILIES).
+   Empty as of the rain/flood/scheduled_roadworks batch: every family the
+   review asked for is now built (see ASSUMPTIONS.NO_CALIBRATION_FAMILIES for
+   the four with no calibration data — overturned_vehicle, flood,
+   scheduled_roadworks, rain — all manual-duration-only, all built on the
+   engine's EXISTING closure_stretch / speed_zone levers with no simulation.ts
+   change). The type and list stay in place, empty, so the Add panel's
+   disabled-family branch keeps compiling and rendering nothing rather than
+   being deleted outright — the next reviewer-requested family that has no
+   data or no adapter support yet has a slot ready to drop into.
 ───────────────────────────────────────────────────────────────────────────── */
-/** The Add panel's badge on a disabled family. Never "engine": none of these need simulation.ts (see the block comment above) — it's a data or adapter gap. */
+/** The Add panel's badge on a disabled family. Never "engine": no disabled family should ever need simulation.ts — it would be a data or adapter gap. */
 export const NOT_YET_BUILT = "Not yet built";
 
 export type UnsupportedFamily = {
-  readonly id: "rain" | "flood" | "scheduled_roadworks";
+  readonly id: string;
   readonly displayName: string;
   /** Why it isn't built yet: a data gap, an adapter capability gap, or both. Never an engine gap. */
   readonly needs: string;
 };
 
-export const UNSUPPORTED_FAMILIES: readonly UnsupportedFamily[] = [
-  { id: "rain", displayName: "Heavy rain", needs: "not a family of its own: it would be a corridor-wide modifier on other events' calibrated duration, which the adapter does not support yet" },
-  { id: "flood", displayName: "Flooding", needs: "no NLEX data of any kind, and one family would need to hold a partial closure and a speed zone at once, which the adapter does not support yet" },
-  { id: "scheduled_roadworks", displayName: "Scheduled roadworks", needs: "no NLEX data of any kind, and a recurring/planned event, which the adapter's one-off scheduling does not support yet" },
-];
+export const UNSUPPORTED_FAMILIES: readonly UnsupportedFamily[] = [];

@@ -95,13 +95,19 @@ function variantFor(family: FamilyKey, vehicle: VehicleKind, cause: BreakdownCau
       return { family };
     case "overturned_vehicle":
       return { family };
+    case "flood":
+      return { family };
+    case "scheduled_roadworks":
+      return { family };
+    case "rain":
+      return { family };
     default:
       return assertNever(family);
   }
 }
 
 function hasLane(family: FamilyKey): boolean {
-  return family !== "breakdown_shoulder";
+  return family !== "breakdown_shoulder" && family !== "rain";
 }
 
 /** A number box that commits on blur or Enter, so a half-typed value is never acted on. */
@@ -209,7 +215,10 @@ function EventRow({ event, owners, nowS, onRemove }: { event: ScenarioEvent; own
       : p.state === "done"
         ? "Finished"
         : "Active";
-  const where = `${event.lane === null ? "Shoulder" : `Lane ${event.lane}`} · Km ${event.positionKm.toFixed(2)} · starts +${Number((event.startS / 60).toFixed(1))} min`;
+  // "Shoulder" is right for a breakdown beside the road; rain has no location at all (its zone is the whole
+  // segment, see ASSUMPTIONS.RAIN_ZONE) so it gets its own word instead of borrowing a place that isn't true of it.
+  const place = event.variant.family === "rain" ? "Corridor-wide" : event.lane === null ? "Shoulder" : `Lane ${event.lane}`;
+  const where = `${place} · Km ${event.positionKm.toFixed(2)} · starts +${Number((event.startS / 60).toFixed(1))} min`;
   return (
     <div className={`sandbox-scn-event${invalid ? " is-invalid" : ""}`} data-scn-event={event.id}>
       <div className="sandbox-scn-event-head">
@@ -281,6 +290,9 @@ export default function ScenarioPanel(props: Props) {
       case "multi_vehicle_collision":
       case "self_accident":
       case "overturned_vehicle":
+      case "flood":
+      case "scheduled_roadworks":
+      case "rain":
         break;
       default:
         assertNever(t);

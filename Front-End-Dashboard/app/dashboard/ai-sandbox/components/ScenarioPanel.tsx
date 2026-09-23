@@ -8,6 +8,7 @@ import {
   formatClock,
   resolutionView,
   schedulePhases,
+  type Direction,
   type ManualClosure,
   type NewEventSpec,
   type Ownership,
@@ -55,6 +56,12 @@ type Props = {
   events: readonly ScenarioEvent[];
   owners: Ownership;
   road: Road;
+  /**
+   * Which carriageway this panel's events belong to. Stamped onto every event this panel
+   * creates; the picker in Both mode (see D4) will let the operator change it before Add,
+   * but a value is always required — there is no direction-less event.
+   */
+  direction: Direction;
   /** Seconds after the end of warm-up, as of the last metrics refresh. */
   nowS: number;
   laneCount: number;
@@ -256,7 +263,7 @@ function EventRow({ event, owners, nowS, onRemove }: { event: ScenarioEvent; own
 }
 
 export default function ScenarioPanel(props: Props) {
-  const { events, owners, road, nowS, laneCount, fromKm, toKm, kmAtPct, manualClosure, nextSeq } = props;
+  const { events, owners, road, direction, nowS, laneCount, fromKm, toKm, kmAtPct, manualClosure, nextSeq } = props;
   const [family, setFamily] = useState<FamilyKey>("breakdown_in_lane");
   const template: ScenarioTemplate = getTemplate(family);
   const [vehicle, setVehicle] = useState<VehicleKind>("truck");
@@ -305,7 +312,7 @@ export default function ScenarioPanel(props: Props) {
   const variant = variantFor(family, vehicle, cause, label);
   const duration: DurationMode =
     choice === "sampled" ? { kind: "sampled", seed } : choice === "p50" ? { kind: "p50" } : choice === "p90" ? { kind: "p90" } : { kind: "manual", minutes: manualMin };
-  const spec: NewEventSpec = { variant, lane: hasLane(family) ? laneNow : null, positionKm: kmNow, startMinutes: startMin, duration };
+  const spec: NewEventSpec = { variant, direction, lane: hasLane(family) ? laneNow : null, positionKm: kmNow, startMinutes: startMin, duration };
 
   // The same call "Add event" makes, so what is shown is what will be stored (and why not, if it will not).
   const verdict = addEvent(events, spec, road, nextSeq, manualClosure);

@@ -37,7 +37,9 @@ import {
   canvasMarks,
   composeInterventions,
   createEngineBinding,
+  directionBucketsConsistent,
   MANUAL_CLOSURE_MESSAGE,
+  manualClosureMessage,
   SAME_STRETCH_TOL_M,
   describeActiveEvents,
   describeBoundary,
@@ -61,6 +63,7 @@ import {
   scenarioTimeS,
   schedulePhases,
   stepToScenarioTime,
+  type Direction,
   type EngineBinding,
   type ManualClosure,
   type ManualControls,
@@ -770,17 +773,20 @@ function refused(events: readonly ScenarioEvent[], spec: NewEventSpec, seq: numb
   return r.ok ? null : r.reason;
 }
 const manualMinutes = (minutes: number): DurationMode => ({ kind: "manual", minutes });
-const inLaneSpec = (vehicle: VehicleKind, lane: number, posM: number, startMin: number, duration: DurationMode): NewEventSpec => ({
-  variant: { family: "breakdown_in_lane", vehicle, cause: "engine" }, lane, positionKm: kmOf(posM), startMinutes: startMin, duration,
+// Every fixture defaults to NB: almost none of the 1,200+ existing checks are about direction at
+// all, so defaulting keeps that whole body of tests unchanged. The direction-specific tests below
+// pass "SB" explicitly through this same trailing parameter.
+const inLaneSpec = (vehicle: VehicleKind, lane: number, posM: number, startMin: number, duration: DurationMode, direction: Direction = "NB"): NewEventSpec => ({
+  variant: { family: "breakdown_in_lane", vehicle, cause: "engine" }, direction, lane, positionKm: kmOf(posM), startMinutes: startMin, duration,
 });
-const shoulderSpec = (posM: number, startMin: number, duration: DurationMode): NewEventSpec => ({
-  variant: { family: "breakdown_shoulder", vehicle: "car", cause: "engine" }, lane: null, positionKm: kmOf(posM), startMinutes: startMin, duration,
+const shoulderSpec = (posM: number, startMin: number, duration: DurationMode, direction: Direction = "NB"): NewEventSpec => ({
+  variant: { family: "breakdown_shoulder", vehicle: "car", cause: "engine" }, direction, lane: null, positionKm: kmOf(posM), startMinutes: startMin, duration,
 });
-const collisionSpec = (family: "minor_collision" | "multi_vehicle_collision" | "self_accident" | "overturned_vehicle" | "flood" | "scheduled_roadworks", lane: number, posM: number, startMin: number, duration: DurationMode): NewEventSpec => ({
-  variant: family === "minor_collision" ? { family, label: "rear_end" } : { family }, lane, positionKm: kmOf(posM), startMinutes: startMin, duration,
+const collisionSpec = (family: "minor_collision" | "multi_vehicle_collision" | "self_accident" | "overturned_vehicle" | "flood" | "scheduled_roadworks", lane: number, posM: number, startMin: number, duration: DurationMode, direction: Direction = "NB"): NewEventSpec => ({
+  variant: family === "minor_collision" ? { family, label: "rear_end" } : { family }, direction, lane, positionKm: kmOf(posM), startMinutes: startMin, duration,
 });
-const rainSpec = (posM: number, startMin: number, duration: DurationMode): NewEventSpec => ({
-  variant: { family: "rain" }, lane: null, positionKm: kmOf(posM), startMinutes: startMin, duration,
+const rainSpec = (posM: number, startMin: number, duration: DurationMode, direction: Direction = "NB"): NewEventSpec => ({
+  variant: { family: "rain" }, direction, lane: null, positionKm: kmOf(posM), startMinutes: startMin, duration,
 });
 const ALL_SPECS: readonly { name: string; spec: NewEventSpec }[] = [
   { name: "in-lane", spec: inLaneSpec("truck", 3, 330, 5, { kind: "sampled", seed: 7 }) },
@@ -986,17 +992,59 @@ check("event: phases tile the whole duration, start at 0, ascend, are labelled w
 {
   const elsewhere: ManualClosure = { closedLanes: [false, false, true, false], closurePoint: 100, closureEnd: 200 };
   const minor = collisionSpec("minor_collision", 1, 330, 5, manualMinutes(10));
-  check("manual closure: an event that needs the closure stretch is refused with exactly the stated message", refused([], minor, 1, road600, elsewhere) === "Clear your manual lane closure first — this event needs the closure stretch." && MANUAL_CLOSURE_MESSAGE === "Clear your manual lane closure first — this event needs the closure stretch.");
-  check("manual closure: ... for every closure family", (["minor_collision", "multi_vehicle_collision", "self_accident", "overturned_vehicle", "flood", "scheduled_roadworks"] as const).every((f) => refused([], collisionSpec(f, 1, 330, 5, manualMinutes(10)), 1, road600, elsewhere) === MANUAL_CLOSURE_MESSAGE));
+  check(
+    "manual closure: an event that needs the closure stretch is refused with exactly the stated message, named to its carriageway (all these fixtures default to NB)",
+    refused([], minor, 1, road600, elsewhere) === "NB: Clear your manual lane closure first — this event needs the closure stretch." &&
+      MANUAL_CLOSURE_MESSAGE === "Clear your manual lane closure first — this event needs the closure stretch." &&
+      manualClosureMessage("NB") === "NB: Clear your manual lane closure first — this event needs the closure stretch." &&
+      manualClosureMessage("SB") === "SB: Clear your manual lane closure first — this event needs the closure stretch.",
+  );
+  check("manual closure: ... for every closure family", (["minor_collision", "multi_vehicle_collision", "self_accident", "overturned_vehicle", "flood", "scheduled_roadworks"] as const).every((f) => refused([], collisionSpec(f, 1, 330, 5, manualMinutes(10)), 1, road600, elsewhere) === manualClosureMessage("NB")));
   check("manual closure: rain does not use the closure stretch, so it is unaffected by one elsewhere", refused([], rainSpec(330, 5, manualMinutes(10)), 1, road600, elsewhere) === null);
   check("manual closure: events that do not use the closure stretch are not affected", refused([], inLaneSpec("truck", 3, 330, 5, manualMinutes(10)), 1, road600, elsewhere) === null && refused([], shoulderSpec(330, 5, manualMinutes(10)), 1, road600, elsewhere) === null);
   check("manual closure: no lane closed by hand means no conflict, whatever stretch is set", refused([], minor, 1, road600, { ...elsewhere, closedLanes: [false, false, false, false] }) === null);
   check("manual closure: a closure on exactly the event's stretch (230 to 370 m) is accepted", refused([], minor, 1, road600, { ...elsewhere, closurePoint: 230, closureEnd: 370 }) === null);
-  check("manual closure: the tolerance at each end decides", refused([], minor, 1, road600, { ...elsewhere, closurePoint: 230.4, closureEnd: 370 }) === null && refused([], minor, 1, road600, { ...elsewhere, closurePoint: 230, closureEnd: 370.6 }) === MANUAL_CLOSURE_MESSAGE);
+  check("manual closure: the tolerance at each end decides", refused([], minor, 1, road600, { ...elsewhere, closurePoint: 230.4, closureEnd: 370 }) === null && refused([], minor, 1, road600, { ...elsewhere, closurePoint: 230, closureEnd: 370.6 }) === manualClosureMessage("NB"));
   const multi = collisionSpec("multi_vehicle_collision", 1, 330, 5, manualMinutes(10));
-  check("manual closure: an event with several closure phases is judged on the stretch it takes first (multi-vehicle: 230 to 430 m)", refused([], multi, 1, road600, { ...elsewhere, closurePoint: 230, closureEnd: 430 }) === null && refused([], multi, 1, road600, { ...elsewhere, closurePoint: 230, closureEnd: 390 }) === MANUAL_CLOSURE_MESSAGE);
+  check("manual closure: an event with several closure phases is judged on the stretch it takes first (multi-vehicle: 230 to 430 m)", refused([], multi, 1, road600, { ...elsewhere, closurePoint: 230, closureEnd: 430 }) === null && refused([], multi, 1, road600, { ...elsewhere, closurePoint: 230, closureEnd: 390 }) === manualClosureMessage("NB"));
   check("manual closure: an invalid event is refused for its own reason first", (refused([], collisionSpec("minor_collision", 9, 330, 5, manualMinutes(10)), 1, road600, elsewhere) ?? "").includes("does not exist"));
+  const minorSb = collisionSpec("minor_collision", 1, 330, 5, manualMinutes(10), "SB");
+  check(
+    "manual closure: an SB event's refusal names SB, not NB — the direction on the SPEC decides the message, not some ambient default",
+    refused([], minorSb, 1, road600, elsewhere) === manualClosureMessage("SB") && refused([], minorSb, 1, road600, elsewhere) !== manualClosureMessage("NB"),
+  );
+  const sbHost = must([], collisionSpec("multi_vehicle_collision", 1, 330, 10, manualMinutes(40), "SB"), 1);
+  check(
+    "conflict: an SB event's conflict message is named to SB, not NB",
+    (() => {
+      const r = refused(sbHost.events, collisionSpec("self_accident", 2, 200, 20, manualMinutes(30), "SB"), 2, road600, noClosure);
+      return r !== null && r.startsWith("SB: Cannot add") && !r.startsWith("NB:");
+    })(),
+  );
 }
+
+// --- direction bookkeeping: an event's own .direction field must always agree with which
+// per-direction list it is stored in (see useDirectionSim). addEvent stamps it from the spec and
+// never infers it, so the ONLY way the two can drift is a caller bug — directionBucketsConsistent
+// is the guard against that, and it must actually catch a mismatch, not just accept everything.
+{
+  const nbEvent = must([], collisionSpec("minor_collision", 1, 330, 0, manualMinutes(10), "NB"), 1).event;
+  const sbEvent = must([], collisionSpec("minor_collision", 1, 330, 0, manualMinutes(10), "SB"), 1).event;
+  check("direction: addEvent stamps the event's own .direction from the spec, for both directions", nbEvent.direction === "NB" && sbEvent.direction === "SB");
+  check(
+    "directionBucketsConsistent: true for correctly-bucketed events (including an empty SB bucket, and a bucket missing from the map entirely)",
+    directionBucketsConsistent({ NB: [nbEvent], SB: [] }) && directionBucketsConsistent({ NB: [nbEvent] }) && directionBucketsConsistent({}),
+  );
+  check(
+    "directionBucketsConsistent: FALSE (a hard failure, not a warning) when an SB-direction event sits in the NB bucket — the exact mistake this guards against",
+    directionBucketsConsistent({ NB: [sbEvent] }) === false,
+  );
+  check(
+    "directionBucketsConsistent: FALSE when a bucket mixes directions, even with one correct entry alongside the wrong one",
+    directionBucketsConsistent({ NB: [nbEvent, sbEvent] }) === false && directionBucketsConsistent({ SB: [nbEvent, sbEvent] }) === false,
+  );
+}
+
 // --- conflicts: an exclusive lever cannot be held twice, and nothing is merged
 {
   const a = must([], collisionSpec("multi_vehicle_collision", 1, 330, 10, manualMinutes(40)), 1);
@@ -1109,6 +1157,56 @@ function engineInSync(ts: TrafficSim, controls: ManualControls, events: readonly
   check("loop: it applies once at the start and once per boundary crossed, no more", applied === 1 + boundaryTimes(events, road600).length, `${applied} applies, ${boundaryTimes(events, road600).length} boundaries`);
   check("loop: the run passed through every state (lane closed alone, lane closed with the bus, the bus alone, nothing)", ["1/0", "1/2", "0/2", "0/0"].every((s) => seen.has(s)), [...seen].join(" "));
   check("loop: when everything has ended the engine is back to the operator's settings, with no scenario incident left", ts.interventions.incidents.length === 0 && ts.interventions.closedLanes.every((x) => !x) && ts.interventions.closurePoint === idle.closurePoint);
+}
+
+// --- binding isolation: NB and SB each get their OWN createEngineBinding() (see useDirectionSim);
+// this proves two independently-created bindings really are independent, not just two different
+// object references pointing at shared internal state. createEngineBinding()'s ownership tracking
+// (owned incidents map, previous Ownership) lives inside the closure it returns — the only way this
+// could break is a caller reusing one binding for two sims, which is exactly what this rules out.
+{
+  const bindingNB = createEngineBinding();
+  const bindingSB = createEngineBinding();
+  check("binding isolation: two fresh bindings are distinct objects", bindingNB !== bindingSB);
+
+  const simNB = newSim();
+  const simSB = newSim();
+  const eventsNB = must([], collisionSpec("multi_vehicle_collision", 1, 330, 0, manualMinutes(10), "NB"), 1).events;
+  simNB.time = abs(1);
+  simSB.time = abs(1);
+
+  // Drive NB's binding hard: apply, step, apply again — its own sim owns a closure and incidents.
+  bindingNB.apply(simNB, idle, eventsNB, frame);
+  check("binding isolation: NB's binding took ownership on NB's own sim", bindingNB.previousOwners().closure !== null);
+  check("binding isolation: SB's binding, never applied to anything yet, still reports NO_OWNERS", ownershipKey(bindingSB.previousOwners()) === ownershipKey(NO_OWNERS));
+
+  // SB has no events of its own; applying its binding to its own (otherwise idle) sim must show
+  // nothing owned — NOT NB's closure, even though NB's binding just took one on a structurally
+  // identical sim a moment ago.
+  bindingSB.apply(simSB, idle, [], frame);
+  check(
+    "binding isolation: SB's binding, applied to SB's own sim with no SB events, owns nothing — NB's closure never leaks across",
+    bindingSB.previousOwners().closure === null && simSB.interventions.closedLanes.every((x) => !x) && simSB.interventions.closurePoint === idle.closurePoint,
+  );
+  check("binding isolation: NB's ownership is unaffected by SB's binding having been created and applied afterwards", bindingNB.previousOwners().closure !== null && simNB.interventions.closedLanes.some(Boolean));
+
+  // Incident ownership: NB's binding must never think an incident it never placed (SB's, if SB had
+  // one) belongs to it, and vice versa. Give SB its own in-lane breakdown and cross-check.
+  // "car", not "truck": a car uses exactly 1 incident slot, matching the incidents.length === 1
+  // assertions below — a truck's 3 slots would make those checks assert the wrong number for a
+  // reason that has nothing to do with what this block is actually testing.
+  const eventsSB = must([], inLaneSpec("car", 2, 200, 0, manualMinutes(10), "SB"), 1).events;
+  bindingSB.apply(simSB, idle, eventsSB, frame);
+  const sbIncident = simSB.interventions.incidents[0];
+  check(
+    "binding isolation: an incident SB's binding placed on SB's sim is not recognised as NB's binding's own (different closures, no shared 'owned' map)",
+    sbIncident !== undefined && !bindingNB.isScenarioIncident(sbIncident) && bindingSB.isScenarioIncident(sbIncident),
+  );
+  bindingNB.reset();
+  check(
+    "binding isolation: resetting NB's binding forgets NB's own ownership but leaves SB's untouched — SB's incident is still there and still recognised as SB's binding's own",
+    bindingNB.previousOwners().closure === null && simSB.interventions.incidents.length === 1 && bindingSB.isScenarioIncident(sbIncident),
+  );
 }
 
 {
@@ -1291,9 +1389,9 @@ function engineInSync(ts: TrafficSim, controls: ManualControls, events: readonly
 
 {
   // the words the operator reads come from the stored resolution
-  const capped = ALL_SPECS.map((s) => must([], s.spec, 1).event).concat([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30].map((seed) => must([], { variant: { family: "breakdown_in_lane", vehicle: "truck", cause: "tire" }, lane: 3, positionKm: kmOf(330), startMinutes: 0, duration: { kind: "sampled", seed } }, 1).event)).find((e) => e.resolved.capped);
-  const tt = must([], { variant: { family: "breakdown_in_lane", vehicle: "truck", cause: "tire" }, lane: 3, positionKm: kmOf(330), startMinutes: 0, duration: { kind: "p50" } }, 1).event;
-  const hnr = must([], { variant: { family: "minor_collision", label: "hit_and_run" }, lane: 1, positionKm: kmOf(330), startMinutes: 0, duration: { kind: "p50" } }, 1).event;
+  const capped = ALL_SPECS.map((s) => must([], s.spec, 1).event).concat([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30].map((seed) => must([], { variant: { family: "breakdown_in_lane", vehicle: "truck", cause: "tire" }, direction: "NB", lane: 3, positionKm: kmOf(330), startMinutes: 0, duration: { kind: "sampled", seed } }, 1).event)).find((e) => e.resolved.capped);
+  const tt = must([], { variant: { family: "breakdown_in_lane", vehicle: "truck", cause: "tire" }, direction: "NB", lane: 3, positionKm: kmOf(330), startMinutes: 0, duration: { kind: "p50" } }, 1).event;
+  const hnr = must([], { variant: { family: "minor_collision", label: "hit_and_run" }, direction: "NB", lane: 1, positionKm: kmOf(330), startMinutes: 0, duration: { kind: "p50" } }, 1).event;
   const man = must([], inLaneSpec("car", 3, 330, 0, manualMinutes(12)), 1).event;
   const text = describeResolution(tt);
   check("describe: a p50 names the level and n from the stored resolution", text.includes("median") && text.includes("calibrated at cause × vehicle level") && text.includes(`n = ${tt.resolved.n.toLocaleString("en-US")}`) && !text.includes("capped") && !text.includes("low sample"));
@@ -1318,16 +1416,16 @@ check(
   const p50 = resolutionView(must([], inLaneSpec("truck", 3, 330, 0, { kind: "p50" }), 1).event.resolved);
   const engineTruck = cal.hierarchy[causeVehicleKey("breakdown_in_lane", "engine", "truck")];
   check("resolution view: a median names the level and n, and carries no badge", engineTruck !== undefined && p50.headline === `${Number(engineTruck.quantiles.p50.toFixed(1))} min · median` && p50.calibration === `Level: cause × vehicle · n = ${engineTruck.n.toLocaleString("en-US")}` && p50.noCalibration === null && p50.lowSample === null && p50.capped === null && p50.cappedDetail === null);
-  const hnrView = resolutionView(must([], { variant: { family: "minor_collision", label: "hit_and_run" }, lane: 1, positionKm: kmOf(330), startMinutes: 0, duration: { kind: "p50" } }, 1).event.resolved);
+  const hnrView = resolutionView(must([], { variant: { family: "minor_collision", label: "hit_and_run" }, direction: "NB", lane: 1, positionKm: kmOf(330), startMinutes: 0, duration: { kind: "p50" } }, 1).event.resolved);
   check("resolution view: hit-and-run shows the badge \"Low sample (n = 129)\", and no no-calibration badge", hnrView.lowSample === "Low sample (n = 129)" && hnrView.calibration === "Level: collision type · n = 129" && hnrView.noCalibration === null);
-  const manualHnr = resolutionView(must([], { variant: { family: "minor_collision", label: "hit_and_run" }, lane: 1, positionKm: kmOf(330), startMinutes: 0, duration: manualMinutes(20) }, 1).event.resolved);
+  const manualHnr = resolutionView(must([], { variant: { family: "minor_collision", label: "hit_and_run" }, direction: "NB", lane: 1, positionKm: kmOf(330), startMinutes: 0, duration: manualMinutes(20) }, 1).event.resolved);
   check(
     "resolution view: a MANUAL draw on a CALIBRATED family claims no calibration line and no low/cap badge, but ALSO no no-calibration badge (that badge means the family has no entry at all, which is a different claim from 'this one draw happened to be manual')",
     manualHnr.headline === "20 min · entered by you" && manualHnr.calibration === null && manualHnr.noCalibration === null && manualHnr.lowSample === null && manualHnr.capped === null,
   );
   let cappedEvent: ScenarioEvent | undefined;
   for (let seed = 1; seed <= 400 && cappedEvent === undefined; seed++) {
-    const e = must([], { variant: { family: "breakdown_in_lane", vehicle: "car", cause: "mechanical" }, lane: 3, positionKm: kmOf(330), startMinutes: 0, duration: { kind: "sampled", seed } }, 1).event;
+    const e = must([], { variant: { family: "breakdown_in_lane", vehicle: "car", cause: "mechanical" }, direction: "NB", lane: 3, positionKm: kmOf(330), startMinutes: 0, duration: { kind: "sampled", seed } }, 1).event;
     if (e.resolved.capped) cappedEvent = e;
   }
   const cv = cappedEvent === undefined ? null : resolutionView(cappedEvent.resolved);
@@ -1424,7 +1522,7 @@ check(
     const n = 1 + Math.floor(rnd() * 4);
     for (let i = 1; i <= n; i++) {
       const v = pickOne(variants);
-      const r = addEvent(evs, { variant: v, lane: noLaneFamily(v.family) ? null : 1 + Math.floor(rnd() * 4), positionKm: kmOf(20 + rnd() * 560), startMinutes: Math.floor(rnd() * 10), duration: manualMinutes(2 + Math.floor(rnd() * 40)) }, road600, i, noClosure);
+      const r = addEvent(evs, { variant: v, direction: "NB", lane: noLaneFamily(v.family) ? null : 1 + Math.floor(rnd() * 4), positionKm: kmOf(20 + rnd() * 560), startMinutes: Math.floor(rnd() * 10), duration: manualMinutes(2 + Math.floor(rnd() * 40)) }, road600, i, noClosure);
       if (r.ok) evs = r.events;
     }
     const cp = rnd() < 0.5 ? 330 : 100 + rnd() * 200;
@@ -1451,21 +1549,57 @@ check(
 }
 
 // --- the page uses the adapter and nothing else to write scenario state; the engine and replicate() are untouched
+// Phase D2: per-direction state moved into useDirectionSim.ts (called once per direction — NB, SB —
+// from page.tsx), so some of what these checks guard now lives in that file's source instead of (or
+// as well as) page.tsx's. Each check says which it reads and why.
 {
   const pageSource = readFileSync(new URL("../page.tsx", import.meta.url), "utf8");
-  check("page: no direct write to the engine's closure, speed or lane state remains (the adapter is the only writer)", !/interventions\.(closedLanes|closurePoint|closureEnd|speedLimitKmh|speedZone|showClosurePreview)\s*=[^=]/.test(pageSource));
+  const hookSource = readFileSync(new URL("../useDirectionSim.ts", import.meta.url), "utf8");
+  check(
+    "page + hook: no direct write to the engine's closure, speed or lane state remains (the adapter is the only writer)",
+    !/interventions\.(closedLanes|closurePoint|closureEnd|speedLimitKmh|speedZone|showClosurePreview)\s*=[^=]/.test(pageSource) &&
+      !/interventions\.(closedLanes|closurePoint|closureEnd|speedLimitKmh|speedZone|showClosurePreview)\s*=[^=]/.test(hookSource),
+  );
   check("page: the confidence run says why it is off while events exist", (pageSource.match(/Confidence runs don't yet support timed events\./g) ?? []).length === 1);
-  check("page: replicate() is still called exactly once (at its one call site), and the confidence run refuses while events exist", (pageSource.match(/= replicate\(/g) ?? []).length === 1 && /if \(scenarioEvents\.length > 0\) return;/.test(pageSource));
+  check(
+    "page: replicate() is still called exactly once (at its one call site), and the confidence run refuses while events exist",
+    (pageSource.match(/= replicate\(/g) ?? []).length === 1 && /if \(focused\.scenarioEvents\.length > 0\) return;/.test(pageSource),
+  );
   check("engine source does not mention the adapter or scenario events", !/adapter|ScenarioEvent|composeInterventions/.test(engineSource));
-  // phase 3: the readouts read the EFFECTIVE state, and the assistant is told it through its existing fields only
-  check("page: ownership state is set in ONE place, and only when its key changed (a setter called on every render of the live-apply effect raised React's maximum-update-depth warning)", (pageSource.match(/\bsetOwners\(/g) ?? []).length === 1 && /const publishOwners = useCallback\(\(next: Ownership\) => \{\s*const key = ownershipKey\(next\);\s*if \(key === ownersKeyRef\.current\) return;/.test(pageSource) && !/TEMP-DEBUG/.test(pageSource));
+  // phase 3: the readouts read the EFFECTIVE state, and the assistant is told it through its existing fields only.
+  // Ownership is now set inside useDirectionSim (called once per direction, so the SOURCE has the
+  // guarded setOwners call written once, same discipline as when this lived directly in page.tsx).
+  check(
+    "hook: ownership state is set in ONE place, and only when its key changed (a setter called on every render of the live-apply effect raised React's maximum-update-depth warning)",
+    (hookSource.match(/\bsetOwners\(/g) ?? []).length === 1 &&
+      /const publishOwners = useCallback\(\(next: Ownership\) => \{\s*const key = ownershipKey\(next\);\s*if \(key === ownersKeyRef\.current\) return;/.test(hookSource) &&
+      !/TEMP-DEBUG/.test(hookSource) && !/\bsetOwners\(/.test(pageSource),
+  );
   check("page: the console hook is gone now that the panel exists (nothing is exposed on window)", !/sandboxScenarios/.test(pageSource) && !/Object\.defineProperty\(window/.test(pageSource));
-  check("page: recommendation, before/after, baseline and folded summary read the effective state", /getRecommendation\(metrics, baseline, \[\.\.\.eff\.closedLanes\], effIncidentCount, eff\.speedLimitKmh\)/.test(pageSource) && /const anyIntervention = eff\.closedLanes\.some\(Boolean\) \|\| eff\.speedLimitKmh != null \|\| effIncidentCount > 0;/.test(pageSource) && /\.\.\.activeScenarioText,\s*\]\s*\.filter\(Boolean\)\s*\.join\(" · "\) \|\| "a clear road"/.test(pageSource) && /\.\.\.activeScenarioText,\s*\]\s*\.filter\(Boolean\)\s*\.join\(" · "\) \|\| "none applied"/.test(pageSource));
+  check(
+    "page: the recommendation reads the FOCUSED direction's effective state",
+    /getRecommendation\(focused\.metrics, focused\.baseline, \[\.\.\.focused\.eff\.closedLanes\], focused\.effIncidentCount, focused\.eff\.speedLimitKmh\)/.test(pageSource),
+  );
+  check(
+    "hook: anyIntervention and the folded before/after / event-list summaries are built from the effective state, per direction",
+    /const anyIntervention = eff\.closedLanes\.some\(Boolean\) \|\| eff\.speedLimitKmh != null \|\| effIncidentCount > 0;/.test(hookSource) &&
+      /\.\.\.activeScenarioText,\s*\]\s*\.filter\(Boolean\)\s*\.join\(" · "\) \|\| "a clear road"/.test(hookSource) &&
+      /\.\.\.activeScenarioText,\s*\]\s*\.filter\(Boolean\)\s*\.join\(" · "\) \|\| "none applied"/.test(hookSource),
+  );
   const ctxStart = pageSource.indexOf("context: {");
   const ctxEnd = pageSource.indexOf("exits: EXITS.map", ctxStart);
   const ctxSource = pageSource.slice(ctxStart, ctxEnd);
   const ctxKeys = [...ctxSource.matchAll(/^\s+(\w+):/gm)].map((m) => m[1]);
-  check("page: the assistant's context carries the effective closed lanes, speed limit and incident count, in the EXISTING fields only", /^\s+laneCount,$/m.test(ctxSource) && ctxKeys.join() === "segmentLengthM,closedLanes,speedLimitKmh,incidentCount" && /closedLanes: eff\.closedLanes\.map/.test(pageSource) && /speedLimitKmh: eff\.speedLimitKmh,/.test(pageSource) && /incidentCount: effIncidentCount,/.test(pageSource), ctxKeys.join());
+  check(
+    // No new "direction" field (Phase D1 §4 / no backend change): the context always names the
+    // FOCUSED direction's effective state through the same 5 fields that existed before D2.
+    "page: the assistant's context carries the FOCUSED direction's effective closed lanes, speed limit and incident count, in the EXISTING fields only",
+    ctxKeys.join() === "laneCount,segmentLengthM,closedLanes,speedLimitKmh,incidentCount" &&
+      /closedLanes: focused\.eff\.closedLanes\.map/.test(pageSource) &&
+      /speedLimitKmh: focused\.eff\.speedLimitKmh,/.test(pageSource) &&
+      /incidentCount: focused\.effIncidentCount,/.test(pageSource),
+    ctxKeys.join(),
+  );
   check("page: scenario incidents are drawn differently from the operator's, and each event is labelled on the canvas", /overlay\.isScenarioIncident\(inc\)/.test(pageSource) && /drawScenarioLabels\(ctx, canvasMarks\(/.test(pageSource));
 }
 

@@ -42,6 +42,16 @@ import { resolveDuration, type CalibrationLevel, type DurationMode, type Resolve
 /** One of the engine's stalled obstacles. */
 export type Incident = Interventions["incidents"][number];
 
+/**
+ * Which carriageway an event runs on. Two independent TrafficSims, one per
+ * direction (see the page's useDirectionSim) — this is what tells their
+ * events apart. An event carries this explicitly (rather than direction being
+ * implicit in which per-direction list it sits in) because a message, an
+ * event row, or a future persisted record all need to NAME the direction
+ * without first reconstructing it from list membership.
+ */
+export type Direction = "NB" | "SB";
+
 /** The road an event runs on. `laneCount` and `segmentLengthM` come from the engine itself (see EngineBinding.apply). */
 export type Road = {
   readonly laneCount: number;
@@ -68,8 +78,13 @@ export type ManualInterventions = ManualControls & { readonly incidents: readonl
 /** The part of the operator's settings a closure event has to be checked against. */
 export type ManualClosure = Pick<ManualControls, "closedLanes" | "closurePoint" | "closureEnd">;
 
-/** Why an event that needs the closure stretch is refused while the operator has a closure of their own elsewhere. */
+/** Why an event that needs the closure stretch is refused while the operator has a closure of their own elsewhere. Direction-agnostic base text; addEvent prefixes it with the event's own carriageway (see manualClosureMessage) so a Both-mode refusal names which one it is about. */
 export const MANUAL_CLOSURE_MESSAGE = "Clear your manual lane closure first — this event needs the closure stretch.";
+
+/** MANUAL_CLOSURE_MESSAGE, named to the carriageway the refused event was for — "SB: Clear your manual lane closure first ...". */
+export function manualClosureMessage(direction: Direction): string {
+  return `${direction}: ${MANUAL_CLOSURE_MESSAGE}`;
+}
 
 /** Two stretches closer than this (metres, at each end) are the same stretch. */
 export const SAME_STRETCH_TOL_M = 0.5;
@@ -124,6 +139,8 @@ export type ScenarioEvent = {
   readonly id: string;
   /** For messages: "Breakdown in a lane #2". */
   readonly name: string;
+  /** Which carriageway this event runs on. Also which per-direction list it is stored in — see verify.ts's directionBucketsConsistent, which checks the two never drift apart. */
+  readonly direction: Direction;
   readonly variant: ScenarioVariant;
   /** Operator lane number (1-based); null for a shoulder breakdown, which has no lane. */
   readonly lane: number | null;
@@ -148,6 +165,7 @@ export type ScenarioEvent = {
 
 export type NewEventSpec = {
   readonly variant: ScenarioVariant;
+  readonly direction: Direction;
   /** Operator lane number, 1-based. Ignored for a shoulder breakdown. */
   readonly lane: number | null;
   readonly positionKm: number;
@@ -445,7 +463,12 @@ function minutesAfterWarmup(s: number): string {
   return `+${Number((s / 60).toFixed(1))} min`;
 }
 
-/** The first overlap between a new event and the events already stored, worded for the operator. Null when there is none. */
+/**
+ * The first overlap between a new event and the events already stored, worded for the operator.
+ * Null when there is none. Named to the candidate's carriageway: `existing` is always that same
+ * direction's own event list (each direction keeps its own — see useDirectionSim), so a conflict
+ * is always within one carriageway, never across the median.
+ */
 function conflictMessage(existing: readonly ScenarioEvent[], candidate: ScenarioEvent): string | null {
   const mine = resourceWindows(candidate);
   for (const other of existing) {
@@ -454,7 +477,7 @@ function conflictMessage(existing: readonly ScenarioEvent[], candidate: Scenario
         if (w.resource !== theirs.resource) continue;
         if (w.fromS < theirs.toS && theirs.fromS < w.toS) {
           return (
-            `Cannot add "${candidate.name}": it needs the engine's single ${RESOURCE_NAME[w.resource]} from ${minutesAfterWarmup(w.fromS)} to ${minutesAfterWarmup(w.toS)}, ` +
+            `${candidate.direction}: Cannot add "${candidate.name}": it needs the engine's single ${RESOURCE_NAME[w.resource]} from ${minutesAfterWarmup(w.fromS)} to ${minutesAfterWarmup(w.toS)}, ` +
             `and "${other.name}" holds it from ${minutesAfterWarmup(theirs.fromS)} to ${minutesAfterWarmup(theirs.toS)}. ` +
             `The two are not merged; move one of them in time. Nothing was changed.`
           );
@@ -479,10 +502,14 @@ function firstClosureStretch(event: ScenarioEvent, road: Road): ClosureStretch |
 /**
  * Store a new event, or refuse it and say why. The duration is resolved here,
  * once. `seq` numbers the event for its name and id ("Breakdown in a lane #2"),
- * and the caller keeps it counting up, so a name is never reused.
+ * and the caller keeps it counting up, so a name is never reused. The stored
+ * event's `direction` is exactly `spec.direction` — addEvent does not infer or
+ * validate it against `events`/`road`, because it does not know which
+ * per-direction list it was called for; that invariant is the caller's (see
+ * directionBucketsConsistent).
  * Refused when the event cannot run on `road` (see eventProblems), when it needs
  * the closure stretch while the operator has a manual closure on a different
- * stretch (MANUAL_CLOSURE_MESSAGE; judged against the stretch of its first
+ * stretch (manualClosureMessage; judged against the stretch of its first
  * lane-blocking phase), or when it needs a single-instance lever another event
  * holds at an overlapping time.
  */
@@ -504,6 +531,7 @@ export function addEvent(events: readonly ScenarioEvent[], spec: NewEventSpec, r
   const event: ScenarioEvent = {
     id: `ev${seq}`,
     name,
+    direction: spec.direction,
     variant: spec.variant,
     lane: effectOf(spec.variant.family) === "speed_zone" ? null : spec.lane,
     positionKm: spec.positionKm,
@@ -520,10 +548,22 @@ export function addEvent(events: readonly ScenarioEvent[], spec: NewEventSpec, r
   const problems = eventProblems(event, road);
   if (problems.length > 0) return { ok: false, reason: `Cannot add "${name}": ${problems.join("; ")}.` };
   const first = firstClosureStretch(event, road);
-  if (first !== null && manualClosureConflicts(manual, first)) return { ok: false, reason: MANUAL_CLOSURE_MESSAGE };
+  if (first !== null && manualClosureConflicts(manual, first)) return { ok: false, reason: manualClosureMessage(spec.direction) };
   const conflict = conflictMessage(events, event);
   if (conflict !== null) return { ok: false, reason: conflict };
   return { ok: true, events: [...events, event], event };
+}
+
+/**
+ * True when every event's own `.direction` field matches the direction it is filed under in
+ * `byDirection` — the invariant a per-direction bucket (see useDirectionSim) must never break.
+ * False is a hard failure: an event whose stored direction disagrees with its list membership
+ * would show the wrong carriageway in its own row, or let a conflict check compare across the
+ * median. Pure and total over any Direction keys actually present, so a caller can check a
+ * partial map (e.g. only NB, in NB-only view) without an SB entry.
+ */
+export function directionBucketsConsistent(byDirection: Readonly<Partial<Record<Direction, readonly ScenarioEvent[]>>>): boolean {
+  return (Object.keys(byDirection) as Direction[]).every((direction) => (byDirection[direction] ?? []).every((event) => event.direction === direction));
 }
 
 const LEVEL_TEXT: Readonly<Record<CalibrationLevel, string>> = {

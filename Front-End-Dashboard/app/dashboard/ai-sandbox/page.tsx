@@ -8,35 +8,22 @@ import PageHeader from "../../../components/dashboard/PageHeader";
 import ScenarioForecastPanel from "../../../components/dashboard/ScenarioForecastPanel";
 import {
   TrafficSim, CLASS_META, mixHex, visualLane, replicate,
-  type Metrics, type Interventions, type ReplicationResult, type RepStat,
+  type Metrics, type ReplicationResult, type RepStat,
 } from "./simulation";
 import {
-  NO_OWNERS,
-  addEvent,
   applyAtBoundary,
   canvasMarks,
-  createEngineBinding,
-  describeActiveEvents,
-  describeBoundary,
   describeOwner,
-  effectiveState,
   nextBoundaryAfter,
-  ownershipKey,
-  removeEvent,
   roadOf,
-  scenarioLockedLanes,
-  scenarioTimeS,
-  stepToScenarioTime,
   type CanvasMark,
+  type Direction,
   type Incident,
-  type ManualControls,
-  type NewEventSpec,
-  type Ownership,
-  type Road,
   type RoadFrame,
   type ScenarioEvent,
 } from "./scenarios/adapter";
-import ScenarioPanel, { type SkipView } from "./components/ScenarioPanel";
+import ScenarioPanel from "./components/ScenarioPanel";
+import { useDirectionSim, type DirectionApi, type SharedRoadInputs } from "./useDirectionSim";
 
 const BACKEND = process.env.NEXT_PUBLIC_BACKEND_URL ?? "http://localhost:4000";
 
@@ -217,7 +204,6 @@ const fmt = (n: number, d = 0) => n.toLocaleString("en-US", { minimumFractionDig
 
 export default function AiSandboxPage() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const simRef = useRef<TrafficSim | null>(null);
   const rafRef = useRef<number>(0);
   const lastFrameRef = useRef<number>(0);
   const metricAccRef = useRef<number>(0);
@@ -261,6 +247,15 @@ export default function AiSandboxPage() {
   const originExit = EXITS[Math.min(origin, EXITS.length - 1)];
   const destExit = EXITS[Math.min(destination, EXITS.length - 1)];
 
+  // How wide the selected stretch of road actually is. Null when the corridor
+  // lane table does not cover it — see lib/nlex-lanes.ts, which is deliberately
+  // unpopulated until someone can cite a source for the real configuration.
+  // Direction-independent (a property of the road, not of which way you drive
+  // it) — computed once here and handed to both directions' useDirectionSim,
+  // each of which defaults ITS OWN laneCount from it (see D2.4).
+  const segmentLanes = originExit && destExit ? lanesForSegment(originExit.km, destExit.km) : null;
+  const laneProvenance = originExit && destExit ? laneSources(originExit.km, destExit.km) : [];
+
   /**
    * WHICH STRETCH of the corridor is being simulated, as km-posts.
    *
@@ -269,26 +264,34 @@ export default function AiSandboxPage() {
    * model whatever span is asked for; only the drawing has a practical ceiling
    * (see MAX_SEG_M). Previously this was a fixed 280 m of anonymous tarmac and
    * the route pickers changed nothing but the heading.
+   *
+   * Origin/destination now define this km window ONLY (Phase D2). Which
+   * carriageway(s) are simulated is a SEPARATE choice — `view` below — because
+   * a real expressway is two carriageways sharing one chainage, not one
+   * carriageway whose direction happens to be a fact about which end you
+   * start from. Before D2, direction WAS derived from origin > destination;
+   * that coupling is gone, and swapping origin/destination now only reverses
+   * which end of the window is "from".
    */
-  // Southbound when the journey runs down the km posts.
-  const direction: "NB" | "SB" =
-    (originExit?.km ?? 0) > (destExit?.km ?? 0) ? "SB" : "NB";
   const routeFromKm = Math.min(originExit?.km ?? 0, destExit?.km ?? 0);
   const routeToKm = Math.max(originExit?.km ?? 0, destExit?.km ?? 0);
-  /* Which carriageway is being simulated — DERIVED from the route, never set
-   * separately.
-   *
-   * The simulation models one carriageway: every vehicle enters at x = 0 and
-   * travels toward increasing x. Nothing used to say which, and the route
-   * picker quietly forbade the question by disabling any origin above the
-   * destination, so every run was northbound whether or not that was intended.
-   *
-   * Direction is not an independent fact — it IS the relationship between where
-   * the traffic starts and where it is going. NLEX runs Balintawak (Km 0, the
-   * Manila end) north to Sta. Ines, so a route whose origin is the higher km
-   * post is southbound. Deriving it means the two controls can never disagree;
-   * a separate toggle could claim "Southbound" while the route still read
-   * Balintawak -> Marilao. */
+
+  /** NB only, SB only, or both carriageways at once (median-separated — see Phase D3 for the canvas). */
+  const [view, setView] = useState<Direction | "Both">("NB");
+  const activeDirections: readonly Direction[] = view === "Both" ? ["NB", "SB"] : [view];
+  /**
+   * Which direction the still-single-direction-shaped panels (Interventions,
+   * Scenario events, Baseline, Confidence run, metric tiles, the canvas, the
+   * GLM command context) read and write, while in Both mode. NB-only/SB-only
+   * needs no choice — the one active direction IS the focus, so those modes
+   * are byte-for-byte the pre-D2 behaviour. Splitting every one of those
+   * panels to show both directions at once in Both mode is Phase D4's job;
+   * D2 proves the two engines run correctly and gives the operator something
+   * sane to look at and control in the meantime, not the final Both-mode UI.
+   */
+  const [focusedDirection, setFocusedDirection] = useState<Direction>("NB");
+  const focusDirection: Direction = view === "Both" ? focusedDirection : view;
+
   /* First half of a two-click span across the exit chips. Null means the next
    * click just frames a single junction. */
   /* At most one section open, and closing one closes it — it does not hand the
@@ -399,7 +402,8 @@ export default function AiSandboxPage() {
     return EXITS.reduce((best, x) => (Math.abs(x.km - mid) < Math.abs(best.km - mid) ? x : best));
   })();
 
-  const dirLabel = direction === "NB" ? "Northbound" : "Southbound";
+  // The canvas draws the FOCUSED direction only (Phase D3 draws both carriageways at once).
+  const dirLabel = focusDirection === "NB" ? "Northbound" : "Southbound";
 
   const locationLabel = nearestExit
     ? `${dirLabel} · Km ${fromKm.toFixed(2)}–${toKm.toFixed(2)} · ${(segLengthM / 1000).toFixed(2)} km · near ${displayExitName(nearestExit.exit_name)}`
@@ -408,8 +412,8 @@ export default function AiSandboxPage() {
   // The render loop runs outside React, so these reach it through refs.
   const locationRef = useRef(locationLabel);
   locationRef.current = locationLabel;
-  const marksRef = useRef({ fromKm, toKm, direction });
-  marksRef.current = { fromKm, toKm, direction };
+  const marksRef = useRef({ fromKm, toKm, direction: focusDirection });
+  marksRef.current = { fromKm, toKm, direction: focusDirection };
   // Docked, a lane is capped so the road keeps its proportions inside a card.
   // Expanded there is no card to respect, and capping it only left the
   // carriageway floating in the middle of an empty screen.
@@ -423,12 +427,11 @@ export default function AiSandboxPage() {
     km: x.km,
   }));
 
-  const [laneCount, setLaneCount] = useState(4);
-
-  const [inflow, setInflow] = useState(4500);
   // Which forecast day the inflow came from, when it came from one. Kept apart
   // from dataAnchor so the slider caption can never call a prediction an
-  // observation.
+  // observation. Shared: the forecast is one corridor prediction, not one per
+  // carriageway, and "Load into simulation" applies it to whichever direction
+  // is focused (Both mode) or the only one there is (NB-only/SB-only).
   const [forecastDay, setForecastDay] = useState<string | null>(null);
   // Exit the incident model rates highest for the chosen day, when the sandbox
   // has been positioned there.
@@ -449,64 +452,8 @@ export default function AiSandboxPage() {
     return () => window.removeEventListener("keydown", onKey);
   }, [expanded]);
 
-  const [closedLanes, setClosedLanes] = useState<boolean[]>(Array(4).fill(false));
-  const [speedLimit, setSpeedLimit] = useState<number | null>(null);
-  const [incidentCount, setIncidentCount] = useState(0);
-  /* Scenario events (see ./scenarios/adapter.ts). closedLanes, speedLimit and the
-   * closure and zone positions below stay the OPERATOR's settings; what the engine
-   * actually holds is composeInterventions(operator's settings, these events, sim
-   * time), applied through the binding. incidentCount counts the operator's
-   * incidents only. */
-  const [scenarioEvents, setScenarioEvents] = useState<readonly ScenarioEvent[]>([]);
-  const [owners, setOwners] = useState<Ownership>(NO_OWNERS);
-  /* The live-apply effect runs on every render, so it must not call a state setter each time
-   * even for an unchanged value: React counts passive effects that schedule an update, and
-   * fifty in a row without a quiet one raises "Maximum update depth exceeded". Ownership is
-   * published only when its key changes, tracked here. */
-  const ownersKeyRef = useRef(ownershipKey(NO_OWNERS));
-  const publishOwners = useCallback((next: Ownership) => {
-    const key = ownershipKey(next);
-    if (key === ownersKeyRef.current) return;
-    ownersKeyRef.current = key;
-    setOwners(next);
-  }, []);
-  const [scenarioBinding] = useState(createEngineBinding);
-  /** A skip to the next phase in progress: what it skips through and where the engine has got to. */
-  const [skip, setSkip] = useState<SkipView | null>(null);
-  /** When (on the scenario clock) the animation loop next has to re-apply. -Infinity: at the next step. */
-  const scenarioDueRef = useRef(-Infinity);
-  const scenarioSeqRef = useRef(0);
-  /** The stored events, kept in step with the state so two calls in one tick (a script, a double click) each see the other. */
-  const scenarioEventsRef = useRef<readonly ScenarioEvent[]>([]);
-  const skipRef = useRef<{ cancel: boolean } | null>(null);
-  /**
-   * What the animation loop applies. Written by the live-apply effect, so the loop
-   * (which is not re-created when these change) always sees the latest.
-   */
-  const scenarioCtxRef = useRef<{ controls: ManualControls; events: readonly ScenarioEvent[]; frame: RoadFrame } | null>(null);
-  /** What the canvas draws for scenario events: where each is, its phase, and which incidents in the engine are the scenarios'. */
-  const scenarioOverlayRef = useRef<ScenarioOverlay | null>(null);
-  /** Lanes a running scenario is blocking: shown closed, and the operator cannot reopen them. */
-  const lockedLanes = scenarioLockedLanes(owners, laneCount);
-  /**
-   * Where on the corridor an intervention is applied, as km-posts.
-   *
-   * These were fixed fractions of the segment — a closure always began at 55%
-   * of whatever span was on screen, and the speed zone always spanned 30-80%.
-   * That is not a decision the simulation should be making: an operator closing
-   * a lane knows which chainage it starts at, and moving the segment window
-   * silently moved the closure with it. Null means "centre of the current
-   * span", so the defaults behave as before until a position is chosen.
-   */
-  const [closureKm, setClosureKm] = useState<number | null>(null);
-  const [closureEndKm, setClosureEndKm] = useState<number | null>(null);
-  const [zoneFromKm, setZoneFromKm] = useState<number | null>(null);
-  const [zoneToKm, setZoneToKm] = useState<number | null>(null);
-  const [placingIncident, setPlacingIncident] = useState(false);
-  const [placingClosure, setPlacingClosure] = useState(false);
-  // First click of the two that mark a closed stretch, as a km-post. Null until
-  // the start has been clicked.
-  const [closureDraftKm, setClosureDraftKm] = useState<number | null>(null);
+  /** What the canvas draws for scenario events: where each is, its phase, and which incidents in the engine are the scenarios'. Keyed by direction — Phase D3 draws both; today the canvas reads only the focused one. */
+  const scenarioOverlayRef = useRef<Partial<Record<Direction, ScenarioOverlay>>>({});
 
   // Simulation Controls card can flip between the manual controls and a
   // natural-language command prompt for the NLEX corridor. The prompt is parsed
@@ -519,10 +466,6 @@ export default function AiSandboxPage() {
   const [commandBusy, setCommandBusy] = useState(false);
   const [commandError, setCommandError] = useState<string | null>(null);
   const [plan, setPlan] = useState<CommandPlan | null>(null);
-
-  const [metrics, setMetrics] = useState<Metrics | null>(null);
-  const [baseline, setBaseline] = useState<Baseline | null>(null);
-
 
   /* Anchor the inflow to the traffic that actually passes THIS segment.
    *
@@ -543,7 +486,10 @@ export default function AiSandboxPage() {
    * count rather than a flat 8,000. */
   /* Per-class CO2 and fleet share, from the warehouse rather than from
    * constants in the bundle. Until it resolves the simulation runs on its
-   * defaults, which is why this is optional rather than blocking. */
+   * defaults, which is why this is optional rather than blocking. Shared: a
+   * vehicle class's g/m CO2 factor is not a property of which carriageway
+   * it's on (each direction's own fleet-MIX share still comes from its own
+   * demand profile — see useDirectionSim's activeHour). */
   const [classProfile, setClassProfile] =
     useState<Partial<Record<1 | 2 | 3, { co2PerM?: number; share?: number }>> | undefined>(undefined);
   useEffect(() => {
@@ -567,390 +513,33 @@ export default function AiSandboxPage() {
       .catch(() => {});
   }, []);
 
-  /* ── Observed hourly demand ──────────────────────────────────────────────
-   *
-   * The 24-hour shape at the nearest interchange, measured, replacing a daily
-   * mean multiplied by an assumed peaking factor of 1.6. At Balintawak NB the
-   * real ratio is 1.89, and the class mix swings from 1.6% heavy at 06:00 to
-   * 12.4% at 02:00 — freight at night, commuters at rush hour — which one
-   * flat mix cannot represent at all. */
-  type DemandHour = { hour: number; vehPerHour: number; mix: Record<1 | 2 | 3, number> };
-  type DemandProfile = {
-    exit: string; hours: DemandHour[]; peakHour: number; peakVehPerHour: number;
-    meanVehPerHour: number; peakingFactor: number; days: number;
-  };
-  const [demand, setDemand] = useState<DemandProfile | null>(null);
+  /* ── Observed hourly demand: hour of day stays SHARED (D1 §2 / D2 correction #4) — "what does
+   * 09:00 look like" is one question, not one per carriageway. Each direction's own demand PROFILE
+   * (fetched per direction, see useDirectionSim) still supplies its own vehPerHour/mix AT that
+   * shared hour, which is what actually varies between NB and SB. */
   const [hourOfDay, setHourOfDay] = useState<number | null>(null);
+  // Open at the busiest hour: the interesting question is what a closure costs when it costs the
+  // most. Whichever direction's demand-profile fetch resolves first proposes it; once set, neither
+  // direction's later fetch overwrites it (both call this, but only the first "cur == null" wins).
+  const proposeHourOfDay = useCallback((hour: number) => {
+    setHourOfDay((cur) => (cur == null ? hour : cur));
+  }, []);
+  const resetSimAccumulator = useCallback(() => {
+    simAccRef.current = 0;
+  }, []);
 
-  useEffect(() => {
-    if (!nearestExit) return;
-    const name = encodeURIComponent(String(nearestExit.exit_name));
-    fetch(`${BACKEND}/api/ai-sandbox/demand-profile?exit=${name}&direction=${direction}`, {
-      cache: "no-store",
-    })
-      .then((r) => (r.ok ? r.json() : null))
-      .then((j) => {
-        if (j?.success && j.data?.hours?.length) {
-          setDemand(j.data);
-          // Open at the busiest hour: the interesting question is what a
-          // closure costs when it costs the most.
-          setHourOfDay((cur) => (cur == null ? j.data.peakHour : cur));
-        } else setDemand(null);
-      })
-      .catch(() => setDemand(null));
-  }, [nearestExit, direction]);
-
-  /** The hour currently being simulated, if observed demand is driving it. */
-  const activeHour = useMemo(
-    () => (demand && hourOfDay != null ? demand.hours.find((h) => h.hour === hourOfDay) ?? null : null),
-    [demand, hourOfDay],
-  );
-
-  /* ── Mainline flow ───────────────────────────────────────────────────────
-   *
-   * Per-interchange entry and exit volumes, which the km table below turns
-   * into the flow crossing any point:
-   *
-   *     mainline(x) = SUM(entries at km <= x) - SUM(exits at km <= x)   [NB]
-   *
-   * This replaces anchoring the inflow to the NEAREST plaza's own volume,
-   * which was an on-ramp figure being used as a through-flow. Near Balintawak
-   * (km 0, the gateway) the two are close and it looked fine; eight km north
-   * at Meycauayan the plaza reads 211 veh/h against a mainline of roughly
-   * 3,500, and the sandbox was simulating the slip road. */
-  type PlazaFlow = { exit: string; entriesByHour: number[]; exitsByHour: number[] };
-  const [plazaFlows, setPlazaFlows] = useState<PlazaFlow[] | null>(null);
-  useEffect(() => {
-    fetch(`${BACKEND}/api/ai-sandbox/plaza-flows?direction=${direction}`, { cache: "no-store" })
-      .then((r) => (r.ok ? r.json() : null))
-      .then((j) => setPlazaFlows(j?.success ? j.data.plazas : null))
-      .catch(() => setPlazaFlows(null));
-  }, [direction]);
-
-  /** Entry/exit volumes for one exit at one hour, or null if not recorded. */
-  const flowAt = useCallback(
-    (exitName: string, hour: number) => {
-      if (!plazaFlows) return null;
-      const key = String(exitName).toLowerCase().trim();
-      const f =
-        plazaFlows.find((x) => x.exit.toLowerCase().trim() === key) ??
-        plazaFlows.find((x) => {
-          const k = x.exit.toLowerCase().trim();
-          return k.includes(key) || key.includes(k);
-        });
-      if (!f) return null;
-      const h = Math.max(0, Math.min(23, hour));
-      return { entries: f.entriesByHour[h] ?? 0, exits: f.exitsByHour[h] ?? 0 };
-    },
-    [plazaFlows],
-  );
-
-  /** Vehicles per hour crossing this km-post, in the direction of travel. */
-  const mainlineAtKm = useCallback(
-    (km: number, hour: number): number | null => {
-      if (!plazaFlows || EXITS.length === 0) return null;
-      let flow = 0;
-      let sawAny = false;
-      for (const e of EXITS) {
-        // Upstream means lower km northbound, higher km southbound.
-        const upstream = direction === "NB" ? e.km <= km + 1e-6 : e.km >= km - 1e-6;
-        if (!upstream) continue;
-        const f = flowAt(e.exit_name, hour);
-        if (!f) continue;
-        sawAny = true;
-        flow += f.entries - f.exits;
-      }
-      return sawAny ? Math.max(0, Math.round(flow)) : null;
-    },
-    [plazaFlows, EXITS, direction, flowAt],
-  );
-
-  const [plazaVol, setPlazaVol] = useState<Record<string, number> | null>(null);
-  const [volDays, setVolDays] = useState(365);
-  useEffect(() => {
-    fetch(`${BACKEND}/api/traffic/analytics?months=12&direction=${direction}`, { cache: "no-store" })
-      .then((r) => r.json())
-      .then((j) => {
-        if (!j.success) return;
-        const map: Record<string, number> = {};
-        for (const row of j.data.byPlaza ?? []) map[String(row.plaza).toLowerCase()] = Number(row.v) || 0;
-        setPlazaVol(map);
-        setVolDays(Math.max(1, j.data.kpis?.days ?? 365));
-      })
-      .catch(() => {});
-  }, [direction]);
-
-  /* Peak-hour flow past the nearest junction, capped at what the lanes can
-   * physically carry. PEAK_FACTOR turns a daily mean into a peak hour; the
-   * ceiling is per-lane capacity, so the sandbox can never open already
-   * gridlocked. */
-  const dataAnchor = (() => {
-    /* Preference order, best evidence first.
-     *
-     * 1. Mainline flow across the start of the segment, from the conservation
-     *    count. This is the only one of the three that is actually the
-     *    quantity being simulated.
-     * 2. The nearest interchange's own hourly volume. Correct at Balintawak,
-     *    increasingly wrong the further up the corridor it is used.
-     * 3. A daily mean scaled by an assumed peaking factor. */
-    const hr = hourOfDay ?? demand?.peakHour ?? 8;
-    const ceiling = laneCount * 2200; // motorway capacity, per lane
-    const entryKm = direction === "NB" ? fromKm : toKm;
-    const mainline = mainlineAtKm(entryKm, hr);
-    if (mainline != null && mainline > 0) {
-      return Math.max(300, Math.min(ceiling, mainline));
-    }
-    if (activeHour) {
-      return Math.max(300, Math.min(ceiling, activeHour.vehPerHour));
-    }
-    if (!plazaVol || !nearestExit) return null;
-    const key = String(nearestExit.exit_name).toLowerCase();
-    const total =
-      plazaVol[key] ??
-      Object.entries(plazaVol).find(([k]) => k.includes(key) || key.includes(k))?.[1];
-    if (!total) return null;
-    const peakHourly = Math.round((total / volDays / 24) * 1.6);
-    // Shares the ceiling declared above; 2,200/lane matches the calibrated
-    // capacity of ~2,267 veh/h/lane rather than the round 2,000 guessed before.
-    return Math.max(600, Math.min(ceiling, peakHourly));
-  })();
-
-  /** One line saying where the inflow figure came from. */
-  const inflowBasis = useMemo(() => {
-    const hr = hourOfDay ?? demand?.peakHour ?? 8;
-    const entryKm = direction === "NB" ? fromKm : toKm;
-    const mainline = mainlineAtKm(entryKm, hr);
-    if (mainline == null || mainline <= 0) {
-      return activeHour
-        ? `Inflow from the volume recorded at ${displayExitName(String(nearestExit?.exit_name ?? ""))} — an interchange figure, not a through-flow.`
-        : null;
-    }
-    const feeders = EXITS.filter((e) =>
-      direction === "NB" ? e.km <= entryKm + 1e-6 : e.km >= entryKm - 1e-6,
-    ).filter((e) => {
-      const f = flowAt(e.exit_name, hr);
-      return f && (f.entries > 0 || f.exits > 0);
-    });
-    const names = feeders.slice(0, 3).map((e) => displayExitName(e.exit_name)).join(" + ");
-    const more = feeders.length > 3 ? ` +${feeders.length - 3} more` : "";
-    return `Mainline flow at Km ${entryKm.toFixed(2)}: ${mainline.toLocaleString()} veh/h — entries minus exits upstream (${names}${more}).`;
-  }, [hourOfDay, demand, direction, fromKm, toKm, mainlineAtKm, EXITS, flowAt, activeHour, nearestExit]);
-
-  // Re-anchor when the route, direction or lane count changes — each of those
-  // changes what "normal traffic here" means.
-  useEffect(() => {
-    if (dataAnchor != null) setInflow(dataAnchor);
-  }, [dataAnchor]);
-
-  /* The class profile actually handed to the simulation: warehouse CO2
-   * factors always, and the fleet mix from the selected HOUR when one is
-   * available, falling back to the all-hours average. An 02:00 closure meets
-   * 12.4% heavy vehicles and an 06:00 one meets 1.6%; the emissions and the
-   * merging behaviour differ accordingly, and a single average hides both. */
-  const effectiveClassProfile = useMemo(() => {
-    if (!classProfile && !activeHour) return undefined;
-    const out: Partial<Record<1 | 2 | 3, { co2PerM?: number; share?: number }>> = {};
-    for (const k of [1, 2, 3] as const) {
-      const co2PerM = classProfile?.[k]?.co2PerM;
-      const share = activeHour ? activeHour.mix[k] : classProfile?.[k]?.share;
-      if (co2PerM != null || share != null) out[k] = { co2PerM, share };
-    }
-    return Object.keys(out).length ? out : undefined;
-  }, [classProfile, activeHour]);
-
-  const buildInterventions = useCallback(
-    (lanes: number, len: number): Partial<Interventions> => ({
-      closedLanes: Array(lanes).fill(false),
-      closurePoint: len * 0.55,
-      closureEnd: len,
-      incidents: [],
-      speedLimitKmh: null,
-      speedZone: [len * 0.3, len * 0.8],
-    }),
-    []
-  );
-
-  /* Interchanges inside the simulated stretch, as on- and off-ramps.
-   *
-   * Volumes come from the same measured per-plaza figures as the mainline
-   * inflow, scaled to the selected hour. One assumption is unavoidable and is
-   * stated rather than buried: the warehouse records a plaza's total volume,
-   * not a split between traffic joining and traffic leaving, so it is halved
-   * between the two. If an entry/exit split is ever recorded, this is the one
-   * line to change.
-   *
-   * Access is per direction and comes from the data: an interchange with no
-   * northbound entry contributes no on-ramp to a northbound run, which is why
-   * nb_entry / sb_exit and friends are read rather than assumed symmetric. */
-  const ramps = useMemo(() => {
-    if (!originExit || !destExit) return [];
-    const lo = Math.min(originExit.km, destExit.km);
-    const hi = Math.max(originExit.km, destExit.km);
-    const nb = direction === "NB";
-    const hr = hourOfDay ?? demand?.peakHour ?? 8;
-    const shape =
-      activeHour && demand && demand.meanVehPerHour > 0
-        ? activeHour.vehPerHour / demand.meanVehPerHour
-        : 1;
-    const out: { x: number; onVehPerHour: number; offFraction: number; name: string }[] = [];
-    for (const e of EXITS) {
-      // Strictly inside: the endpoints are where the simulated road starts and
-      // stops, not junctions traffic passes through.
-      if (e.km <= lo + 0.02 || e.km >= hi - 0.02) continue;
-      const canJoin = nb ? e.nb_entry : e.sb_entry;
-      const canLeave = nb ? e.nb_exit : e.sb_exit;
-      if (!canJoin && !canLeave) continue;
-
-      /* Measured entries and exits, not a plaza total split down the middle.
-       *
-       * The halving was a stated assumption standing in for data that turns
-       * out to exist: role = Entry/Exit separates the two, so a junction that
-       * only takes traffic on now contributes only an on-ramp. */
-      const f = flowAt(e.exit_name, hr);
-      let on = 0;
-      let off = 0;
-      if (f) {
-        on = canJoin ? f.entries : 0;
-        off = canLeave ? f.exits : 0;
-      } else {
-        // Fallback for a junction with no transaction data: the old daily-mean
-        // estimate, halved between the two movements as before.
-        const key = String(e.exit_name).toLowerCase();
-        const total =
-          plazaVol?.[key] ??
-          Object.entries(plazaVol ?? {}).find(([k]) => k.includes(key) || key.includes(k))?.[1];
-        if (!total) continue;
-        const hourly = (total / volDays / 24) * shape;
-        on = canJoin ? hourly / 2 : 0;
-        off = canLeave ? hourly / 2 : 0;
-      }
-      if (on <= 0 && off <= 0) continue;
-
-      // The share leaving is measured against the flow actually reaching this
-      // junction, not against the flow that entered the segment.
-      const passing = mainlineAtKm(e.km, hr) ?? inflow;
-      out.push({
-        x: nb ? (e.km - fromKm) * 1000 : (toKm - e.km) * 1000,
-        onVehPerHour: Math.round(on),
-        // Capped: a junction taking more than a third of the mainline would be
-        // the end of the corridor, not a ramp on it.
-        offFraction: Math.max(0, Math.min(0.35, off / Math.max(1, passing))),
-        name: displayExitName(e.exit_name),
-      });
-    }
-    return out;
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [originExit, destExit, EXITS, plazaVol, volDays, activeHour, demand, inflow,
-      direction, fromKm, toKm, hourOfDay, flowAt, mainlineAtKm]);
-
-
-  // (Re)create the sim when structural config changes.
-  const rebuild = useCallback(() => {
-    simRef.current = new TrafficSim(
-      {
-        length: segLengthM,
-        laneCount,
-        inflowVehPerHour: inflow,
-        seed: 12345,
-        classProfile: effectiveClassProfile,
-        ramps,
-        warmupS: WARMUP_S,
-      },
-      buildInterventions(laneCount, segLengthM)
-    );
-    setClosedLanes(Array(laneCount).fill(false));
-    setSpeedLimit(null);
-    setIncidentCount(0);
-    setBaseline(null);
-    /* Sim time is back at 0, so scenario events start over from the new warm-up.
-     * The events themselves are kept as stored (durations are never re-drawn); the
-     * binding forgets the old engine's incidents, a fast-forward aimed at the old
-     * engine is cancelled, and the next step re-applies. */
-    scenarioBinding.reset();
-    scenarioDueRef.current = -Infinity;
-    if (skipRef.current) skipRef.current.cancel = true;
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    // classProfile included so the run restarts once the warehouse values
-    // land — otherwise the first simulation would keep emitting at the
-    // bundled defaults for its whole life.
-  }, [laneCount, segLengthM, buildInterventions, effectiveClassProfile, ramps, scenarioBinding]);
-
-  useEffect(() => {
-    rebuild();
-  }, [rebuild]);
-
-  // Live-apply inflow without discarding the running sim.
-  useEffect(() => {
-    if (simRef.current) simRef.current.cfg.inflowVehPerHour = inflow;
-  }, [inflow]);
-
-  // Positions in metres from the start of the simulated span, which is what the
-  // simulation works in. Clamped so a position left over from a previous
-  // segment cannot sit outside the current one.
-  const clampKm = (km: number) => Math.min(Math.max(km, fromKm), toKm);
-  /* The only place direction enters the maths. Metres are always measured
-   * along the direction of travel from the entry point, which is the low km
-   * post northbound and the high one southbound. */
-  const kmAt = (m: number) => (direction === "NB" ? fromKm + m / 1000 : toKm - m / 1000);
-  const mAt = (km: number) => (direction === "NB" ? (km - fromKm) * 1000 : (toKm - km) * 1000);
-  const spanM = (toKm - fromKm) * 1000;
-  const closureAtKm = clampKm(closureKm ?? kmAt(spanM * 0.55));
-  const zoneA = clampKm(zoneFromKm ?? kmAt(spanM * 0.3));
-  const zoneB = clampKm(zoneToKm ?? kmAt(spanM * 0.8));
-  // A closure occupies a stretch. Null end means "to the end of the span",
-  // which is what it always used to do implicitly.
-  const closureEndAtKm = clampKm(Math.max(closureEndKm ?? toKm, closureAtKm + 0.01));
-  // Ordered along travel: southbound the "start" km is the higher number, so a
-  // raw subtraction would give a negative offset and an inverted stretch.
-  const closureM = Math.min(mAt(closureAtKm), mAt(closureEndAtKm));
-  const closureEndM = Math.max(mAt(closureAtKm), mAt(closureEndAtKm));
-  // Likewise the speed zone: the operator's, or a shoulder breakdown's while it owns it.
-  const shownSpeedLimit = owners.speedZone ? owners.speedZone.limitKmh : speedLimit;
-  const shownZoneFromKm = owners.speedZone ? Math.min(kmAt(owners.speedZone.zone[0]), kmAt(owners.speedZone.zone[1])) : zoneA;
-  const shownZoneToKm = owners.speedZone ? Math.max(kmAt(owners.speedZone.zone[0]), kmAt(owners.speedZone.zone[1])) : zoneB;
-  // The stretch the controls show: the operator's own, or, while a scenario owns it, the scenario's (locked).
-  const shownClosureFromKm = owners.closure ? Math.min(kmAt(owners.closure.closurePointM), kmAt(owners.closure.closureEndM)) : closureAtKm;
-  const shownClosureToKm = owners.closure ? Math.max(kmAt(owners.closure.closurePointM), kmAt(owners.closure.closureEndM)) : closureEndAtKm;
-
-  // Typed ends always keep the value the operator typed. The previous clamp
-  // (end = max(end, start + 0.01)) silently discarded a "To" below the current
-  // start — typing Km 0.30 while the start sat at the default 0.33 did nothing.
-  // Now the OTHER end moves out of the way instead.
-  const commitClosureStart = (km: number) => {
-    const a = clampKm(km);
-    setClosureKm(a);
-    if (a >= closureEndAtKm) setClosureEndKm(clampKm(a + 0.1));
+  const sharedRoadInputs: SharedRoadInputs = {
+    BACKEND, fromKm, toKm, segLengthM, EXITS, nearestExit, segmentLanes, hourOfDay, proposeHourOfDay, classProfile, resetSimAccumulator,
   };
-  const commitClosureEnd = (km: number) => {
-    const b = clampKm(km);
-    if (b <= closureAtKm) setClosureKm(clampKm(b - 0.1));
-    setClosureEndKm(b);
-  };
-  const zoneM: [number, number] = [
-    Math.min(mAt(zoneA), mAt(zoneB)),
-    Math.max(mAt(zoneA), mAt(zoneB)),
-  ];
-
-  /* What the operator has set by hand, and how km-posts map to metres on this
-   * stretch: the two things the scenario adapter needs from the page. */
-  const manualControls: ManualControls = {
-    closedLanes,
-    closurePoint: closureM,
-    closureEnd: closureEndM,
-    showClosurePreview: closureKm != null || closureEndKm != null || placingClosure,
-    speedLimitKmh: speedLimit,
-    speedZone: zoneM,
-  };
-  const scenarioFrame: RoadFrame = { warmupS: WARMUP_S, metresAt: mAt };
-  const scenarioRoad: Road = { laneCount, segmentLengthM: segLengthM, ...scenarioFrame };
-  // Seconds since the end of warm-up, as of the last metrics refresh (a few times a second), for the events list.
-  const scenarioNowS = scenarioTimeS(metrics?.elapsedS ?? 0, scenarioFrame);
-  /* What is actually on the road: the operator's settings with any running scenario laid over
-   * them. The readouts below (recommendation, before/after, baseline, the assistant's context)
-   * read THIS, not the operator's settings alone. */
-  const eff = effectiveState({ closedLanes, speedLimitKmh: speedLimit }, owners, scenarioEvents, scenarioNowS, laneCount);
-  const effIncidentCount = incidentCount + eff.scenarioIncidents;
-  const activeScenarioText = describeActiveEvents(eff.active);
+  // Called unconditionally, twice, regardless of `view` — an inactive direction's sim just is not
+  // stepped or rendered below. Hooks cannot be called conditionally, and there is no need to: the
+  // per-direction state is cheap to hold even when unused, and this is what keeps switching the
+  // view instant (nothing to (re)build) rather than mount/unmount churn.
+  const nb = useDirectionSim("NB", sharedRoadInputs);
+  const sb = useDirectionSim("SB", sharedRoadInputs);
+  const byDirection: Record<Direction, DirectionApi> = { NB: nb, SB: sb };
+  /** The single-direction-shaped panels' data source while Both mode has not yet split them (Phase D4). NB-only/SB-only: this IS the (only) active direction. */
+  const focused = byDirection[focusDirection];
 
   /* ── Confidence run ──────────────────────────────────────────────────────
    *
@@ -961,7 +550,12 @@ export default function AiSandboxPage() {
    *
    * Driven through the generator rather than called outright: ten runs is
    * tens of millions of integration steps and would lock the tab solid. The
-   * pump below yields to the browser between simulated seconds. */
+   * pump below yields to the browser between simulated seconds.
+   *
+   * Runs against the FOCUSED direction only — replicate() takes one static
+   * Interventions snapshot and cannot follow a timed event OR two carriageways
+   * at once (see Phase D4.6 for Both mode's disabled state; this phase keeps
+   * it working exactly as before for NB-only/SB-only). */
   const [repRuns, setRepRuns] = useState(10);
   const [repResult, setRepResult] = useState<ReplicationResult | null>(null);
   const [repProgress, setRepProgress] = useState<number | null>(null);
@@ -969,7 +563,7 @@ export default function AiSandboxPage() {
 
   const runReplications = useCallback(() => {
     // replicate() runs static interventions and cannot follow a timed event.
-    if (scenarioEvents.length > 0) return;
+    if (focused.scenarioEvents.length > 0) return;
     if (repProgress != null) { repCancel.current = true; return; }
     repCancel.current = false;
     setRepResult(null);
@@ -977,21 +571,21 @@ export default function AiSandboxPage() {
     const gen = replicate(
       {
         length: segLengthM,
-        laneCount,
-        inflowVehPerHour: inflow,
-        classProfile: effectiveClassProfile,
-        ramps,
+        laneCount: focused.laneCount,
+        inflowVehPerHour: focused.inflow,
+        classProfile: classProfile,
+        ramps: focused.ramps,
         warmupS: WARMUP_S,
       },
       // The interventions AS CURRENTLY SET, not a clean road: the operator is
       // asking about the scenario in front of them.
       {
-        closedLanes: [...closedLanes],
-        closurePoint: closureM,
-        closureEnd: closureEndM,
-        incidents: simRef.current ? [...simRef.current.interventions.incidents] : [],
-        speedLimitKmh: speedLimit,
-        speedZone: zoneM,
+        closedLanes: [...focused.closedLanes],
+        closurePoint: focused.manualControls.closurePoint,
+        closureEnd: focused.manualControls.closureEnd,
+        incidents: focused.simRef.current ? [...focused.simRef.current.interventions.incidents] : [],
+        speedLimitKmh: focused.speedLimit,
+        speedZone: [focused.manualControls.speedZone[0], focused.manualControls.speedZone[1]],
       },
       { runs: repRuns, secondsPerRun: 300 },
     );
@@ -1011,35 +605,22 @@ export default function AiSandboxPage() {
       setTimeout(pump, 0);
     };
     setTimeout(pump, 0);
-  }, [
-    repProgress, repRuns, segLengthM, laneCount, inflow, effectiveClassProfile, ramps,
-    closedLanes, closureM, closureEndM, speedLimit, zoneM, scenarioEvents,
-  ]);
+  }, [repProgress, repRuns, segLengthM, classProfile, focused]);
 
-
-  /* Live-apply interventions.
-   *
-   * This used to copy the operator's state straight onto the engine. It now goes
-   * through the scenario adapter, which lays any running scenario event over that
-   * state (composeInterventions) and applies the result. The animation loop below
-   * goes through the same call when a phase boundary is crossed, so neither path
-   * can overwrite the other. Runs whenever the operator's settings or the events
-   * change. */
+  // What the canvas draws for each direction's scenario events: kept in a ref (the render loop runs
+  // outside React) and refreshed whenever either direction's own events/binding change — mirrors the
+  // single-sim page's old scenarioOverlayRef assignment, just done once per direction instead of once.
   useEffect(() => {
-    const sim = simRef.current;
-    if (!sim) return;
-    scenarioCtxRef.current = { controls: manualControls, events: scenarioEvents, frame: scenarioFrame };
-    scenarioOverlayRef.current = { events: scenarioEvents, frame: scenarioFrame, isScenarioIncident: scenarioBinding.isScenarioIncident };
-    const { owners: next } = scenarioBinding.apply(sim, manualControls, scenarioEvents, scenarioFrame);
-    const now = scenarioTimeS(sim.time, scenarioFrame);
-    const due = nextBoundaryAfter(scenarioEvents, roadOf(sim, scenarioFrame), now);
-    scenarioDueRef.current = due === null ? Infinity : due;
-    publishOwners(next);
-    // manualControls and scenarioFrame are rebuilt from the values listed on every render.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [closedLanes, speedLimit, closureM, closureEndM, zoneM, closureKm, closureEndKm, placingClosure, scenarioEvents, direction, fromKm, toKm, scenarioBinding, publishOwners]);
+    scenarioOverlayRef.current.NB = { events: nb.scenarioEvents, frame: nb.scenarioFrame, isScenarioIncident: nb.scenarioBinding.isScenarioIncident };
+  }, [nb.scenarioEvents, nb.scenarioFrame, nb.scenarioBinding]);
+  useEffect(() => {
+    scenarioOverlayRef.current.SB = { events: sb.scenarioEvents, frame: sb.scenarioFrame, isScenarioIncident: sb.scenarioBinding.isScenarioIncident };
+  }, [sb.scenarioEvents, sb.scenarioFrame, sb.scenarioBinding]);
 
-  // Animation + physics loop.
+  // Animation + physics loop: steps every ACTIVE direction's sim in the same tick, in the same
+  // ~25ms-equivalent-per-frame slice budget the single-sim loop always used (there is no separate
+  // budget per direction — Both mode's two steps share the one frame, which is the whole point of
+  // the Phase D1 performance estimate and the D2.5/D2.6 measurement below).
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
@@ -1048,28 +629,31 @@ export default function AiSandboxPage() {
 
     const loop = (now: number) => {
       rafRef.current = requestAnimationFrame(loop);
-      const sim = simRef.current;
-      if (!sim) return;
       const dtReal = Math.min(0.1, (now - (lastFrameRef.current || now)) / 1000);
       lastFrameRef.current = now;
 
-      // While a "skip to next phase" is fast-forwarding the engine it is the only thing stepping it.
-      if (running && skipRef.current === null) {
-        // advance sim time = real time × simSpeed, in fixed steps for stability.
-        // A persistent accumulator carries the sub-timestep remainder between
-        // frames, so slow (1×) speeds still integrate correctly.
+      // The accumulator is shared across directions deliberately: both sims advance sim time at the
+      // same simSpeed from the same real dtReal, so one accumulator drives both step loops in lockstep
+      // rather than two independently-drifting ones.
+      if (running) {
         simAccRef.current += dtReal * simSpeed;
         let guard = 0;
-        // Guard scales with the step size so the catch-up window stays ~3 s of
-        // simulated time rather than shrinking when SIM_DT does.
         while (simAccRef.current >= SIM_DT && guard < 3 / SIM_DT) {
-          sim.step(SIM_DT);
-          // Scenario events: re-apply when a phase boundary has just been crossed.
-          const ctx = scenarioCtxRef.current;
-          if (ctx) {
-            const r = applyAtBoundary(scenarioBinding, sim, ctx.controls, ctx.events, ctx.frame, scenarioDueRef.current);
-            scenarioDueRef.current = r.dueS;
-            if (r.composition !== null) publishOwners(r.composition.owners);
+          for (const direction of activeDirections) {
+            const d = byDirection[direction];
+            const sim = d.simRef.current;
+            // A skip-in-progress on THIS direction owns its own stepping (stepToScenarioTime, inside
+            // useDirectionSim's skipToNextPhase) — the rAF loop must not also step it, or the two
+            // would race for the same sim. The other direction (if also active) is unaffected and
+            // steps normally here, which is exactly what "skip is per direction" requires.
+            if (!sim || d.skipRef.current !== null) continue;
+            sim.step(SIM_DT);
+            const sctx = d.scenarioCtxRef.current;
+            if (sctx) {
+              const r = applyAtBoundary(d.scenarioBinding, sim, sctx.controls, sctx.events, sctx.frame, d.scenarioDueRef.current);
+              d.scenarioDueRef.current = r.dueS;
+              if (r.composition !== null) d.publishOwners(r.composition.owners);
+            }
           }
           simAccRef.current -= SIM_DT;
           guard++;
@@ -1078,24 +662,35 @@ export default function AiSandboxPage() {
         metricAccRef.current += dtReal;
         if (metricAccRef.current >= 0.25) {
           metricAccRef.current = 0;
-          setMetrics(sim.metrics());
+          for (const direction of activeDirections) {
+            const sim = byDirection[direction].simRef.current;
+            if (sim) byDirection[direction].setMetrics(sim.metrics());
+          }
         }
       }
-      render(ctx, canvas, sim, locationRef.current, marksRef.current, maxLaneRef.current, exitsRef.current, scenarioOverlayRef.current);
+      // Canvas draws the FOCUSED direction only (Phase D3 draws both carriageways at once).
+      const focusedSim = byDirection[focusDirection].simRef.current;
+      if (focusedSim) {
+        render(ctx, canvas, focusedSim, locationRef.current, marksRef.current, maxLaneRef.current, exitsRef.current, scenarioOverlayRef.current[focusDirection] ?? null);
+      }
     };
     rafRef.current = requestAnimationFrame(loop);
     return () => cancelAnimationFrame(rafRef.current);
-  }, [running, simSpeed, scenarioBinding, publishOwners]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [running, simSpeed, activeDirections.join(), focusDirection, nb.simRef, sb.simRef, nb.scenarioBinding, sb.scenarioBinding, nb.publishOwners, sb.publishOwners, nb.setMetrics, sb.setMetrics]);
 
   // Incident placement: arm "placing" mode, then let the user click the
   // simulation to choose exactly where (which lane / how far along) the
   // incident is dropped. One accident per click — re-arm to drop another.
-  const togglePlacing = () => setPlacingIncident((p) => !p);
+  // Placement always targets the FOCUSED direction — the canvas draws only
+  // that one (Phase D3 draws both carriageways; clicking one of them then
+  // maps to ITS OWN sim, not always the focused one).
+  const togglePlacing = () => focused.setPlacingIncident((p) => !p);
 
   const placeIncidentAt = (e: React.MouseEvent<HTMLCanvasElement>) => {
-    if (!placingIncident && !placingClosure) return;
+    if (!focused.placingIncident && !focused.placingClosure) return;
     const canvas = canvasRef.current;
-    const sim = simRef.current;
+    const sim = focused.simRef.current;
     if (!canvas || !sim) return;
 
     // Invert the same geometry the renderer uses to map the click back to
@@ -1107,7 +702,6 @@ export default function AiSandboxPage() {
     const cy = e.clientY - rect.top;
     const L = sim.cfg.length;
     const lanes = sim.cfg.laneCount;
-    const pad = CANVAS_PAD;
     // Same geometry render() used for this frame, or a click maps to a
     // different lane than the one under the cursor. The ramp gutter is part of
     // that geometry: reserving it moves the road up, and a handler that did not
@@ -1121,66 +715,80 @@ export default function AiSandboxPage() {
       segLenM: L,
       exitCount: exitsRef.current.length,
       maxLaneH: maxLaneRef.current,
-      rampsAbove: direction === "NB",
+      rampsAbove: focusDirection === "NB",
     });
 
     const lane = Math.max(0, Math.min(lanes - 1, Math.floor((cy - roadTop) / laneH)));
-    const alongFrac = direction === "SB" ? 1 - cx / cssW : cx / cssW;
+    const alongFrac = focusDirection === "SB" ? 1 - cx / cssW : cx / cssW;
     const x = Math.max(0, Math.min(L, alongFrac * L));
-    if (placingClosure) {
+    if (focused.placingClosure) {
       // Two clicks mark the stretch an operator actually closes — "Km 0.20 to
       // 0.30" — in either order. One click used to move only the start, so the
       // works always ran on to the end of the span.
-      const km = Number(kmAt(x).toFixed(2));
-      if (closureDraftKm == null) {
-        setClosureDraftKm(km);
+      const km = Number(focused.kmAt(x).toFixed(2));
+      if (focused.closureDraftKm == null) {
+        focused.setClosureDraftKm(km);
         sim.interventions.closureDraft = { from: x, to: x };
         return;
       }
-      const a = Math.min(closureDraftKm, km);
-      const b = Math.max(Math.max(closureDraftKm, km), Math.min(toKm, a + 0.01));
-      setClosureKm(a);
-      setClosureEndKm(b);
-      setPlacingClosure(false);
+      const a = Math.min(focused.closureDraftKm, km);
+      const b = Math.max(Math.max(focused.closureDraftKm, km), Math.min(toKm, a + 0.01));
+      focused.setClosureKm(a);
+      focused.setClosureEndKm(b);
+      focused.setPlacingClosure(false);
       return;
     }
-    sim.addIncident(lane, x);
-    setIncidentCount(scenarioBinding.operatorIncidents(sim).length);
-    setPlacingIncident(false); // one accident per click; re-arm to drop another
+    focused.placeIncident(lane, x);
+    focused.setPlacingIncident(false); // one accident per click; re-arm to drop another
   };
 
   // Follow the cursor after the first click so the stretch is seen before it is set.
   const previewClosureAt = (e: React.MouseEvent<HTMLCanvasElement>) => {
-    const sim = simRef.current;
+    const sim = focused.simRef.current;
     const canvas = canvasRef.current;
-    if (!sim || !canvas || !placingClosure || closureDraftKm == null) return;
+    if (!sim || !canvas || !focused.placingClosure || focused.closureDraftKm == null) return;
     const rect = canvas.getBoundingClientRect();
     const L = sim.cfg.length;
     const frac = (e.clientX - rect.left) / rect.width;
-    const x = Math.max(0, Math.min(L, (direction === "SB" ? 1 - frac : frac) * L));
-    const startM = mAt(closureDraftKm);
+    const x = Math.max(0, Math.min(L, (focusDirection === "SB" ? 1 - frac : frac) * L));
+    const startM = focused.mAt(focused.closureDraftKm);
     sim.interventions.closureDraft = { from: Math.min(startM, x), to: Math.max(startM, x) };
   };
 
-  // Leaving placing mode, by any route, discards a half-drawn stretch.
+  // Leaving placing mode, by any route, discards a half-drawn stretch. Runs per direction: each
+  // direction's own placingClosure/simRef, so drawing a closure on one carriageway never touches
+  // the other's half-drawn state.
   useEffect(() => {
-    if (placingClosure) return;
-    setClosureDraftKm(null);
-    if (simRef.current) simRef.current.interventions.closureDraft = null;
-  }, [placingClosure]);
+    if (nb.placingClosure) return;
+    nb.setClosureDraftKm(null);
+    if (nb.simRef.current) nb.simRef.current.interventions.closureDraft = null;
+    // nb is a fresh object every render (useDirectionSim returns a new literal each call); the
+    // fields actually read here are the only ones that matter, and are themselves each stable
+    // (state value / setState setter / ref) — listing the whole object would re-run this every render.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [nb.placingClosure, nb.setClosureDraftKm, nb.simRef]);
+  useEffect(() => {
+    if (sb.placingClosure) return;
+    sb.setClosureDraftKm(null);
+    if (sb.simRef.current) sb.simRef.current.interventions.closureDraft = null;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sb.placingClosure, sb.setClosureDraftKm, sb.simRef]);
 
-  // Esc leaves either placing mode.
+  // Esc leaves either placing mode, on the focused direction (the one placement is ever armed on).
   useEffect(() => {
-    if (!placingIncident && !placingClosure) return;
+    if (!focused.placingIncident && !focused.placingClosure) return;
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") {
-        setPlacingIncident(false);
-        setPlacingClosure(false);
+        focused.setPlacingIncident(false);
+        focused.setPlacingClosure(false);
       }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [placingIncident, placingClosure]);
+    // focused is a fresh object every render (it's nb or sb, both fresh per the note above); same
+    // reasoning — only the fields actually read are listed, each itself stable.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [focused.placingIncident, focused.placingClosure, focused.setPlacingIncident, focused.setPlacingClosure]);
 
   // Ask the backend to turn the sentence into simulation actions. This only
   // ever produces a PROPOSAL — applyPlan() below is what actually touches the
@@ -1201,15 +809,20 @@ export default function AiSandboxPage() {
         body: JSON.stringify({
           command: text,
           context: {
-            laneCount,
+            laneCount: focused.laneCount,
             segmentLengthM: segLengthM,
             // The model reasons in 1-indexed lane numbers, the sim in 0-indexed
             // array positions. Convert on the way out and back again in
             // applyPlan() so the two never mix.
-            // What is actually on the road (operator + running scenario), in the existing fields.
-            closedLanes: eff.closedLanes.map((c, i) => (c ? i + 1 : 0)).filter(Boolean),
-            speedLimitKmh: eff.speedLimitKmh,
-            incidentCount: effIncidentCount,
+            // What is actually on the road (operator + running scenario), in the existing fields —
+            // no new "direction" field (no backend change, per Phase D1 §4): this is always the
+            // FOCUSED direction's effective state. NB-only/SB-only, that's unambiguous. In Both
+            // mode it is whichever carriageway the operator has focused — see the focus switch in
+            // the JSX below, which Phase D4 will make an explicit, required choice rather than a
+            // silent default.
+            closedLanes: focused.eff.closedLanes.map((c, i) => (c ? i + 1 : 0)).filter(Boolean),
+            speedLimitKmh: focused.eff.speedLimitKmh,
+            incidentCount: focused.effIncidentCount,
             exits: EXITS.map((x) => ({ exit_id: x.exit_id, exit_name: displayExitName(x.exit_name) })),
           },
         }),
@@ -1230,9 +843,10 @@ export default function AiSandboxPage() {
 
   // Apply a confirmed plan to the simulation. Every action was already range-
   // checked server-side; the bounds are re-asserted here because this function
-  // is the last thing between model output and sim state.
+  // is the last thing between model output and sim state. Applies to the
+  // FOCUSED direction only, matching the context runCommand sent.
   const applyPlan = () => {
-    const sim = simRef.current;
+    const sim = focused.simRef.current;
     if (!plan || !sim) return;
     const applied: string[] = [];
 
@@ -1242,7 +856,7 @@ export default function AiSandboxPage() {
     // resizes the road applies only that and says the rest was dropped.
     const resize = plan.actions.find((a) => a.type === "set_lane_count");
     if (resize && resize.type === "set_lane_count") {
-      setLaneCount(resize.lanes);
+      focused.setLaneCount(resize.lanes);
       const dropped = plan.actions.length - 1;
       setCommandNote(
         `Applied: ${resize.lanes} lanes.` +
@@ -1262,44 +876,42 @@ export default function AiSandboxPage() {
         case "close_lane":
         case "open_lane": {
           const shut = a.type === "close_lane";
-          const idx = a.lanes.map((n) => n - 1).filter((i) => i >= 0 && i < laneCount);
-          const held = shut ? [] : idx.filter((i) => lockedLanes[i]);
-          if (held.length > 0 && owners.closure) {
-            notApplied.push(`Lane ${held.map((i) => i + 1).join(", ")} stays closed (driven by ${describeOwner(owners.closure)})`);
+          const idx = a.lanes.map((n) => n - 1).filter((i) => i >= 0 && i < focused.laneCount);
+          const held = shut ? [] : idx.filter((i) => focused.lockedLanes[i]);
+          if (held.length > 0 && focused.owners.closure) {
+            notApplied.push(`Lane ${held.map((i) => i + 1).join(", ")} stays closed (driven by ${describeOwner(focused.owners.closure)})`);
           }
           const free = idx.filter((i) => !held.includes(i));
           if (free.length === 0) break;
-          setClosedLanes((prev) => prev.map((c, i) => (free.includes(i) ? shut : c)));
+          focused.setClosedLanes((prev) => prev.map((c, i) => (free.includes(i) ? shut : c)));
           applied.push(`${shut ? "Closed" : "Opened"} lane ${free.map((i) => i + 1).join(", ")}`);
           break;
         }
         case "set_speed_limit":
-          if (owners.speedZone) {
-            notApplied.push(`The speed zone is driven by ${describeOwner(owners.speedZone)}`);
+          if (focused.owners.speedZone) {
+            notApplied.push(`The speed zone is driven by ${describeOwner(focused.owners.speedZone)}`);
             break;
           }
-          setSpeedLimit(a.kmh);
+          focused.setSpeedLimit(a.kmh);
           applied.push(a.kmh == null ? "Removed the speed limit" : `Speed limit ${a.kmh} km/h`);
           break;
         case "add_incident": {
           const x = (a.positionPct / 100) * segLengthM;
-          sim.addIncident(a.lane - 1, x);
-          setIncidentCount(scenarioBinding.operatorIncidents(sim).length);
+          focused.placeIncident(a.lane - 1, x);
           applied.push(`Incident in lane ${a.lane}`);
           break;
         }
         case "clear_incidents":
           // Only the operator's: a running scenario's obstacle stays until its event ends.
-          scenarioBinding.clearOperatorIncidents(sim);
-          setIncidentCount(0);
+          focused.clearIncidents();
           applied.push("Cleared incidents");
           break;
         case "set_inflow":
-          setInflow(a.vehPerHour);
+          focused.setInflow(a.vehPerHour);
           applied.push(`Inflow ${fmt(a.vehPerHour)} veh/h`);
           break;
         case "set_lane_count":
-          setLaneCount(a.lanes);
+          focused.setLaneCount(a.lanes);
           applied.push(`${a.lanes} lanes`);
           break;
         case "set_route": {
@@ -1321,163 +933,25 @@ export default function AiSandboxPage() {
     setPlan(null);
     setCommand("");
   };
-  const clearIncidents = () => {
-    const sim = simRef.current;
-    if (!sim) return;
-    // The operator's incidents only: an in-lane breakdown event removes its own when it ends.
-    scenarioBinding.clearOperatorIncidents(sim);
-    setIncidentCount(0);
-  };
-
-  // A lane a scenario event is blocking cannot be reopened; any other lane can be closed or opened as before.
-  const toggleLane = (i: number) => {
-    if (lockedLanes[i]) return;
-    setClosedLanes((prev) => prev.map((c, idx) => (idx === i ? !c : c)));
-  };
-
-  /* ── Scenario events ─────────────────────────────────────────────────────
-   * Adding stores the event with its duration already drawn; it is refused,
-   * with a message naming what it collides with, if it cannot run or needs a
-   * lever another event holds at an overlapping time. */
-  const addScenarioEvent = (spec: NewEventSpec): { ok: true; event: ScenarioEvent } | { ok: false; reason: string } => {
-    const sim = simRef.current;
-    if (!sim) return { ok: false, reason: "The simulation has not started yet." };
-    const seq = scenarioSeqRef.current + 1;
-    // The operator's own closure matters here: an event that needs the closure stretch is refused while they have one elsewhere.
-    const r = addEvent(scenarioEventsRef.current, spec, roadOf(sim, scenarioFrame), seq, { closedLanes, closurePoint: closureM, closureEnd: closureEndM });
-    if (!r.ok) return r;
-    scenarioSeqRef.current = seq;
-    scenarioEventsRef.current = r.events;
-    setScenarioEvents(r.events);
-    return { ok: true, event: r.event };
-  };
-  const removeScenarioEvent = (id: string) => {
-    scenarioEventsRef.current = removeEvent(scenarioEventsRef.current, id);
-    setScenarioEvents(scenarioEventsRef.current);
-  };
-
-  /* Skip to the next phase boundary of any scenario event. The engine is stepped
-   * without rendering, in ~25 ms slices so the page stays responsive, and the
-   * metrics are refreshed once at the end. The panel shows the simulated minutes
-   * done and left and a Cancel (cancelSkip); a rebuild stops it too. */
-  const cancelSkip = () => {
-    if (skipRef.current) skipRef.current.cancel = true;
-  };
-  const skipToNextPhase = () => {
-    const sim = simRef.current;
-    if (!sim) return;
-    if (skipRef.current) return;
-    const road = roadOf(sim, scenarioFrame);
-    const from = scenarioTimeS(sim.time, road);
-    const target = nextBoundaryAfter(scenarioEventsRef.current, road, from);
-    if (target === null) return;
-    const token = { cancel: false };
-    skipRef.current = token;
-    const what = describeBoundary(scenarioEventsRef.current, road, target, from);
-    setSkip({ label: what ? what.label : "the next phase", intervalStartS: what ? what.intervalStartS : from, targetS: target, nowS: from });
-    const finish = () => {
-      skipRef.current = null;
-      setSkip(null);
-      simAccRef.current = 0;
-    };
-    const pump = () => {
-      if (token.cancel || simRef.current !== sim) {
-        finish();
-        return;
-      }
-      const r = stepToScenarioTime(sim, scenarioFrame, target, SIM_DT, 25, () => performance.now());
-      if (!r.reached) {
-        const now = scenarioTimeS(sim.time, scenarioFrame);
-        setSkip((cur) => (cur ? { ...cur, nowS: now } : cur));
-        setTimeout(pump, 0);
-        return;
-      }
-      // On the boundary: apply the new phase (with whatever the operator has set by now), then show the result.
-      const ctx = scenarioCtxRef.current;
-      if (ctx) {
-        const applied = applyAtBoundary(scenarioBinding, sim, ctx.controls, ctx.events, ctx.frame, -Infinity);
-        scenarioDueRef.current = applied.dueS;
-        publishOwners(applied.composition ? applied.composition.owners : NO_OWNERS);
-      }
-      setMetrics(sim.metrics());
-      finish();
-    };
-    setTimeout(pump, 0);
-  };
-
-  const captureBaseline = () => {
-    if (!metrics) return;
-    const closed = eff.closedLanes
-      .map((c, i) => (c ? `L${i + 1}` : null))
-      .filter(Boolean)
-      .join(", ");
-    setBaseline({
-      avgSpeedKmh: metrics.avgSpeedKmh,
-      throughputPerMin: metrics.throughputPerMin,
-      longestQueueM: metrics.longestQueueM,
-      co2RatePerMin: metrics.co2RatePerMin,
-      avgTravelTimeS: metrics.avgTravelTimeS,
-      takenWith:
-        [
-          closed ? `${closed} closed` : null,
-          eff.speedLimitKmh != null ? `${eff.speedLimitKmh} km/h zone` : null,
-          effIncidentCount > 0 ? `${effIncidentCount} incident${effIncidentCount === 1 ? "" : "s"}` : null,
-          // The scenario events running when it was taken, and the phase each was in.
-          ...activeScenarioText,
-        ]
-          .filter(Boolean)
-          .join(" · ") || "a clear road",
-    });
-  };
-
-  /* What each folded section reports. These must read as the state itself, not
-   * as a label — "L1 closed, Km 0.27-0.60" is the reason folding is safe. */
-  const closedLaneList = eff.closedLanes
-    .map((c, i) => (c ? `L${i + 1}` : null))
-    .filter(Boolean)
-    .join(", ");
-  const interventionSummary =
-    [
-      closedLaneList ? `${closedLaneList} closed` : null,
-      closedLaneList ? `Km ${shownClosureFromKm.toFixed(2)}–${shownClosureToKm.toFixed(2)}` : null,
-      effIncidentCount > 0 ? `${effIncidentCount} incident${effIncidentCount === 1 ? "" : "s"}` : null,
-      eff.speedLimitKmh != null ? `${eff.speedLimitKmh} km/h zone` : null,
-      ...activeScenarioText,
-    ]
-      .filter(Boolean)
-      .join(" · ") || "none applied";
-  const anyIntervention = eff.closedLanes.some(Boolean) || eff.speedLimitKmh != null || effIncidentCount > 0;
+  // clearIncidents, toggleLane, addScenarioEvent, removeScenarioEvent, cancelSkip, skipToNextPhase,
+  // captureBaseline, interventionSummary and anyIntervention are all useDirectionSim's now — called
+  // per direction there, read here as focused.clearIncidents etc. (see the JSX below).
+  const laneOverridden = segmentLanes != null && focused.laneCount !== segmentLanes;
 
   /* Baseline capture is a three-step procedure and the panel now says so.
    * Throughput is counted over the run so far, so a snapshot taken seconds
    * after a rebuild records a near-zero flow — the road has not filled and
    * nobody has finished the segment yet — and every later comparison then
    * reads as a miracle. Hence the settling step, which is the one an operator
-   * would never guess at. */
-  const elapsedS = metrics?.elapsedS ?? 0;
+   * would never guess at. Reads the FOCUSED direction (see the D2 scoping note
+   * above useDirectionSim) — Phase D4 shows this per direction in Both mode. */
+  const elapsedS = focused.metrics?.elapsedS ?? 0;
   const warmedUp = elapsedS >= WARMUP_S;
-  const stepDone = [warmedUp, baseline != null, baseline != null && anyIntervention];
+  const stepDone = [warmedUp, focused.baseline != null, focused.baseline != null && focused.anyIntervention];
   const activeStep = stepDone.findIndex((d) => !d) + 1; // 0 once all are done
   const stepCls = (n: number) =>
     `sandbox-step${stepDone[n - 1] ? " is-done" : activeStep === n ? " is-now" : ""}`;
-  const recommendation = getRecommendation(metrics, baseline, [...eff.closedLanes], effIncidentCount, eff.speedLimitKmh);
-
-  // How wide the selected stretch of road actually is. Null when the corridor
-  // lane table does not cover it — see lib/nlex-lanes.ts, which is deliberately
-  // unpopulated until someone can cite a source for the real configuration.
-  const segmentLanes =
-    originExit && destExit ? lanesForSegment(originExit.km, destExit.km) : null;
-  const laneProvenance =
-    originExit && destExit ? laneSources(originExit.km, destExit.km) : [];
-  const laneOverridden = segmentLanes != null && laneCount !== segmentLanes;
-
-  // Following the road means the simulation rebuilds when the route changes, so
-  // a closure is always modelled against the right number of lanes rather than
-  // whatever the slider was last left on.
-  useEffect(() => {
-    if (segmentLanes != null) setLaneCount(segmentLanes);
-  }, [segmentLanes]);
-
+  const recommendation = getRecommendation(focused.metrics, focused.baseline, [...focused.eff.closedLanes], focused.effIncidentCount, focused.eff.speedLimitKmh);
 
   return (
     <section className="ds-content sandbox-page">
@@ -1492,7 +966,9 @@ export default function AiSandboxPage() {
           scenario starts from. */}
       <ScenarioForecastPanel
         onApplyInflow={(v, day) => {
-          setInflow(v);
+          // The forecast is one corridor prediction, not one per carriageway (D2 §3): applies to
+          // whichever direction is focused (Both mode) or the only one there is otherwise.
+          focused.setInflow(v);
           setForecastDay(day);
         }}
         onHotspot={(name, km) => {
@@ -1509,31 +985,32 @@ export default function AiSandboxPage() {
         onIncidentCoverage={setIncidentCovered}
       />
 
+      {/* Metric tiles: the FOCUSED direction (Phase D4 adds a per-direction + corridor-total view for Both mode — see the D1 report for the flow-weighted-average-speed / max-queue aggregation rules). */}
       <div className="sandbox-metric-row">
-        <MetricTile label="Active agents" value={metrics ? fmt(metrics.activeAgents) : "…"} />
+        <MetricTile label="Active agents" value={focused.metrics ? fmt(focused.metrics.activeAgents) : "…"} />
         <MetricTile
           label="Avg speed"
-          value={metrics ? `${fmt(metrics.avgSpeedKmh)} km/h` : "…"}
-          delta={baseline && metrics ? pctDelta(metrics.avgSpeedKmh, baseline.avgSpeedKmh) : null}
+          value={focused.metrics ? `${fmt(focused.metrics.avgSpeedKmh)} km/h` : "…"}
+          delta={focused.baseline && focused.metrics ? pctDelta(focused.metrics.avgSpeedKmh, focused.baseline.avgSpeedKmh) : null}
           goodWhenUp
         />
         <MetricTile
           label="Throughput"
-          value={metrics ? `${fmt(metrics.throughputPerMin)}/min` : "…"}
-          delta={baseline && metrics ? pctDelta(metrics.throughputPerMin, baseline.throughputPerMin) : null}
+          value={focused.metrics ? `${fmt(focused.metrics.throughputPerMin)}/min` : "…"}
+          delta={focused.baseline && focused.metrics ? pctDelta(focused.metrics.throughputPerMin, focused.baseline.throughputPerMin) : null}
           goodWhenUp
         />
         <MetricTile
           label="Longest queue"
-          value={metrics ? `${fmt(metrics.longestQueueM)} m` : "…"}
-          delta={baseline && metrics ? pctDelta(metrics.longestQueueM, baseline.longestQueueM) : null}
+          value={focused.metrics ? `${fmt(focused.metrics.longestQueueM)} m` : "…"}
+          delta={focused.baseline && focused.metrics ? pctDelta(focused.metrics.longestQueueM, focused.baseline.longestQueueM) : null}
         />
         <MetricTile
           label="CO₂ rate"
-          value={metrics ? `${fmt(metrics.co2RatePerMin, 1)} kg/min` : "…"}
-          delta={baseline && metrics ? pctDelta(metrics.co2RatePerMin, baseline.co2RatePerMin) : null}
+          value={focused.metrics ? `${fmt(focused.metrics.co2RatePerMin, 1)} kg/min` : "…"}
+          delta={focused.baseline && focused.metrics ? pctDelta(focused.metrics.co2RatePerMin, focused.baseline.co2RatePerMin) : null}
         />
-        <MetricTile label="Density" value={metrics ? `${fmt(metrics.densityPerKmLane)}/km/ln` : "…"} />
+        <MetricTile label="Density" value={focused.metrics ? `${fmt(focused.metrics.densityPerKmLane)}/km/ln` : "…"} />
       </div>
 
       <div className="sandbox-grid" style={{ marginTop: 14 }}>
@@ -1542,6 +1019,31 @@ export default function AiSandboxPage() {
           <div className="sandbox-head">
             <h2>Traffic Simulation</h2>
             <div>
+              {/* NB / SB / Both. Origin and destination define the km window only (see the
+                  Corridor section below) — this is the only place direction is chosen. */}
+              <div className="sandbox-speed-seg" role="tablist" aria-label="Carriageway view">
+                {(["NB", "SB", "Both"] as const).map((v) => (
+                  <button
+                    key={v}
+                    role="tab"
+                    aria-selected={view === v}
+                    className={view === v ? "active" : ""}
+                    onClick={() => setView(v)}
+                    title={v === "Both" ? "Both carriageways at once, median-separated" : v === "NB" ? "Northbound only" : "Southbound only"}
+                  >
+                    {v === "Both" ? "Both" : v}
+                  </button>
+                ))}
+              </div>
+              {view === "Both" && (
+                <div className="sandbox-speed-seg" role="tablist" aria-label="Focused carriageway">
+                  {(["NB", "SB"] as const).map((d) => (
+                    <button key={d} role="tab" aria-selected={focusedDirection === d} className={focusedDirection === d ? "active" : ""} onClick={() => setFocusedDirection(d)}>
+                      {d}
+                    </button>
+                  ))}
+                </div>
+              )}
               <div className="sandbox-speed-seg">
                 {SPEED_STEPS.map((s) => (
                   <button key={s} className={simSpeed === s ? "active" : ""} onClick={() => setSimSpeed(s)}>
@@ -1552,7 +1054,7 @@ export default function AiSandboxPage() {
               <button className="btn-primary" onClick={() => setRunning((r) => !r)}>
                 {running ? "Pause" : "Play"}
               </button>
-              <button className="btn-muted" onClick={rebuild}>
+              <button className="btn-muted" onClick={() => { nb.rebuild(); sb.rebuild(); }}>
                 Reset
               </button>
               <button
@@ -1564,22 +1066,30 @@ export default function AiSandboxPage() {
               </button>
             </div>
           </div>
+          {view === "Both" && (
+            <p className="sandbox-live-note">
+              Both mode runs NB and SB together; the controls below still show only the focused
+              direction ({focusedDirection}) — full per-direction controls and a corridor total are
+              coming next.
+            </p>
+          )}
 
           {/* Full screen hides the controls panel, so the road could be studied
               but not acted on — an operator had to leave the view to place the
               closure they were looking at. The controls that matter while
-              watching the road come with it. */}
+              watching the road come with it. Full-screen controls act on the
+              FOCUSED direction, same as the docked ones (see the note above). */}
           {expanded && (
             <div className="sandbox-fs-bar">
               <span className="k">Close lane</span>
               <div className="sandbox-lane-toggles">
-                {Array.from({ length: laneCount }, (_, i) => (
+                {Array.from({ length: focused.laneCount }, (_, i) => (
                   <button
                     key={i}
-                    className={closedLanes[i] || lockedLanes[i] ? "closed" : ""}
-                    onClick={() => toggleLane(i)}
-                    disabled={lockedLanes[i]}
-                    title={lockedLanes[i] && owners.closure ? `Driven by: ${describeOwner(owners.closure)}` : undefined}
+                    className={focused.closedLanes[i] || focused.lockedLanes[i] ? "closed" : ""}
+                    onClick={() => focused.toggleLane(i)}
+                    disabled={focused.lockedLanes[i]}
+                    title={focused.lockedLanes[i] && focused.owners.closure ? `Driven by: ${describeOwner(focused.owners.closure)}` : undefined}
                   >
                     L{i + 1}
                   </button>
@@ -1589,49 +1099,49 @@ export default function AiSandboxPage() {
               <span className="k">Closed Km</span>
               <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
                 <div style={{ width: 84 }}>
-                  <KmInput value={shownClosureFromKm} min={fromKm} max={toKm} onCommit={commitClosureStart} disabled={owners.closure !== null} />
+                  <KmInput value={focused.shownClosureFromKm} min={fromKm} max={toKm} onCommit={focused.commitClosureStart} disabled={focused.owners.closure !== null} />
                 </div>
                 <span className="k" style={{ opacity: 0.7 }}>to</span>
                 <div style={{ width: 84 }}>
                   <KmInput
-                    value={shownClosureToKm}
+                    value={focused.shownClosureToKm}
                     min={fromKm}
                     max={toKm}
-                    onCommit={commitClosureEnd}
-                    disabled={owners.closure !== null}
+                    onCommit={focused.commitClosureEnd}
+                    disabled={focused.owners.closure !== null}
                   />
                 </div>
                 <span className="k" style={{ opacity: 0.7 }}>
-                  {Math.round((shownClosureToKm - shownClosureFromKm) * 1000)} m
+                  {Math.round((focused.shownClosureToKm - focused.shownClosureFromKm) * 1000)} m
                 </span>
               </div>
-              {owners.closure && (
-                <span className="k" style={{ opacity: 0.85 }}>Driven by: {describeOwner(owners.closure)}</span>
+              {focused.owners.closure && (
+                <span className="k" style={{ opacity: 0.85 }}>Driven by: {describeOwner(focused.owners.closure)}</span>
               )}
 
               <button
-                className={`btn-muted ${placingClosure ? "active" : ""}`}
-                disabled={owners.closure !== null}
+                className={`btn-muted ${focused.placingClosure ? "active" : ""}`}
+                disabled={focused.owners.closure !== null}
                 onClick={() => {
-                  setPlacingClosure((v) => !v);
-                  setPlacingIncident(false);
+                  focused.setPlacingClosure((v) => !v);
+                  focused.setPlacingIncident(false);
                 }}
               >
-                {placingClosure ? (closureDraftKm == null ? "Click start…" : "Click end…") : "Set closed stretch"}
+                {focused.placingClosure ? (focused.closureDraftKm == null ? "Click start…" : "Click end…") : "Set closed stretch"}
               </button>
               <button
-                className={`btn-muted ${placingIncident ? "active" : ""}`}
+                className={`btn-muted ${focused.placingIncident ? "active" : ""}`}
                 onClick={() => {
-                  setPlacingIncident((v) => !v);
-                  setPlacingClosure(false);
+                  focused.setPlacingIncident((v) => !v);
+                  focused.setPlacingClosure(false);
                 }}
               >
-                {placingIncident ? "Click a lane…" : "Drop incident"}
+                {focused.placingIncident ? "Click a lane…" : "Drop incident"}
               </button>
-              <button className="btn-muted" onClick={clearIncidents} disabled={incidentCount === 0}>
-                Clear ({incidentCount})
+              <button className="btn-muted" onClick={focused.clearIncidents} disabled={focused.incidentCount === 0}>
+                Clear ({focused.incidentCount})
               </button>
-              <ClosureHint placing={placingClosure} draftKm={closureDraftKm} anyClosed={closedLanes.some(Boolean)} laneCount={laneCount} dark />
+              <ClosureHint placing={focused.placingClosure} draftKm={focused.closureDraftKm} anyClosed={focused.closedLanes.some(Boolean)} laneCount={focused.laneCount} dark />
             </div>
           )}
 
@@ -1643,11 +1153,12 @@ export default function AiSandboxPage() {
               With DOCKED_LANE_MAX above LANE_PX, render() widens the lanes to
               use whatever height the canvas is given, so the card can stretch
               and the road grows to match. The min-height keeps the road at its
-              usual size whenever the rail is shorter than it. */}
+              usual size whenever the rail is shorter than it.
+              Draws the FOCUSED direction (Phase D3 draws both carriageways). */}
           <canvas
             ref={canvasRef}
-            className={`sandbox-canvas ${placingIncident || placingClosure ? "placing" : ""}`}
-            style={expanded ? undefined : { minHeight: laneCount * LANE_PX + CANVAS_PAD * 2 }}
+            className={`sandbox-canvas ${focused.placingIncident || focused.placingClosure ? "placing" : ""}`}
+            style={expanded ? undefined : { minHeight: focused.laneCount * LANE_PX + CANVAS_PAD * 2 }}
             onClick={placeIncidentAt}
             onMouseMove={previewClosureAt}
           />
@@ -1661,15 +1172,15 @@ export default function AiSandboxPage() {
               demand exceeds what the segment can take, the surplus queues
               upstream where nothing draws it, so the road can report a healthy
               speed precisely because a quarter of the traffic never got on. */}
-          {metrics && !metrics.warm && (
+          {focused.metrics && !focused.metrics.warm && (
             <p className="sandbox-live-note">
               Warming up &mdash; the road is still filling, so these figures are not yet the
-              scenario. {Math.max(0, Math.ceil(WARMUP_S - metrics.elapsedS))}s to go.
+              scenario. {Math.max(0, Math.ceil(WARMUP_S - focused.metrics.elapsedS))}s to go.
             </p>
           )}
-          {metrics && metrics.warm && metrics.unmetVehPerHour > 1 && (
+          {focused.metrics && focused.metrics.warm && focused.metrics.unmetVehPerHour > 1 && (
             <p className="sandbox-live-note warn">
-              {Math.round(metrics.unmetVehPerHour).toLocaleString()} veh/h of demand cannot
+              {Math.round(focused.metrics.unmetVehPerHour).toLocaleString()} veh/h of demand cannot
               enter: the segment is at capacity and the queue for it forms upstream, outside
               this model. The speeds shown describe only the traffic that got on.
             </p>
@@ -1686,20 +1197,20 @@ export default function AiSandboxPage() {
               tiles, which is easy to miss and impossible to read as a whole.
               Laid out side by side, the effect of an intervention is one
               glance rather than four comparisons. */}
-          {baseline && metrics && anyIntervention && (
+          {focused.baseline && focused.metrics && focused.anyIntervention && (
             <div className="sandbox-compare">
               <div className="sandbox-compare-head">
                 <b>Baseline vs now</b>
                 <span>
-                  {baseline.takenWith} &rarr; {interventionSummary}
+                  {focused.baseline.takenWith} &rarr; {focused.interventionSummary}
                 </span>
               </div>
               <div className="sandbox-compare-rows">
                 {([
-                  ["Avg speed", baseline.avgSpeedKmh, metrics.avgSpeedKmh, "km/h", true],
-                  ["Throughput", baseline.throughputPerMin, metrics.throughputPerMin, "/min", true],
-                  ["Longest queue", baseline.longestQueueM, metrics.longestQueueM, "m", false],
-                  ["CO₂ rate", baseline.co2RatePerMin, metrics.co2RatePerMin, "kg/min", false],
+                  ["Avg speed", focused.baseline.avgSpeedKmh, focused.metrics.avgSpeedKmh, "km/h", true],
+                  ["Throughput", focused.baseline.throughputPerMin, focused.metrics.throughputPerMin, "/min", true],
+                  ["Longest queue", focused.baseline.longestQueueM, focused.metrics.longestQueueM, "m", false],
+                  ["CO₂ rate", focused.baseline.co2RatePerMin, focused.metrics.co2RatePerMin, "kg/min", false],
                 ] as [string, number, number, string, boolean][]).map(
                   ([label, was, now, unit, higherIsBetter]) => {
                     const pct = was === 0 ? null : ((now - was) / was) * 100;
@@ -1763,7 +1274,7 @@ export default function AiSandboxPage() {
             title="Corridor"
             open={openSection === "corridor"}
             onToggle={() => toggleSection("corridor")}
-            summary={`${originExit ? displayExitName(originExit.exit_name) : "?"} → ${destExit ? displayExitName(destExit.exit_name) : "?"} · ${direction} · ${laneCount} lanes · ${fmt(inflow)} veh/hr`}
+            summary={`${originExit ? displayExitName(originExit.exit_name) : "?"} → ${destExit ? displayExitName(destExit.exit_name) : "?"} · ${view} · ${focused.laneCount} lanes · ${fmt(focused.inflow)} veh/hr`}
           >
           {/* Side by side: two full-width selects stacked cost a whole row of
               rail height for no gain, and a route reads better as one line. */}
@@ -1797,14 +1308,14 @@ export default function AiSandboxPage() {
               fleet mix both. It is also the question they actually have: not
               "what happens at 4,500 veh/h" but "which hour is cheapest to
               close this lane". */}
-          {demand && hourOfDay != null && (
+          {focused.demand && hourOfDay != null && (
             <div className="sandbox-hour">
               <div className="sandbox-hour-head">
                 <span>Hour of day</span>
                 <b>
                   {String(hourOfDay).padStart(2, "0")}:00 &middot;{" "}
-                  {activeHour?.vehPerHour.toLocaleString()} veh/h
-                  {hourOfDay === demand.peakHour ? " · peak" : ""}
+                  {focused.activeHour?.vehPerHour.toLocaleString()} veh/h
+                  {hourOfDay === focused.demand.peakHour ? " · peak" : ""}
                 </b>
               </div>
               <input
@@ -1817,62 +1328,70 @@ export default function AiSandboxPage() {
                 aria-label="Hour of day"
               />
               <p className="sandbox-hour-note">
-                {activeHour
-                  ? `${(activeHour.mix[2] * 100 + activeHour.mix[3] * 100).toFixed(0)}% heavy vehicles at this hour. `
+                {focused.activeHour
+                  ? `${(focused.activeHour.mix[2] * 100 + focused.activeHour.mix[3] * 100).toFixed(0)}% heavy vehicles at this hour. `
                   : ""}
-                Measured at {displayExitName(String(nearestExit?.exit_name ?? ""))} over {demand.days.toLocaleString()} days;
-                peak {demand.peakVehPerHour.toLocaleString()} veh/h at{" "}
-                {String(demand.peakHour).padStart(2, "0")}:00, {demand.peakingFactor.toFixed(2)}&times; the daily mean.
+                Measured at {displayExitName(String(nearestExit?.exit_name ?? ""))} over {focused.demand.days.toLocaleString()} days;
+                peak {focused.demand.peakVehPerHour.toLocaleString()} veh/h at{" "}
+                {String(focused.demand.peakHour).padStart(2, "0")}:00, {focused.demand.peakingFactor.toFixed(2)}&times; the daily mean.
               </p>
               {/* Where the inflow figure came from. The panel used to show a
                   number with no basis, and the basis turned out to be wrong —
                   an on-ramp volume standing in for a through-flow — which is
                   precisely the kind of error a visible provenance line catches
                   before it reaches a recommendation. */}
-              {inflowBasis && <p className="sandbox-hour-note src">{inflowBasis}</p>}
+              {focused.inflowBasis && <p className="sandbox-hour-note src">{focused.inflowBasis}</p>}
             </div>
           )}
 
-          {/* Direction is derived from the route, so it belongs with the route
-              rather than in a titled group of its own. */}
-          <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 8 }}>
-            <button
-              className="btn-muted"
-              onClick={() => { const o = origin; setOrigin(destination); setDestination(o); }}
-              title="Reverse the journey. Southbound runs down the km posts, so Balintawak becomes the destination."
-              style={{ flex: "0 0 auto", padding: "4px 10px" }}
-            >
-              ⇄ Swap
-            </button>
-            <span style={{ fontSize: "0.78rem", fontWeight: 700, color: "#0284c7" }}>{dirLabel}</span>
-            <span className="sandbox-slider-hint" style={{ margin: 0 }}>
-              carriageway
-            </span>
-          </div>
-
           <div className="sandbox-slider-group">
             <div className="sandbox-slider-header">
-              <span className="sandbox-slider-label">Inflow</span>
-              <span className="sandbox-slider-value" style={{ color: "var(--brand-primary)" }}>{fmt(inflow)} veh/hr</span>
+              <span className="sandbox-slider-label">{view === "Both" ? `Inflow (${focusDirection})` : "Inflow"}</span>
+              <span className="sandbox-slider-value" style={{ color: "var(--brand-primary)" }}>{fmt(focused.inflow)} veh/hr</span>
             </div>
             <input
               type="range"
               min={1000}
               max={8000}
               step={100}
-              value={inflow}
-              onChange={(e) => setInflow(Number(e.target.value))}
+              value={focused.inflow}
+              onChange={(e) => focused.setInflow(Number(e.target.value))}
               className="sandbox-range inflow"
-              style={{ "--range-pct": `${((inflow - 1000) / 7000) * 100}%` } as React.CSSProperties}
+              style={{ "--range-pct": `${((focused.inflow - 1000) / 7000) * 100}%` } as React.CSSProperties}
             />
             <span className="sandbox-slider-hint">
               {forecastDay
                 ? `Forecast for ${new Date(`${forecastDay}T00:00:00`).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}`
-                : dataAnchor
-                  ? `Observed NLEX peak ≈ ${fmt(dataAnchor)} veh/hr`
+                : focused.dataAnchor
+                  ? `Observed NLEX peak ≈ ${fmt(focused.dataAnchor)} veh/hr`
                   : "Vehicle entry rate"}
             </span>
           </div>
+          {/* Both mode: the OTHER direction's inflow, right below the focused one's — D2.3's "show
+              both inflow sliders in Both mode". Switching focus (the NB/SB tabs above the canvas)
+              brings that direction's full slider (with its own basis/forecast hint) into the primary
+              slot above; this one stays a compact second control so both are always reachable without
+              a focus switch just to nudge a number. */}
+          {view === "Both" && (
+            <div className="sandbox-slider-group">
+              <div className="sandbox-slider-header">
+                <span className="sandbox-slider-label">Inflow ({focusDirection === "NB" ? "SB" : "NB"})</span>
+                <span className="sandbox-slider-value" style={{ color: "var(--brand-primary)" }}>
+                  {fmt(byDirection[focusDirection === "NB" ? "SB" : "NB"].inflow)} veh/hr
+                </span>
+              </div>
+              <input
+                type="range"
+                min={1000}
+                max={8000}
+                step={100}
+                value={byDirection[focusDirection === "NB" ? "SB" : "NB"].inflow}
+                onChange={(e) => byDirection[focusDirection === "NB" ? "SB" : "NB"].setInflow(Number(e.target.value))}
+                className="sandbox-range inflow"
+                style={{ "--range-pct": `${((byDirection[focusDirection === "NB" ? "SB" : "NB"].inflow - 1000) / 7000) * 100}%` } as React.CSSProperties}
+              />
+            </div>
+          )}
 
           {/* The stretch under study, as km-posts. An operator asks about
               "km 3.5 to km 6"; the simulation is parameterised on length, so it
@@ -1971,28 +1490,24 @@ export default function AiSandboxPage() {
             )}
           </div>
 
+          {/* Direction used to be DERIVED from origin > destination, with a Swap button to reverse
+              it — removed in Phase D2, not repurposed: origin/destination now define the km window
+              only (routeFromKm/routeToKm already take the min/max regardless of which was picked
+              first), so swapping them changes nothing to swap. Which carriageway(s) run is the NB /
+              SB / Both selector above the road. This block is read-only status, kept here because an
+              operator scanning the Corridor section for "which way" should still find an answer. */}
           <div className="sandbox-slider-group">
             <div className="sandbox-slider-header">
               <span className="sandbox-slider-label">Carriageway</span>
               <span className="sandbox-slider-value" style={{ color: "#0ea5e9" }}>
-                {direction === "NB" ? "Northbound" : "Southbound"}
+                {view === "Both" ? `Both (focused: ${focusDirection === "NB" ? "Northbound" : "Southbound"})` : focusDirection === "NB" ? "Northbound" : "Southbound"}
               </span>
             </div>
-            <div className="sandbox-btn-row">
-              <button
-                className="btn-muted"
-                style={{ flex: 1 }}
-                onClick={() => { const o = origin; setOrigin(destination); setDestination(o); }}
-                title="Reverse the journey. Southbound means travelling down the km posts, so Balintawak becomes the destination rather than the origin."
-              >
-                Swap origin &amp; destination
-              </button>
-            </div>
             <span className="sandbox-slider-hint">
-              NLEX runs Balintawak (Km 0) north to Sta. Ines, so a route starting at the
-              higher km post is southbound. Inflow re-anchors to that carriageway&apos;s
-              observed volume; traffic is always drawn left to right and the km axis
-              reverses southbound.
+              NLEX runs Balintawak (Km 0) north to Sta. Ines. Use the NB / SB / Both tabs above the
+              road to choose. The km axis is fixed — Km 0 is always on-screen-left — and it is the
+              TRAFFIC that runs right to left when southbound; each direction&apos;s inflow anchors to
+              its own observed volume, independently.
             </span>
           </div>
 
@@ -2042,9 +1557,9 @@ export default function AiSandboxPage() {
 
           <div className="sandbox-slider-group">
             <div className="sandbox-slider-header">
-              <span className="sandbox-slider-label">Lanes</span>
+              <span className="sandbox-slider-label">{view === "Both" ? `Lanes (${focusDirection})` : "Lanes"}</span>
               <span className="sandbox-slider-value" style={{ color: laneOverridden ? "#b45309" : "#16a34a" }}>
-                {laneCount}
+                {focused.laneCount}
               </span>
             </div>
             <input
@@ -2052,10 +1567,10 @@ export default function AiSandboxPage() {
               min={2}
               max={5}
               step={1}
-              value={laneCount}
-              onChange={(e) => setLaneCount(Number(e.target.value))}
+              value={focused.laneCount}
+              onChange={(e) => focused.setLaneCount(Number(e.target.value))}
               className="sandbox-range lanes"
-              style={{ "--range-pct": `${((laneCount - 2) / 3) * 100}%` } as React.CSSProperties}
+              style={{ "--range-pct": `${((focused.laneCount - 2) / 3) * 100}%` } as React.CSSProperties}
             />
             <span className="sandbox-slider-hint">
               {segmentLanes == null
@@ -2065,6 +1580,27 @@ export default function AiSandboxPage() {
                   : `Matches the corridor between ${displayExitName(originExit?.exit_name ?? "")} and ${displayExitName(destExit?.exit_name ?? "")}${laneProvenance.length ? ` · ${laneProvenance.join(", ")}` : ""}. Changing lanes resets the run.`}
             </span>
           </div>
+          {/* Both mode: the other direction's own lane count, independently adjustable — D2.4's "per-direction lane count, defaulting to the same value" (both start from segmentLanes; either can diverge from here). */}
+          {view === "Both" && (
+            <div className="sandbox-slider-group">
+              <div className="sandbox-slider-header">
+                <span className="sandbox-slider-label">Lanes ({focusDirection === "NB" ? "SB" : "NB"})</span>
+                <span className="sandbox-slider-value" style={{ color: "#16a34a" }}>
+                  {byDirection[focusDirection === "NB" ? "SB" : "NB"].laneCount}
+                </span>
+              </div>
+              <input
+                type="range"
+                min={2}
+                max={5}
+                step={1}
+                value={byDirection[focusDirection === "NB" ? "SB" : "NB"].laneCount}
+                onChange={(e) => byDirection[focusDirection === "NB" ? "SB" : "NB"].setLaneCount(Number(e.target.value))}
+                className="sandbox-range lanes"
+                style={{ "--range-pct": `${((byDirection[focusDirection === "NB" ? "SB" : "NB"].laneCount - 2) / 3) * 100}%` } as React.CSSProperties}
+              />
+            </div>
+          )}
 
           </RailSection>
 
@@ -2072,18 +1608,19 @@ export default function AiSandboxPage() {
             title="Interventions"
             open={openSection === "interventions"}
             onToggle={() => toggleSection("interventions")}
-            summary={interventionSummary}
+            summary={focused.interventionSummary}
           >
 
+          {/* Every control here acts on the FOCUSED direction (Phase D4 splits this per direction for Both mode). */}
           <span className="sandbox-mini-label">Close a lane (traffic must merge out)</span>
           <div className="sandbox-lane-toggles">
-            {Array.from({ length: laneCount }, (_, i) => (
+            {Array.from({ length: focused.laneCount }, (_, i) => (
               <button
                 key={i}
-                className={closedLanes[i] || lockedLanes[i] ? "closed" : ""}
-                onClick={() => toggleLane(i)}
-                disabled={lockedLanes[i]}
-                title={lockedLanes[i] && owners.closure ? `Driven by: ${describeOwner(owners.closure)}` : undefined}
+                className={focused.closedLanes[i] || focused.lockedLanes[i] ? "closed" : ""}
+                onClick={() => focused.toggleLane(i)}
+                disabled={focused.lockedLanes[i]}
+                title={focused.lockedLanes[i] && focused.owners.closure ? `Driven by: ${describeOwner(focused.owners.closure)}` : undefined}
               >
                 L{i + 1}
               </button>
@@ -2092,23 +1629,23 @@ export default function AiSandboxPage() {
 
           <div style={{ marginTop: 8 }}>
             <span className="sandbox-mini-label">
-              Closed from Km {shownClosureFromKm.toFixed(2)} to Km {shownClosureToKm.toFixed(2)} ·{" "}
-              {Math.round((shownClosureToKm - shownClosureFromKm) * 1000)} m
+              Closed from Km {focused.shownClosureFromKm.toFixed(2)} to Km {focused.shownClosureToKm.toFixed(2)} ·{" "}
+              {Math.round((focused.shownClosureToKm - focused.shownClosureFromKm) * 1000)} m
             </span>
-            {owners.closure && (
+            {focused.owners.closure && (
               <p className="sandbox-live-note">
-                Driven by: {describeOwner(owners.closure)}. The stretch is locked. You can close more lanes on it; the lanes
+                Driven by: {describeOwner(focused.owners.closure)}. The stretch is locked. You can close more lanes on it; the lanes
                 the event blocks stay closed until it moves on.
               </p>
             )}
             <div style={{ display: "flex", gap: 8, marginTop: 4 }}>
               <label style={{ flex: 1, minWidth: 0 }}>
                 <span className="sandbox-slider-hint" style={{ display: "block", marginBottom: 3 }}>From km</span>
-                <KmInput value={shownClosureFromKm} min={fromKm} max={toKm} onCommit={commitClosureStart} disabled={owners.closure !== null} />
+                <KmInput value={focused.shownClosureFromKm} min={fromKm} max={toKm} onCommit={focused.commitClosureStart} disabled={focused.owners.closure !== null} />
               </label>
               <label style={{ flex: 1, minWidth: 0 }}>
                 <span className="sandbox-slider-hint" style={{ display: "block", marginBottom: 3 }}>To km</span>
-                <KmInput value={shownClosureToKm} min={fromKm} max={toKm} onCommit={commitClosureEnd} disabled={owners.closure !== null} />
+                <KmInput value={focused.shownClosureToKm} min={fromKm} max={toKm} onCommit={focused.commitClosureEnd} disabled={focused.owners.closure !== null} />
               </label>
             </div>
             {/* The instruction that used to sit here ran to three wrapped lines
@@ -2124,29 +1661,29 @@ export default function AiSandboxPage() {
               as one cluster and cost a row less height. */}
           <div className="sandbox-btn-row sandbox-btn-row-3">
             <button
-              className={`btn-muted ${placingClosure ? "active" : ""}`}
+              className={`btn-muted ${focused.placingClosure ? "active" : ""}`}
               title="Traffic merges out before the start and the lane reopens after the end. Type the Km range above, or press this and click the road twice — start, then end."
-              disabled={owners.closure !== null}
+              disabled={focused.owners.closure !== null}
               onClick={() => {
-                setPlacingClosure((p) => !p);
-                setPlacingIncident(false);
+                focused.setPlacingClosure((p) => !p);
+                focused.setPlacingIncident(false);
               }}
             >
-              {placingClosure ? (closureDraftKm == null ? "Click start…" : "Click end…") : "Set stretch"}
+              {focused.placingClosure ? (focused.closureDraftKm == null ? "Click start…" : "Click end…") : "Set stretch"}
             </button>
             <button
-              className={`btn-muted ${placingIncident ? "active" : ""}`}
+              className={`btn-muted ${focused.placingIncident ? "active" : ""}`}
               title="Drop a stopped vehicle on a lane to see how traffic behaves around it."
               onClick={togglePlacing}
             >
-              {placingIncident ? "Placing…" : "Drop incident"}
+              {focused.placingIncident ? "Placing…" : "Drop incident"}
             </button>
-            <button className="btn-muted" onClick={clearIncidents} disabled={incidentCount === 0}>
-              Clear ({incidentCount})
+            <button className="btn-muted" onClick={focused.clearIncidents} disabled={focused.incidentCount === 0}>
+              Clear ({focused.incidentCount})
             </button>
           </div>
-          <ClosureHint placing={placingClosure} draftKm={closureDraftKm} anyClosed={closedLanes.some(Boolean)} laneCount={laneCount} />
-          {placingIncident && (
+          <ClosureHint placing={focused.placingClosure} draftKm={focused.closureDraftKm} anyClosed={focused.closedLanes.some(Boolean)} laneCount={focused.laneCount} />
+          {focused.placingIncident && (
             <p className="sandbox-place-hint">
               Click a lane on the simulation to drop an incident · Esc to cancel
             </p>
@@ -2156,12 +1693,12 @@ export default function AiSandboxPage() {
             <div className="sandbox-slider-header">
               <span className="sandbox-slider-label">Speed limit zone</span>
               <span className="sandbox-slider-value" style={{ color: "#ea580c" }}>
-                {shownSpeedLimit == null ? "off" : `${shownSpeedLimit} km/h`}
+                {focused.shownSpeedLimit == null ? "off" : `${focused.shownSpeedLimit} km/h`}
               </span>
             </div>
-            {owners.speedZone && (
+            {focused.owners.speedZone && (
               <p className="sandbox-live-note">
-                Driven by: {describeOwner(owners.speedZone)}. The zone and its limit are locked until the event ends.
+                Driven by: {describeOwner(focused.owners.speedZone)}. The zone and its limit are locked until the event ends.
               </p>
             )}
             <input
@@ -2169,30 +1706,30 @@ export default function AiSandboxPage() {
               min={20}
               max={100}
               step={5}
-              value={shownSpeedLimit ?? 100}
-              onChange={(e) => setSpeedLimit(Number(e.target.value) >= 100 ? null : Number(e.target.value))}
-              disabled={owners.speedZone !== null}
+              value={focused.shownSpeedLimit ?? 100}
+              onChange={(e) => focused.setSpeedLimit(Number(e.target.value) >= 100 ? null : Number(e.target.value))}
+              disabled={focused.owners.speedZone !== null}
               className="sandbox-range capacity"
               title="Slide to 100 to disable the zone."
-              style={{ "--range-pct": `${(((shownSpeedLimit ?? 100) - 20) / 80) * 100}%` } as React.CSSProperties}
+              style={{ "--range-pct": `${(((focused.shownSpeedLimit ?? 100) - 20) / 80) * 100}%` } as React.CSSProperties}
             />
             {/* "Slide to 100 to disable" was a whole line spent restating the
                 value readout beside the title, which already says "off" the
                 moment the zone is disabled. It survives as the slider's own
                 tooltip. */}
-            {shownSpeedLimit != null && (
+            {focused.shownSpeedLimit != null && (
               <div style={{ display: "flex", gap: 8, marginTop: 6 }}>
                 <label style={{ flex: 1, minWidth: 0 }}>
                   <span className="sandbox-slider-hint" style={{ display: "block", marginBottom: 3 }}>
                     Zone from km
                   </span>
-                  <KmInput value={shownZoneFromKm} min={fromKm} max={toKm} onCommit={setZoneFromKm} disabled={owners.speedZone !== null} />
+                  <KmInput value={focused.shownZoneFromKm} min={fromKm} max={toKm} onCommit={focused.setZoneFromKm} disabled={focused.owners.speedZone !== null} />
                 </label>
                 <label style={{ flex: 1, minWidth: 0 }}>
                   <span className="sandbox-slider-hint" style={{ display: "block", marginBottom: 3 }}>
                     Zone to km
                   </span>
-                  <KmInput value={shownZoneToKm} min={fromKm} max={toKm} onCommit={setZoneToKm} disabled={owners.speedZone !== null} />
+                  <KmInput value={focused.shownZoneToKm} min={fromKm} max={toKm} onCommit={focused.setZoneToKm} disabled={focused.owners.speedZone !== null} />
                 </label>
               </div>
             )}
@@ -2205,28 +1742,33 @@ export default function AiSandboxPage() {
             open={openSection === "scenarios"}
             onToggle={() => toggleSection("scenarios")}
             summary={
-              scenarioEvents.length === 0
+              focused.scenarioEvents.length === 0
                 ? "none"
-                : `${scenarioEvents.length} event${scenarioEvents.length === 1 ? "" : "s"} · ${activeScenarioText.length > 0 ? activeScenarioText[0] : "none running"}`
+                : `${focused.scenarioEvents.length} event${focused.scenarioEvents.length === 1 ? "" : "s"} · ${focused.activeScenarioText.length > 0 ? focused.activeScenarioText[0] : "none running"}`
             }
           >
+            {/* Events for the FOCUSED direction only — its own bucket (D2 correction #1: an
+                event carries its direction explicitly AND lives in that direction's list).
+                Phase D4 adds the picker (defaulting to the viewed direction, required in Both
+                mode); for now every event this panel creates is stamped with focusDirection. */}
             <ScenarioPanel
-              events={scenarioEvents}
-              owners={owners}
-              road={scenarioRoad}
-              nowS={scenarioNowS}
-              laneCount={laneCount}
+              events={focused.scenarioEvents}
+              owners={focused.owners}
+              road={focused.scenarioRoad}
+              direction={focusDirection}
+              nowS={focused.scenarioNowS}
+              laneCount={focused.laneCount}
               fromKm={fromKm}
               toKm={toKm}
-              kmAtPct={(pct) => kmAt((spanM * pct) / 100)}
-              manualClosure={{ closedLanes, closurePoint: closureM, closureEnd: closureEndM }}
-              nextSeq={scenarioSeqRef.current + 1}
-              onAdd={addScenarioEvent}
-              onRemove={removeScenarioEvent}
-              skip={skip}
-              canSkip={nextBoundaryAfter(scenarioEvents, scenarioRoad, scenarioNowS) !== null}
-              onSkip={skipToNextPhase}
-              onCancelSkip={cancelSkip}
+              kmAtPct={(pct) => focused.kmAt((focused.spanM * pct) / 100)}
+              manualClosure={{ closedLanes: focused.closedLanes, closurePoint: focused.manualControls.closurePoint, closureEnd: focused.manualControls.closureEnd }}
+              nextSeq={focused.scenarioSeqRef.current + 1}
+              onAdd={focused.addScenarioEvent}
+              onRemove={focused.removeScenarioEvent}
+              skip={focused.skip}
+              canSkip={nextBoundaryAfter(focused.scenarioEvents, focused.scenarioRoad, focused.scenarioNowS) !== null}
+              onSkip={focused.skipToNextPhase}
+              onCancelSkip={focused.cancelSkip}
             />
           </RailSection>
 
@@ -2234,7 +1776,7 @@ export default function AiSandboxPage() {
             title="Baseline comparison"
             open={openSection === "baseline"}
             onToggle={() => toggleSection("baseline")}
-            summary={baseline ? `${fmt(baseline.avgSpeedKmh)} km/h · ${fmt(baseline.throughputPerMin)}/min captured` : "not captured"}
+            summary={focused.baseline ? `${fmt(focused.baseline.avgSpeedKmh)} km/h · ${fmt(focused.baseline.throughputPerMin)}/min captured` : "not captured"}
           >
           {/* This was a lone "Capture baseline" button whose only explanation
               lived in a title tooltip — invisible unless hovered, so nothing on
@@ -2256,7 +1798,7 @@ export default function AiSandboxPage() {
                   <i>
                     Throughput counts vehicles finishing the segment, so it needs about a
                     minute of running before it means anything.
-                    {metrics ? ` ${Math.ceil(Math.max(0, WARMUP_S - elapsedS))}s to go.` : ""}
+                    {focused.metrics ? ` ${Math.ceil(Math.max(0, WARMUP_S - elapsedS))}s to go.` : ""}
                   </i>
                 )}
               </div>
@@ -2266,10 +1808,10 @@ export default function AiSandboxPage() {
               <span className="n">{stepDone[1] ? "✓" : "2"}</span>
               <div className="t">
                 <b>Capture the &ldquo;before&rdquo;</b>
-                {baseline ? (
+                {focused.baseline ? (
                   <i>
-                    Recorded {fmt(baseline.avgSpeedKmh)} km/h · {fmt(baseline.throughputPerMin)}/min
-                    with {baseline.takenWith}.
+                    Recorded {fmt(focused.baseline.avgSpeedKmh)} km/h · {fmt(focused.baseline.throughputPerMin)}/min
+                    with {focused.baseline.takenWith}.
                   </i>
                 ) : activeStep === 2 ? (
                   <i>Freezes the current numbers for comparison. Nothing in the simulation changes.</i>
@@ -2277,14 +1819,14 @@ export default function AiSandboxPage() {
                 <div className="sandbox-btn-row">
                   <button
                     className="btn-primary"
-                    onClick={captureBaseline}
-                    disabled={!metrics}
+                    onClick={focused.captureBaseline}
+                    disabled={!focused.metrics}
                     style={{ marginLeft: 0 }}
                   >
-                    {baseline ? "Re-capture" : "Capture baseline"}
+                    {focused.baseline ? "Re-capture" : "Capture baseline"}
                   </button>
-                  {baseline && (
-                    <button className="btn-muted" onClick={() => setBaseline(null)}>
+                  {focused.baseline && (
+                    <button className="btn-muted" onClick={() => focused.setBaseline(null)}>
                       Clear
                     </button>
                   )}
@@ -2298,7 +1840,7 @@ export default function AiSandboxPage() {
                 <b>Change something, then read the difference</b>
                 {stepDone[2] ? (
                   <i>
-                    Comparing {baseline?.takenWith} &rarr; {interventionSummary}. The
+                    Comparing {focused.baseline?.takenWith} &rarr; {focused.interventionSummary}. The
                     before/after table is under the road.
                   </i>
                 ) : activeStep === 3 ? (
@@ -2344,7 +1886,7 @@ export default function AiSandboxPage() {
             <button
               className="btn-primary"
               onClick={runReplications}
-              disabled={scenarioEvents.length > 0}
+              disabled={focused.scenarioEvents.length > 0}
               style={{ marginLeft: 0 }}
             >
               {repProgress != null ? "Stop" : "Run"}
@@ -2353,7 +1895,7 @@ export default function AiSandboxPage() {
               <span className="sandbox-reps-prog">{(repProgress * 100).toFixed(0)}%</span>
             )}
           </div>
-          {scenarioEvents.length > 0 && (
+          {focused.scenarioEvents.length > 0 && (
             <p className="sandbox-reps-warn">{"Confidence runs don't yet support timed events."}</p>
           )}
           {repResult && (

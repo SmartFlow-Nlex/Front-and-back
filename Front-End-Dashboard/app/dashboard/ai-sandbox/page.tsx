@@ -70,6 +70,15 @@ const CAR_M = 4.5;
 const RAMP_GUTTER_PX = 46; // room above/below the road for ramps and their tags
 const AXIS_H = 22; // the km scale, printed beside the carriageway
 
+/**
+ * Both mode's median: the shared km axis (AXIS_H) plus a visible barrier
+ * stripe (18px — thick enough to read as a physical divider, not a stray
+ * line) between the two carriageways. One gutter, not two: NB and SB each
+ * already reserve their OWN ramp gutter on their outer edge (see
+ * `dualRoadLayout`), so the median only ever needs to hold the axis.
+ */
+const MEDIAN_GUTTER_PX = AXIS_H + 18;
+
 /* ── A note on the vertical scale, because it has been got wrong twice ──────
  *
  * The canvas cannot be to scale in both axes: 600 m across 1,900 px is
@@ -122,6 +131,71 @@ function roadLayout(opts: {
   const roadTop =
     spaceAbove + Math.max(0, (cssH - spaceAbove - spaceBelow - roadH) / 2);
   return { rampGutter, laneH, roadH, roadTop, mToPx };
+}
+
+/**
+ * Both mode's geometry: two carriageways stacked in ONE canvas with a shared
+ * median between them — NB on top, SB below, each keeping its own outer ramp
+ * gutter (NB's above, SB's below, exactly roadLayout's existing convention),
+ * with the km axis shared in the median rather than duplicated per side.
+ *
+ * `laneH` is ONE value for both carriageways, not two independently-fitted
+ * ones: a 4-lane carriageway and a 5-lane one stacked at different lane
+ * heights would draw a false step in the median where none exists on the
+ * road, and it is what turns "8 lanes" into one picture of one road rather
+ * than two unrelated diagrams sharing a canvas. It is fitted to whichever
+ * side needs the most room — laneH * (lanesNB + lanesSB) is the total road
+ * height the budget is divided by.
+ */
+function dualRoadLayout(opts: {
+  cssW: number;
+  cssH: number;
+  lanesNB: number;
+  lanesSB: number;
+  segLenM: number;
+  exitCount: number;
+  maxLaneH: number;
+}) {
+  const { cssW, cssH, lanesNB, lanesSB, segLenM, exitCount, maxLaneH } = opts;
+  // EXITS is one corridor-wide list shared by both directions (SharedRoadInputs),
+  // so whether the gutter is needed at all is the same question for NB and SB —
+  // there is no case where one carriageway has ramps in view and the other does
+  // not, for the same km window.
+  const rampGutter = exitCount > 0 ? RAMP_GUTTER_PX : 0;
+  const mToPx = segLenM > 0 ? cssW / segLenM : 1;
+  const totalLanes = Math.max(1, lanesNB + lanesSB);
+  const laneH = Math.max(
+    6,
+    Math.min(
+      (cssH - CANVAS_PAD * 2 - rampGutter * 2 - MEDIAN_GUTTER_PX) / totalLanes,
+      maxLaneH,
+    ),
+  );
+  const nbRoadH = laneH * lanesNB;
+  const sbRoadH = laneH * lanesSB;
+  const nbRoadTop = CANVAS_PAD + rampGutter;
+  const medianTop = nbRoadTop + nbRoadH;
+  const sbRoadTop = medianTop + MEDIAN_GUTTER_PX;
+  return { rampGutter, laneH, nbRoadH, sbRoadH, nbRoadTop, medianTop, sbRoadTop, mToPx };
+}
+
+/**
+ * Where an engine lane index draws vertically, within a carriageway block
+ * that starts at `roadTop`. Plain (non-reversed) matches every single-
+ * direction carriageway there has ever been: index 0 (operator lane 1, the
+ * innermost lane per LANE1_IS_INNERMOST) at the top of the block.
+ *
+ * `reverseLanes` is Both mode's NB carriageway ONLY. NB is drawn above the
+ * median, so the block's BOTTOM edge is the one actually next to the median
+ * — reversing which end lane 0 draws at is what keeps "lane 1, innermost"
+ * true on the drawn road instead of just true in the data. SB sits below the
+ * median, so its top edge is already the median-adjacent one; SB never
+ * reverses, and single-direction NB/SB never reverses either (roadLayout()
+ * callers all pass false, unchanged from before D3).
+ */
+function laneSlotTop(engineLane: number, roadTop: number, laneH: number, lanes: number, reverseLanes: boolean): number {
+  const slot = reverseLanes ? lanes - 1 - engineLane : engineLane;
+  return roadTop + slot * laneH;
 }
 
 /**
@@ -668,23 +742,42 @@ export default function AiSandboxPage() {
           }
         }
       }
-      // Canvas draws the FOCUSED direction only (Phase D3 draws both carriageways at once).
-      const focusedSim = byDirection[focusDirection].simRef.current;
-      if (focusedSim) {
-        render(ctx, canvas, focusedSim, locationRef.current, marksRef.current, maxLaneRef.current, exitsRef.current, scenarioOverlayRef.current[focusDirection] ?? null);
+      // Both mode draws both carriageways in one canvas (Phase D3); NB-only/SB-only draw the one
+      // active direction full-height, exactly as before D3.
+      if (view === "Both") {
+        const simNB = nb.simRef.current;
+        const simSB = sb.simRef.current;
+        if (simNB && simSB) {
+          renderBoth(
+            ctx, canvas, simNB, simSB,
+            { fromKm: marksRef.current.fromKm, toKm: marksRef.current.toKm },
+            maxLaneRef.current, exitsRef.current,
+            scenarioOverlayRef.current.NB ?? null, scenarioOverlayRef.current.SB ?? null,
+          );
+        }
+      } else {
+        const focusedSim = byDirection[focusDirection].simRef.current;
+        if (focusedSim) {
+          render(ctx, canvas, focusedSim, locationRef.current, marksRef.current, maxLaneRef.current, exitsRef.current, scenarioOverlayRef.current[focusDirection] ?? null);
+        }
       }
     };
     rafRef.current = requestAnimationFrame(loop);
     return () => cancelAnimationFrame(rafRef.current);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [running, simSpeed, activeDirections.join(), focusDirection, nb.simRef, sb.simRef, nb.scenarioBinding, sb.scenarioBinding, nb.publishOwners, sb.publishOwners, nb.setMetrics, sb.setMetrics]);
+  }, [running, simSpeed, activeDirections.join(), view, focusDirection, nb.simRef, sb.simRef, nb.scenarioBinding, sb.scenarioBinding, nb.publishOwners, sb.publishOwners, nb.setMetrics, sb.setMetrics]);
 
   // Incident placement: arm "placing" mode, then let the user click the
   // simulation to choose exactly where (which lane / how far along) the
   // incident is dropped. One accident per click — re-arm to drop another.
-  // Placement always targets the FOCUSED direction — the canvas draws only
-  // that one (Phase D3 draws both carriageways; clicking one of them then
-  // maps to ITS OWN sim, not always the focused one).
+  // Placement always targets the FOCUSED direction (splitting Interventions
+  // so a click could act on the OTHER carriageway is Phase D4's job, same as
+  // the rest of that rail). What D3 does fix: in Both mode the canvas draws
+  // two carriageways with dualRoadLayout's geometry, not one with
+  // roadLayout's — a click is now read back with whichever geometry actually
+  // drew the pixels under the cursor, and a click that lands in the
+  // non-focused carriageway's band is rejected rather than silently mapped
+  // through the wrong formula.
   const togglePlacing = () => focused.setPlacingIncident((p) => !p);
 
   const placeIncidentAt = (e: React.MouseEvent<HTMLCanvasElement>) => {
@@ -694,7 +787,7 @@ export default function AiSandboxPage() {
     if (!canvas || !sim) return;
 
     // Invert the same geometry the renderer uses to map the click back to
-    // (lane, x-in-metres). Keep these formulas in sync with render().
+    // (lane, x-in-metres). Keep these formulas in sync with render()/renderBoth().
     const rect = canvas.getBoundingClientRect();
     const cssW = rect.width;
     const cssH = rect.height;
@@ -702,23 +795,51 @@ export default function AiSandboxPage() {
     const cy = e.clientY - rect.top;
     const L = sim.cfg.length;
     const lanes = sim.cfg.laneCount;
-    // Same geometry render() used for this frame, or a click maps to a
-    // different lane than the one under the cursor. The ramp gutter is part of
-    // that geometry: reserving it moves the road up, and a handler that did not
-    // know would place incidents one lane low wherever a junction is in view.
-    // roadTop comes from the shared helper too, so there is no copy of the
-    // vertical placement left to drift out of step with the renderer.
-    const { laneH, roadTop } = roadLayout({
-      cssW: rect.width,
-      cssH,
-      lanes,
-      segLenM: L,
-      exitCount: exitsRef.current.length,
-      maxLaneH: maxLaneRef.current,
-      rampsAbove: focusDirection === "NB",
-    });
 
-    const lane = Math.max(0, Math.min(lanes - 1, Math.floor((cy - roadTop) / laneH)));
+    let laneH: number;
+    let roadTop: number;
+    if (view === "Both") {
+      const otherSim = byDirection[focusDirection === "NB" ? "SB" : "NB"].simRef.current;
+      if (!otherSim) return;
+      const layout = dualRoadLayout({
+        cssW,
+        cssH,
+        lanesNB: focusDirection === "NB" ? lanes : otherSim.cfg.laneCount,
+        lanesSB: focusDirection === "SB" ? lanes : otherSim.cfg.laneCount,
+        segLenM: L,
+        exitCount: exitsRef.current.length,
+        maxLaneH: maxLaneRef.current,
+      });
+      laneH = layout.laneH;
+      roadTop = focusDirection === "NB" ? layout.nbRoadTop : layout.sbRoadTop;
+      const roadH = laneH * lanes;
+      if (cy < roadTop || cy > roadTop + roadH) return; // clicked the other carriageway's band, or the median
+    } else {
+      // Same geometry render() used for this frame, or a click maps to a
+      // different lane than the one under the cursor. The ramp gutter is part of
+      // that geometry: reserving it moves the road up, and a handler that did not
+      // know would place incidents one lane low wherever a junction is in view.
+      // roadTop comes from the shared helper too, so there is no copy of the
+      // vertical placement left to drift out of step with the renderer.
+      const single = roadLayout({
+        cssW: rect.width,
+        cssH,
+        lanes,
+        segLenM: L,
+        exitCount: exitsRef.current.length,
+        maxLaneH: maxLaneRef.current,
+        rampsAbove: focusDirection === "NB",
+      });
+      laneH = single.laneH;
+      roadTop = single.roadTop;
+    }
+
+    // The drawn slot (0 at roadTop, downward) is the engine lane index UNLESS this is Both mode's
+    // NB carriageway, which draws lane 0 at the BOTTOM of its block (laneSlotTop's reverseLanes) —
+    // same inversion the renderer applies, read backwards.
+    const drawnSlot = Math.max(0, Math.min(lanes - 1, Math.floor((cy - roadTop) / laneH)));
+    const reverseLanes = view === "Both" && focusDirection === "NB";
+    const lane = reverseLanes ? lanes - 1 - drawnSlot : drawnSlot;
     const alongFrac = focusDirection === "SB" ? 1 - cx / cssW : cx / cssW;
     const x = Math.max(0, Math.min(L, alongFrac * L));
     if (focused.placingClosure) {
@@ -1019,31 +1140,6 @@ export default function AiSandboxPage() {
           <div className="sandbox-head">
             <h2>Traffic Simulation</h2>
             <div>
-              {/* NB / SB / Both. Origin and destination define the km window only (see the
-                  Corridor section below) — this is the only place direction is chosen. */}
-              <div className="sandbox-speed-seg" role="tablist" aria-label="Carriageway view">
-                {(["NB", "SB", "Both"] as const).map((v) => (
-                  <button
-                    key={v}
-                    role="tab"
-                    aria-selected={view === v}
-                    className={view === v ? "active" : ""}
-                    onClick={() => setView(v)}
-                    title={v === "Both" ? "Both carriageways at once, median-separated" : v === "NB" ? "Northbound only" : "Southbound only"}
-                  >
-                    {v === "Both" ? "Both" : v}
-                  </button>
-                ))}
-              </div>
-              {view === "Both" && (
-                <div className="sandbox-speed-seg" role="tablist" aria-label="Focused carriageway">
-                  {(["NB", "SB"] as const).map((d) => (
-                    <button key={d} role="tab" aria-selected={focusedDirection === d} className={focusedDirection === d ? "active" : ""} onClick={() => setFocusedDirection(d)}>
-                      {d}
-                    </button>
-                  ))}
-                </div>
-              )}
               <div className="sandbox-speed-seg">
                 {SPEED_STEPS.map((s) => (
                   <button key={s} className={simSpeed === s ? "active" : ""} onClick={() => setSimSpeed(s)}>
@@ -1066,11 +1162,46 @@ export default function AiSandboxPage() {
               </button>
             </div>
           </div>
+
+          {/* The PRIMARY control on this card, not a peer of the speed buttons above: with the old
+              swap button gone, this is the only place a carriageway is chosen at all, and in Both
+              mode the road below draws exactly what it says (two carriageways, one median) — it
+              needs to read as the thing that decides that, at a glance, in a screenshot. */}
+          <div className="sandbox-view-seg" role="tablist" aria-label="Carriageway view">
+            <span className="k">Carriageway</span>
+            <div className="sandbox-view-buttons">
+              {(["NB", "SB", "Both"] as const).map((v) => (
+                <button
+                  key={v}
+                  role="tab"
+                  aria-selected={view === v}
+                  className={view === v ? "active" : ""}
+                  onClick={() => setView(v)}
+                  title={v === "Both" ? "Both carriageways at once, median-separated — the whole road" : v === "NB" ? "Northbound only" : "Southbound only"}
+                >
+                  {v === "NB" ? "Northbound" : v === "SB" ? "Southbound" : "Both (NB + SB)"}
+                </button>
+              ))}
+            </div>
+            {view === "Both" && (
+              <>
+                <span className="k" style={{ marginLeft: 10 }}>Controls follow</span>
+                <div className="sandbox-speed-seg" role="tablist" aria-label="Focused carriageway">
+                  {(["NB", "SB"] as const).map((d) => (
+                    <button key={d} role="tab" aria-selected={focusedDirection === d} className={focusedDirection === d ? "active" : ""} onClick={() => setFocusedDirection(d)}>
+                      {d}
+                    </button>
+                  ))}
+                </div>
+              </>
+            )}
+          </div>
           {view === "Both" && (
             <p className="sandbox-live-note">
-              Both mode runs NB and SB together; the controls below still show only the focused
-              direction ({focusedDirection}) — full per-direction controls and a corridor total are
-              coming next.
+              Both carriageways are drawn and simulated together, median-separated, lane 1 against
+              the median on each side. The controls below still act on one direction at a time —
+              {" "}<b>{focusedDirection}</b>, chosen above — full per-direction controls and a
+              corridor total are coming next.
             </p>
           )}
 
@@ -1154,11 +1285,31 @@ export default function AiSandboxPage() {
               use whatever height the canvas is given, so the card can stretch
               and the road grows to match. The min-height keeps the road at its
               usual size whenever the rail is shorter than it.
-              Draws the FOCUSED direction (Phase D3 draws both carriageways). */}
+              Both mode's floor is the same idea doubled: both carriageways at
+              their own natural LANE_PX, plus the median and (if any exit is in
+              view) both ramp gutters — docked mode would rather grow the card
+              than compress a lane, which is the "taller canvas" option D3's
+              pre-build legibility note called for whenever the budget is
+              actually tight (see the D3 report — expanded mode is the one with
+              a real ceiling; docked has never had one).
+              Draws both carriageways in Both mode (renderBoth), the one active
+              direction full-height otherwise (render) — see the rAF loop above. */}
           <canvas
             ref={canvasRef}
             className={`sandbox-canvas ${focused.placingIncident || focused.placingClosure ? "placing" : ""}`}
-            style={expanded ? undefined : { minHeight: focused.laneCount * LANE_PX + CANVAS_PAD * 2 }}
+            style={
+              expanded
+                ? undefined
+                : {
+                    minHeight:
+                      view === "Both"
+                        ? (nb.laneCount + sb.laneCount) * LANE_PX +
+                          MEDIAN_GUTTER_PX +
+                          (exitsRef.current.length > 0 ? RAMP_GUTTER_PX * 2 : 0) +
+                          CANVAS_PAD * 2
+                        : focused.laneCount * LANE_PX + CANVAS_PAD * 2,
+                  }
+            }
             onClick={placeIncidentAt}
             onMouseMove={previewClosureAt}
           />
@@ -1504,10 +1655,12 @@ export default function AiSandboxPage() {
               </span>
             </div>
             <span className="sandbox-slider-hint">
-              NLEX runs Balintawak (Km 0) north to Sta. Ines. Use the NB / SB / Both tabs above the
+              NLEX runs Balintawak (Km 0) north to Sta. Ines. Use the Carriageway control above the
               road to choose. The km axis is fixed — Km 0 is always on-screen-left — and it is the
               TRAFFIC that runs right to left when southbound; each direction&apos;s inflow anchors to
-              its own observed volume, independently.
+              its own observed volume, independently. Both mode draws the two carriageways stacked
+              with a median between them, NB above and SB below, sharing this one axis — lane 1 sits
+              against the median on both sides.
             </span>
           </div>
 
@@ -2271,7 +2424,17 @@ function drawScenarioMarker(ctx: CanvasRenderingContext2D, x: number, y: number,
 function drawScenarioLabels(
   ctx: CanvasRenderingContext2D,
   marks: readonly CanvasMark[],
-  g: { xPx: (m: number) => number; roadTop: number; laneH: number; roadH: number; cssW: number; r: number },
+  g: {
+    xPx: (m: number) => number;
+    roadTop: number;
+    laneH: number;
+    roadH: number;
+    cssW: number;
+    r: number;
+    lanes: number;
+    /** Both mode's NB carriageway only — see laneSlotTop(). */
+    reverseLanes: boolean;
+  },
 ) {
   const placed: { x0: number; x1: number; y0: number; y1: number }[] = [];
   ctx.save();
@@ -2281,7 +2444,12 @@ function drawScenarioLabels(
   for (const m of marks) {
     const x = g.xPx(m.xM);
     const shoulder = m.lane === null;
-    const laneY = shoulder ? g.roadTop + g.roadH - 3 : g.roadTop + (m.lane ?? 0) * g.laneH + g.laneH * 0.5;
+    // Shoulder sits just past the outermost lane (engine index lanes-1) — which
+    // edge of the block that is flips with reverseLanes exactly as the
+    // outermost lane's own slot does.
+    const laneY = shoulder
+      ? (g.reverseLanes ? g.roadTop + 3 : g.roadTop + g.roadH - 3)
+      : laneSlotTop(m.lane ?? 0, g.roadTop, g.laneH, g.lanes, g.reverseLanes) + g.laneH * 0.5;
     const faint = m.state === "pending";
     // An in-lane breakdown's obstacles are drawn as incidents once it starts; everything else gets a marker here.
     if (m.kind !== "incident" || faint) drawScenarioMarker(ctx, x, laneY, g.r, faint);
@@ -2312,66 +2480,53 @@ function drawScenarioLabels(
   ctx.restore();
 }
 
-function render(
+/**
+ * Everything about drawing ONE carriageway: asphalt, zones, closures,
+ * congestion, vehicles, incidents, scenario labels, ramps, its own corner
+ * text — every layer render() has always drawn, unchanged in content.
+ *
+ * Pulled out of render() so Both mode can call it twice (D3) instead of
+ * carrying a second copy that drifts from the first, which is the exact
+ * mistake roadLayout() was already written to avoid for the geometry alone.
+ * render() below is now a thin single-carriageway wrapper — same signature,
+ * same behaviour, nothing single-direction reads has changed.
+ */
+function drawCarriageway(
   ctx: CanvasRenderingContext2D,
-  canvas: HTMLCanvasElement,
   sim: TrafficSim,
-  location: string,
-  // `direction` decides which end of the km range the canvas starts from;
-  // travel itself is always drawn left to right.
-  marks: { fromKm: number; toKm: number; direction: "NB" | "SB" },
-  maxLaneH: number,
-  exits: { name: string; km: number }[],
-  overlay: ScenarioOverlay | null,
+  opts: {
+    cssW: number;
+    cssH: number;
+    roadTop: number;
+    laneH: number;
+    roadH: number;
+    rampGutter: number;
+    /** Northbound draws its ramps above the road, southbound below — true for NB in every mode. */
+    rampsAbove: boolean;
+    /** Both mode's NB carriageway only — see laneSlotTop(). Single-direction always false. */
+    reverseLanes: boolean;
+    mToPx: number;
+    /** Southbound: traffic mirrors, sprites face left. True for SB in every mode. */
+    sb: boolean;
+    xPx: (x: number) => number;
+    wPx: (m: number) => number;
+    fromKm: number;
+    toKm: number;
+    exits: { name: string; km: number }[];
+    overlay: ScenarioOverlay | null;
+    /** Single-direction draws its own km axis; Both draws one shared axis separately (drawSharedKmAxis). */
+    drawAxis: boolean;
+    /** "▶ traffic flow" for single-direction, unchanged; Both passes a direction-aware arrow. */
+    flowLabel: string;
+    /** Corner label — the full location string for single-direction, just "Northbound"/"Southbound" for Both. */
+    location: string;
+  },
 ) {
-  const dpr = window.devicePixelRatio || 1;
-  const cssW = canvas.clientWidth;
-  const cssH = canvas.clientHeight;
-  if (canvas.width !== cssW * dpr || canvas.height !== cssH * dpr) {
-    canvas.width = cssW * dpr;
-    canvas.height = cssH * dpr;
-  }
-  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-  ctx.clearRect(0, 0, cssW, cssH);
-
-  // The canvas has no size for a frame or two while the layout settles — most
-  // visibly when entering full screen, where its height is elastic. Every
-  // dimension below is derived from cssH, so a zero here turns into a negative
-  // lane height, a negative vehicle width, and a negative corner radius that
-  // throws inside drawVehicle. Canvas then paints the road and dies before the
-  // traffic, every frame, which looks exactly like an empty simulation.
-  if (cssW <= 0 || cssH <= 0) return;
-
-  const L = sim.cfg.length;
+  const {
+    cssW, cssH, roadTop, laneH, roadH, rampGutter, rampsAbove, reverseLanes,
+    mToPx, sb, xPx, wPx, fromKm, toKm, exits, overlay, drawAxis, flowLabel, location,
+  } = opts;
   const lanes = sim.cfg.laneCount;
-  /* Which side the off-ramps leave from. Northbound they are drawn above the
-   * carriageway, southbound below, so the two directions are told apart at a
-   * glance and the ramps always trail away from the traffic rather than
-   * crossing it. The gutter is reserved on that same side, and the km scale
-   * on the other — see roadLayout(), which owns all of that arithmetic and is
-   * shared with the click handler and the page's canvas sizing. */
-  const rampsAbove = marks.direction === "NB";
-  const { rampGutter, laneH, roadH, roadTop } = roadLayout({
-    cssW,
-    cssH,
-    lanes,
-    segLenM: L,
-    exitCount: exits.length,
-    maxLaneH,
-    rampsAbove,
-  });
-  const mToPx = cssW / L;
-  /* The corridor keeps a fixed, map-like orientation: the low km post is always
-   * on the left. Southbound traffic therefore runs right to left, which is what
-   * an operator expects to see — reversing the km axis instead made the road
-   * flip end-for-end between directions and was disorienting.
-   *
-   * `xPx` maps a distance-along-travel to a screen position and so is mirrored;
-   * `wPx` converts a LENGTH and must never be, which is the distinction that
-   * makes spans need explicit min/max below. */
-  const sb = marks.direction === "SB";
-  const xPx = (x: number) => (sb ? cssW - x * mToPx : x * mToPx);
-  const wPx = (m: number) => m * mToPx;
 
   // asphalt
   ctx.fillStyle = "#20293a";
@@ -2409,7 +2564,7 @@ function render(
   // closed-lane hatching + taper
   for (let l = 0; l < lanes; l++) {
     if (!sim.interventions.closedLanes[l]) continue;
-    const y = roadTop + l * laneH;
+    const y = laneSlotTop(l, roadTop, laneH, lanes, reverseLanes);
     const x0 = xPx(sim.interventions.closurePoint);
     // The works end where the operator said they end, not at the edge of the
     // view — a closure that always ran to the end of the screen could not
@@ -2481,8 +2636,7 @@ function render(
     ctx.moveTo(x1, roadTop);
     ctx.lineTo(x1, roadTop + roadH);
     ctx.stroke();
-    const kmOf = (m: number) =>
-      marks.direction === "NB" ? marks.fromKm + m / 1000 : marks.toKm - m / 1000;
+    const kmOf = (m: number) => (sb ? toKm - m / 1000 : fromKm + m / 1000);
     const kmA = kmOf(draftStretch.from).toFixed(2);
     const kmB = kmOf(draftStretch.to).toFixed(2);
     const label = kmA === kmB ? `Km ${kmA} → click the end` : `Km ${kmA} – ${kmB}`;
@@ -2518,7 +2672,7 @@ function render(
         const b = Math.min(bins - 1, Math.max(0, Math.floor(xPx(v.x) / binPx)));
         worst[b] = Math.min(worst[b], v.v);
       }
-      const y = roadTop + lane * laneH;
+      const y = laneSlotTop(lane, roadTop, laneH, lanes, reverseLanes);
       for (let b = 0; b < bins; b++) {
         if (!Number.isFinite(worst[b])) continue;
         // Deeper red the slower it is: stopped reads differently from crawling.
@@ -2577,7 +2731,7 @@ function render(
     ctx.textAlign = "center";
     ctx.textBaseline = "middle";
     for (let lane = 0; lane < lanes; lane++) {
-      const cy = roadTop + lane * laneH + laneH / 2;
+      const cy = laneSlotTop(lane, roadTop, laneH, lanes, reverseLanes) + laneH / 2;
       ctx.fillStyle = "rgba(9,14,28,0.72)";
       roundRect(ctx, 5, cy - tagH / 2, tagW, tagH, 3);
       ctx.fill();
@@ -2599,7 +2753,7 @@ function render(
       );
       // visualLane, not v.lane: the integer flips the instant MOBIL accepts
       // the move, which drew the change as a one-frame jump across a whole lane.
-      const y = roadTop + visualLane(v) * laneH + laneH * 0.5;
+      const y = laneSlotTop(visualLane(v), roadTop, laneH, lanes, reverseLanes) + laneH * 0.5;
       // Braking, or already stopped. The threshold is a real lift-off rather
       // than any negative value, so brake lights do not flicker on the small
       // corrections every car-following model makes continuously.
@@ -2623,7 +2777,7 @@ function render(
 
   // incidents
   for (const inc of sim.interventions.incidents) {
-    const y = roadTop + inc.lane * laneH + laneH * 0.5;
+    const y = laneSlotTop(inc.lane, roadTop, laneH, lanes, reverseLanes) + laneH * 0.5;
     // A scenario's obstacle is amber and triangular, so it cannot be mistaken for one the operator dropped.
     if (overlay && overlay.isScenarioIncident(inc)) {
       drawScenarioMarker(ctx, xPx(inc.x), y, Math.min(9, laneH * 0.36), false);
@@ -2649,6 +2803,8 @@ function render(
       roadH,
       cssW,
       r: Math.min(9, laneH * 0.36),
+      lanes,
+      reverseLanes,
     });
   }
 
@@ -2684,7 +2840,7 @@ function render(
     for (const ex of exits) {
       // Distance along travel; xPx mirrors it when southbound, so the km posts
       // stay put on screen and only the traffic changes direction.
-      const x = xPx(sb ? (marks.toKm - ex.km) * 1000 : (ex.km - marks.fromKm) * 1000);
+      const x = xPx(sb ? (toKm - ex.km) * 1000 : (ex.km - fromKm) * 1000);
       if (x < -rampLen || x > cssW + rampLen) continue;
 
       const xEnd = x + fwd * rampLen;
@@ -2750,10 +2906,14 @@ function render(
   // Km ladder. Without it the road is 600 m of anonymous tarmac and an operator
   // cannot say where on the corridor a queue is forming — which is the first
   // thing they need in order to act on it.
-  {
-    const spanKm = Math.max(1e-6, marks.toKm - marks.fromKm);
+  // Both mode draws this once, shared, in the median (drawSharedKmAxis) rather
+  // than once per carriageway — the two would print identical numbers at
+  // identical x (see drawSharedKmAxis's own comment for why that is exact,
+  // not approximate), so a second copy would only be a duplicate, not a check.
+  if (drawAxis) {
+    const spanKm = Math.max(1e-6, toKm - fromKm);
     const step = kmTickStep(spanKm);
-    const first = Math.ceil(marks.fromKm / step) * step;
+    const first = Math.ceil(fromKm / step) * step;
     /* The scale sits outside the carriageway, opposite the ramps.
      *
      * It used to be printed at roadTop + roadH - 3, i.e. inside the bottom
@@ -2769,8 +2929,8 @@ function render(
     ctx.textAlign = "center";
     ctx.textBaseline = axisBelow ? "top" : "bottom";
     ctx.font = "10px system-ui";
-    for (let km = first; km <= marks.toKm + 1e-9; km += step) {
-      const x = xPx(sb ? (marks.toKm - km) * 1000 : (km - marks.fromKm) * 1000);
+    for (let km = first; km <= toKm + 1e-9; km += step) {
+      const x = xPx(sb ? (toKm - km) * 1000 : (km - fromKm) * 1000);
       if (x < 2 || x > cssW - 2) continue;
       ctx.strokeStyle = "rgba(255,255,255,0.16)";
       ctx.lineWidth = 1;
@@ -2789,7 +2949,7 @@ function render(
 
   ctx.font = "10px system-ui";
   ctx.fillStyle = "rgba(255,255,255,0.5)";
-  ctx.fillText("▶ traffic flow", 8, roadTop + 4);
+  ctx.fillText(flowLabel, 8, roadTop + 4);
 
   // Where this stretch is on the corridor. Without it the canvas is 280 m of
   // anonymous tarmac and the route pickers appear to do nothing.
@@ -2797,6 +2957,232 @@ function render(
   ctx.font = "600 11px system-ui";
   ctx.textAlign = "right";
   ctx.fillText(location, cssW - 8, roadTop + 4);
+}
+
+/**
+ * render() unchanged in behaviour: single carriageway, full canvas height,
+ * its own km axis, reverseLanes always false. Same signature D2 left it
+ * with — the rAF loop's single-direction call site did not need to change.
+ */
+function render(
+  ctx: CanvasRenderingContext2D,
+  canvas: HTMLCanvasElement,
+  sim: TrafficSim,
+  location: string,
+  // `direction` decides which end of the km range the canvas starts from;
+  // travel itself is always drawn left to right.
+  marks: { fromKm: number; toKm: number; direction: "NB" | "SB" },
+  maxLaneH: number,
+  exits: { name: string; km: number }[],
+  overlay: ScenarioOverlay | null,
+) {
+  const dpr = window.devicePixelRatio || 1;
+  const cssW = canvas.clientWidth;
+  const cssH = canvas.clientHeight;
+  if (canvas.width !== cssW * dpr || canvas.height !== cssH * dpr) {
+    canvas.width = cssW * dpr;
+    canvas.height = cssH * dpr;
+  }
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, cssW, cssH);
+
+  // The canvas has no size for a frame or two while the layout settles — most
+  // visibly when entering full screen, where its height is elastic. Every
+  // dimension below is derived from cssH, so a zero here turns into a negative
+  // lane height, a negative vehicle width, and a negative corner radius that
+  // throws inside drawVehicle. Canvas then paints the road and dies before the
+  // traffic, every frame, which looks exactly like an empty simulation.
+  if (cssW <= 0 || cssH <= 0) return;
+
+  const L = sim.cfg.length;
+  const lanes = sim.cfg.laneCount;
+  /* Which side the off-ramps leave from. Northbound they are drawn above the
+   * carriageway, southbound below, so the two directions are told apart at a
+   * glance and the ramps always trail away from the traffic rather than
+   * crossing it. The gutter is reserved on that same side, and the km scale
+   * on the other — see roadLayout(), which owns all of that arithmetic and is
+   * shared with the click handler and the page's canvas sizing. */
+  const rampsAbove = marks.direction === "NB";
+  const { rampGutter, laneH, roadH, roadTop } = roadLayout({
+    cssW,
+    cssH,
+    lanes,
+    segLenM: L,
+    exitCount: exits.length,
+    maxLaneH,
+    rampsAbove,
+  });
+  const mToPx = cssW / L;
+  /* The corridor keeps a fixed, map-like orientation: the low km post is always
+   * on the left. Southbound traffic therefore runs right to left, which is what
+   * an operator expects to see — reversing the km axis instead made the road
+   * flip end-for-end between directions and was disorienting.
+   *
+   * `xPx` maps a distance-along-travel to a screen position and so is mirrored;
+   * `wPx` converts a LENGTH and must never be, which is the distinction that
+   * makes spans need explicit min/max below. */
+  const sb = marks.direction === "SB";
+  const xPx = (x: number) => (sb ? cssW - x * mToPx : x * mToPx);
+  const wPx = (m: number) => m * mToPx;
+
+  drawCarriageway(ctx, sim, {
+    cssW,
+    cssH,
+    roadTop,
+    laneH,
+    roadH,
+    rampGutter,
+    rampsAbove,
+    reverseLanes: false,
+    mToPx,
+    sb,
+    xPx,
+    wPx,
+    fromKm: marks.fromKm,
+    toKm: marks.toKm,
+    exits,
+    overlay,
+    drawAxis: true,
+    flowLabel: "▶ traffic flow",
+    location,
+  });
+}
+
+/**
+ * Both mode: two carriageways in one canvas, a shared median between them —
+ * NB above (traffic left to right, lane 1 reversed to draw next to the
+ * median below it), SB below (traffic right to left, lane 1 already draws
+ * next to the median above it, unchanged from single-direction). One shared
+ * km axis in the median rather than one per carriageway (see
+ * drawSharedKmAxis) — this is the "whole carriageway, 8 lanes, 4 north +
+ * 4 south" picture as one road, not two.
+ */
+function renderBoth(
+  ctx: CanvasRenderingContext2D,
+  canvas: HTMLCanvasElement,
+  simNB: TrafficSim,
+  simSB: TrafficSim,
+  marks: { fromKm: number; toKm: number },
+  maxLaneH: number,
+  exits: { name: string; km: number }[],
+  overlayNB: ScenarioOverlay | null,
+  overlaySB: ScenarioOverlay | null,
+) {
+  const dpr = window.devicePixelRatio || 1;
+  const cssW = canvas.clientWidth;
+  const cssH = canvas.clientHeight;
+  if (canvas.width !== cssW * dpr || canvas.height !== cssH * dpr) {
+    canvas.width = cssW * dpr;
+    canvas.height = cssH * dpr;
+  }
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, cssW, cssH);
+  if (cssW <= 0 || cssH <= 0) return; // see render()'s identical guard for why
+
+  const L = simNB.cfg.length; // both directions share the same segment length (SharedRoadInputs)
+  const { rampGutter, laneH, nbRoadH, sbRoadH, nbRoadTop, medianTop, sbRoadTop, mToPx } = dualRoadLayout({
+    cssW,
+    cssH,
+    lanesNB: simNB.cfg.laneCount,
+    lanesSB: simSB.cfg.laneCount,
+    segLenM: L,
+    exitCount: exits.length,
+    maxLaneH,
+  });
+
+  const xPxNB = (x: number) => x * mToPx; // NB: left to right, unmirrored
+  const xPxSB = (x: number) => cssW - x * mToPx; // SB: right to left, mirrored
+  const wPx = (m: number) => m * mToPx;
+
+  drawMedian(ctx, cssW, medianTop, MEDIAN_GUTTER_PX);
+  drawSharedKmAxis(ctx, { xPx: xPxNB, fromKm: marks.fromKm, toKm: marks.toKm, cssW, axisY: medianTop + MEDIAN_GUTTER_PX / 2 });
+
+  drawCarriageway(ctx, simNB, {
+    cssW,
+    cssH,
+    roadTop: nbRoadTop,
+    laneH,
+    roadH: nbRoadH,
+    rampGutter,
+    rampsAbove: true,
+    reverseLanes: true, // NB sits above the median: its bottom edge is the median-adjacent one
+    mToPx,
+    sb: false,
+    xPx: xPxNB,
+    wPx,
+    fromKm: marks.fromKm,
+    toKm: marks.toKm,
+    exits,
+    overlay: overlayNB,
+    drawAxis: false,
+    flowLabel: "▶ traffic flow",
+    location: "Northbound",
+  });
+  drawCarriageway(ctx, simSB, {
+    cssW,
+    cssH,
+    roadTop: sbRoadTop,
+    laneH,
+    roadH: sbRoadH,
+    rampGutter,
+    rampsAbove: false,
+    reverseLanes: false, // SB sits below the median: its top edge is already the median-adjacent one
+    mToPx,
+    sb: true,
+    xPx: xPxSB,
+    wPx,
+    fromKm: marks.fromKm,
+    toKm: marks.toKm,
+    exits,
+    overlay: overlaySB,
+    drawAxis: false,
+    flowLabel: "traffic flow ◀",
+    location: "Southbound",
+  });
+}
+
+/** The barrier between the two carriageways in Both mode — a solid stripe, not just empty space,
+ *  so it reads as a physical median rather than a gap the layout happened to leave. */
+function drawMedian(ctx: CanvasRenderingContext2D, cssW: number, medianTop: number, gutterH: number) {
+  const barrierH = 6;
+  const barrierY = medianTop + (gutterH - barrierH) / 2;
+  ctx.fillStyle = "rgba(226,232,240,0.85)";
+  roundRect(ctx, 0, barrierY, cssW, barrierH, 2);
+  ctx.fill();
+  ctx.fillStyle = "rgba(15,23,42,0.55)";
+  ctx.fillRect(0, barrierY - 2, cssW, 1);
+  ctx.fillRect(0, barrierY + barrierH + 1, cssW, 1);
+}
+
+/**
+ * Both mode's ONE km axis, drawn once in the median rather than once per
+ * carriageway. This is exact, not an approximation that happens to look
+ * right: NB's xPx(x) = x*mToPx and SB's xPx(x) = cssW - x*mToPx place the
+ * SAME km at the SAME pixel whenever each is fed its own direction-correct
+ * distance-along-travel — fromKm always lands at x=0 and toKm at x=cssW for
+ * both (that is what "the km axis is fixed, low km always on-screen-left"
+ * already means for single-direction SB). One axis, using either
+ * carriageway's mapping, is therefore correct for both, not a compromise.
+ */
+function drawSharedKmAxis(
+  ctx: CanvasRenderingContext2D,
+  g: { xPx: (m: number) => number; fromKm: number; toKm: number; cssW: number; axisY: number },
+) {
+  const { xPx, fromKm, toKm, cssW, axisY } = g;
+  const spanKm = Math.max(1e-6, toKm - fromKm);
+  const step = kmTickStep(spanKm);
+  const first = Math.ceil(fromKm / step) * step;
+  ctx.save();
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.font = "600 10px system-ui";
+  for (let km = first; km <= toKm + 1e-9; km += step) {
+    const x = xPx((km - fromKm) * 1000);
+    if (x < 2 || x > cssW - 2) continue;
+    ctx.fillStyle = "rgba(255,255,255,0.7)";
+    ctx.fillText(`${km.toFixed(step < 0.1 ? 2 : step < 1 ? 2 : 1)}`, x, axisY);
+  }
+  ctx.restore();
 }
 
 // Top-down vehicle sprite. Local frame: front (nose) at x=0, body extends to

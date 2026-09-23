@@ -1603,6 +1603,70 @@ check(
   check("page: scenario incidents are drawn differently from the operator's, and each event is labelled on the canvas", /overlay\.isScenarioIncident\(inc\)/.test(pageSource) && /drawScenarioLabels\(ctx, canvasMarks\(/.test(pageSource));
 }
 
+// --- Phase D3: Both mode draws two carriageways in one canvas, not one (the whole point of the
+// phase), and lane 1 must still land against the median on BOTH sides even though only one of them
+// (NB, drawn above the median) needs its internal draw order reversed to get there. page.tsx's
+// render()/renderBoth() run real canvas code and are checked live in the browser (see the D3 report's
+// screenshots and the geometry probe); what is checked here is the STRUCTURE regex can see reliably:
+// which function calls which, with which literal flag, and that render() (single-direction) is
+// byte-unchanged in the one respect that matters most — it never reverses.
+{
+  const pageSource = readFileSync(new URL("../page.tsx", import.meta.url), "utf8");
+  check(
+    "page: the dual-carriageway geometry and draw-order helpers exist, separate from single-direction roadLayout()",
+    /function dualRoadLayout\(/.test(pageSource) &&
+      /function laneSlotTop\(/.test(pageSource) &&
+      /function drawCarriageway\(/.test(pageSource) &&
+      /function renderBoth\(/.test(pageSource) &&
+      /function drawMedian\(/.test(pageSource) &&
+      /function drawSharedKmAxis\(/.test(pageSource),
+  );
+  const renderBothStart = pageSource.indexOf("function renderBoth(");
+  const renderBothEnd = pageSource.indexOf("\nfunction drawMedian(", renderBothStart);
+  const renderBothSource = pageSource.slice(renderBothStart, renderBothEnd);
+  const nbCallStart = renderBothSource.indexOf("simNB, {");
+  const sbCallStart = renderBothSource.indexOf("simSB, {");
+  check(
+    "renderBoth: NB is drawn reversed (lane 1 ends up against the median, which is BELOW the NB block since NB is drawn above it) and SB is not (its lane 1 is already against the median above it)",
+    nbCallStart > -1 && sbCallStart > nbCallStart &&
+      /reverseLanes: true/.test(renderBothSource.slice(nbCallStart, sbCallStart)) &&
+      /reverseLanes: false/.test(renderBothSource.slice(sbCallStart)),
+  );
+  check(
+    "renderBoth: NB keeps its ramps on the outer edge (above, away from the median) and SB keeps its ramps below (also away from the median) — unchanged from single-direction's own rampsAbove convention",
+    /rampsAbove: true,[\s\S]{0,80}reverseLanes: true/.test(renderBothSource.slice(nbCallStart)) &&
+      /rampsAbove: false,[\s\S]{0,80}reverseLanes: false/.test(renderBothSource.slice(sbCallStart)),
+  );
+  check(
+    // Exactly one reversed call (NB in Both mode) anywhere in the file; single-direction render()'s
+    // own call to drawCarriageway must be among the non-reversed ones, or NB-only/SB-only would
+    // silently start drawing lane 1 at the wrong edge — the one regression D3 must not cause.
+    "exactly one reversed carriageway in the whole file (Both mode's NB), and render()'s own call is not it",
+    (pageSource.match(/reverseLanes: true/g) ?? []).length === 1 &&
+      (pageSource.match(/reverseLanes: false/g) ?? []).length === 2, // render()'s call + renderBoth's SB call
+  );
+  check(
+    "renderBoth shares ONE km axis (drawSharedKmAxis, called once) rather than drawing it per carriageway (both drawCarriageway calls pass drawAxis: false)",
+    (renderBothSource.match(/drawSharedKmAxis\(/g) ?? []).length === 1 &&
+      (renderBothSource.match(/drawAxis: false/g) ?? []).length === 2 &&
+      !/drawAxis: true/.test(renderBothSource),
+  );
+  check(
+    "render() (single-direction) still draws its own axis, unreversed — NB-only/SB-only unchanged from before D3",
+    /drawAxis: true/.test(pageSource.slice(pageSource.indexOf("function render("), pageSource.indexOf("function renderBoth("))),
+  );
+  const clickStart = pageSource.indexOf("const placeIncidentAt = ");
+  const clickEnd = pageSource.indexOf("const previewClosureAt = ");
+  const clickSource = pageSource.slice(clickStart, clickEnd);
+  check(
+    "click-to-place reads Both mode's actual dual geometry (dualRoadLayout), not the single-direction roadLayout formula, and rejects a click landing in the other carriageway's band or the median",
+    /view === "Both"/.test(clickSource) &&
+      /dualRoadLayout\(\{/.test(clickSource) &&
+      /if \(cy < roadTop \|\| cy > roadTop \+ roadH\) return;/.test(clickSource) &&
+      /const reverseLanes = view === "Both" && focusDirection === "NB";/.test(clickSource),
+  );
+}
+
 /* ───────────────────────────── report ───────────────────────────── */
 console.log(`verify: ${checks} checks, ${failures.length} failed  (${listed.length} assumptions, ${allEntries.length} calibration entries [${CALIBRATION_KEYS.length} base + ${allEntries.length - CALIBRATION_KEYS.length} hierarchy], ${SCENARIO_TEMPLATES.length} templates, ${N.toLocaleString("en-US")} draws per entry)`);
 for (const f of failures) console.log(`  FAIL ${f}`);

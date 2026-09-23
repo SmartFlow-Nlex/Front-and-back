@@ -6144,6 +6144,60 @@ body:has(.sandbox-main.is-expanded) {
 }
 .sandbox-speed-seg button.active { background: #fff; color: var(--brand-primary); box-shadow: var(--shadow-sm); }
 
+/* The carriageway view selector: the ONLY place a carriageway is chosen since the old swap button
+   was removed in Phase D2, so it reads as a primary control rather than a peer of the speed/play/
+   reset buttons above it — its own row, a labelled segmented control, brand-coloured. Built on
+   theme tokens (not the light-only hex sandbox-speed-seg above) so it holds up in dark mode too. */
+.sandbox-view-seg {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 12px 0 2px;
+}
+.sandbox-view-seg .k {
+  font-size: 0.72rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-secondary);
+}
+.sandbox-view-buttons {
+  display: inline-flex;
+  gap: 3px;
+  background: var(--color-info-bg);
+  border: 1.5px solid var(--brand-primary);
+  border-radius: var(--radius-md);
+  padding: 3px;
+}
+.sandbox-view-buttons button {
+  border: 0;
+  background: transparent;
+  padding: 8px 16px;
+  font-size: 0.88rem;
+  font-weight: 800;
+  border-radius: 7px;
+  cursor: pointer;
+  color: var(--brand-primary);
+}
+.sandbox-view-buttons button.active { background: var(--brand-primary); color: #fff; box-shadow: var(--shadow-sm); }
+
+/* Full screen forces its own dark overlay regardless of the page theme (see .sandbox-main.is-expanded
+   above), so this reuses the same fixed dark-overlay palette the rest of the full-screen bar already
+   has (.sandbox-fs-bar .btn-muted.active), rather than the light-mode-only tokens above. */
+.sandbox-main.is-expanded .sandbox-view-seg {
+  flex: 0 0 auto;
+  margin: 0;
+  padding: 10px 20px 0;
+}
+.sandbox-main.is-expanded .sandbox-view-seg .k { color: #94a3b8; }
+.sandbox-main.is-expanded .sandbox-view-buttons {
+  background: rgba(124, 58, 237, 0.14);
+  border-color: #a78bfa;
+}
+.sandbox-main.is-expanded .sandbox-view-buttons button { color: #ddd6fe; }
+.sandbox-main.is-expanded .sandbox-view-buttons button.active { background: #7c3aed; color: #fff; }
+
 .sandbox-mini-label {
   display: block;
   font-size: 0.78rem;

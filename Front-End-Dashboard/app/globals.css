@@ -6708,7 +6708,6 @@ body:has(.sandbox-main.is-expanded) {
   }
 }
 
-@media (prefers-color-scheme: dark) {
 .sandbox-page .sandbox-forecast {
   flex-shrink: 0;
 }
@@ -6953,5 +6952,4 @@ body:has(.sandbox-main.is-expanded) {
 .sandbox-fs-bar .sandbox-km-input:focus {
   border-color: #a78bfa;
   box-shadow: 0 0 0 3px rgba(167, 139, 250, 0.25);
-}
 }

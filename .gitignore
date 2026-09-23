@@ -30,7 +30,13 @@ Back-End/.env.*
 # Scripts bundle: real credentials and local caches/logs are never committed.
 smartflow_scripts/config/.env
 smartflow_scripts/_work/cache/
-smartflow_scripts/**/__pycache__/
+
+# Python bytecode caches, anywhere in the repo (a stray one was committed under
+# the sandbox scenarios' tools/ — see project_env_secrets.md). Compiled .pyc
+# files are build artifacts, not secrets, but they don't belong in git either.
+__pycache__/
+**/__pycache__/
+*.pyc
 
 .env
 **/.env

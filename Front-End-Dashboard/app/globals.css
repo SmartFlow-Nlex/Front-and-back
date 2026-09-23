@@ -6215,6 +6215,8 @@ body:has(.sandbox-main.is-expanded) {
 }
 .sandbox-scn-badge.low { background: var(--color-warning-bg); border-color: var(--color-warning-border); color: var(--color-warning); }
 .sandbox-scn-badge.cap { background: var(--color-info-bg); border-color: var(--color-info-border); color: var(--color-info); }
+/* Distinct from low/cap (both about a calibrated draw): this is about there being no calibration at all. */
+.sandbox-scn-badge.no-cal { background: var(--color-purple-bg); border-color: var(--color-purple); color: var(--color-purple); }
 .sandbox-scn-detail { font-size: 0.7rem; color: var(--text-muted); }
 .sandbox-scn-phases { list-style: none; margin: 6px 0 0; padding: 0; font-size: 0.76rem; line-height: 1.5; color: var(--text-secondary); }
 .sandbox-scn-phases li { padding-left: 10px; border-left: 2px solid var(--border-default); }

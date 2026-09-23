@@ -160,8 +160,9 @@ function ResolutionBlock({ resolved }: { resolved: ResolvedDuration }) {
     <div className="sandbox-scn-res">
       <b>{v.headline}</b>
       {v.calibration !== null && <span>{v.calibration}</span>}
-      {(v.lowSample !== null || v.capped !== null) && (
+      {(v.noCalibration !== null || v.lowSample !== null || v.capped !== null) && (
         <span className="sandbox-scn-badges">
+          {v.noCalibration !== null && <em className="sandbox-scn-badge no-cal" data-scn="badge-no-cal">{v.noCalibration}</em>}
           {v.lowSample !== null && <em className="sandbox-scn-badge low" data-scn="badge-low">{v.lowSample}</em>}
           {v.capped !== null && <em className="sandbox-scn-badge cap" data-scn="badge-capped">{v.capped}</em>}
         </span>

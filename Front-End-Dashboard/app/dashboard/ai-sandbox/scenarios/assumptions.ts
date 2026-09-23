@@ -182,6 +182,15 @@ export const ASSUMPTIONS = {
     { settledBy: "Field measurement or NLEX incident-management guidance." },
   ),
 
+  CLASS_FILTERED_BLOCKAGE: assume<readonly FamilyKey[]>(
+    ["flood"],
+    "The engine's closure model is binary: Interventions.closedLanes marks a lane closed to every vehicle class or open to all of them, with no per-class or per-height dimension. Flooding is modelled as a single closed lane over CLOSURE_LENGTH_M.flood (150 m) for exactly that reason — it is the closest thing the engine's existing levers can express — but this is a PLACEHOLDER, not a modelled result. Real flooding affects outer lanes first (they sit lower, nearer the shoulder drain) and is class-dependent: standing water shallow enough for a truck's higher ground clearance to pass can still stop a car. A single lane, closed uniformly to every class, does not represent either of those things; it is only the nearest available approximation. Overturned vehicle and scheduled roadworks do NOT share this limitation, despite also being single-lane closures with an assumed length: both are genuine physical obstructions that block every vehicle class equally (a car cannot pass an overturned truck's wreckage, or a roadworks barrier, any more than another truck could), so a binary closure is not a simplification for them the way it is for flood — there is no real per-class or outer-lanes-first behaviour being flattened away.",
+    {
+      settledBy:
+        "A per-class or per-height blockage lever in the engine (simulation.ts) — none exists today, and adding one is out of this feature's scope (Front-End-Dashboard only, simulation.ts untouched) — or NLEX/DPWH guidance on typical flood depth by vehicle class, if the sandbox ever tries to model this more finely than a placeholder.",
+    },
+  ),
+
   UPSTREAM_BUFFER_M: assume(
     100,
     "How far UPSTREAM of a collision the closure begins. In the engine a closure is a wall at closurePoint that traffic in the closed lane must merge out of before reaching it, so a closure that begins exactly at the wreck makes vehicles queue right up against it. A real scene is protected by advance warning and cones well before the wreck. 100 m is a round figure of that order; it is not from an NLEX document. Applies to the closure families only.",

@@ -50,6 +50,7 @@ import {
   eventState,
   formatClock,
   nextBoundaryAfter,
+  NO_CALIBRATION_NOTE,
   ownershipKey,
   phaseAt,
   removeEvent,
@@ -651,6 +652,10 @@ for (const f of ASSUMPTIONS.NO_CALIBRATION_FAMILIES.value) {
   check(`${f}: a manual duration of 0, negative or NaN is rejected, same as any other family`, throws(() => resolveDuration(v, { kind: "manual", minutes: 0 })) && throws(() => resolveDuration(v, { kind: "manual", minutes: -3 })) && throws(() => resolveDuration(v, { kind: "manual", minutes: Number.NaN })));
 }
 check("NO_CALIBRATION_FAMILIES lists exactly the families whose template says manual_only", [...ASSUMPTIONS.NO_CALIBRATION_FAMILIES.value].sort().join() === SCENARIO_TEMPLATES.filter((t) => t.durationSource === "manual_only").map((t) => t.family).sort().join());
+check(
+  "CLASS_FILTERED_BLOCKAGE names exactly flood (not overturned_vehicle or scheduled_roadworks: both are genuine full-width closures, so a binary lane-closed lever is not a simplification for them the way it is for flood)",
+  ASSUMPTIONS.CLASS_FILTERED_BLOCKAGE.value.join() === "flood" && ASSUMPTIONS.CLASS_FILTERED_BLOCKAGE.status === "ASSUMPTION" && ASSUMPTIONS.CLASS_FILTERED_BLOCKAGE.reason.includes("outer lanes") && ASSUMPTIONS.CLASS_FILTERED_BLOCKAGE.reason.includes("PLACEHOLDER"),
+);
 const labels: readonly CollisionLabel[] = ["rear_end", "sideswipe", "hit_and_run"];
 check("each collision label maps to its own entry", labels.every((l) => calibrationKeyFor({ family: "minor_collision", label: l }) === `minor_collision_${l}`));
 
@@ -1312,11 +1317,14 @@ check(
 {
   const p50 = resolutionView(must([], inLaneSpec("truck", 3, 330, 0, { kind: "p50" }), 1).event.resolved);
   const engineTruck = cal.hierarchy[causeVehicleKey("breakdown_in_lane", "engine", "truck")];
-  check("resolution view: a median names the level and n, and carries no badge", engineTruck !== undefined && p50.headline === `${Number(engineTruck.quantiles.p50.toFixed(1))} min · median` && p50.calibration === `Level: cause × vehicle · n = ${engineTruck.n.toLocaleString("en-US")}` && p50.lowSample === null && p50.capped === null && p50.cappedDetail === null);
+  check("resolution view: a median names the level and n, and carries no badge", engineTruck !== undefined && p50.headline === `${Number(engineTruck.quantiles.p50.toFixed(1))} min · median` && p50.calibration === `Level: cause × vehicle · n = ${engineTruck.n.toLocaleString("en-US")}` && p50.noCalibration === null && p50.lowSample === null && p50.capped === null && p50.cappedDetail === null);
   const hnrView = resolutionView(must([], { variant: { family: "minor_collision", label: "hit_and_run" }, lane: 1, positionKm: kmOf(330), startMinutes: 0, duration: { kind: "p50" } }, 1).event.resolved);
-  check("resolution view: hit-and-run shows the badge \"Low sample (n = 129)\"", hnrView.lowSample === "Low sample (n = 129)" && hnrView.calibration === "Level: collision type · n = 129");
+  check("resolution view: hit-and-run shows the badge \"Low sample (n = 129)\", and no no-calibration badge", hnrView.lowSample === "Low sample (n = 129)" && hnrView.calibration === "Level: collision type · n = 129" && hnrView.noCalibration === null);
   const manualHnr = resolutionView(must([], { variant: { family: "minor_collision", label: "hit_and_run" }, lane: 1, positionKm: kmOf(330), startMinutes: 0, duration: manualMinutes(20) }, 1).event.resolved);
-  check("resolution view: a duration the operator typed claims no calibration and no badge", manualHnr.headline === "20 min · entered by you" && manualHnr.calibration === null && manualHnr.lowSample === null && manualHnr.capped === null);
+  check(
+    "resolution view: a MANUAL draw on a CALIBRATED family claims no calibration line and no low/cap badge, but ALSO no no-calibration badge (that badge means the family has no entry at all, which is a different claim from 'this one draw happened to be manual')",
+    manualHnr.headline === "20 min · entered by you" && manualHnr.calibration === null && manualHnr.noCalibration === null && manualHnr.lowSample === null && manualHnr.capped === null,
+  );
   let cappedEvent: ScenarioEvent | undefined;
   for (let seed = 1; seed <= 400 && cappedEvent === undefined; seed++) {
     const e = must([], { variant: { family: "breakdown_in_lane", vehicle: "car", cause: "mechanical" }, lane: 3, positionKm: kmOf(330), startMinutes: 0, duration: { kind: "sampled", seed } }, 1).event;
@@ -1325,9 +1333,21 @@ check(
   const cv = cappedEvent === undefined ? null : resolutionView(cappedEvent.resolved);
   check(
     "resolution view: a capped draw says \"Capped at X min (from <level>)\" and what it drew; in-lane car x mechanical caps from the vehicle level",
-    cappedEvent !== undefined && cv !== null && cv.capped === `Capped at ${Number(cappedEvent.resolved.capMinutes?.toFixed(1))} min (from vehicle)` && cv.cappedDetail !== null && cv.cappedDetail.startsWith("Drew ") && cv.cappedDetail.includes("(n = 2,047)") && cv.lowSample === "Low sample (n = 278)" === (278 < MIN_N),
+    cappedEvent !== undefined && cv !== null && cv.noCalibration === null && cv.capped === `Capped at ${Number(cappedEvent.resolved.capMinutes?.toFixed(1))} min (from vehicle)` && cv.cappedDetail !== null && cv.cappedDetail.startsWith("Drew ") && cv.cappedDetail.includes("(n = 2,047)") && cv.lowSample === "Low sample (n = 278)" === (278 < MIN_N),
     cv === null ? "no capped draw in 400 seeds" : cv.capped ?? "",
   );
+
+  // --- the SAME view, but for every NO_CALIBRATION_FAMILIES member: the positive badge is present, not just an
+  // absent Sampled/Median/90th choice, and it reads identically whether built from a fresh preview (the Add
+  // panel's use) or a stored event's resolution (an event row's use) — resolutionView takes only ResolvedDuration
+  // either way, so there is exactly one code path to get this right in both places.
+  for (const f of ASSUMPTIONS.NO_CALIBRATION_FAMILIES.value) {
+    const view = resolutionView(resolveDuration(defaultVariant(f), { kind: "manual", minutes: 12 }));
+    check(
+      `${f}: resolution view shows the no-calibration badge with the exact required text, distinct from low/cap`,
+      view.noCalibration === NO_CALIBRATION_NOTE && view.noCalibration === "No NLEX calibration data — duration is operator-set." && view.calibration === null && view.lowSample === null && view.capped === null,
+    );
+  }
 }
 
 // --- what the readouts see: the operator's settings with the scenario laid over them

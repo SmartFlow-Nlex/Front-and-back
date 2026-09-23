@@ -979,6 +979,15 @@ export type ResolutionView = {
   readonly headline: string;
   /** "Level: cause × vehicle · n = 1,446"; null for a duration the operator typed in (no calibration behind it). */
   readonly calibration: string | null;
+  /**
+   * NO_CALIBRATION_NOTE when the variant's FAMILY has no calibration.json entry at all (r.level === "none" —
+   * only true for a NO_CALIBRATION_FAMILIES member); null otherwise, including for an ordinary manual draw on
+   * an otherwise-calibrated family (mode "manual" alone is not enough: that also happens for the 5 calibrated
+   * families whenever the operator picks Manual for one event, which is not the same claim). Shown as a badge,
+   * not just inferred from the Sampled/Median/90th buttons being absent, so it reads the same way in the Add
+   * panel preview and in an already-added event's row (both go through this same view / ResolutionBlock).
+   */
+  readonly noCalibration: string | null;
   /** "Low sample (n = 129)" when the entry behind the duration has fewer than LOW_SAMPLE_N events. */
   readonly lowSample: string | null;
   /** "Capped at 217.2 min (from cause × vehicle)" when a sampled draw hit the cap. */
@@ -986,6 +995,9 @@ export type ResolutionView = {
   /** What was drawn before the cap, and what the cap is. Present exactly when `capped` is. */
   readonly cappedDetail: string | null;
 };
+
+/** The exact badge text for a family with no NLEX calibration data at all (see ASSUMPTIONS.NO_CALIBRATION_FAMILIES). */
+export const NO_CALIBRATION_NOTE = "No NLEX calibration data — duration is operator-set.";
 
 /** The resolved duration as the operator reads it. Built from the stored resolution only. */
 export function resolutionView(r: ResolvedDuration): ResolutionView {
@@ -995,6 +1007,7 @@ export function resolutionView(r: ResolvedDuration): ResolutionView {
   return {
     headline: `${fmtMinutes(r.minutes)} · ${how}`,
     calibration: calibrated ? `Level: ${LEVEL_TEXT[r.level]} · n = ${r.n.toLocaleString("en-US")}` : null,
+    noCalibration: r.level === "none" ? NO_CALIBRATION_NOTE : null,
     lowSample: calibrated && r.lowSample ? `Low sample (n = ${r.n.toLocaleString("en-US")})` : null,
     capped: capped && r.capMinutes !== null && r.capLevel !== null ? `Capped at ${fmtMinutes(r.capMinutes)} (from ${LEVEL_TEXT[r.capLevel]})` : null,
     cappedDetail:

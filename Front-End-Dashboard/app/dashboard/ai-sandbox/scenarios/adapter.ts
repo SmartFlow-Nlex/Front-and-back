@@ -505,8 +505,9 @@ function firstClosureStretch(event: ScenarioEvent, road: Road): ClosureStretch |
  * and the caller keeps it counting up, so a name is never reused. The stored
  * event's `direction` is exactly `spec.direction` — addEvent does not infer or
  * validate it against `events`/`road`, because it does not know which
- * per-direction list it was called for; that invariant is the caller's (see
- * directionBucketsConsistent).
+ * per-direction list it was called for. Whoever stores the result into a
+ * per-direction list must go through addEventToBucket, which does know and
+ * refuses a mismatch (see directionBucketsConsistent).
  * Refused when the event cannot run on `road` (see eventProblems), when it needs
  * the closure stretch while the operator has a manual closure on a different
  * stretch (manualClosureMessage; judged against the stretch of its first
@@ -563,7 +564,41 @@ export function addEvent(events: readonly ScenarioEvent[], spec: NewEventSpec, r
  * partial map (e.g. only NB, in NB-only view) without an SB entry.
  */
 export function directionBucketsConsistent(byDirection: Readonly<Partial<Record<Direction, readonly ScenarioEvent[]>>>): boolean {
-  return (Object.keys(byDirection) as Direction[]).every((direction) => (byDirection[direction] ?? []).every((event) => event.direction === direction));
+  return DIRECTIONS.every((direction) => (byDirection[direction] ?? []).every((event) => eventFitsBucket(direction, event)));
+}
+
+const DIRECTIONS = ["NB", "SB"] as const;
+
+/** The one rule: an event may sit in a direction's list only if it names that direction. */
+function eventFitsBucket(bucket: Direction, event: { readonly direction: Direction }): boolean {
+  return event.direction === bucket;
+}
+
+/** Why `bucket`'s list refuses an event that names another carriageway. */
+export function wrongCarriagewayMessage(bucket: Direction, eventDirection: Direction): string {
+  return `${bucket}: refused an event that names ${eventDirection} as its carriageway. An event is stored only in its own carriageway's list. Nothing was changed.`;
+}
+
+/** Why `bucket`'s list refuses everything once it holds an event that names the other carriageway. */
+export function inconsistentBucketMessage(bucket: Direction): string {
+  return `${bucket}: refused because this carriageway's event list already holds an event that names the other carriageway, which must never happen. Nothing was changed; reload the page to clear the events.`;
+}
+
+/**
+ * addEvent for a per-direction list, with the direction invariant ENFORCED instead of assumed:
+ * an event whose `direction` is not this list's is refused with a clear reason and nothing is
+ * stored, checked first so it is never masked by an unrelated refusal (a conflict, a bad start),
+ * and the list that would result is checked with directionBucketsConsistent before it is handed
+ * back — so a list that was already corrupted by some other caller also stops taking events
+ * rather than carrying the error on. Same return shape as addEvent.
+ */
+export function addEventToBucket(bucket: Direction, events: readonly ScenarioEvent[], spec: NewEventSpec, road: Road, seq: number, manual: ManualClosure): AddResult {
+  if (!eventFitsBucket(bucket, spec)) return { ok: false, reason: wrongCarriagewayMessage(bucket, spec.direction) };
+  const r = addEvent(events, spec, road, seq, manual);
+  if (!r.ok) return r;
+  const stored = bucket === "NB" ? { NB: r.events } : { SB: r.events };
+  if (!directionBucketsConsistent(stored)) return { ok: false, reason: inconsistentBucketMessage(bucket) };
+  return r;
 }
 
 const LEVEL_TEXT: Readonly<Record<CalibrationLevel, string>> = {

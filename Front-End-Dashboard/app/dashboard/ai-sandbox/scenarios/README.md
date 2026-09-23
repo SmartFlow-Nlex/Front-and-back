@@ -65,6 +65,15 @@ after either the two can be at different simulated times. A corridor total then 
 readings taken at different moments. Each direction's own tile row, warm-up note and recommendation is
 correct for that direction; the total is not a synchronised snapshot.
 
+> **Top follow-up item for the dual-carriageway work.** Because of this, a corridor total can show a
+> combination that **never existed on the road at one moment** — for example NB's queue half an hour
+> into a collision added to SB's throughput from before it began — and **nothing in the UI indicates
+> it**: the tiles print the total with no sign that the two rows above and below it come from different
+> simulated times. **Suggested fix for later:** show each direction's simulated time (`Metrics.elapsedS`
+> already carries it, so the data is there) next to that direction's row, and mark the corridor totals
+> as stale when the two clocks differ by more than a threshold (the threshold is a choice worth making
+> deliberately: a few seconds is ordinary drift between two rebuilds, minutes is a skip).
+
 ### Corridor totals (Both mode)
 
 Computed by `bothMetrics.ts` (pure; every rule is pinned in `verify.ts`, and the page only calls it).
@@ -112,12 +121,18 @@ ownership are per carriageway (the same event can exist on both at once; a refus
 e.g. `SB: Cannot add …`, via `conflictMessage` / `manualClosureMessage`).
 
 The consistency rule is `directionBucketsConsistent(byDirection)` in `adapter.ts`: every event in
-bucket X must have `direction === X`. **It is a pure checker that `verify.ts` pins** (including a
-deliberately mismatched case that must return `false`); **nothing calls it at runtime.** At runtime the
-invariant holds by construction, not by enforcement: `addEvent` stamps the direction from the spec and
-never infers or validates it, `addScenarioEvent` in the hook does not compare `spec.direction` with its
-own direction, and the panel keeps them in step by building the spec and choosing which direction's
-`onAdd` to call from the same variable. A new caller that adds events must keep that invariant itself.
+bucket X must have `direction === X`. It is **enforced where events are stored**:
+`useDirectionSim`'s `addScenarioEvent` goes through `addEventToBucket(direction, …)` (which the panel's
+preview also calls, so what the panel shows is what will be stored). That function refuses — returning a
+reason and **storing nothing** — (1) an event whose `direction` is not that list's, e.g. `NB: refused an
+event that names SB as its carriageway …`, checked *first* so an unrelated refusal (a conflict, a bad
+start time) can never mask it; and (2) any add to a list that already holds a wrong-direction event, by
+running `directionBucketsConsistent` on the list it would hand back, so a corrupted list stops taking
+events instead of carrying the error on. `verify.ts` pins this behaviourally (the mismatch, the masking
+case and the corrupted-list case, both directions) and checks that the hook has no bare `addEvent` call
+left to bypass it. `addEvent` on its own still stamps the direction from the spec and does not check it
+(it does not know which list it is for), so anything new that stores events must go through
+`addEventToBucket`.
 
 ### Fast-forward cost and the skip guard
 
@@ -187,7 +202,7 @@ cd Back-End
 ./node_modules/.bin/tsx ../Front-End-Dashboard/app/dashboard/ai-sandbox/scenarios/verify.ts
 ```
 
-Read-only, exits 1 on any failure, prints every `FAIL` with its name. As of this write-up: **1,317
+Read-only, exits 1 on any failure, prints every `FAIL` with its name. As of this write-up: **1,323
 checks**. It guards, in order: the sampler reproduces the calibrated quantiles and response shares
 exactly (distribution, cap behaviour, reproducibility per seed); the breakdown hierarchy fallback and
 its cap-source chain; the catalogue/assumptions' internal consistency (phases, shares, lanes,
@@ -200,7 +215,7 @@ every UI view (`resolutionView`, `describeResolution`, `effectiveState`, `descri
 `canvasMarks`); and a 1,500-trial fuzz check that re-composing with the previous ownership fed back
 is always a fixed point after one apply (the live-apply effect re-applies on every render — this is
 what stops that looping). For the dual-carriageway view it also pins the direction bookkeeping
-(`directionBucketsConsistent`, including a case that must fail), that two engine bindings never touch
+(`directionBucketsConsistent` and the `addEventToBucket` guard that enforces it, including the cases that must be refused), that two engine bindings never touch
 each other, every corridor-aggregation rule in `bothMetrics.ts` (including zero flow and unequal
 flow), and — as source checks, since `page.tsx` cannot be imported by a Node script — the structure
 of click routing, the pinned command direction and the Both-mode tile labels; rendered behaviour is
@@ -219,6 +234,10 @@ time they were written.
 
 ## Open items
 
+- **Corridor totals can mix simulated moments** (top follow-up for the dual-carriageway work): see the
+  per-carriageway clock note under [The two carriageways are independent](#the-two-carriageways-are-independent-modelling-limitation)
+  for the problem and the suggested fix (show each direction's sim time; mark totals stale when the
+  clocks differ by more than a threshold).
 - **Class-filtered blockage** (`ASSUMPTIONS.CLASS_FILTERED_BLOCKAGE`, new): the engine's closure
   lever is binary — a lane is closed to every vehicle class or open to all of them. Flooding is
   modelled as a single closed lane over 150 m for exactly that reason, but this is a **placeholder**,

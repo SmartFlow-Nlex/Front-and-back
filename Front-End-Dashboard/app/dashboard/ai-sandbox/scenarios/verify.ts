@@ -38,7 +38,10 @@ import {
   canvasMarks,
   composeInterventions,
   createEngineBinding,
+  addEventToBucket,
   directionBucketsConsistent,
+  inconsistentBucketMessage,
+  wrongCarriagewayMessage,
   MANUAL_CLOSURE_MESSAGE,
   manualClosureMessage,
   SAME_STRETCH_TOL_M,
@@ -1046,6 +1049,51 @@ check("event: phases tile the whole duration, start at 0, ascend, are labelled w
   );
 }
 
+// --- the direction invariant is ENFORCED where events are stored, not just checkable: addEventToBucket
+// (what useDirectionSim's addScenarioEvent and the panel's preview both call) refuses an event that names
+// the other carriageway, checked FIRST so an unrelated refusal cannot mask it, and refuses to build on a
+// list that is already corrupted. Nothing is returned to store in either case.
+{
+  const nbSpec = collisionSpec("minor_collision", 1, 330, 0, manualMinutes(10), "NB");
+  const sbSpec = collisionSpec("minor_collision", 1, 330, 0, manualMinutes(10), "SB");
+  const okNB = addEventToBucket("NB", [], nbSpec, road600, 1, noClosure);
+  const okSB = addEventToBucket("SB", [], sbSpec, road600, 1, noClosure);
+  check(
+    "addEventToBucket: an event naming the bucket's own carriageway is stored, exactly as addEvent would (both directions)",
+    okNB.ok && okNB.events.length === 1 && okNB.event.direction === "NB" && okSB.ok && okSB.events.length === 1 && okSB.event.direction === "SB",
+  );
+  const wrongIntoNB = addEventToBucket("NB", [], sbSpec, road600, 1, noClosure);
+  const wrongIntoSB = addEventToBucket("SB", [], nbSpec, road600, 1, noClosure);
+  check(
+    "addEventToBucket: an SB event offered to NB's list (and an NB event to SB's) is REFUSED with a reason naming both carriageways, and no events are returned to store",
+    !wrongIntoNB.ok && wrongIntoNB.reason === wrongCarriagewayMessage("NB", "SB") && wrongIntoNB.reason.includes("NB") && wrongIntoNB.reason.includes("SB") && !("events" in wrongIntoNB) &&
+      !wrongIntoSB.ok && wrongIntoSB.reason === wrongCarriagewayMessage("SB", "NB") && !("events" in wrongIntoSB),
+  );
+  const held = must([], collisionSpec("multi_vehicle_collision", 1, 330, 10, manualMinutes(40), "NB"), 1);
+  const wouldAlsoConflict = collisionSpec("self_accident", 2, 200, 20, manualMinutes(30), "SB");
+  check(
+    "addEventToBucket: the wrong-carriageway refusal is reported even when the event would ALSO have been refused for another reason (a conflict) — it is checked first, never masked",
+    refused(held.events, { ...wouldAlsoConflict, direction: "NB" }, 2) !== null && (() => {
+      const r = addEventToBucket("NB", held.events, wouldAlsoConflict, road600, 2, noClosure);
+      return !r.ok && r.reason === wrongCarriagewayMessage("NB", "SB");
+    })(),
+  );
+  const strayInNB = must([], sbSpec, 1).event;
+  const laterNB = collisionSpec("minor_collision", 2, 200, 100, manualMinutes(5), "NB");
+  const onCorrupted = addEventToBucket("NB", [strayInNB], laterNB, road600, 2, noClosure);
+  check(
+    "addEventToBucket: a list that ALREADY holds an event naming the other carriageway stops taking events (the resulting list is checked with directionBucketsConsistent), rather than carrying the error on",
+    addEvent([strayInNB], laterNB, road600, 2, noClosure).ok && !onCorrupted.ok && onCorrupted.reason === inconsistentBucketMessage("NB"),
+  );
+  check(
+    "addEventToBucket: an ordinary refusal (a conflict inside the right list) passes through unchanged, so the panel keeps showing the reason it always did",
+    (() => {
+      const dup = addEventToBucket("NB", held.events, collisionSpec("self_accident", 2, 200, 20, manualMinutes(30), "NB"), road600, 2, noClosure);
+      return !dup.ok && dup.reason.includes("Multi-vehicle collision #1") && dup.reason !== wrongCarriagewayMessage("NB", "NB");
+    })(),
+  );
+}
+
 // --- conflicts: an exclusive lever cannot be held twice, and nothing is merged
 {
   const a = must([], collisionSpec("multi_vehicle_collision", 1, 330, 10, manualMinutes(40)), 1);
@@ -1700,6 +1748,11 @@ check(
 {
   const pageSource = readFileSync(new URL("../page.tsx", import.meta.url), "utf8");
   const panelSource = readFileSync(new URL("../components/ScenarioPanel.tsx", import.meta.url), "utf8");
+  const hookSrc = readFileSync(new URL("../useDirectionSim.ts", import.meta.url), "utf8");
+  check(
+    "runtime guard: useDirectionSim's addScenarioEvent stores events ONLY through addEventToBucket(direction, ...) — there is no bare addEvent call left in the hook to bypass it",
+    /const r = addEventToBucket\(direction, scenarioEventsRef\.current,/.test(hookSrc) && !/\baddEvent\(/.test(hookSrc) && /\[direction, scenarioFrame, closedLanes, closureM, closureEndM\]/.test(hookSrc),
+  );
   const tileTags = [...pageSource.matchAll(/<MetricTileBoth\s+label="([^"]+)"\s+tag="([^"]+)"/g)].map((x) => `${x[1]}=${x[2]}`).join(", ");
   check(
     "page: Both-mode tiles label what kind of headline each is (avg speed flow-weighted, queue max, density per direction) — the tag is in the tile, not only in a tooltip",
@@ -1762,7 +1815,7 @@ check(
   );
   check(
     "scenario panel: conflicts, locks and the next event number are taken from the TARGET carriageway's own events (scoped within a direction)",
-    /const target = data\[direction\];/.test(panelSource) && /addEvent\(events, spec, road, nextSeq, manualClosure\)/.test(panelSource),
+    /const target = data\[direction\];/.test(panelSource) && /addEventToBucket\(direction, events, spec, road, nextSeq, manualClosure\)/.test(panelSource),
   );
   check(
     "scenario panel: the long-skip guard applies in EVERY view (the single-direction skip and each Both-mode group use the same SkipControl, no off switch) and the threshold is two minutes",

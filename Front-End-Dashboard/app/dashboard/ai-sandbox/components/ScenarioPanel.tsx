@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import {
-  addEvent,
+  addEventToBucket,
   describeYield,
   eventProgress,
   formatClock,
@@ -38,7 +38,7 @@ import DirectionPill, { DIRECTION_NAME } from "./DirectionPill";
  * Everything shown here is built by scenarios/adapter.ts (resolutionView, the phase
  * list, eventProgress...); this file only lays it out and keeps the form's state.
  * The panel previews exactly what "Add event" will store: it calls the same
- * addEvent with the same seed, so the minutes, the calibration level, the badges and
+ * addEventToBucket with the same seed, so the minutes, the calibration level, the badges and
  * any refusal on screen are the ones that will apply.
  */
 
@@ -432,7 +432,7 @@ export default function ScenarioPanel(props: Props) {
   const spec: NewEventSpec = { variant, direction, lane: hasLane(family) ? laneNow : null, positionKm: kmNow, startMinutes: startMin, duration };
 
   // The same call "Add event" makes, so what is shown is what will be stored (and why not, if it will not).
-  const verdict = addEvent(events, spec, road, nextSeq, manualClosure);
+  const verdict = addEventToBucket(direction, events, spec, road, nextSeq, manualClosure);
   let preview: ResolvedDuration | null = null;
   try {
     preview = resolveDuration(variant, duration);

@@ -5,7 +5,7 @@ import type { NlexExit } from "../../../lib/nlex-exits";
 import { TrafficSim, type Interventions, type Metrics } from "./simulation";
 import {
   NO_OWNERS,
-  addEvent,
+  addEventToBucket,
   applyAtBoundary,
   createEngineBinding,
   describeActiveEvents,
@@ -457,14 +457,16 @@ export function useDirectionSim(direction: Direction, shared: SharedRoadInputs) 
       const sim = simRef.current;
       if (!sim) return { ok: false, reason: "The simulation has not started yet." };
       const seq = scenarioSeqRef.current + 1;
-      const r = addEvent(scenarioEventsRef.current, spec, roadOf(sim, scenarioFrame), seq, { closedLanes, closurePoint: closureM, closureEnd: closureEndM });
+      // Through addEventToBucket, not addEvent: this list is `direction`'s, and an event naming the other carriageway (or a list
+      // already holding one) is refused with a reason instead of being stored.
+      const r = addEventToBucket(direction, scenarioEventsRef.current, spec, roadOf(sim, scenarioFrame), seq, { closedLanes, closurePoint: closureM, closureEnd: closureEndM });
       if (!r.ok) return r;
       scenarioSeqRef.current = seq;
       scenarioEventsRef.current = r.events;
       setScenarioEvents(r.events);
       return { ok: true, event: r.event };
     },
-    [scenarioFrame, closedLanes, closureM, closureEndM],
+    [direction, scenarioFrame, closedLanes, closureM, closureEndM],
   );
   const removeScenarioEvent = useCallback((id: string) => {
     scenarioEventsRef.current = removeEvent(scenarioEventsRef.current, id);

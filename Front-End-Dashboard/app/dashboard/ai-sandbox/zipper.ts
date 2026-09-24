@@ -2,22 +2,27 @@ import { ASSUMPTIONS } from "./scenarios/assumptions";
 import type { Direction } from "./scenarios/adapter";
 
 /**
- * Zipper lane / counterflow, as far as this sandbox can honestly model it.
+ * Lane reallocation, as far as this sandbox can honestly model it. (The file and its identifiers keep the
+ * name "zipper" from when the feature was first built as a zipper lane / counterflow; the operator-facing
+ * name is REALLOCATION_NAME, and the engine's own "zipper merge" is an unrelated thing.)
  *
- * A zipper lane (a movable barrier) moves the median by one lane so one carriageway gains a lane and the
- * other loses one; counterflow does the same with more lanes, typically to relieve one direction. The
- * engine has no cross-carriageway traffic and cannot change a carriageway's lane count mid-run, so this is
- * modelled as what it does to capacity: the two carriageways' lane counts are changed together, the total
- * kept, and both runs restart (a lane count change always does, see the Lanes slider). The carriageways
- * still never interact (see the README's limitation); what changes is how many lanes each one has.
+ * Reallocation moves 1 or 2 lanes from one carriageway to the other, as a movable barrier would: one
+ * carriageway gains lanes and the other loses the same number. The engine has no cross-carriageway traffic
+ * and cannot change a carriageway's lane count mid-run, so this is modelled as what it does to capacity: the
+ * two carriageways' lane counts are changed together, the total kept, and both runs restart (a lane count
+ * change always does, see the Lanes slider). Lanes are reassigned; vehicles do not cross the median, and the
+ * carriageways still never interact (see the README's limitation).
  *
  * Pure, so verify.ts pins the limits and the refusal wording.
  */
 
+/** What the scheme is called wherever the operator sees it. */
+export const REALLOCATION_NAME = "Lane reallocation";
+
 export type ZipperState = {
   /** The carriageway that GAINED lanes. */
   readonly toward: Direction;
-  /** How many lanes moved: 1 is a zipper lane, 2 a counterflow scheme. */
+  /** How many lanes moved (1 or 2). */
   readonly lanes: number;
   /** Each carriageway's lane count before the transfer — what "Off" restores. */
   readonly base: Readonly<Record<Direction, number>>;
@@ -71,7 +76,3 @@ export function borrowedLanes(state: ZipperState | null, direction: Direction): 
   return state !== null && state.toward === direction ? state.lanes : 0;
 }
 
-/** "Zipper lane" for one lane moved, "Counterflow" for more. */
-export function zipperName(lanes: number): string {
-  return lanes <= 1 ? "Zipper lane" : "Counterflow";
-}

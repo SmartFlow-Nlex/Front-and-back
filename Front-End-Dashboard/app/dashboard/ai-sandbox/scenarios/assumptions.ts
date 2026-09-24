@@ -69,6 +69,16 @@ export type PhaseIdOf = {
 export type RainIntensity = "light" | "moderate" | "heavy";
 export const RAIN_INTENSITIES: readonly RainIntensity[] = ["light", "moderate", "heavy"];
 
+/**
+ * Free-flow speed on the NLEx (km/h) by rainfall class, as fitted from loop-detector data: Table 2 of
+ * Mejia & Sigua (2018) — see ASSUMPTIONS.RAIN_SPEED_KMH for the full citation, the site and what it can
+ * and cannot support. Recorded here so the caps below are derived from them, in one place, rather than typed.
+ */
+export const NLEX_RAIN_FREE_FLOW_KMH = { clear: 109.79, light: 102.12, moderate: 101.46, heavy: 97.658 } as const;
+
+/** The engine's own class-1 free-flow speed (30 m/s) scaled by the NLEx study's ratio of rain to clear free-flow speed, to whole km/h. */
+const rainCapKmh = (rainFreeFlowKmh: number): number => Math.round((CLASS_META[1].v0 * 3.6 * rainFreeFlowKmh) / NLEX_RAIN_FREE_FLOW_KMH.clear);
+
 /** Engine vehicle classes 1 / 2 / 3. */
 export type VehicleKind = "car" | "bus" | "truck";
 export type BreakdownCause = "tire" | "engine" | "mechanical" | "fuel" | "electrical";
@@ -253,11 +263,13 @@ export const ASSUMPTIONS = {
   ),
 
   RAIN_SPEED_KMH: assume<Readonly<Record<RainIntensity, number>>>(
-    { light: 90, moderate: 75, heavy: 60 },
-    "The speed each rain intensity caps traffic to, for as long as the event runs. Unlike GAWK_SPEED_KMH (drivers slowing to look at something beside the road), this stands in for reduced grip and visibility over the WHOLE simulated stretch, not a local effect near one vehicle — so the speed zone for a rain event is [0, segment length] regardless of where the event is placed (RAIN_ZONE below). Heavy is 60, exactly the single value this family had before intensities existed, so a rain event added then still means what it did. Light and moderate are placed at 90 and 75 so the three are ordered and roughly evenly spaced between the engine's free-flow class-1 speed (108) and the heavy cap: steps of 18, 15 and 15 km/h. They are ROUND NUMBERS, not measurements, and have not been checked against any published figure. The warehouse holds no observed corridor operating speed at all (see GAWK_SPEED_KMH), and the weather-split check that would have anchored a real number instead found no measurable effect on clearance time (see NO_CALIBRATION_FAMILIES).",
+    { light: rainCapKmh(NLEX_RAIN_FREE_FLOW_KMH.light), moderate: rainCapKmh(NLEX_RAIN_FREE_FLOW_KMH.moderate), heavy: rainCapKmh(NLEX_RAIN_FREE_FLOW_KMH.heavy) },
+    "The speed each rain intensity caps traffic to, for as long as the event runs, over the WHOLE simulated stretch (RAIN_ZONE) — a stand-in for the lower free-flow speed rain causes, not a local effect near one vehicle (unlike GAWK_SPEED_KMH). DERIVED from one NLEx study, not measured here: Mejia & Sigua (2018) fitted speed-density curves to NLEx loop-detector data by rainfall class (PAGASA classes: light 0.1-2.5 mm/h, moderate 2.6-7.5, heavy above 7.5) and report a free-flow speed of 109.79 km/h in clear weather, 102.12 light, 101.46 moderate and 97.66 heavy (their Table 2). Each cap is the engine's own class-1 free-flow speed (108 km/h) scaled by that study's ratio of rain to clear free-flow speed — 108 x 102.12/109.79, 108 x 101.46/109.79, 108 x 97.658/109.79 — rounded to whole km/h: 100, 100 and 96. Light and moderate come out the same because the study's own figures for them differ by under 1 km/h (its average speeds by 0.7 km/h): the data do not separate them, so the cap does not either. A SPEED CAP IS ONLY A PROXY. Rain's main real effect is on following headways — drivers keep larger gaps — and the engine cannot vary headway, so a cap reproduces the speed effect and likely UNDERSTATES the capacity loss. The same study finds capacity falling 3.7%, 7.6% and 17.4% (light, moderate, heavy); this engine loses about 2% under these caps (see evidence).",
     {
-      evidence: "The engine's own free-flow class-1 speed is 108 km/h; GAWK_SPEED_KMH (a narrower, one-vehicle effect) is 70. The old single rain cap, 60, is kept as heavy. The intensity picker exists so an operator can compare a lighter and a heavier assumption, not because the values are known.",
-      settledBy: "Probe / loop-detector speeds during recorded rain events of known intensity, which do not exist in the warehouse.",
+      evidence:
+        "Mejia, H. N. & Sigua, R. G. (2018), 'Impacts of Different Rainfall Intensities on Key Traffic Flow Parameters at ...' (the rest of the title did not extract from the PDF; the site is the NLEx), Philippine Transportation Journal 1(2), August 2018, Table 2 and section 5.2: https://ncts.upd.edu.ph/tssp/wp-content/uploads/2018/08/Mejia18.pdf. Their data: loop detectors at Km 11+150 northbound near the Balintawak toll plaza (4 lanes), 6-minute intervals, June-December 2016, daytime only (06:00-17:00), rainfall from a PAGASA automatic weather station within 1 km (15-minute readings); the model was calibrated on lanes 3 and 4; free-flow speed is a parameter of the fitted Underwood speed-density model, not an observed maximum. One site, one season, one study. Also reported there: average speed 73.0 km/h clear against 69.1, 68.4 and 67.6; capacity 1,554 pcu/h clear against 1,497, 1,436 and 1,283 (the text gives them per lane). Corroboration only, NOT used to set the values: the HCM 2000 figures that paper quotes (free-flow speed down 1.9 km/h in light rain and 4.8-6.4 in heavy; capacity down 14-15% in heavy rain), and the FHWA Road Weather Management 'Rain & Flooding' page (freeway speeds down 2-13% in light rain, 3-17% in heavy; it cites no primary source). The HCM 6th-edition Chapter 11 weather adjustment factors were searched for and not found in any free source. Measured on this engine (scenarios/tools/measure_rain_cap.ts: 4 lanes, 1 km, 3 seeds, 1,500 simulated s): at saturating demand these caps cut capacity by 2.1% (100 km/h) and 2.3% (96 km/h) against the study's 3.7% / 7.6% / 17.4%; at 1,500 veh/h/lane they cut average speed by 2.9% and 5.1% against the study's 5.3% / 6.3% / 7.4%.",
+      settledBy:
+        "Loop-detector speeds and flows at more NLEx sites and seasons with rain of recorded intensity (this is one site and one season); a following-headway lever in the engine, so rain can act where it mostly acts (out of scope: simulation.ts).",
     },
   ),
 
@@ -269,7 +281,7 @@ export const ASSUMPTIONS = {
 
   ZIPPER_LANES: assume<{ readonly minLanes: number; readonly maxLanes: number; readonly maxTransfer: number }>(
     { minLanes: 2, maxLanes: 6, maxTransfer: 2 },
-    "Limits on the zipper lane / counterflow control, which moves 1 lane (zipper) or 2 lanes (counterflow) from one carriageway to the other by changing each carriageway's lane count. A carriageway never drops below 2 lanes (the same floor as the lane slider: a single lane is not a road this sandbox models), may not exceed 6 (one more than the lane slider's 5, which is what lets a 4-lane carriageway take 2 lanes from the other), and at most 2 lanes are moved (a zipper lane moves the barrier one lane; a counterflow scheme takes over up to two). These are modelling bounds, not operating rules: nothing in the data says whether NLEX runs a movable barrier or contraflow on this corridor, and how many lanes a real scheme could move depends on the road and the barrier system.",
+    "Limits on the lane reallocation control, which moves 1 or 2 lanes from one carriageway to the other by changing each carriageway's lane count. A carriageway never drops below 2 lanes (the same floor as the lane slider: a single lane is not a road this sandbox models), may not exceed 6 (one more than the lane slider's 5, which is what lets a 4-lane carriageway take 2 lanes from the other), and at most 2 lanes are moved (a movable barrier is assumed to move one lane, or up to two). These are modelling bounds, not operating rules: nothing in the data says whether NLEX runs a movable barrier or any reversible-lane operation on this corridor, and how many lanes a real scheme could move depends on the road and the barrier system.",
     {
       evidence: "The lane slider runs 2 to 5 (lib/nlex-lanes holds no lane data yet, so there is no corridor figure to check the 6 against). The engine itself takes any lane count: verify.ts runs it at 2 and at 6, and 6 was looked at in Both mode (8 lanes in total in either split) and draws legibly.",
       settledBy: "NLEX guidance on whether a movable barrier or contraflow operation exists on this corridor and how many lanes it can move.",

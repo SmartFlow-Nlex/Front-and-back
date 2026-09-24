@@ -15,10 +15,10 @@
  */
 import { readFileSync } from "node:fs";
 import calibrationJson from "./calibration.json";
-import { TrafficSim, type Interventions, type Metrics } from "../simulation";
+import { CLASS_META, TrafficSim, type Interventions, type Metrics } from "../simulation";
 import { combineBaselines, combineMetrics, flowWeightedSpeed } from "../bothMetrics";
 import { drawBorrowedLanes, drawMovableBarrier, drawScenes, drawWater, drawWeather, hasSceneArt, type SceneCtx, type SceneGeometry } from "../sceneArt";
-import { borrowedLanes, planZipper, zipperCounts, zipperHolds, zipperName } from "../zipper";
+import { borrowedLanes, planZipper, REALLOCATION_NAME, zipperCounts, zipperHolds } from "../zipper";
 import {
   ASSUMPTIONS,
   CHAINAGE_DERIVATION,
@@ -30,6 +30,7 @@ import {
   engineIndexToOperatorLane,
   incidentSlotsFor,
   listAssumptions,
+  NLEX_RAIN_FREE_FLOW_KMH,
   operatorLaneToEngineIndex,
   RAIN_INTENSITIES,
   type RainIntensity,
@@ -977,12 +978,12 @@ check("event: phases tile the whole duration, start at 0, ascend, are labelled w
   const c0 = composeInterventions({ ...idle, incidents: [] }, [near0], abs(1), road600);
   const c1 = composeInterventions({ ...idle, incidents: [] }, [nearEnd], abs(1), road600);
   check(
-    "rain: the zone is [0, segment length] no matter where positionKm places the event (RAIN_ZONE = whole_segment), at RAIN_SPEED_KMH (60)",
-    c0.interventions.speedZone[0] === 0 && c0.interventions.speedZone[1] === 600 && c0.interventions.speedLimitKmh === 60 && ASSUMPTIONS.RAIN_SPEED_KMH.value.heavy === 60 &&
-      c1.interventions.speedZone[0] === 0 && c1.interventions.speedZone[1] === 600 && c1.interventions.speedLimitKmh === 60,
+    "rain: the zone is [0, segment length] no matter where positionKm places the event (RAIN_ZONE = whole_segment), at RAIN_SPEED_KMH (heavy, for the spec these use)",
+    c0.interventions.speedZone[0] === 0 && c0.interventions.speedZone[1] === 600 && c0.interventions.speedLimitKmh === ASSUMPTIONS.RAIN_SPEED_KMH.value.heavy &&
+      c1.interventions.speedZone[0] === 0 && c1.interventions.speedZone[1] === 600 && c1.interventions.speedLimitKmh === ASSUMPTIONS.RAIN_SPEED_KMH.value.heavy,
   );
   check("rain: no lane is closed", !c0.interventions.closedLanes.some(Boolean) && c0.owners.closure === null);
-  check("rain: it owns the speed zone, not a shoulder breakdown's gawk zone (a different, lower speed)", c0.owners.speedZone !== null && c0.owners.speedZone.eventId === near0.id && ASSUMPTIONS.RAIN_SPEED_KMH.value.heavy < ASSUMPTIONS.GAWK_SPEED_KMH.value.breakdown_shoulder);
+  check("rain: it owns the speed zone, not a shoulder breakdown's gawk zone (a different speed, so the two are told apart by who owns it)", c0.owners.speedZone !== null && c0.owners.speedZone.eventId === near0.id && ASSUMPTIONS.RAIN_SPEED_KMH.value.heavy !== ASSUMPTIONS.GAWK_SPEED_KMH.value.breakdown_shoulder);
   check("rain: has no lane, whatever lane the spec was given (effectOf routes it to speed_zone, same as a shoulder breakdown)", must([], { ...rainSpec(330, 0, manualMinutes(5)), lane: 2 }, 1).event.lane === null);
 
   const opLimit = composeInterventions({ ...idle, speedLimitKmh: 50, incidents: [] }, [near0], abs(1), road600);
@@ -1832,8 +1833,22 @@ check(
 // --- rain intensity: light, moderate, heavy each cap traffic to their own assumed speed
 {
   const caps = ASSUMPTIONS.RAIN_SPEED_KMH.value;
-  check("rain intensity: the caps are ordered — light > moderate > heavy — and every one is below the engine's free-flow speed (108) and above zero", caps.light > caps.moderate && caps.moderate > caps.heavy && caps.light < 108 && caps.heavy > 0, JSON.stringify(caps));
-  check("rain intensity: heavy is 60, exactly the single cap this family had before intensities existed (so an old rain event means what it did)", caps.heavy === 60);
+  check("rain intensity: the caps never rise with intensity — light >= moderate > heavy — and every one is below the engine's free-flow speed (108) and above zero", caps.light >= caps.moderate && caps.moderate > caps.heavy && caps.light < 108 && caps.heavy > 0, JSON.stringify(caps));
+  check(
+    "rain intensity: the caps are the engine's 108 km/h free-flow speed scaled by the NLEx study's rain / clear free-flow ratios (Mejia & Sigua 2018, Table 2: 109.79, 102.12, 101.46, 97.658) — 100, 100, 96 — recomputed here from the paper's own figures",
+    NLEX_RAIN_FREE_FLOW_KMH.clear === 109.79 && NLEX_RAIN_FREE_FLOW_KMH.light === 102.12 && NLEX_RAIN_FREE_FLOW_KMH.moderate === 101.46 && NLEX_RAIN_FREE_FLOW_KMH.heavy === 97.658 &&
+      CLASS_META[1].v0 * 3.6 === 108 &&
+      caps.light === Math.round((108 * 102.12) / 109.79) && caps.moderate === Math.round((108 * 101.46) / 109.79) && caps.heavy === Math.round((108 * 97.658) / 109.79) &&
+      caps.light === 100 && caps.moderate === 100 && caps.heavy === 96,
+    JSON.stringify(caps),
+  );
+  const rainAssumption = ASSUMPTIONS.RAIN_SPEED_KMH;
+  check(
+    "rain intensity: the assumption cites its source (author, year, journal, URL), the site, and says a speed cap is a proxy that understates capacity loss because the engine cannot vary following headways",
+    /Mejia/.test(rainAssumption.evidence ?? "") && /Sigua/.test(rainAssumption.evidence ?? "") && /2018/.test(rainAssumption.evidence ?? "") && /Philippine Transportation Journal/.test(rainAssumption.evidence ?? "") &&
+      /https:\/\/ncts\.upd\.edu\.ph\/tssp\/wp-content\/uploads\/2018\/08\/Mejia18\.pdf/.test(rainAssumption.evidence ?? "") && /Km 11\+150/.test(rainAssumption.evidence ?? "") &&
+      /following headways/.test(rainAssumption.reason) && /cannot vary headway/.test(rainAssumption.reason) && /UNDERSTATES the capacity loss/.test(rainAssumption.reason) && /PROXY/.test(rainAssumption.reason),
+  );
   check("rain intensity: the template offers exactly light, moderate, heavy, in that order, each with a label", (() => { const tpl = TEMPLATE_BY_FAMILY.rain; return tpl.intensities.map((i) => i.id).join() === "light,moderate,heavy" && tpl.intensities.every((i) => i.label.length > 0) && RAIN_INTENSITIES.join() === "light,moderate,heavy"; })());
   check("rain intensity: the family is named Rain and its default intensity is offered", TEMPLATE_BY_FAMILY.rain.displayName === "Rain" && TEMPLATE_BY_FAMILY.rain.intensities.some((i) => i.id === TEMPLATE_BY_FAMILY.rain.defaultIntensity));
   const dv = defaultVariant("rain");
@@ -1872,7 +1887,7 @@ const roadMarks = (evs: readonly ScenarioEvent[], min: number, owners = NO_OWNER
   const rain = roadMarks([must([], rainSpec(330, 0, manualMinutes(30), "NB", "light"), 1).event], 1)[0];
   check("scene marks: rain carries its intensity and holds nothing on the road; other families carry none", rain.intensity === "light" && rain.closedLanes.length === 0 && rain.stretch === null && active.intensity === null);
   check(
-    "scene marks: rain carries the cap its intensity applies (light 90, moderate 75, heavy 60) for the speed sign; nothing else carries one",
+    "scene marks: rain carries the cap its intensity applies (from RAIN_SPEED_KMH) for the speed sign; nothing else carries one",
     RAIN_INTENSITIES.every((i, n) => roadMarks([must([], rainSpec(330, 0, manualMinutes(30), "NB", i), n + 1).event], 1)[0].capKmh === ASSUMPTIONS.RAIN_SPEED_KMH.value[i]) && active.capKmh === null,
   );
   const ev2 = must([], collisionSpec("minor_collision", 1, 330, 5, manualMinutes(10), "NB"), 2).event;
@@ -1902,6 +1917,7 @@ const roadMarks = (evs: readonly ScenarioEvent[], min: number, owners = NO_OWNER
   class Recorder implements SceneCtx {
     readonly calls: string[] = [];
     readonly texts: string[] = [];
+    readonly strokeStyles: string[] = [];
     fillStyle: SceneCtx["fillStyle"] = "#000";
     strokeStyle: SceneCtx["strokeStyle"] = "#000";
     lineWidth = 1;
@@ -1926,7 +1942,7 @@ const roadMarks = (evs: readonly ScenarioEvent[], min: number, owners = NO_OWNER
     ellipse(x: number, y: number, rx: number, ry: number): void { this.log("ellipse", x, y, rx, ry); }
     rect(x: number, y: number, w: number, h: number): void { this.log("rect", x, y, w, h); }
     fill(): void { this.log("fill"); }
-    stroke(): void { this.log("stroke"); }
+    stroke(): void { this.strokeStyles.push(String(this.strokeStyle)); this.log("stroke"); }
     clip(): void { this.log("clip"); }
     fillRect(x: number, y: number, w: number, h: number): void { this.log("fillRect", x, y, w, h); }
     strokeRect(x: number, y: number, w: number, h: number): void { this.log("strokeRect", x, y, w, h); }
@@ -1951,9 +1967,17 @@ const roadMarks = (evs: readonly ScenarioEvent[], min: number, owners = NO_OWNER
   check("rain art: the harder it rains, the more drops are drawn (light < moderate < heavy, heavy more than double light)", drops(light) < drops(moderate) && drops(moderate) < drops(heavy) && drops(heavy) > 2 * drops(light), `${drops(light)} < ${drops(moderate)} < ${drops(heavy)}`);
   check("rain art: the drops are clipped to the carriageway (a clip is applied before any drop is drawn)", heavy.calls.indexOf("clip") > -1 && heavy.calls.indexOf("clip") < heavy.calls.findIndex((c) => c.startsWith("lineTo")));
   check("rain art: the drops and the wet tint stay inside the carriageway (the clip is exactly the road's rectangle, not a margin around it)", heavy.calls.includes("rect 0.00 20.00 800.00 120.00") && heavy.calls.filter((c) => c.startsWith("rect ")).length === 1);
-  check("rain art: a speed-limit sign shows the intensity's cap (60 heavy, 90 light), and no sign is drawn for a mark with no cap", paintWeather([{ ...base, intensity: "heavy", capKmh: 60 }], 1).texts.join() === "60" && paintWeather([{ ...base, intensity: "light", capKmh: 90 }], 1).texts.join() === "90" && paintWeather([{ ...base, capKmh: null }], 1).texts.length === 0);
+  check("rain art: a speed-limit sign shows the intensity's cap (96 heavy, 100 light as fixtures), and no sign is drawn for a mark with no cap", paintWeather([{ ...base, intensity: "heavy", capKmh: 96 }], 1).texts.join() === "96" && paintWeather([{ ...base, intensity: "light", capKmh: 100 }], 1).texts.join() === "100" && paintWeather([{ ...base, capKmh: null }], 1).texts.length === 0);
   check("rain art: it is deterministic — the same clock paints the same picture, exactly (which is what makes a paused run freeze)", paintWeather([base], 2.5).calls.join("|") === paintWeather([base], 2.5).calls.join("|"));
   check("rain art: a later clock moves the drops (the animation actually animates)", paintWeather([base], 2.5).calls.join("|") !== paintWeather([base], 2.6).calls.join("|"));
+  const alphaOf = (style: string): number => Number(/,([0-9.]+)\)$/.exec(style)?.[1] ?? "0");
+  // the first two strokes of a weather pass are the two layers of drops (far, then near); the ripples come after
+  const layers = (r: Recorder): string[] => r.strokeStyles.slice(0, 2);
+  check(
+    "rain art: the drops are sky blue — the far layer #87CEFA (135,206,250), the near layer #9CDDEC (156,221,236) — and clearly opaque even in light rain (alpha at least 0.5, higher in heavy)",
+    [light, moderate, heavy].every((r) => layers(r)[0]?.startsWith("rgba(135,206,250,") === true && layers(r)[1]?.startsWith("rgba(156,221,236,") === true) &&
+      Math.min(...layers(light).map(alphaOf)) >= 0.5 && Math.min(...layers(light).map(alphaOf)) < Math.min(...layers(heavy).map(alphaOf)),
+  );
   const dropPath = (r: Recorder): string => r.calls.filter((c) => c.startsWith("moveTo ") || c.startsWith("lineTo ")).join("|");
   check("rain art: the DROPS themselves fall — their positions change with the clock (not just the ripples)", dropPath(paintWeather([base], 2.5)) !== dropPath(paintWeather([base], 2.6)) && dropPath(paintWeather([base], 2.5)).length > 0);
   check("rain art: an event that has not started draws no rain, and neither does an empty list", paintWeather([{ ...base, state: "pending" }], 1).calls.length === 0 && paintWeather([], 1).calls.length === 0);
@@ -1990,30 +2014,30 @@ const roadMarks = (evs: readonly ScenarioEvent[], min: number, owners = NO_OWNER
   drawMovableBarrier(barrierA, 800, 200, 6, 1, 1);
   const barrierB = new Recorder();
   drawMovableBarrier(barrierB, 800, 200, 6, 3, 1);
-  check("zipper art: the movable barrier is a chain of segments with a transfer vehicle that MOVES along it", barrierA.count("arcTo") > 100 && barrierA.calls.join("|") !== barrierB.calls.join("|"));
+  check("reallocation art: the movable barrier is a chain of segments with a transfer vehicle that MOVES along it", barrierA.count("arcTo") > 100 && barrierA.calls.join("|") !== barrierB.calls.join("|"));
   const lanesR = new Recorder();
-  drawBorrowedLanes(geom(lanesR, 1), 1, "ZIPPER LANE");
+  drawBorrowedLanes(geom(lanesR, 1), 1, "REALLOCATED");
   const noLanes = new Recorder();
-  drawBorrowedLanes(geom(noLanes, 1), 0, "ZIPPER LANE");
-  check("zipper art: borrowed lanes are marked (wash, chevrons, an edge line and the scheme's name); none borrowed paints nothing", lanesR.count("fillRect") >= 1 && lanesR.count("fillText") === 1 && lanesR.count("stroke") > 5 && noLanes.calls.length === 0);
+  drawBorrowedLanes(geom(noLanes, 1), 0, "REALLOCATED");
+  check("reallocation art: borrowed lanes are marked (wash, chevrons, an edge line and the scheme's name); none borrowed paints nothing", lanesR.count("fillRect") >= 1 && lanesR.count("fillText") === 1 && lanesR.count("stroke") > 5 && noLanes.calls.length === 0);
 }
 
-// --- zipper lane / counterflow: the lane-transfer rules, pure
+// --- lane reallocation (was zipper lane / counterflow): the lane-transfer rules, pure
 {
   const b44 = { NB: 4, SB: 4 } as const;
   const okNB1 = planZipper(b44, "NB", 1);
   const okNB2 = planZipper(b44, "NB", 2);
   const okSB2 = planZipper(b44, "SB", 2);
-  check("zipper: from 4 + 4, one lane moves either way (5 + 3, 3 + 5) and the total stays 8", okNB1.ok && okNB1.counts.NB === 5 && okNB1.counts.SB === 3 && planZipper(b44, "SB", 1).ok && (() => { const p = planZipper(b44, "SB", 1); return p.ok && p.counts.SB === 5 && p.counts.NB === 3; })());
-  check("zipper: from 4 + 4, counterflow moves two lanes (6 + 2, 2 + 6), the most the limits allow, total kept", okNB2.ok && okNB2.counts.NB === 6 && okNB2.counts.SB === 2 && okSB2.ok && okSB2.counts.SB === 6 && okSB2.counts.NB === 2);
+  check("lane reallocation: from 4 + 4, one lane moves either way (5 + 3, 3 + 5) and the total stays 8", okNB1.ok && okNB1.counts.NB === 5 && okNB1.counts.SB === 3 && planZipper(b44, "SB", 1).ok && (() => { const p = planZipper(b44, "SB", 1); return p.ok && p.counts.SB === 5 && p.counts.NB === 3; })());
+  check("lane reallocation: from 4 + 4, counterflow moves two lanes (6 + 2, 2 + 6), the most the limits allow, total kept", okNB2.ok && okNB2.counts.NB === 6 && okNB2.counts.SB === 2 && okSB2.ok && okSB2.counts.SB === 6 && okSB2.counts.NB === 2);
   const tooFew = planZipper({ NB: 3, SB: 3 }, "NB", 2);
   const tooMany = planZipper({ NB: 5, SB: 5 }, "NB", 2);
   const nonsense = [planZipper(b44, "NB", 0), planZipper(b44, "NB", 3), planZipper(b44, "NB", 1.5)];
-  check("zipper: a transfer that would leave the donor below 2 lanes is refused, saying which carriageway and how many lanes", !tooFew.ok && tooFew.reason.includes("SB") && tooFew.reason.includes("1 lane") && tooFew.reason.includes("at least 2"), tooFew.ok ? "" : tooFew.reason);
-  check("zipper: a transfer that would take the recipient past 6 lanes is refused, saying so", !tooMany.ok && tooMany.reason.includes("NB") && tooMany.reason.includes("7") && tooMany.reason.includes("6"), tooMany.ok ? "" : tooMany.reason);
-  check("zipper: 0, 3 or a fractional number of lanes is refused", nonsense.every((p) => !p.ok));
-  check("zipper: the limits are the recorded assumption (min 2, max 6, at most 2 moved), not numbers scattered in the code", ASSUMPTIONS.ZIPPER_LANES.value.minLanes === 2 && ASSUMPTIONS.ZIPPER_LANES.value.maxLanes === 6 && ASSUMPTIONS.ZIPPER_LANES.value.maxTransfer === 2);
-  check("zipper: the lane total is conserved by every accepted transfer, over every base 2..5 + 2..5, both directions, 1 and 2 lanes", (() => {
+  check("lane reallocation: a transfer that would leave the donor below 2 lanes is refused, saying which carriageway and how many lanes", !tooFew.ok && tooFew.reason.includes("SB") && tooFew.reason.includes("1 lane") && tooFew.reason.includes("at least 2"), tooFew.ok ? "" : tooFew.reason);
+  check("lane reallocation: a transfer that would take the recipient past 6 lanes is refused, saying so", !tooMany.ok && tooMany.reason.includes("NB") && tooMany.reason.includes("7") && tooMany.reason.includes("6"), tooMany.ok ? "" : tooMany.reason);
+  check("lane reallocation: 0, 3 or a fractional number of lanes is refused", nonsense.every((p) => !p.ok));
+  check("lane reallocation: the limits are the recorded assumption (min 2, max 6, at most 2 moved), not numbers scattered in the code", ASSUMPTIONS.ZIPPER_LANES.value.minLanes === 2 && ASSUMPTIONS.ZIPPER_LANES.value.maxLanes === 6 && ASSUMPTIONS.ZIPPER_LANES.value.maxTransfer === 2);
+  check("lane reallocation: the lane total is conserved by every accepted transfer, over every base 2..5 + 2..5, both directions, 1 and 2 lanes", (() => {
     for (let a = 2; a <= 5; a++) for (let b = 2; b <= 5; b++) for (const to of ["NB", "SB"] as const) for (const n of [1, 2]) {
       const p = planZipper({ NB: a, SB: b }, to, n);
       if (p.ok && (p.counts.NB + p.counts.SB !== a + b || p.counts.NB < 2 || p.counts.SB < 2 || p.counts.NB > 6 || p.counts.SB > 6)) return false;
@@ -2022,9 +2046,9 @@ const roadMarks = (evs: readonly ScenarioEvent[], min: number, owners = NO_OWNER
   })());
   if (!okNB1.ok) throw new Error("fixture");
   const held = { NB: 5, SB: 3 };
-  check("zipper: zipperCounts reproduces what the plan set, and zipperHolds is true only while the lane counts are exactly those", zipperCounts(okNB1.state).NB === 5 && zipperCounts(okNB1.state).SB === 3 && zipperHolds(okNB1.state, held) && !zipperHolds(okNB1.state, { NB: 4, SB: 3 }) && !zipperHolds(okNB1.state, { NB: 5, SB: 4 }) && !zipperHolds(okNB1.state, b44));
-  check("zipper: only the carriageway that GAINED lanes has borrowed ones (the innermost n); the donor and 'no scheme' have none", borrowedLanes(okNB1.state, "NB") === 1 && borrowedLanes(okNB1.state, "SB") === 0 && borrowedLanes(okNB2.ok ? okNB2.state : null, "NB") === 2 && borrowedLanes(null, "NB") === 0);
-  check("zipper: one lane is a 'Zipper lane', two is 'Counterflow'", zipperName(1) === "Zipper lane" && zipperName(2) === "Counterflow");
+  check("lane reallocation: zipperCounts reproduces what the plan set, and zipperHolds is true only while the lane counts are exactly those", zipperCounts(okNB1.state).NB === 5 && zipperCounts(okNB1.state).SB === 3 && zipperHolds(okNB1.state, held) && !zipperHolds(okNB1.state, { NB: 4, SB: 3 }) && !zipperHolds(okNB1.state, { NB: 5, SB: 4 }) && !zipperHolds(okNB1.state, b44));
+  check("lane reallocation: only the carriageway that GAINED lanes has borrowed ones (the innermost n); the donor and 'no scheme' have none", borrowedLanes(okNB1.state, "NB") === 1 && borrowedLanes(okNB1.state, "SB") === 0 && borrowedLanes(okNB2.ok ? okNB2.state : null, "NB") === 2 && borrowedLanes(null, "NB") === 0);
+  check("lane reallocation: the scheme is called 'Lane reallocation' — one name for one or two lanes", REALLOCATION_NAME === "Lane reallocation");
   // the engine really does run at the lane counts a scheme produces (2 and 6), fills them and stays finite
   let runs = "";
   for (const lanes of [2, 6]) {
@@ -2034,10 +2058,21 @@ const roadMarks = (evs: readonly ScenarioEvent[], min: number, owners = NO_OWNER
     const maxLane = Math.max(-1, ...e.vehicles.map((v) => v.lane));
     if (!(m.activeAgents > 0) || !Number.isFinite(m.avgSpeedKmh) || maxLane > lanes - 1) runs += `${lanes} lanes failed (agents ${m.activeAgents}, max lane ${maxLane}); `;
   }
-  check("zipper: the engine runs at 2 and at 6 lanes (the extremes a scheme can produce) — vehicles are present, speeds finite, none outside the lanes", runs === "", runs);
+  // per-lane capacity at 6 lanes is what it is at 4: same road, same seeds, saturating demand (2,600 veh/h/lane),
+  // admitted flow per lane = (inflow - the engine's own unmet demand) / lanes at the end of 900 simulated seconds
+  const admittedPerLane = (lanes: number): number => {
+    const inflow = 2600 * lanes;
+    const e = new TrafficSim({ length: 1000, laneCount: lanes, inflowVehPerHour: inflow, seed: 11, warmupS: 60 });
+    for (let i = 0; i < 18000; i++) e.step(0.05);
+    return (inflow - e.metrics().unmetVehPerHour) / lanes;
+  };
+  const cap4 = admittedPerLane(4);
+  const cap6 = admittedPerLane(6);
+  check("lane reallocation: 6 lanes carry the same flow per lane as 4 (within 5%) at saturating demand — the engine's capacity scales with lanes up to the largest carriageway a reallocation can make", cap4 > 1500 && Math.abs(cap6 - cap4) / cap4 < 0.05, `${cap4.toFixed(0)} vs ${cap6.toFixed(0)} veh/h/lane`);
+  check("lane reallocation: the engine runs at 2 and at 6 lanes (the extremes a scheme can produce) — vehicles are present, speeds finite, none outside the lanes", runs === "", runs);
 }
 
-// --- Rain intensity / scene art / zipper wiring in the page and panel (source checks: page.tsx cannot be imported by Node)
+// --- Rain intensity / scene art / lane reallocation wiring in the page and panel (source checks: page.tsx cannot be imported by Node)
 {
   const pageSource = readFileSync(new URL("../page.tsx", import.meta.url), "utf8");
   const panelSource = readFileSync(new URL("../components/ScenarioPanel.tsx", import.meta.url), "utf8");
@@ -2051,16 +2086,30 @@ const roadMarks = (evs: readonly ScenarioEvent[], min: number, owners = NO_OWNER
   check("scene art: water goes under the traffic and scenes, weather over both, labels last", pageSource.indexOf("drawWater(") > -1 && pageSource.indexOf("drawWater(") < pageSource.indexOf("drawScenes(sceneGeom") && pageSource.indexOf("drawScenes(sceneGeom") < pageSource.indexOf("drawWeather(sceneGeom") && pageSource.indexOf("drawWeather(sceneGeom") < pageSource.indexOf("drawScenarioLabels(ctx, scenes"));
   check("rain: the engine's orange speed-zone wash is skipped when the zone is a rain event's (the sign and the rain say it; the orange made the road look brown)", /const rainOwnsZone =/.test(pageSource) && /e\.variant\.family === "rain"/.test(pageSource) && /sim\.interventions\.speedLimitKmh != null && !rainOwnsZone/.test(pageSource));
   check("scene art: a label for a scene that holds lanes sits on the seam just past them (or before, at the road's edge), centred on the stretch — never on top of the water, works or wreck", /if \(hasSceneArt\(m\) && m\.closedLanes\.length > 0\) \{/.test(pageSource) && /const cx = heldStretch === null \? x : g\.xPx\(\(heldStretch\.fromM \+ heldStretch\.toM\) \/ 2\);/.test(pageSource));
-  check("zipper: while a scheme is on, both Lanes sliders reach the zipper limit (a 6-lane carriageway is not shown as 5), and they are the corridor's 5 otherwise", (pageSource.match(/max=\{laneSliderMax\}/g) ?? []).length === 2 && !/max=\{5\}/.test(pageSource) && /zipper === null \? 5 : Math\.max\(5, ASSUMPTIONS\.ZIPPER_LANES\.value\.maxLanes\)/.test(pageSource));
-  check("zipper: the shared km axis gets a dark chip behind its numbers while the striped barrier is drawn", /backdrop: zipper !== null/.test(pageSource));
+  check("lane reallocation: while a scheme is on, both Lanes sliders reach the zipper limit (a 6-lane carriageway is not shown as 5), and they are the corridor's 5 otherwise", (pageSource.match(/max=\{laneSliderMax\}/g) ?? []).length === 2 && !/max=\{5\}/.test(pageSource) && /zipper === null \? 5 : Math\.max\(5, ASSUMPTIONS\.ZIPPER_LANES\.value\.maxLanes\)/.test(pageSource));
+  check("lane reallocation: the shared km axis gets a dark chip behind its numbers while the striped barrier is drawn", /backdrop: zipper !== null/.test(pageSource));
+  const operatorText = [pageSource, artSource, panelSource, previewSource, readFileSync(new URL("./assumptions.ts", import.meta.url), "utf8"), readFileSync(new URL("./catalogue.ts", import.meta.url), "utf8"), readFileSync(new URL("../../../globals.css", import.meta.url), "utf8")].join("\n");
+  check("lane reallocation: nothing the operator can read still calls it a zipper lane or counterflow (UI strings, canvas labels, assumption text)", !/Zipper lane|ZIPPER LANE|Counterflow|COUNTERFLOW|zipper lane|counterflow/.test(operatorText));
+  check(
+    "lane reallocation: the control is titled with the name, states the model in one line — 'Lanes are reassigned between carriageways; vehicles do not cross the median.' — and warns what a change restarts",
+    /<span className="sandbox-slider-label">\{REALLOCATION_NAME\}<\/span>/.test(pageSource) && /Lanes are reassigned between carriageways; vehicles do not cross the median\./.test(pageSource) &&
+      /Changing it restarts BOTH carriageways: clocks, baselines, and hand-set closures, speed limits and incidents are cleared\. Scenario events stay and replay from their start\./.test(pageSource) &&
+      /\$\{REALLOCATION_NAME\.toUpperCase\(\)\} · /.test(pageSource),
+  );
+  check(
+    "panel: once an event is stored the form's answers are cleared back to the family's defaults (start, minutes, position, lane, vehicle, cause, label, intensity, duration choice, draw); a REFUSED add keeps them so they can be fixed",
+    /const add = \(\) => \{\s*const r = target\.onAdd\(spec\);\s*if \(r\.ok\) clearAnswers\(family\);\s*else setRefusal\(r\.reason\);\s*\};/.test(panelSource) &&
+      /const clearAnswers = \(f: FamilyKey\) => \{\s*pickFamily\(f\);\s*setStartMin\(DEFAULT_START_MIN\);\s*setManualMin\(DEFAULT_MANUAL_MIN\);\s*setSeed\(1\);\s*if \(getTemplate\(f\)\.durationSource !== "manual_only"\) setChoice\("sampled"\);\s*\};/.test(panelSource) &&
+      /useState\(DEFAULT_START_MIN\)/.test(panelSource) && /useState\(DEFAULT_MANUAL_MIN\)/.test(panelSource),
+  );
   check("rain intensity: the panel offers a Light / Moderate / Heavy radio group for rain only, each choice titled with its cap, and passes the choice into the variant", /template\.family === "rain" && \(/.test(panelSource) && /data-scn-intensity=\{o\.id\}/.test(panelSource) && /variantFor\(family, vehicle, cause, label, intensity\)/.test(panelSource) && /case "rain":\s*return \{ family, intensity \};/.test(panelSource));
   check("panel: every family chip carries its pictogram, and the preview is the SAME scene art the road uses", /<FamilyIcon family=\{t\.family\} \/>/.test(panelSource) && /<ScenePreview family=\{family\}/.test(panelSource) && /from "\.\.\/sceneArt"/.test(previewSource) && /reduce/.test(previewSource));
   check(
-    "zipper: the control is Both-mode only, plans every change through planZipper, and a scheme is dropped the moment the lane counts stop matching it",
+    "lane reallocation: the control is Both-mode only, plans every change through planZipper, and a scheme is dropped the moment the lane counts stop matching it",
     /\{both && <ZipperControl /.test(pageSource) && /const plan = planZipper\(zipper === null \? laneCounts : zipper\.base, toward, lanes\);/.test(pageSource) && /if \(zipper !== null && !zipperHolds\(zipper, \{ NB: nb\.laneCount, SB: sb\.laneCount \}\)\) setZipper\(null\);/.test(pageSource),
   );
-  check("zipper: 'Off' restores the lane counts the road had before the scheme", /nb\.setLaneCount\(zipper\.base\.NB\);\s*sb\.setLaneCount\(zipper\.base\.SB\);/.test(pageSource));
-  check("zipper: the canvas draws the movable barrier and the borrowed lanes only when a scheme is on (borrowedLanes(zipper, ...) feeds each carriageway)", /borrowed: borrowedLanes\(zipper, "NB"\)/.test(pageSource) && /borrowed: borrowedLanes\(zipper, "SB"\)/.test(pageSource) && /if \(zipper === null\) \{\s*drawMedian/.test(pageSource));
+  check("lane reallocation: 'Off' restores the lane counts the road had before the scheme", /nb\.setLaneCount\(zipper\.base\.NB\);\s*sb\.setLaneCount\(zipper\.base\.SB\);/.test(pageSource));
+  check("lane reallocation: the canvas draws the movable barrier and the borrowed lanes only when a scheme is on (borrowedLanes(zipper, ...) feeds each carriageway)", /borrowed: borrowedLanes\(zipper, "NB"\)/.test(pageSource) && /borrowed: borrowedLanes\(zipper, "SB"\)/.test(pageSource) && /if \(zipper === null\) \{\s*drawMedian/.test(pageSource));
 }
 
 /* ───────────────────────────── report ───────────────────────────── */

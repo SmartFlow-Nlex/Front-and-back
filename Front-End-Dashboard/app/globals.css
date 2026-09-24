@@ -6385,7 +6385,7 @@ body:has(.sandbox-main.is-expanded) {
 .sandbox-scn-intensity { margin-top: 10px; }
 .sandbox-scn-cap { display: block; margin-top: 6px; font-size: 0.72rem; color: var(--text-muted); }
 
-/* Zipper lane / counterflow: the amber of a movable barrier, not a carriageway's colour. */
+/* Lane reallocation: the amber of a movable barrier, not a carriageway's colour. */
 .sandbox-dir-seg.zip { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); width: 100%; box-sizing: border-box; }
 .sandbox-dir-seg.zip button { padding: 6px 2px; font-size: 0.74rem; white-space: nowrap; }
 .sandbox-zipper .sandbox-slider-header { flex-wrap: wrap; gap: 2px 8px; }

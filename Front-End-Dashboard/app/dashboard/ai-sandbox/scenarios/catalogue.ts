@@ -428,7 +428,7 @@ const RAIN: RainTemplate = {
   family: "rain",
   displayName: "Rain",
   description:
-    "Light, moderate or heavy rain: a speed zone across the WHOLE simulated stretch, for a duration the operator enters directly, with a lower speed cap the harder it rains. NLEX does record weather on accidents, but checked properly (the same population and exclusion rules the calibration file itself uses) it shows no real difference in how long anything takes to clear during rain — so these are not calibrated slowdowns, just round, assumed speed caps standing in for reduced grip and visibility. No lane is blocked. The engine has a single speed zone, so this cannot run alongside a hand-set speed limit or a shoulder breakdown's gawk zone.",
+    "Light, moderate or heavy rain: a speed zone across the WHOLE simulated stretch, for a duration the operator enters directly. The caps are scaled from free-flow speeds measured on the NLEx in rain (Mejia & Sigua 2018; heavy is lowest, and the study does not separate light from moderate). NLEX does record weather on accidents, but checked properly (the same population and exclusion rules the calibration file itself uses) it shows no real difference in how long anything takes to clear during rain, so there is no calibrated duration. A speed cap is a proxy: rain mostly lengthens following headways, which the engine cannot vary, so capacity loss is understated. No lane is blocked. The engine has a single speed zone, so this cannot run alongside a hand-set speed limit or a shoulder breakdown's gawk zone.",
   phases: singlePhase("Raining"),
   defaultLane: { kind: "outermost" },
   defaultPlacement: DEFAULT_PLACEMENT,

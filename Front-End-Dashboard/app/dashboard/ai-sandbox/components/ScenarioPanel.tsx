@@ -383,6 +383,10 @@ function EventRow({
   );
 }
 
+/** The form's starting answers (also what "Add event" puts back once it has stored an event). */
+const DEFAULT_START_MIN = 1;
+const DEFAULT_MANUAL_MIN = 30;
+
 export default function ScenarioPanel(props: Props) {
   const { directions, focus: direction, data, fromKm, toKm } = props;
   const both = directions.length > 1;
@@ -398,9 +402,9 @@ export default function ScenarioPanel(props: Props) {
   const [intensity, setIntensity] = useState<RainIntensity>("moderate");
   const [lane, setLane] = useState<number | null>(null);
   const [posKm, setPosKm] = useState<number | null>(null);
-  const [startMin, setStartMin] = useState(1);
+  const [startMin, setStartMin] = useState(DEFAULT_START_MIN);
   const [choice, setChoice] = useState<DurationChoice>("sampled");
-  const [manualMin, setManualMin] = useState(30);
+  const [manualMin, setManualMin] = useState(DEFAULT_MANUAL_MIN);
   const [seed, setSeed] = useState(1);
   const [refusal, setRefusal] = useState<string | null>(null);
 
@@ -453,9 +457,20 @@ export default function ScenarioPanel(props: Props) {
   }
   const previewPhases = preview === null ? [] : schedulePhases(variant, preview);
 
+  // Back to this family's own defaults: what was typed for the event just stored must not linger and be
+  // re-submitted (it would refuse as a conflict with itself). The family chip stays where it is.
+  const clearAnswers = (f: FamilyKey) => {
+    pickFamily(f);
+    setStartMin(DEFAULT_START_MIN);
+    setManualMin(DEFAULT_MANUAL_MIN);
+    setSeed(1);
+    if (getTemplate(f).durationSource !== "manual_only") setChoice("sampled");
+  };
+
   const add = () => {
     const r = target.onAdd(spec);
-    setRefusal(r.ok ? null : r.reason);
+    if (r.ok) clearAnswers(family);
+    else setRefusal(r.reason);
   };
 
   return (
@@ -515,7 +530,7 @@ export default function ScenarioPanel(props: Props) {
             ))}
           </div>
           <span className="sandbox-scn-cap" data-scn="rain-cap">
-            Caps traffic at {ASSUMPTIONS.RAIN_SPEED_KMH.value[intensity]} km/h — an assumed figure, not a measurement.
+            Caps traffic at {ASSUMPTIONS.RAIN_SPEED_KMH.value[intensity]} km/h — scaled from free-flow speeds measured on the NLEx in rain (Mejia &amp; Sigua 2018). A cap does not lengthen following headways, so capacity loss is understated.
           </span>
         </div>
       )}

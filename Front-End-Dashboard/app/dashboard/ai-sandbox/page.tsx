@@ -29,7 +29,7 @@ import DirectionPill, { DIRECTION_NAME } from "./components/DirectionPill";
 import { combineBaselines, combineMetrics } from "./bothMetrics";
 import { drawBorrowedLanes, drawMovableBarrier, drawScenes, drawWater, drawWeather, hasSceneArt, type SceneGeometry } from "./sceneArt";
 import { ASSUMPTIONS } from "./scenarios/assumptions";
-import { borrowedLanes, planZipper, zipperHolds, zipperName, type ZipperState } from "./zipper";
+import { borrowedLanes, planZipper, REALLOCATION_NAME, zipperHolds, type ZipperState } from "./zipper";
 import { useDirectionSim, type DirectionApi, type SharedRoadInputs } from "./useDirectionSim";
 
 const BACKEND = process.env.NEXT_PUBLIC_BACKEND_URL ?? "http://localhost:4000";
@@ -302,7 +302,7 @@ export default function AiSandboxPage() {
   const lastFrameRef = useRef<number>(0);
   /** Seconds of animation clock for the scene art (rain, water, beacons): advances in real time, but only while the run is not paused. */
   const animClockRef = useRef<number>(0);
-  /** The zipper lane / counterflow scheme in force, for the canvas (the rAF loop reads it outside React). */
+  /** The lane reallocation in force, for the canvas (the rAF loop reads it outside React). */
   const zipperRef = useRef<ZipperState | null>(null);
   const metricAccRef = useRef<number>(0);
   const simAccRef = useRef<number>(0);
@@ -673,17 +673,17 @@ export default function AiSandboxPage() {
   };
   const placingArmed = activeDirections.some((dn) => byDirection[dn].placingIncident || byDirection[dn].placingClosure);
 
-  /* ── Zipper lane / counterflow ────────────────────────────────────────────
+  /* ── Lane reallocation ────────────────────────────────────────────────────
    *
-   * Moves 1 lane (zipper) or 2 (counterflow) from one carriageway to the other by changing both lane
-   * counts together — see zipper.ts for what that models and what it does not. Both mode only. While a
+   * Moves 1 or 2 lanes from one carriageway to the other by changing both lane counts together — see
+   * zipper.ts for what that models and what it does not. Both mode only. While a
    * scheme is on, the canvas draws the movable barrier and marks the borrowed lanes; the moment either lane
    * count stops matching what the scheme set (the Lanes slider, a new segment resetting to the corridor's
    * own count) the scheme is dropped, so the barrier is never drawn where it is not. */
   const [zipper, setZipper] = useState<ZipperState | null>(null);
   zipperRef.current = zipper;
   const laneCounts = { NB: nb.laneCount, SB: sb.laneCount };
-  // The Lanes sliders stop at 5, the corridor's own range. A scheme can take a carriageway to the zipper limit
+  // The Lanes sliders stop at 5, the corridor's own range. A reallocation can take a carriageway to its limit
   // (recorded in ASSUMPTIONS.ZIPPER_LANES), so while one is on the sliders reach it — otherwise the thumb would
   // sit at 5 while the road has 6.
   const laneSliderMax = zipper === null ? 5 : Math.max(5, ASSUMPTIONS.ZIPPER_LANES.value.maxLanes);
@@ -2306,8 +2306,7 @@ function KmInput({
 }
 
 /**
- * The zipper lane / counterflow control: move 1 or 2 lanes between the carriageways with a movable barrier.
- * Each option shows whether it is possible from the lane counts the road would have with the scheme off, and
+ * The lane reallocation control: move 1 or 2 lanes from one carriageway to the other. Each option shows whether it is possible from the lane counts the road would have with the scheme off, and
  * says why not when it is not; "Off" puts the original counts back. Both mode only.
  */
 function ZipperControl({
@@ -2329,9 +2328,9 @@ function ZipperControl({
   return (
     <div className="sandbox-slider-group sandbox-zipper" data-zipper={state === null ? "off" : `${state.toward}+${state.lanes}`}>
       <div className="sandbox-slider-header">
-        <span className="sandbox-slider-label">Zipper lane / counterflow</span>
+        <span className="sandbox-slider-label">{REALLOCATION_NAME}</span>
         <span className="sandbox-slider-value" style={{ color: state === null ? "var(--text-muted)" : "#ca8a04" }}>
-          {state === null ? "off" : `${zipperName(state.lanes)} · ${state.toward} +${state.lanes}`}
+          {state === null ? "off" : `${state.toward} +${state.lanes}`}
         </span>
       </div>
       <div className="sandbox-dir-seg zip" role="radiogroup" aria-label="Move lanes between the carriageways">
@@ -2357,10 +2356,16 @@ function ZipperControl({
           );
         })}
       </div>
-      <span className="sandbox-slider-hint">
+      <span className="sandbox-slider-hint" data-zipper-note="model">
+        Lanes are reassigned between carriageways; vehicles do not cross the median.
+      </span>
+      <span className="sandbox-slider-hint" data-zipper-note="state">
         {state === null
-          ? "A movable barrier: one carriageway gains 1 lane (zipper) or 2 (counterflow), the other loses the same. Restarts both runs. The carriageways still do not interact — only their lane counts change."
-          : `NB ${counts.NB} lanes · SB ${counts.SB} lanes (was ${state.base.NB} + ${state.base.SB}). ${state.toward}'s lane 1 is the borrowed lane, against the barrier. Changing either Lanes slider ends the scheme.`}
+          ? "One carriageway gains 1 or 2 lanes and the other loses the same."
+          : `NB ${counts.NB} lanes · SB ${counts.SB} lanes (was ${state.base.NB} + ${state.base.SB}). ${state.toward}'s lane 1 is the reallocated lane, against the barrier. Changing either Lanes slider ends it.`}
+      </span>
+      <span className="sandbox-slider-hint" data-zipper-note="restart">
+        Changing it restarts BOTH carriageways: clocks, baselines, and hand-set closures, speed limits and incidents are cleared. Scenario events stay and replay from their start.
       </span>
     </div>
   );
@@ -3068,9 +3073,9 @@ function drawCarriageway(
     location: string;
     /** Animation clock, seconds (frozen while paused): drives rain, flowing water, beacons and hazard lights. */
     animT: number;
-    /** How many of this carriageway's innermost lanes it has borrowed from the other (zipper / counterflow); 0 otherwise. */
+    /** How many of this carriageway's innermost lanes were reallocated to it from the other; 0 otherwise. */
     borrowed: number;
-    /** What to call the scheme on those lanes ("Zipper lane" / "Counterflow"). */
+    /** What to call those lanes on the canvas. */
     borrowedLabel: string;
   },
 ) {
@@ -3214,7 +3219,7 @@ function drawCarriageway(
     ctx.restore();
   }
 
-  // Zipper / counterflow: this carriageway's borrowed lanes, marked as reversible, under the traffic.
+  // Lane reallocation: the lanes this carriageway was given, marked as reversible, under the traffic.
   const fwd: 1 | -1 = sb ? -1 : 1;
   if (borrowed > 0) {
     drawBorrowedLanes(
@@ -3703,7 +3708,7 @@ function renderBoth(
     ctx.textAlign = "left";
     ctx.textBaseline = "top";
     ctx.fillStyle = "rgba(253,224,71,0.95)";
-    ctx.fillText(`${zipperName(zipper.lanes).toUpperCase()} · ${zipper.toward} +${zipper.lanes} lane${zipper.lanes === 1 ? "" : "s"}, ${zipper.toward === "NB" ? "SB" : "NB"} −${zipper.lanes}`, 8, medianTop + 2);
+    ctx.fillText(`${REALLOCATION_NAME.toUpperCase()} · ${zipper.toward} +${zipper.lanes} lane${zipper.lanes === 1 ? "" : "s"}, ${zipper.toward === "NB" ? "SB" : "NB"} −${zipper.lanes}`, 8, medianTop + 2);
   }
   drawSharedKmAxis(ctx, { xPx: xPxNB, fromKm: marks.fromKm, toKm: marks.toKm, cssW, axisY: medianTop + MEDIAN_GUTTER_PX / 2, backdrop: zipper !== null });
 
@@ -3729,7 +3734,7 @@ function renderBoth(
     location: "Northbound",
     animT,
     borrowed: borrowedLanes(zipper, "NB"),
-    borrowedLabel: zipper === null ? "" : zipperName(zipper.lanes).toUpperCase(),
+    borrowedLabel: zipper === null ? "" : "REALLOCATED",
   });
   drawCarriageway(ctx, simSB, {
     cssW,
@@ -3753,7 +3758,7 @@ function renderBoth(
     location: "Southbound",
     animT,
     borrowed: borrowedLanes(zipper, "SB"),
-    borrowedLabel: zipper === null ? "" : zipperName(zipper.lanes).toUpperCase(),
+    borrowedLabel: zipper === null ? "" : "REALLOCATED",
   });
 }
 

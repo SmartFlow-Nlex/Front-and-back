@@ -9,7 +9,7 @@ setting those levers by hand. `simulation.ts`, the Back-End and `replicate()` ar
 this feature — it is a layer that composes the engine's own inputs, nothing more. The same
 folder also carries the NB / SB / Both dual-carriageway view; see [Dual-carriageway view](#dual-carriageway-view-nb--sb--both),
 the [scene art](#scene-art-what-each-event-looks-like-on-the-road) that draws each event on the road, and
-the [zipper lane / counterflow](#zipper-lane--counterflow) control.
+the [lane reallocation](#lane-reallocation) control.
 
 ## Files
 
@@ -20,7 +20,8 @@ the [zipper lane / counterflow](#zipper-lane--counterflow) control.
 | `sampler.ts` | Turns a variant + a `DurationMode` (`sampled` / `p50` / `p90` / `manual`) into a `ResolvedDuration`, via `calibration.json`'s quantiles and the breakdown fallback hierarchy (cause × vehicle → cause → vehicle → family). `resolveDuration` is the one entry point; `calibratedVariantOf()` is where it branches for a family with no calibration entry. |
 | `adapter.ts` | The pure core: `composeInterventions(manual, events, simTime, road, previous) -> { interventions, owners }` is the ONE function that decides what the engine holds, given the operator's own settings and the scenario events. Also: scheduling (`schedulePhases`, `boundaryTimes`), conflict/ownership rules, the `EngineBinding` that applies a composition to a real `TrafficSim`, and every view the UI reads (`resolutionView`, `canvasMarks`, `effectiveState`, …). |
 | `../sceneArt.ts` | The drawing of every event on the canvas: rain, flowing flood water, roadworks, breakdowns, collisions and their responders, the movable barrier and borrowed lanes. Pure canvas drawing that reads `SceneMark`s and imports only types, so `verify.ts` runs it in Node against a recording context. |
-| `../zipper.ts` | The zipper / counterflow rules: `planZipper` (what a transfer does, or why it is refused), `zipperHolds`, `borrowedLanes`. Pure. |
+| `../zipper.ts` | The lane reallocation rules: `planZipper` (what a transfer does, or why it is refused), `zipperHolds`, `borrowedLanes`. Pure. The file and its identifiers (`planZipper`, `ZIPPER_LANES`, `data-zipper`) keep the name the feature was first built under, a zipper lane / counterflow scheme; everything an operator reads says "Lane reallocation". The engine's own "zipper merge" (vehicles merging at a closure) is unrelated. |
+| `tools/measure_rain_cap.ts` | Runs the real engine with and without a whole-segment speed cap, at busy and saturating demand: the measurement quoted in `ASSUMPTIONS.RAIN_SPEED_KMH`'s evidence. Read-only; about a minute. |
 | `../components/FamilyIcon.tsx`, `../components/ScenePreview.tsx` | The pictogram on each family chip, and the small animated preview under the chips (drawn by the same `sceneArt.ts` the road uses). Decoration only — they read nothing from the simulation. |
 | `verify.ts` | The test suite (see below). Not a framework — a flat script of `check(name, boolean)` calls. |
 | `tools/build_calibration.py` | Regenerates `calibration.json` from the client's raw CSV exports (see below). Read-only on the CSVs. |
@@ -163,13 +164,35 @@ skip over two minutes went unflagged.
 
 Choosing Rain in the Add panel offers **Light / Moderate / Heavy** (default Moderate). Each is a cap on
 the speed of the whole simulated stretch for as long as the event runs, through the engine's one speed
-zone (`speedLimitKmh` + `speedZone` = `[0, segment length]`): **90, 75 and 60 km/h**
-(`ASSUMPTIONS.RAIN_SPEED_KMH`). Heavy is the single value rain had before intensities existed. Light and
-moderate are round numbers placed between the engine's free-flow class-1 speed (108) and that value.
-**They are assumptions, not measurements** — nothing in the warehouse gives a corridor operating speed in
-rain — and the panel says so next to the cap. The event is named for its intensity (`Heavy rain #1`), and
-its row shows `Corridor-wide · 60 km/h cap`. Rain still shares the engine's single speed zone, so it
-conflicts with an overlapping shoulder breakdown, exactly as before.
+zone (`speedLimitKmh` + `speedZone` = `[0, segment length]`): **100, 100 and 96 km/h**
+(`ASSUMPTIONS.RAIN_SPEED_KMH`). The event is named for its intensity (`Heavy rain #1`), and its row shows
+`Corridor-wide · 96 km/h cap`. Rain still shares the engine's single speed zone, so it conflicts with an
+overlapping shoulder breakdown, exactly as before.
+
+**Where the caps come from.** They are derived from one NLEx study, not invented: Mejia & Sigua (2018),
+*Impacts of Different Rainfall Intensities on Key Traffic Flow Parameters at …* (the end of the title did not
+extract from the PDF; the site is the NLEx), *Philippine Transportation Journal* 1(2), August 2018,
+<https://ncts.upd.edu.ph/tssp/wp-content/uploads/2018/08/Mejia18.pdf>. They fitted speed–density curves to
+loop-detector data at Km 11+150 northbound near the Balintawak toll plaza (4 lanes; 6-minute data, June to
+December 2016, daytime only; rain from a PAGASA weather station within 1 km; PAGASA classes light
+0.1–2.5 mm/h, moderate 2.6–7.5, heavy above 7.5) and report free-flow speeds of **109.79 km/h clear,
+102.12 light, 101.46 moderate and 97.66 heavy** (Table 2). Each cap is the engine's own free-flow class-1
+speed (108 km/h) scaled by that study's rain-to-clear ratio, rounded to whole km/h. Light and moderate come
+out the same because the study's own figures for them differ by under 1 km/h: the data do not separate
+them, so the cap does not either (the animation does differ). The panel says where the number comes from.
+
+**Limits, stated plainly.** It is one site, one season and one study, calibrated on lanes 3 and 4; free-flow
+speed there is a fitted model parameter, not an observed maximum. **A speed cap is a proxy.** Rain's main real
+effect is longer following headways, which the engine cannot vary, so a cap reproduces the speed effect and
+likely **understates capacity loss**. Measured on this engine (`tools/measure_rain_cap.ts`; 4 lanes, 1 km,
+3 seeds), the 100 and 96 km/h caps cut capacity at saturating demand by 2.1% and 2.3% — the study finds 3.7%,
+7.6% and 17.4% for light, moderate and heavy — and cut average speed at 1,500 veh/h/lane by 2.9% and 5.1%
+(the study: 5.3%, 6.3%, 7.4%). The values these replaced (90 / 75 / 60) were invented round numbers; the same
+run shows 60 km/h cutting capacity by 13.7% and busy-road speed by 40%, far past anything the study observed.
+Corroboration, not used to set values: the HCM 2000 figures that paper quotes (free-flow speed down 1.9 km/h in
+light rain, 4.8–6.4 km/h in heavy; heavy-rain capacity down 14–15%) and the FHWA Road Weather Management page
+(freeway speeds down 2–13% in light rain, 3–17% in heavy; no primary source given). The HCM 6th-edition
+Chapter 11 weather adjustment factors were looked for and not found in any free source.
 
 ## Scene art: what each event looks like on the road
 
@@ -198,23 +221,44 @@ sit on the seam just past the lanes an event holds rather than on top of it.
 The scenes are illustrations of the engine's state, not measurements: the wreck's angle, the debris and the
 number of responders are decoration. Wreck *length*, lanes and duration are still the recorded assumptions.
 
-## Zipper lane / counterflow
+## Lane reallocation
 
-In Both mode, a control under the Lanes sliders moves **1 lane (zipper lane)** or **2 (counterflow)** from
-one carriageway to the other: `NB +1`, `NB +2`, `SB +1`, `SB +2`, or Off. The canvas draws the movable
-barrier (yellow and black, with the transfer vehicle) in the median in place of the fixed one, and marks the
-borrowed lanes (the recipient's innermost n, against the barrier) with reversible-lane chevrons.
+In Both mode, a control under the Lanes sliders moves **1 or 2 lanes** from one carriageway to the other:
+`NB +1`, `NB +2`, `SB +1`, `SB +2`, or Off. The control says, in one line, what it does: *Lanes are reassigned
+between carriageways; vehicles do not cross the median.* The canvas draws a movable barrier (yellow and
+black, with the transfer vehicle) in the median in place of the fixed one, and marks the lanes the recipient
+was given (its innermost n, against the barrier) with reversible-lane chevrons. (It was first built as a
+"zipper lane" for one lane and "counterflow" for two; those names are gone from everything an operator reads.)
 
 **What it models, and what it does not.** The engine cannot change a carriageway's lane count mid-run and
 the carriageways still never interact (see the limitation above), so this is a **lane-count transfer**: the
 two `setLaneCount`s change together, the total is conserved, and **both runs restart** (any lane-count
 change does). What changes is the capacity of each carriageway — not flow crossing the median. There is
-deliberately **no timed zipper event**: a scheme that switches on at some minute would need the engine to
-change lanes mid-run. The limits (a carriageway keeps at least 2 lanes and takes at most 6; at most 2
+deliberately **no timed reallocation event**: a scheme that switches on at some minute would need the engine
+to change lanes mid-run. The limits (a carriageway keeps at least 2 lanes and takes at most 6; at most 2
 lanes move) are `ASSUMPTIONS.ZIPPER_LANES` — modelling bounds, not operating rules; the Lanes sliders reach 6
-while a scheme is on. The scheme is dropped the moment either lane count stops matching what it set (the
-Lanes slider, a segment change), so the barrier is never drawn where it is not. Off restores the original
-lane counts. Whether NLEX runs a movable barrier on this corridor is not recorded anywhere here.
+while a reallocation is on. The scheme is dropped the moment either lane count stops matching what it set
+(the Lanes slider, a segment change), so the barrier is never drawn where it is not. Off restores the
+original lane counts. Whether NLEX runs a movable barrier on this corridor is not recorded anywhere here.
+
+**What a change restarts.** Both carriageways, always — a transfer changes both lane counts, so there is no
+unaffected direction. Each carriageway is rebuilt (`rebuild()` in `useDirectionSim.ts`): a new engine, so the
+clock, the warm-up and the metrics start again; the hand-set closed lanes, speed limit and incidents are
+cleared; the before/after **baseline is discarded**; a fast-forward in progress is cancelled. **Scenario
+events are kept** and replay from their start (their times are measured from the new run's warm-up); an event
+on a lane the new lane count no longer has is flagged and goes inert rather than being dropped. The control
+says this in a line under its options, before the operator presses anything; there is **no confirmation
+step**, the same as for the Lanes slider.
+
+**Six lanes.** The Lanes slider stops at 5 and a reallocation can make a 6-lane carriageway, so the engine
+was checked at 6. Same 1 km road, no ramps, three seeds, 1,500 simulated seconds: at 800 and 1,500
+veh/h/lane the throughput per lane is the demand at every lane count from 2 to 6 (e.g. 799 / 801 at 4 / 6
+lanes), and at a saturating 3,000 veh/h/lane the admitted flow per lane is 2,196 / 2,186 / 2,180 / 2,172 /
+2,173 at 2 / 3 / 4 / 5 / 6 lanes — no loss of per-lane capacity at 6 (0.3% below 4 lanes). Average speeds
+are the same at every lane count (about 91 km/h at 800, 80 at 1,500 and 78 at 3,000 veh/h/lane). `verify.ts`
+pins a shorter version (6 lanes within 5% of 4 lanes per lane at saturation).
+This tests the engine's arithmetic on a plain road only: it does not show that a real 6-lane NLEx carriageway
+behaves like this, and the engine's lane rules (e.g. heavy vehicles kept out of lane 1) were not tuned for 6.
 
 ## Which families are calibrated
 
@@ -264,7 +308,7 @@ cd Back-End
 ./node_modules/.bin/tsx ../Front-End-Dashboard/app/dashboard/ai-sandbox/scenarios/verify.ts
 ```
 
-Read-only, exits 1 on any failure, prints every `FAIL` with its name. As of this write-up: **1,389
+Read-only, exits 1 on any failure, prints every `FAIL` with its name. As of this write-up: **1,395
 checks**. It guards, in order: the sampler reproduces the calibrated quantiles and response shares
 exactly (distribution, cap behaviour, reproducibility per seed); the breakdown hierarchy fallback and
 its cap-source chain; the catalogue/assumptions' internal consistency (phases, shares, lanes,
@@ -284,8 +328,9 @@ of click routing, the pinned command direction and the Both-mode tile labels; re
 checked in a browser rather than here. It also pins the rain intensities (order, caps, names, what the
 engine applies), `sceneMarks` (including which event owns the lanes), the scene art itself — run in Node
 against a recording canvas context: drop counts per intensity, determinism, that the clock moves the drops
-and the flood streaks, what is clipped to the road, what a paused or pending event draws — and the
-zipper's pure rules and its wiring.
+and the flood streaks, what is clipped to the road, what a paused or pending event draws, the drops' colour —
+and the lane reallocation's pure rules, its wiring, the clear-on-add behaviour of the panel, and that the
+engine's per-lane capacity holds at 6 lanes.
 
 There is also a strict `tsc` pass (two scratch tsconfigs — one for `scenarios/**` + `components/**`,
 one for `page.tsx` — both extending the project's own `tsconfig.json` with `noUnusedLocals`,
@@ -346,9 +391,13 @@ time they were written.
 
   If "the four client questions" already discussed elsewhere is a different set than this, treat
   this list as this feature's own candidates, not a claim that it's the canonical one.
-- **Rain caps and zipper limits are assumptions**: `RAIN_SPEED_KMH` (90 / 75 / 60) and `ZIPPER_LANES`
-  are recorded with what would settle them (probe speeds in recorded rain of known intensity; NLEX
-  guidance on movable barriers). Neither is measured.
-- **A zipper cannot be timed and does not carry traffic across**: see the zipper section. Timing it would
-  need a lane change mid-run in `simulation.ts`, and carrying traffic across the median would end the
-  independence of the two carriageways, which is the model's core simplification.
+- **Rain is a speed cap, which understates rain**: `RAIN_SPEED_KMH` (100 / 100 / 96) is derived from one NLEx
+  study (see [Rain intensity](#rain-intensity)) and is still an assumption — one site, one season — and a
+  cap cannot lengthen headways, which is where most of rain's effect on capacity lies. Settling it needs
+  loop-detector data from more sites and a following-headway lever in `simulation.ts`.
+- **A lane reallocation cannot be timed and does not carry traffic across**: see the lane reallocation
+  section. `ZIPPER_LANES` (2 to 6 lanes, at most 2 moved) is a modelling bound and needs NLEX guidance on
+  movable barriers. Timing it would need a lane change mid-run in `simulation.ts`, and carrying traffic across
+  the median would end the independence of the two carriageways, which is the model's core simplification.
+- **Lane reallocation restarts both carriageways without a confirmation step** (the Lanes slider does the
+  same): see what a change restarts. A confirm dialog is the obvious follow-up if operators lose work to it.

@@ -393,10 +393,14 @@ function drawSmoke(g: SceneGeometry, x: number, y: number, size: number, strengt
 /* ── weather ──────────────────────────────────────────────────────────────────── */
 
 const RAIN: Readonly<Record<RainIntensity, { readonly density: number; readonly speed: number; readonly len: number; readonly alpha: number; readonly width: number; readonly tint: number; readonly ripples: number }>> = {
-  light: { density: 1 / 2600, speed: 360, len: 7, alpha: 0.34, width: 1, tint: 0.06, ripples: 3 },
-  moderate: { density: 1 / 1050, speed: 560, len: 11, alpha: 0.44, width: 1.15, tint: 0.12, ripples: 9 },
-  heavy: { density: 1 / 480, speed: 800, len: 16, alpha: 0.56, width: 1.35, tint: 0.2, ripples: 18 },
+  light: { density: 1 / 1700, speed: 380, len: 9, alpha: 0.62, width: 1.2, tint: 0.07, ripples: 4 },
+  moderate: { density: 1 / 800, speed: 580, len: 13, alpha: 0.74, width: 1.4, tint: 0.13, ripples: 9 },
+  heavy: { density: 1 / 400, speed: 800, len: 18, alpha: 0.86, width: 1.7, tint: 0.2, ripples: 18 },
 };
+
+/** The drops are sky blue so they read against dark asphalt: the near layer #9CDDEC, the far layer #87CEFA. */
+const DROP_NEAR_RGB = "156,221,236";
+const DROP_FAR_RGB = "135,206,250";
 
 /**
  * Rain over one carriageway: a wet, cool tint on the tarmac, streaks of falling drops in two depth
@@ -427,7 +431,7 @@ export function drawRain(g: SceneGeometry, intensity: RainIntensity): void {
     const near = layer === 1;
     const len = cfg.len * (near ? 1.5 : 1);
     const speed = cfg.speed * (near ? 1.3 : 0.85);
-    c.strokeStyle = `rgba(203,222,255,${cfg.alpha * (near ? 1 : 0.7)})`;
+    c.strokeStyle = `rgba(${near ? DROP_NEAR_RGB : DROP_FAR_RGB},${cfg.alpha * (near ? 1 : 0.85)})`;
     c.lineWidth = cfg.width * (near ? 1.2 : 0.9);
     c.beginPath();
     const n = Math.round(total * (near ? 0.4 : 0.6));
@@ -446,7 +450,7 @@ export function drawRain(g: SceneGeometry, intensity: RainIntensity): void {
     const cycle = wrap(g.t * 0.85 + hash(r * 5) * 3, 1);
     const px = hash(r * 3 + 1) * w;
     const py = g.roadTop + hash(r * 3 + 2) * g.roadH;
-    c.strokeStyle = `rgba(203,222,255,${(1 - cycle) * 0.4})`;
+    c.strokeStyle = `rgba(${DROP_NEAR_RGB},${(1 - cycle) * 0.7})`;
     c.beginPath();
     c.ellipse(px, py, 1.5 + cycle * 8, 0.7 + cycle * 3.4, 0, 0, Math.PI * 2);
     c.stroke();
@@ -881,12 +885,12 @@ function assertNeverFamily(family: never): never {
   throw new Error(`Unhandled scenario family: ${JSON.stringify(family)}`);
 }
 
-/* ── zipper lane / counterflow ─────────────────────────────────────────────── */
+/* ── lane reallocation ─────────────────────────────────────────────────────── */
 
 /**
  * The movable barrier in the median when lanes have been moved between the carriageways: a chain of
  * yellow-and-black segments instead of the fixed white stripe, with the barrier transfer vehicle
- * (yellow, amber beacon) driving along it — the thing that actually moves a zipper lane.
+ * (yellow, amber beacon) driving along it — the thing that actually moves a movable barrier.
  */
 export function drawMovableBarrier(ctx: SceneCtx, cssW: number, y: number, h: number, t: number, fwd: 1 | -1): void {
   const seg = 14;

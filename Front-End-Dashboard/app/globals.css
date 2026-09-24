@@ -6270,6 +6270,9 @@ body:has(.sandbox-main.is-expanded) {
 }
 .sandbox-dir-seg button.dir-NB.active { background: var(--dir-nb); color: #fff; }
 .sandbox-dir-seg button.dir-SB.active { background: var(--dir-sb); color: #fff; }
+.sandbox-dir-seg button.dir-BOTH.active { background: linear-gradient(90deg, var(--dir-nb), var(--dir-sb)); color: #fff; }
+.sandbox-scn-families + .sandbox-dir-pick { margin-top: 12px; }
+.sandbox-dir-pick .sandbox-slider-hint { flex-basis: 100%; margin: 0; }
 
 /* Metric tiles in Both mode: corridor figure on top, each carriageway's own value beneath. */
 .sandbox-metric-caption { margin: 12px 0 0; font-size: 0.78rem; color: var(--text-secondary); }

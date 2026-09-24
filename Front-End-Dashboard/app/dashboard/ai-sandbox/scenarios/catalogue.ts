@@ -118,9 +118,18 @@ export type PhaseDef<Id extends string> = {
   readonly offset: PhaseOffset;
 };
 
+/**
+ * How far one scenario reaches across a divided carriageway. "one": it happens on one carriageway (a
+ * collision, a breakdown, works), so the operator names which. "one_or_both": weather and flooding are
+ * not one carriageway's business, so the panel offers Both (one event on each, at the same place and time,
+ * the default) as well as either carriageway alone. Only matters when both carriageways are on screen.
+ */
+export type CarriagewayReach = "one" | "one_or_both";
+
 type TemplateCommon<F extends FamilyKey> = {
   readonly family: F;
   readonly displayName: string;
+  readonly carriageways: CarriagewayReach;
   readonly description: string;
   /** In order. The first starts at offset 0. */
   readonly phases: readonly PhaseDef<PhaseIdOf[F]>[];
@@ -294,6 +303,7 @@ const CAUSE_OPTIONS: readonly CauseOption[] = [
 ───────────────────────────────────────────────────────────────────────────── */
 const BREAKDOWN_IN_LANE: BreakdownInLaneTemplate = {
   family: "breakdown_in_lane",
+  carriageways: "one",
   displayName: "Breakdown in a lane",
   description:
     "A vehicle stalls in a running lane and stays there until the patrol has finished with it: first waiting for the responder, then service or tow. Modelled as a stopped obstacle in that lane (a bus or truck uses several of the engine's 5 m obstacle slots) for the whole event, removed when it ends. Traffic behind it queues and works around it.",
@@ -312,6 +322,7 @@ const BREAKDOWN_IN_LANE: BreakdownInLaneTemplate = {
 
 const BREAKDOWN_SHOULDER: BreakdownShoulderTemplate = {
   family: "breakdown_shoulder",
+  carriageways: "one",
   displayName: "Breakdown on the shoulder",
   description:
     "A vehicle stops on the shoulder and waits for the responder, then is served or towed. No lane is blocked, but passing traffic slows to look. Modelled as a speed zone around the location for the whole event. The engine has a single speed zone, so this cannot run alongside a hand-set speed limit.",
@@ -330,6 +341,7 @@ const BREAKDOWN_SHOULDER: BreakdownShoulderTemplate = {
 
 const MINOR_COLLISION: MinorCollisionTemplate = {
   family: "minor_collision",
+  carriageways: "one",
   displayName: "Minor collision",
   description:
     "A rear-end, side-swipe or hit-and-run that blocks its lane until the vehicles are moved, then clears the scene. Modelled by closing the lane from a short distance upstream of the wreck to its far end, and reopening it when the lane-blocked share of the duration has passed. The engine has a single closure stretch, so it cannot overlap another collision.",
@@ -352,6 +364,7 @@ const MINOR_COLLISION: MinorCollisionTemplate = {
 
 const MULTI_VEHICLE_COLLISION: MultiVehicleCollisionTemplate = {
   family: "multi_vehicle_collision",
+  carriageways: "one",
   displayName: "Multi-vehicle collision",
   description:
     "Three or more vehicles. Two lanes are blocked at first, reduced to one while the tow works, then reopened while the scene is cleared. Modelled through the engine's single closure stretch, so it cannot overlap another collision.",
@@ -369,6 +382,7 @@ const MULTI_VEHICLE_COLLISION: MultiVehicleCollisionTemplate = {
 
 const SELF_ACCIDENT: SelfAccidentTemplate = {
   family: "self_accident",
+  carriageways: "one",
   displayName: "Self accident",
   description:
     "A single vehicle loses control. The slowest accident family to clear in the data. The lane stays blocked while awaiting response and during the tow, then reopens while the scene is cleared. Modelled through the engine's single closure stretch, so it cannot overlap another collision.",
@@ -386,6 +400,7 @@ const SELF_ACCIDENT: SelfAccidentTemplate = {
 
 const OVERTURNED_VEHICLE: OverturnedVehicleTemplate = {
   family: "overturned_vehicle",
+  carriageways: "one",
   displayName: "Overturned vehicle",
   description:
     "A vehicle has rolled or come to rest on its side, blocking a lane until it is righted and towed. NLEX's own accident logs have no category for this (no \"Overturned\" or \"Rollover\" event type exists in the data), so there is no calibrated duration to sample from: the operator enters the duration directly. Modelled through the engine's single closure stretch, like the other collision families, so it cannot overlap another collision.",
@@ -402,6 +417,7 @@ const OVERTURNED_VEHICLE: OverturnedVehicleTemplate = {
 
 const FLOOD: FloodTemplate = {
   family: "flood",
+  carriageways: "one_or_both",
   displayName: "Flooding",
   description:
     "Standing water makes a lane impassable until it drains. NLEX has no flood record of any kind (no event type, no duration, no lane count), so this is a simplification: modelled as a single lane closed over a longer stretch than a wreck (150 m, against 60-100 m for a collision), for a duration the operator enters directly. A real flood can be a partial-width, reduced-speed hazard rather than a full closure; the engine has no lever for that, so a closed lane is the closest honest approximation with what exists today.",
@@ -414,6 +430,7 @@ const FLOOD: FloodTemplate = {
 
 const SCHEDULED_ROADWORKS: ScheduledRoadworksTemplate = {
   family: "scheduled_roadworks",
+  carriageways: "one",
   displayName: "Scheduled roadworks",
   description:
     "A planned lane closure for maintenance, for a duration the operator enters directly (NLEX has no roadworks record to sample from, and a planned closure would not be something to \"sample\" even if it did). Modelled as a single lane closed over a work-zone-sized stretch (120 m). This is ONE planned window, not a recurring schedule: add it again at a later start time to represent a second occurrence.",
@@ -426,6 +443,7 @@ const SCHEDULED_ROADWORKS: ScheduledRoadworksTemplate = {
 
 const RAIN: RainTemplate = {
   family: "rain",
+  carriageways: "one_or_both",
   displayName: "Rain",
   description:
     "Light, moderate or heavy rain: a speed zone across the WHOLE simulated stretch, for a duration the operator enters directly. The caps are scaled from free-flow speeds measured on the NLEx in rain (Mejia & Sigua 2018; heavy is lowest, and the study does not separate light from moderate). NLEX does record weather on accidents, but checked properly (the same population and exclusion rules the calibration file itself uses) it shows no real difference in how long anything takes to clear during rain, so there is no calibrated duration. A speed cap is a proxy: rain mostly lengthens following headways, which the engine cannot vary, so capacity loss is understated. No lane is blocked. The engine has a single speed zone, so this cannot run alongside a hand-set speed limit or a shoulder breakdown's gawk zone.",

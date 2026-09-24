@@ -1,6 +1,6 @@
 import type { Interventions } from "../simulation";
 import { ASSUMPTIONS, closureStretch, incidentSlotsFor, operatorLaneToEngineIndex, type ClosureStretch, type RainIntensity } from "./assumptions";
-import { TEMPLATE_BY_FAMILY, assertNever, phaseOffsetFractions, type FamilyKey, type PhaseDef, type ScenarioVariant, type VehicleKind } from "./catalogue";
+import { TEMPLATE_BY_FAMILY, assertNever, phaseOffsetFractions, type CarriagewayReach, type FamilyKey, type PhaseDef, type ScenarioVariant, type VehicleKind } from "./catalogue";
 import { resolveDuration, type CalibrationLevel, type DurationMode, type ResolvedDuration } from "./sampler";
 
 /* ══════════════════════════════════════════════════════════════════════════════
@@ -574,6 +574,16 @@ export function directionBucketsConsistent(byDirection: Readonly<Partial<Record<
 }
 
 const DIRECTIONS = ["NB", "SB"] as const;
+
+/**
+ * Which carriageways one "Add event" goes to. One carriageway on screen: that one. Both on screen: both only
+ * if the family can go on both (CarriagewayReach) AND the operator chose Both — otherwise the focused
+ * carriageway alone. Pure; the panel calls it and verify.ts pins every combination.
+ */
+export function addTargets(reach: CarriagewayReach, view: readonly Direction[], focus: Direction, wantBoth: boolean): readonly Direction[] {
+  if (view.length < 2) return [view[0] ?? focus];
+  return reach === "one_or_both" && wantBoth ? [...view] : [focus];
+}
 
 /** The one rule: an event may sit in a direction's list only if it names that direction. */
 function eventFitsBucket(bucket: Direction, event: { readonly direction: Direction }): boolean {

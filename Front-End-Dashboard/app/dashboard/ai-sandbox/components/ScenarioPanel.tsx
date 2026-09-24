@@ -3,6 +3,7 @@
 import { useState } from "react";
 import {
   addEventToBucket,
+  addTargets,
   describeYield,
   eventProgress,
   formatClock,
@@ -101,9 +102,9 @@ type Props = {
   directions: readonly Direction[];
   /**
    * Which carriageway "Add event" targets: the viewed one, or in Both mode the one picked in the
-   * "Add to" control at the top of the panel (which moves the page's focus with it, so the panel and
+   * "Add to" control under the family chips (which moves the page's focus with it, so the panel and
    * the rest of the controls never disagree about which road is meant). Always a real direction —
-   * there is no direction-less event.
+   * there is no direction-less event; "Both" (weather, flooding) adds one event to each.
    */
   focus: Direction;
   onFocus: (d: Direction) => void;
@@ -390,10 +391,11 @@ const DEFAULT_MANUAL_MIN = 30;
 export default function ScenarioPanel(props: Props) {
   const { directions, focus: direction, data, fromKm, toKm } = props;
   const both = directions.length > 1;
-  // Everything the form and its verdict depend on is the TARGET carriageway's: its events (conflicts and
-  // locks are scoped within a direction), its road, its lane count, its manual closure.
+  // The form reads the FOCUSED carriageway's events, and the verdict is worked out per target carriageway
+  // (conflicts and locks are scoped within a direction): its events, its road, its manual closure. Weather and
+  // flooding can target both at once in Both mode (see addTargets).
   const target = data[direction];
-  const { events, road, laneCount, kmAtPct, manualClosure, nextSeq } = target;
+  const { events } = target;
   const [family, setFamily] = useState<FamilyKey>("breakdown_in_lane");
   const template: ScenarioTemplate = getTemplate(family);
   const [vehicle, setVehicle] = useState<VehicleKind>("truck");
@@ -407,10 +409,13 @@ export default function ScenarioPanel(props: Props) {
   const [manualMin, setManualMin] = useState(DEFAULT_MANUAL_MIN);
   const [seed, setSeed] = useState(1);
   const [refusal, setRefusal] = useState<string | null>(null);
+  // Both mode only: add to both carriageways at once (the default for a family that reaches both).
+  const [wantBoth, setWantBoth] = useState(false);
 
   const pickFamily = (f: FamilyKey) => {
     const t = getTemplate(f);
     setFamily(f);
+    setWantBoth(t.carriageways === "one_or_both");
     setLane(null);
     setPosKm(null);
     setRefusal(null);
@@ -440,15 +445,27 @@ export default function ScenarioPanel(props: Props) {
     }
   };
 
-  const laneNow = lane === null ? defaultOperatorLane(template, laneCount) : Math.min(Math.max(1, lane), laneCount);
-  const kmNow = Math.min(toKm, Math.max(fromKm, posKm === null ? kmAtPct(template.defaultPlacement.pct) : posKm));
+  // Where this Add goes: one carriageway (the focused one) or, for weather and flooding in Both mode, both.
+  const targets = addTargets(template.carriageways, directions, direction, wantBoth);
+  const onBoth = targets.length > 1;
+  // Lane numbers mean the same on both carriageways (lane 1 against the median), so with two targets the
+  // lane list is the shorter road's and both events get the same lane.
+  const laneCap = Math.min(...targets.map((d) => data[d].laneCount));
+  const laneNow = lane === null ? defaultOperatorLane(template, laneCap) : Math.min(Math.max(1, lane), laneCap);
+  // One place for both carriageways: the first target's default, so Both does not put the two events at different km.
+  const kmNow = Math.min(toKm, Math.max(fromKm, posKm === null ? data[targets[0]].kmAtPct(template.defaultPlacement.pct) : posKm));
   const variant = variantFor(family, vehicle, cause, label, intensity);
   const duration: DurationMode =
     choice === "sampled" ? { kind: "sampled", seed } : choice === "p50" ? { kind: "p50" } : choice === "p90" ? { kind: "p90" } : { kind: "manual", minutes: manualMin };
-  const spec: NewEventSpec = { variant, direction, lane: hasLane(family) ? laneNow : null, positionKm: kmNow, startMinutes: startMin, duration };
+  const specFor = (d: Direction): NewEventSpec => ({ variant, direction: d, lane: hasLane(family) ? laneNow : null, positionKm: kmNow, startMinutes: startMin, duration });
 
-  // The same call "Add event" makes, so what is shown is what will be stored (and why not, if it will not).
-  const verdict = addEventToBucket(direction, events, spec, road, nextSeq, manualClosure);
+  // The same call "Add event" makes, once per target, so what is shown is what will be stored (and why not, if
+  // it will not). With two targets the Add is all or nothing: one refusal blocks both, and names its carriageway.
+  let refusalNow: string | null = null;
+  for (const d of targets) {
+    const v = addEventToBucket(d, data[d].events, specFor(d), data[d].road, data[d].nextSeq, data[d].manualClosure);
+    if (!v.ok && refusalNow === null) refusalNow = v.reason;
+  }
   let preview: ResolvedDuration | null = null;
   try {
     preview = resolveDuration(variant, duration);
@@ -468,32 +485,17 @@ export default function ScenarioPanel(props: Props) {
   };
 
   const add = () => {
-    const r = target.onAdd(spec);
-    if (r.ok) clearAnswers(family);
-    else setRefusal(r.reason);
+    let failure: string | null = null;
+    for (const d of targets) {
+      const r = data[d].onAdd(specFor(d));
+      if (!r.ok && failure === null) failure = r.reason;
+    }
+    if (failure === null) clearAnswers(family);
+    else setRefusal(failure);
   };
 
   return (
     <div className="sandbox-scn" data-scn="panel">
-      {both && (
-        <div className="sandbox-dir-pick" data-scn="direction-pick" role="tablist" aria-label="Add the event to which carriageway">
-          <span className="k">Add to</span>
-          <div className="sandbox-dir-seg">
-            {directions.map((d) => (
-              <button
-                key={d}
-                role="tab"
-                aria-selected={direction === d}
-                className={`dir-${d}${direction === d ? " active" : ""}`}
-                data-scn-dir={d}
-                onClick={() => props.onFocus(d)}
-              >
-                {DIRECTION_NAME[d]}
-              </button>
-            ))}
-          </div>
-        </div>
-      )}
       <span className="sandbox-mini-label">Add a real-incident scenario</span>
       <div className="sandbox-scn-families">
         {SCENARIO_TEMPLATES.map((t) => (
@@ -509,6 +511,40 @@ export default function ScenarioPanel(props: Props) {
           </button>
         ))}
       </div>
+      {both && (
+        <div className="sandbox-dir-pick" data-scn="direction-pick" role="tablist" aria-label="Add the event to which carriageway">
+          <span className="k">Add to</span>
+          <div className="sandbox-dir-seg">
+            {template.carriageways === "one_or_both" && (
+              <button role="tab" aria-selected={onBoth} className={`dir-BOTH${onBoth ? " active" : ""}`} data-scn-dir="BOTH" onClick={() => setWantBoth(true)}>
+                Both
+              </button>
+            )}
+            {directions.map((d) => (
+              <button
+                key={d}
+                role="tab"
+                aria-selected={!onBoth && direction === d}
+                className={`dir-${d}${!onBoth && direction === d ? " active" : ""}`}
+                data-scn-dir={d}
+                onClick={() => {
+                  setWantBoth(false);
+                  props.onFocus(d);
+                }}
+              >
+                {DIRECTION_NAME[d]}
+              </button>
+            ))}
+          </div>
+          <span className="sandbox-slider-hint" data-scn="direction-note">
+            {template.carriageways === "one"
+              ? "This happens on one carriageway: choose which."
+              : onBoth
+                ? "Applies to both carriageways: one event is added to each, at the same place and time."
+                : `Only ${DIRECTION_NAME[direction]}. Choose Both to add it to each carriageway.`}
+          </span>
+        </div>
+      )}
       <ScenePreview family={family} vehicle={vehicle} intensity={intensity} />
       <p className="sandbox-scn-desc">{template.description}</p>
       {template.family === "rain" && (
@@ -571,7 +607,7 @@ export default function ScenarioPanel(props: Props) {
           <label>
             Lane
             <select data-scn="lane" value={laneNow} onChange={(e) => setLane(Number(e.target.value))}>
-              {Array.from({ length: laneCount }, (_, i) => (
+              {Array.from({ length: laneCap }, (_, i) => (
                 <option key={i} value={i + 1}>Lane {i + 1}</option>
               ))}
             </select>
@@ -623,15 +659,15 @@ export default function ScenarioPanel(props: Props) {
         </ul>
       )}
 
-      {!verdict.ok && (
+      {refusalNow !== null && (
         <p className="sandbox-live-note warn" data-scn="refusal">
-          {verdict.reason}
+          {refusalNow}
         </p>
       )}
-      {refusal !== null && verdict.ok && <p className="sandbox-live-note warn">{refusal}</p>}
+      {refusal !== null && refusalNow === null && <p className="sandbox-live-note warn">{refusal}</p>}
       <div className="sandbox-btn-row">
-        <button className="btn-primary" data-scn="add" disabled={!verdict.ok} onClick={add} style={{ marginLeft: 0 }}>
-          {both ? `Add to ${DIRECTION_NAME[direction]}` : "Add event"}
+        <button className="btn-primary" data-scn="add" disabled={refusalNow !== null} onClick={add} style={{ marginLeft: 0 }}>
+          {both ? (onBoth ? "Add to both carriageways" : `Add to ${DIRECTION_NAME[direction]}`) : "Add event"}
         </button>
       </div>
 

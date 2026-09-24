@@ -46,6 +46,7 @@ import {
   composeInterventions,
   createEngineBinding,
   addEventToBucket,
+  addTargets,
   directionBucketsConsistent,
   inconsistentBucketMessage,
   wrongCarriagewayMessage,
@@ -1818,11 +1819,11 @@ check(
   );
   check(
     "scenario panel: Both mode has an explicit 'Add to' carriageway picker and the Add button names the carriageway; the event is stamped with the picked direction",
-    /data-scn="direction-pick"/.test(panelSource) && /`Add to \$\{DIRECTION_NAME\[direction\]\}`/.test(panelSource) && /const spec: NewEventSpec = \{ variant, direction,/.test(panelSource),
+    /data-scn="direction-pick"/.test(panelSource) && /`Add to \$\{DIRECTION_NAME\[direction\]\}`/.test(panelSource) && /const specFor = \(d: Direction\): NewEventSpec => \(\{ variant, direction: d,/.test(panelSource),
   );
   check(
     "scenario panel: conflicts, locks and the next event number are taken from the TARGET carriageway's own events (scoped within a direction)",
-    /const target = data\[direction\];/.test(panelSource) && /addEventToBucket\(direction, events, spec, road, nextSeq, manualClosure\)/.test(panelSource),
+    /const target = data\[direction\];/.test(panelSource) && /addEventToBucket\(d, data\[d\]\.events, specFor\(d\), data\[d\]\.road, data\[d\]\.nextSeq, data\[d\]\.manualClosure\)/.test(panelSource),
   );
   check(
     "scenario panel: the long-skip guard applies in EVERY view (the single-direction skip and each Both-mode group use the same SkipControl, no off switch) and the threshold is two minutes",
@@ -2097,10 +2098,55 @@ const roadMarks = (evs: readonly ScenarioEvent[], min: number, owners = NO_OWNER
       /\$\{REALLOCATION_NAME\.toUpperCase\(\)\} · /.test(pageSource),
   );
   check(
+    "panel: the 'Add to' picker sits UNDER the family chips (it appears once a scenario is chosen), offers Both only for a family that reaches both, and is Both-mode only",
+    panelSource.indexOf('data-scn="direction-pick"') > panelSource.indexOf('className="sandbox-scn-families"') && panelSource.indexOf('className="sandbox-scn-families"') > -1 &&
+      /\{template\.carriageways === "one_or_both" && \(\s*<button role="tab" aria-selected=\{onBoth\}/.test(panelSource) && /\{both && \(\s*<div className="sandbox-dir-pick"/.test(panelSource) &&
+      /setWantBoth\(t\.carriageways === "one_or_both"\)/.test(panelSource) && /const targets = addTargets\(template\.carriageways, directions, direction, wantBoth\);/.test(panelSource),
+  );
+  check(
+    "panel: a Both add is all or nothing — the refusal is worked out for EVERY target (one refusal disables Add for both, and names its carriageway), and Add stores one event per target",
+    /for \(const d of targets\) \{\s*const v = addEventToBucket\(d, data\[d\]\.events, specFor\(d\), data\[d\]\.road, data\[d\]\.nextSeq, data\[d\]\.manualClosure\);/.test(panelSource) &&
+      /for \(const d of targets\) \{\s*const r = data\[d\]\.onAdd\(specFor\(d\)\);/.test(panelSource) && /disabled=\{refusalNow !== null\}/.test(panelSource) && /Add to both carriageways/.test(panelSource),
+  );
+  check(
+    "panel: with two targets both events get the same km and the same lane number (the shorter road's lane list), so a Both flood is one place on the corridor",
+    /const laneCap = Math\.min\(\.\.\.targets\.map\(\(d\) => data\[d\]\.laneCount\)\);/.test(panelSource) && /data\[targets\[0\]\]\.kmAtPct\(template\.defaultPlacement\.pct\)/.test(panelSource),
+  );
+  check(
     "panel: once an event is stored the form's answers are cleared back to the family's defaults (start, minutes, position, lane, vehicle, cause, label, intensity, duration choice, draw); a REFUSED add keeps them so they can be fixed",
-    /const add = \(\) => \{\s*const r = target\.onAdd\(spec\);\s*if \(r\.ok\) clearAnswers\(family\);\s*else setRefusal\(r\.reason\);\s*\};/.test(panelSource) &&
+    /if \(failure === null\) clearAnswers\(family\);\s*else setRefusal\(failure\);/.test(panelSource) &&
       /const clearAnswers = \(f: FamilyKey\) => \{\s*pickFamily\(f\);\s*setStartMin\(DEFAULT_START_MIN\);\s*setManualMin\(DEFAULT_MANUAL_MIN\);\s*setSeed\(1\);\s*if \(getTemplate\(f\)\.durationSource !== "manual_only"\) setChoice\("sampled"\);\s*\};/.test(panelSource) &&
       /useState\(DEFAULT_START_MIN\)/.test(panelSource) && /useState\(DEFAULT_MANUAL_MIN\)/.test(panelSource),
+  );
+  // ── where an Add goes: one carriageway, or both for weather and flooding ────
+  const reach = (f: FamilyKey): string => TEMPLATE_BY_FAMILY[f].carriageways;
+  check(
+    "add to which carriageway: rain and flooding can go on both; every other family is one carriageway's business",
+    reach("rain") === "one_or_both" && reach("flood") === "one_or_both" &&
+      (["breakdown_in_lane", "breakdown_shoulder", "minor_collision", "multi_vehicle_collision", "self_accident", "overturned_vehicle", "scheduled_roadworks"] as const).every((f) => reach(f) === "one"),
+  );
+  const both2: readonly Direction[] = ["NB", "SB"];
+  check(
+    "add to which carriageway: with both on screen, a both-capable family the operator sent to Both goes to NB and SB — in that order, one event each",
+    addTargets("one_or_both", both2, "NB", true).join() === "NB,SB" && addTargets("one_or_both", both2, "SB", true).join() === "NB,SB",
+  );
+  check(
+    "add to which carriageway: choosing one carriageway (Both off) goes to the focused one only, for either kind of family",
+    addTargets("one_or_both", both2, "SB", false).join() === "SB" && addTargets("one_or_both", both2, "NB", false).join() === "NB" && addTargets("one", both2, "SB", false).join() === "SB",
+  );
+  check(
+    "add to which carriageway: a one-carriageway family never goes to both, even if 'both' was left set from a previous choice",
+    addTargets("one", both2, "NB", true).join() === "NB" && addTargets("one", both2, "SB", true).join() === "SB",
+  );
+  check(
+    "add to which carriageway: with one carriageway on screen it is that carriageway, whatever the family or the flag",
+    addTargets("one_or_both", ["NB"], "NB", true).join() === "NB" && addTargets("one_or_both", ["SB"], "SB", true).join() === "SB" && addTargets("one", ["SB"], "SB", false).join() === "SB",
+  );
+  // the two events a Both add makes are each valid on their own carriageway, and are stored one per bucket
+  const rainBoth = both2.map((d) => addEventToBucket(d, [], { ...rainSpec(330, 0, manualMinutes(30), d, "moderate") }, road600, 1, { closedLanes: [], closurePoint: 0, closureEnd: 0 }));
+  check(
+    "add to which carriageway: a Both add stores one rain event per carriageway, each stamped with its own direction",
+    rainBoth.length === 2 && rainBoth.every((r) => r.ok) && rainBoth.map((r) => (r.ok ? r.event.direction : "")).join() === "NB,SB",
   );
   check("rain intensity: the panel offers a Light / Moderate / Heavy radio group for rain only, each choice titled with its cap, and passes the choice into the variant", /template\.family === "rain" && \(/.test(panelSource) && /data-scn-intensity=\{o\.id\}/.test(panelSource) && /variantFor\(family, vehicle, cause, label, intensity\)/.test(panelSource) && /case "rain":\s*return \{ family, intensity \};/.test(panelSource));
   check("panel: every family chip carries its pictogram, and the preview is the SAME scene art the road uses", /<FamilyIcon family=\{t\.family\} \/>/.test(panelSource) && /<ScenePreview family=\{family\}/.test(panelSource) && /from "\.\.\/sceneArt"/.test(previewSource) && /reduce/.test(previewSource));

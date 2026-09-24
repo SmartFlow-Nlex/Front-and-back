@@ -140,6 +140,26 @@ left to bypass it. `addEvent` on its own still stamps the direction from the spe
 (it does not know which list it is for), so anything new that stores events must go through
 `addEventToBucket`.
 
+### Adding to one carriageway or both
+
+In Both mode the Add panel shows an **Add to** picker *under the scenario chips*, so it appears once a
+scenario is chosen and offers what applies to it (one carriageway in NB-only or SB-only view: no picker).
+
+- Collisions, breakdowns, the overturned vehicle and roadworks happen on one carriageway: the picker offers
+  **Northbound / Southbound**.
+- Rain and flooding (`carriageways: "one_or_both"` on the catalogue template) also offer **Both**, which is
+  the default: weather is not one carriageway's business, and a flooded stretch is often on both. One event
+  goes into **each** carriageway's own list — they are ordinary events, each stamped with its own
+  direction, removable separately, and everything above (buckets, conflicts, locks, ownership) applies to
+  each unchanged. Both carries the same km, start and duration, and for a flood the same lane number (the
+  shorter road's lane list, lane 1 being against the median on both).
+- **All or nothing.** The refusal is worked out for every target; if either carriageway would refuse (say it
+  already has a rain event over that time), Add is disabled for both and the reason names the carriageway.
+- Roadworks are single-carriageway by choice (works are usually on one side); add them twice for both.
+
+Which carriageways a click means is `addTargets` in `adapter.ts` (pure, pinned in `verify.ts`); which
+families reach both is data on the template.
+
 ### Fast-forward cost and the skip guard
 
 "Skip to next phase" steps the engine without drawing. Measured (Chrome, development machine,
@@ -308,7 +328,7 @@ cd Back-End
 ./node_modules/.bin/tsx ../Front-End-Dashboard/app/dashboard/ai-sandbox/scenarios/verify.ts
 ```
 
-Read-only, exits 1 on any failure, prints every `FAIL` with its name. As of this write-up: **1,395
+Read-only, exits 1 on any failure, prints every `FAIL` with its name. As of this write-up: **1,404
 checks**. It guards, in order: the sampler reproduces the calibrated quantiles and response shares
 exactly (distribution, cap behaviour, reproducibility per seed); the breakdown hierarchy fallback and
 its cap-source chain; the catalogue/assumptions' internal consistency (phases, shares, lanes,
@@ -329,8 +349,9 @@ checked in a browser rather than here. It also pins the rain intensities (order,
 engine applies), `sceneMarks` (including which event owns the lanes), the scene art itself — run in Node
 against a recording canvas context: drop counts per intensity, determinism, that the clock moves the drops
 and the flood streaks, what is clipped to the road, what a paused or pending event draws, the drops' colour —
-and the lane reallocation's pure rules, its wiring, the clear-on-add behaviour of the panel, and that the
-engine's per-lane capacity holds at 6 lanes.
+and the lane reallocation's pure rules, its wiring, the clear-on-add behaviour of the panel, that the
+engine's per-lane capacity holds at 6 lanes, and which carriageways an Add goes to (`addTargets`, and the
+panel's all-or-nothing handling of Both).
 
 There is also a strict `tsc` pass (two scratch tsconfigs — one for `scenarios/**` + `components/**`,
 one for `page.tsx` — both extending the project's own `tsconfig.json` with `noUnusedLocals`,

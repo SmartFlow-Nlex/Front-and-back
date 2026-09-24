@@ -6107,6 +6107,11 @@ body:has(.sandbox-main.is-expanded) {
 }
 .sandbox-legend span { display: inline-flex; align-items: center; gap: 6px; }
 .sandbox-legend i { width: 12px; height: 12px; border-radius: 3px; display: inline-block; }
+/* The traffic is silver and white, told apart by shape: the legend shows the shapes, longest for heaviest. */
+.sandbox-legend i.veh { height: 9px; border-radius: 4px; box-sizing: border-box; border: 1px solid rgba(9, 14, 28, 0.7); background: linear-gradient(180deg, #ffffff, #aab4c2); }
+.sandbox-legend i.veh-1 { width: 16px; }
+.sandbox-legend i.veh-2 { width: 24px; }
+.sandbox-legend i.veh-3 { width: 32px; }
 
 .sandbox-reco {
   margin-top: 14px;

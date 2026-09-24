@@ -7,7 +7,7 @@ import { Car } from "lucide-react";
 import PageHeader from "../../../components/dashboard/PageHeader";
 import ScenarioForecastPanel from "../../../components/dashboard/ScenarioForecastPanel";
 import {
-  TrafficSim, CLASS_META, mixHex, visualLane, replicate,
+  TrafficSim, visualLane, replicate,
   type Metrics, type ReplicationResult, type RepStat,
 } from "./simulation";
 import {
@@ -1449,7 +1449,7 @@ export default function AiSandboxPage() {
           <div className="sandbox-view-seg" role="tablist" aria-label="Carriageway view">
             <span className="k">Carriageway</span>
             <div className="sandbox-view-buttons">
-              {(["NB", "SB", "Both"] as const).map((v) => (
+              {(["Both", "NB", "SB"] as const).map((v) => (
                 <button
                   key={v}
                   role="tab"
@@ -1623,9 +1623,9 @@ export default function AiSandboxPage() {
             </>
           )}
           <div className="sandbox-legend">
-            <span><i style={{ background: CLASS_META[1].color }} /> Class 1 · light</span>
-            <span><i style={{ background: CLASS_META[2].color }} /> Class 2 · medium</span>
-            <span><i style={{ background: CLASS_META[3].color }} /> Class 3 · heavy</span>
+            <span><i className="veh veh-1" /> Class 1 · light (car)</span>
+            <span><i className="veh veh-2" /> Class 2 · medium (bus)</span>
+            <span><i className="veh veh-3" /> Class 3 · heavy (truck)</span>
             <span><i style={{ background: "#dc2626" }} /> stopped / incident</span>
             <span><i style={{ background: "#f59e0b" }} /> scenario event</span>
           </div>
@@ -3308,13 +3308,14 @@ function drawCarriageway(
    * How large to draw a vehicle, as one factor applied to both axes.
    *
    * True scale first. Enlargement is a FLOOR for legibility, not a target: at
-   * 600 m a car is already 14.6 px and needs no help, and treating the gap to
-   * the vehicle ahead as something to fill produced 101 px cars sitting nose to
-   * tail. Only when true scale falls below what the eye can resolve does the
-   * sprite grow, and even then it is capped so it cannot overlap its neighbour
-   * or outgrow its lane.
+   * 600 m on a wide screen a car is already 14.6 px and needs no help, and treating
+   * the gap to the vehicle ahead as something to fill produced 101 px cars sitting
+   * nose to tail. Only when true scale falls below what the eye can resolve does
+   * the sprite grow, and even then it is capped so it cannot overlap its neighbour
+   * or outgrow its lane. The floor is 15 px (it was 10, which left the traffic as
+   * specks on a narrower road view).
    */
-  const MIN_LEN_PX = 10;
+  const MIN_LEN_PX = 15;
   const trueCarLen = 4.6 * mToPx;
   const perLane = Math.max(1, sim.vehicles.length / Math.max(1, lanes));
   const spacingPx = cssW / perLane;
@@ -3369,7 +3370,7 @@ function drawCarriageway(
       // than any negative value, so brake lights do not flicker on the small
       // corrections every car-following model makes continuously.
       const braking = v.accel < -0.6 || v.v < 3;
-      drawVehicle(ctx, xPx(v.x), y, len, wid, v.vClass, v.color, braking, sb);
+      drawVehicle(ctx, xPx(v.x), y, len, wid, v.vClass, paintFor(v.id, v.vClass), braking, sb);
     } catch (err) {
       // One unusable sprite must not take the remaining traffic with it: a
       // throw here previously painted the road and skipped every vehicle after
@@ -3841,6 +3842,27 @@ function drawSharedKmAxis(
   ctx.restore();
 }
 
+/**
+ * How a vehicle is painted. The traffic is drawn in a metallic, mostly light palette — white, silver and grey
+ * bodies shaded from a highlight to a shadow across their width, dark glass, a thin dark outline — rather than
+ * one colour per class. A car, a bus and a truck are told apart by SHAPE (length, the run of bus windows, the
+ * truck's cab and ribbed trailer), and the one saturated colour left on the road is the red of the brake
+ * lights. A vehicle keeps its paint for its whole life: it is picked from its id, never from the frame.
+ */
+type Paint = { readonly hi: string; readonly lo: string };
+const PAINT_WHITE: Paint = { hi: "#ffffff", lo: "#c9d1dc" };
+const PAINT_SILVER: Paint = { hi: "#f1f5f9", lo: "#a7b2c1" };
+const PAINT_GREY: Paint = { hi: "#d3dae4", lo: "#7d8999" };
+const PAINT_DARK: Paint = { hi: "#94a0b0", lo: "#3f4859" };
+const PAINT_CHARCOAL: Paint = { hi: "#64707f", lo: "#262e3b" };
+
+function paintFor(id: number, vClass: 1 | 2 | 3): Paint {
+  const roll = (Math.imul(id + 1, 2654435761) >>> 0) % 100;
+  // Buses are kept light; cars and truck cabs take the whole range (mostly white and silver, some grey, few dark).
+  if (vClass === 2) return roll < 55 ? PAINT_WHITE : PAINT_SILVER;
+  return roll < 34 ? PAINT_WHITE : roll < 62 ? PAINT_SILVER : roll < 82 ? PAINT_GREY : roll < 93 ? PAINT_DARK : PAINT_CHARCOAL;
+}
+
 // Top-down vehicle sprite. Local frame: front (nose) at x=0, body extends to
 // -len (behind). Class 1 = car, 2 = bus, 3 = articulated semi.
 function drawVehicle(
@@ -3850,7 +3872,7 @@ function drawVehicle(
   len: number,
   wid: number,
   vClass: 1 | 2 | 3,
-  color: string,
+  paint: Paint,
   /* Lit brake lights.
    *
    * This was `v.v < 3` — brake lights that only came on once a vehicle had
@@ -3859,100 +3881,114 @@ function drawVehicle(
    * stop-and-go waves form, and those waves are made of people braking at
    * speed. Lighting on deceleration instead makes them visible: a pulse of
    * red travelling backwards through otherwise free-flowing traffic, which is
-   * the single clearest sign the model is doing something real. */
+   * the single clearest sign the model is doing something real. On pale
+   * bodies the lit lamp also gets a glow so the pulse still reads. */
   braking: boolean,
   /** Southbound: the sprite is drawn mirrored so the nose leads. */
   faceLeft = false
 ) {
-  const glass = "rgba(196,220,255,0.92)";
-  const headlight = "#fff3b0";
-  const brake = braking ? "#ff4d4d" : "#c62828";
+  const glass = "rgba(20,28,44,0.95)";
+  const glint = "rgba(190,208,232,0.55)";
+  const outline = "rgba(9,14,28,0.8)";
+  const headlight = "#fff6bf";
+  // Below this size a sprite is a speck: the body and the lights only.
+  const detail = len >= 12 && wid >= 6;
   ctx.save();
   ctx.translate(xFront, yCenter);
   // Every part below is drawn behind the nose at negative x, so one flip turns
   // the whole vehicle around without touching any of that geometry.
   if (faceLeft) ctx.scale(-1, 1);
 
+  // A body panel shaded across its width, with a thin dark outline so pale paint still separates from the road.
+  const panel = (x: number, w: number, tone: Paint, radius: number) => {
+    const g = ctx.createLinearGradient(0, -wid / 2, 0, wid / 2);
+    g.addColorStop(0, tone.hi);
+    g.addColorStop(1, tone.lo);
+    ctx.fillStyle = g;
+    roundRect(ctx, x, -wid / 2, w, wid, radius);
+    ctx.fill();
+    ctx.strokeStyle = outline;
+    ctx.lineWidth = 0.9;
+    ctx.stroke();
+  };
+
   // soft shadow
-  ctx.fillStyle = "rgba(0,0,0,0.28)";
-  roundRect(ctx, -len, -wid / 2 + 2.5, len, wid, Math.min(5, wid / 2));
+  ctx.fillStyle = "rgba(0,0,0,0.32)";
+  roundRect(ctx, -len + 0.5, -wid / 2 + 2.2, len, wid, Math.min(6, wid / 2));
   ctx.fill();
 
   if (vClass === 3) {
-    // ---- articulated semi: trailer (back) + cab (front) ----
+    // ---- articulated semi: ribbed trailer (back) + cab (front), joined by a hitch ----
     const cabLen = len * 0.3;
     const trailerLen = len * 0.62;
-    const gap = len * 0.08;
-    // trailer — light tint of this agent's own colour so the whole rig matches
-    ctx.fillStyle = mixHex(color, "#ffffff", 0.6);
-    roundRect(ctx, -len, -wid / 2, trailerLen, wid, 3);
-    ctx.fill();
-    ctx.strokeStyle = mixHex(color, "#0b1226", 0.25);
-    ctx.lineWidth = 1;
-    ctx.stroke();
-    // cab
-    ctx.fillStyle = color;
-    roundRect(ctx, -cabLen, -wid / 2, cabLen, wid, 4);
-    ctx.fill();
-    // windshield across the cab front
-    ctx.fillStyle = glass;
-    roundRect(ctx, -cabLen * 0.42, -wid / 2 + 2, cabLen * 0.32, wid - 4, 1.5);
-    ctx.fill();
-    // coupling gap line
-    ctx.strokeStyle = "rgba(0,0,0,0.25)";
-    ctx.beginPath();
-    ctx.moveTo(-trailerLen + gap * 0.5, -wid / 2);
-    ctx.lineTo(-trailerLen + gap * 0.5, wid / 2);
-    ctx.stroke();
-    // lights
-    ctx.fillStyle = headlight;
-    dot(ctx, -1.5, -wid / 2 + 2.5, 1.4);
-    dot(ctx, -1.5, wid / 2 - 2.5, 1.4);
-    ctx.fillStyle = brake;
-    ctx.fillRect(-len, -wid / 2 + 1.5, 1.8, 2.4);
-    ctx.fillRect(-len, wid / 2 - 3.9, 1.8, 2.4);
-    ctx.restore();
-    return;
-  }
-
-  // ---- car / bus body ----
-  ctx.fillStyle = color;
-  roundRect(ctx, -len, -wid / 2, len, wid, vClass === 1 ? Math.min(6, wid / 2) : 3);
-  ctx.fill();
-
-  // subtle roof highlight
-  ctx.fillStyle = "rgba(255,255,255,0.12)";
-  roundRect(ctx, -len * 0.72, -wid / 2 + 1.5, len * 0.5, wid - 3, 2);
-  ctx.fill();
-
-  if (vClass === 1) {
-    // windshield (front) + rear window
-    ctx.fillStyle = glass;
-    roundRect(ctx, -len * 0.34, -wid / 2 + 2, len * 0.2, wid - 4, 1.5);
-    ctx.fill();
-    roundRect(ctx, -len * 0.82, -wid / 2 + 2.5, len * 0.14, wid - 5, 1.5);
-    ctx.fill();
-  } else {
-    // bus: front windshield + a run of side windows
-    ctx.fillStyle = glass;
-    roundRect(ctx, -len * 0.2, -wid / 2 + 2, len * 0.12, wid - 4, 1.5);
-    ctx.fill();
-    ctx.fillStyle = "rgba(196,220,255,0.6)";
-    const n = 4;
-    for (let i = 0; i < n; i++) {
-      const wx = -len * 0.3 - i * (len * 0.13);
-      roundRect(ctx, wx, -wid / 2 + 2.5, len * 0.08, wid - 5, 1);
+    panel(-len, trailerLen, PAINT_WHITE, Math.min(2.5, wid * 0.3));
+    if (detail) {
+      ctx.strokeStyle = "rgba(15,23,42,0.22)";
+      ctx.lineWidth = 0.8;
+      ctx.beginPath();
+      const ribs = Math.min(12, Math.floor(trailerLen / 3.5));
+      for (let i = 1; i < ribs; i++) {
+        const rx = -len + (trailerLen * i) / ribs;
+        ctx.moveTo(rx, -wid / 2 + 1);
+        ctx.lineTo(rx, wid / 2 - 1);
+      }
+      ctx.stroke();
+    }
+    ctx.fillStyle = "rgba(15,23,42,0.8)";
+    ctx.fillRect(-len * 0.38, -wid * 0.14, len * 0.08, wid * 0.28);
+    panel(-cabLen, cabLen, paint, Math.min(3.5, wid * 0.4));
+    if (detail) {
+      ctx.fillStyle = glass;
+      roundRect(ctx, -cabLen * 0.52, -wid / 2 + wid * 0.14, cabLen * 0.36, wid * 0.72, 1.2);
       ctx.fill();
+    }
+  } else if (vClass === 2) {
+    // ---- bus: a long pale body with a run of dark side windows and a windshield ----
+    panel(-len, len, paint, Math.min(3, wid * 0.32));
+    if (detail) {
+      ctx.fillStyle = glass;
+      roundRect(ctx, -len * 0.15, -wid / 2 + wid * 0.14, len * 0.08, wid * 0.72, 1);
+      ctx.fill();
+      const n = Math.max(3, Math.min(9, Math.floor(len / 4.5)));
+      const step = (len * 0.68) / n;
+      const slotW = step * 0.6;
+      for (let i = 0; i < n; i++) {
+        roundRect(ctx, -len * 0.24 - (i + 1) * step + (step - slotW) / 2, -wid / 2 + wid * 0.2, slotW, wid * 0.6, 1);
+        ctx.fill();
+      }
+    }
+  } else {
+    // ---- car: shaded body, a lighter roof, a dark windshield and rear window ----
+    panel(-len, len, paint, Math.min(wid * 0.48, len * 0.3));
+    if (detail) {
+      ctx.fillStyle = "rgba(255,255,255,0.28)";
+      roundRect(ctx, -len * 0.7, -wid / 2 + wid * 0.18, len * 0.36, wid * 0.64, wid * 0.2);
+      ctx.fill();
+      ctx.fillStyle = glass;
+      roundRect(ctx, -len * 0.34, -wid / 2 + wid * 0.14, len * 0.15, wid * 0.72, wid * 0.16);
+      ctx.fill();
+      roundRect(ctx, -len * 0.86, -wid / 2 + wid * 0.2, len * 0.12, wid * 0.6, wid * 0.14);
+      ctx.fill();
+      ctx.fillStyle = glint;
+      ctx.fillRect(-len * 0.33, -wid / 2 + wid * 0.2, 0.9, wid * 0.22);
     }
   }
 
   // head / tail lights
+  const lampR = Math.max(0.9, wid * 0.11);
   ctx.fillStyle = headlight;
-  dot(ctx, -1.5, -wid / 2 + 2.5, 1.4);
-  dot(ctx, -1.5, wid / 2 - 2.5, 1.4);
-  ctx.fillStyle = brake;
-  ctx.fillRect(-len, -wid / 2 + 1.5, 1.8, 2.4);
-  ctx.fillRect(-len, wid / 2 - 3.9, 1.8, 2.4);
+  dot(ctx, -1.2, -wid / 2 + wid * 0.2, lampR);
+  dot(ctx, -1.2, wid / 2 - wid * 0.2, lampR);
+  const tailW = Math.max(1.6, wid * 0.2);
+  const tailH = Math.max(2.2, wid * 0.26);
+  if (braking) {
+    ctx.fillStyle = "rgba(255,50,50,0.4)";
+    ctx.fillRect(-len - 1.6, -wid / 2 + 0.4, tailW + 2.4, tailH + 1.6);
+    ctx.fillRect(-len - 1.6, wid / 2 - 0.4 - (tailH + 1.6), tailW + 2.4, tailH + 1.6);
+  }
+  ctx.fillStyle = braking ? "#ff2a2a" : "#8f1d1d";
+  ctx.fillRect(-len, -wid / 2 + 1.2, tailW, tailH);
+  ctx.fillRect(-len, wid / 2 - 1.2 - tailH, tailW, tailH);
 
   ctx.restore();
 }

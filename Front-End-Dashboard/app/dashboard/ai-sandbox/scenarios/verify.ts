@@ -2105,6 +2105,16 @@ const roadMarks = (evs: readonly ScenarioEvent[], min: number, owners = NO_OWNER
     !/aria-label="Focused carriageway"/.test(pageSource) && !/>Focus<\/span>/.test(pageSource) && /data-forecast="direction"/.test(pageSource) && /Commands apply to/.test(pageSource) &&
       /aria-label="Carriageway the full-screen controls act on"/.test(pageSource) && /data-scn="direction-pick"/.test(panelSource) && (pageSource.match(/onClick=\{\(\) => chooseFocus\(dn\)\}/g) ?? []).length === 3,
   );
+  check(
+    "carriageway view buttons read Both, Northbound, Southbound (in that order), and the vehicle sprites have a 15 px legibility floor",
+    /\{\(\["Both", "NB", "SB"\] as const\)\.map\(\(v\) => \(/.test(pageSource) && !/\{\(\["NB", "SB", "Both"\] as const\)\.map\(\(v\) => \(/.test(pageSource) && /const MIN_LEN_PX = 15;/.test(pageSource),
+  );
+  check(
+    "traffic sprites: vehicles are drawn in a metallic white / silver / grey palette (paint chosen from the vehicle's id, so it never changes frame to frame), classes are told apart by shape, and the legend shows the shapes rather than class colours",
+    /const PAINT_WHITE: Paint = \{ hi: "#ffffff"/.test(pageSource) && /const roll = \(Math\.imul\(id \+ 1, 2654435761\) >>> 0\) % 100;/.test(pageSource) &&
+      /drawVehicle\(ctx, xPx\(v\.x\), y, len, wid, v\.vClass, paintFor\(v\.id, v\.vClass\), braking, sb\);/.test(pageSource) && !/v\.color/.test(pageSource) &&
+      /<i className="veh veh-1" \/>/.test(pageSource) && /<i className="veh veh-3" \/>/.test(pageSource) && !/CLASS_META\[[123]\]\.color/.test(pageSource),
+  );
   const operatorText = [pageSource, artSource, panelSource, previewSource, readFileSync(new URL("./assumptions.ts", import.meta.url), "utf8"), readFileSync(new URL("./catalogue.ts", import.meta.url), "utf8"), readFileSync(new URL("../../../globals.css", import.meta.url), "utf8")].join("\n");
   check("lane reallocation: nothing the operator can read still calls it a zipper lane or counterflow (UI strings, canvas labels, assumption text)", !/Zipper lane|ZIPPER LANE|Counterflow|COUNTERFLOW|zipper lane|counterflow/.test(operatorText));
   check(

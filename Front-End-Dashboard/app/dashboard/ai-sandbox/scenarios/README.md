@@ -252,6 +252,13 @@ sit on the seam just past the lanes an event holds rather than on top of it.
 - **Picker**: each family chip has a pictogram and an animated preview shows the selected family (accident
   families cycle through their phases). It freezes for people who ask for reduced motion.
 
+- **The traffic itself** is drawn as silver / white / grey vehicles — a highlight-to-shadow gradient across the
+  body, dark glass, a thin dark outline — with the paint picked from the vehicle's id so it never changes
+  frame to frame. Cars, buses and trucks are told apart by shape (length, a run of bus windows, a truck's cab
+  and ribbed trailer) rather than by colour, so the legend shows the shapes; the brake lights stay red and
+  glow when lit. Sprites have a 15 px legibility floor (`MIN_LEN_PX` in `page.tsx`), capped so they cannot
+  overlap their neighbour or outgrow their lane.
+
 The scenes are illustrations of the engine's state, not measurements: the wreck's angle, the debris and the
 number of responders are decoration. Wreck *length*, lanes and duration are still the recorded assumptions.
 
@@ -342,7 +349,7 @@ cd Back-End
 ./node_modules/.bin/tsx ../Front-End-Dashboard/app/dashboard/ai-sandbox/scenarios/verify.ts
 ```
 
-Read-only, exits 1 on any failure, prints every `FAIL` with its name. As of this write-up: **1,407
+Read-only, exits 1 on any failure, prints every `FAIL` with its name. As of this write-up: **1,409
 checks**. It guards, in order: the sampler reproduces the calibrated quantiles and response shares
 exactly (distribution, cap behaviour, reproducibility per seed); the breakdown hierarchy fallback and
 its cap-source chain; the catalogue/assumptions' internal consistency (phases, shares, lanes,

@@ -17,6 +17,8 @@ import { readFileSync } from "node:fs";
 import calibrationJson from "./calibration.json";
 import { TrafficSim, type Interventions, type Metrics } from "../simulation";
 import { combineBaselines, combineMetrics, flowWeightedSpeed } from "../bothMetrics";
+import { drawBorrowedLanes, drawMovableBarrier, drawScenes, drawWater, drawWeather, hasSceneArt, type SceneCtx, type SceneGeometry } from "../sceneArt";
+import { borrowedLanes, planZipper, zipperCounts, zipperHolds, zipperName } from "../zipper";
 import {
   ASSUMPTIONS,
   CHAINAGE_DERIVATION,
@@ -29,9 +31,13 @@ import {
   incidentSlotsFor,
   listAssumptions,
   operatorLaneToEngineIndex,
+  RAIN_INTENSITIES,
+  type RainIntensity,
 } from "./assumptions";
 import {
   NO_OWNERS,
+  sceneMarks,
+  type SceneMark,
   addEvent,
   applyAtBoundary,
   boundaryTimes,
@@ -789,8 +795,8 @@ const shoulderSpec = (posM: number, startMin: number, duration: DurationMode, di
 const collisionSpec = (family: "minor_collision" | "multi_vehicle_collision" | "self_accident" | "overturned_vehicle" | "flood" | "scheduled_roadworks", lane: number, posM: number, startMin: number, duration: DurationMode, direction: Direction = "NB"): NewEventSpec => ({
   variant: family === "minor_collision" ? { family, label: "rear_end" } : { family }, direction, lane, positionKm: kmOf(posM), startMinutes: startMin, duration,
 });
-const rainSpec = (posM: number, startMin: number, duration: DurationMode, direction: Direction = "NB"): NewEventSpec => ({
-  variant: { family: "rain" }, direction, lane: null, positionKm: kmOf(posM), startMinutes: startMin, duration,
+const rainSpec = (posM: number, startMin: number, duration: DurationMode, direction: Direction = "NB", intensity: RainIntensity = "heavy"): NewEventSpec => ({
+  variant: { family: "rain", intensity }, direction, lane: null, positionKm: kmOf(posM), startMinutes: startMin, duration,
 });
 const ALL_SPECS: readonly { name: string; spec: NewEventSpec }[] = [
   { name: "in-lane", spec: inLaneSpec("truck", 3, 330, 5, { kind: "sampled", seed: 7 }) },
@@ -972,11 +978,11 @@ check("event: phases tile the whole duration, start at 0, ascend, are labelled w
   const c1 = composeInterventions({ ...idle, incidents: [] }, [nearEnd], abs(1), road600);
   check(
     "rain: the zone is [0, segment length] no matter where positionKm places the event (RAIN_ZONE = whole_segment), at RAIN_SPEED_KMH (60)",
-    c0.interventions.speedZone[0] === 0 && c0.interventions.speedZone[1] === 600 && c0.interventions.speedLimitKmh === 60 && ASSUMPTIONS.RAIN_SPEED_KMH.value === 60 &&
+    c0.interventions.speedZone[0] === 0 && c0.interventions.speedZone[1] === 600 && c0.interventions.speedLimitKmh === 60 && ASSUMPTIONS.RAIN_SPEED_KMH.value.heavy === 60 &&
       c1.interventions.speedZone[0] === 0 && c1.interventions.speedZone[1] === 600 && c1.interventions.speedLimitKmh === 60,
   );
   check("rain: no lane is closed", !c0.interventions.closedLanes.some(Boolean) && c0.owners.closure === null);
-  check("rain: it owns the speed zone, not a shoulder breakdown's gawk zone (a different, lower speed)", c0.owners.speedZone !== null && c0.owners.speedZone.eventId === near0.id && ASSUMPTIONS.RAIN_SPEED_KMH.value < ASSUMPTIONS.GAWK_SPEED_KMH.value.breakdown_shoulder);
+  check("rain: it owns the speed zone, not a shoulder breakdown's gawk zone (a different, lower speed)", c0.owners.speedZone !== null && c0.owners.speedZone.eventId === near0.id && ASSUMPTIONS.RAIN_SPEED_KMH.value.heavy < ASSUMPTIONS.GAWK_SPEED_KMH.value.breakdown_shoulder);
   check("rain: has no lane, whatever lane the spec was given (effectOf routes it to speed_zone, same as a shoulder breakdown)", must([], { ...rainSpec(330, 0, manualMinutes(5)), lane: 2 }, 1).event.lane === null);
 
   const opLimit = composeInterventions({ ...idle, speedLimitKmh: 50, incidents: [] }, [near0], abs(1), road600);
@@ -1561,7 +1567,7 @@ check(
     { family: "overturned_vehicle" },
     { family: "flood" },
     { family: "scheduled_roadworks" },
-    { family: "rain" },
+    { family: "rain", intensity: "heavy" },
   ];
   const noLaneFamily = (f: FamilyKey): boolean => f === "breakdown_shoulder" || f === "rain";
   let notSettled = 0;
@@ -1651,7 +1657,7 @@ check(
       /incidentCount: sentTo\.effIncidentCount,/.test(pageSource),
     ctxKeys.join(),
   );
-  check("page: scenario incidents are drawn differently from the operator's, and each event is labelled on the canvas", /overlay\.isScenarioIncident\(inc\)/.test(pageSource) && /drawScenarioLabels\(ctx, canvasMarks\(/.test(pageSource));
+  check("page: a scenario's obstacle is not drawn as the operator's red dot (the scene art draws it), and each event is labelled on the canvas", /overlay\.isScenarioIncident\(inc\)/.test(pageSource) && /drawScenarioLabels\(ctx, scenes,/.test(pageSource));
 }
 
 // --- Phase D3: Both mode draws two carriageways in one canvas, not one (the whole point of the
@@ -1821,6 +1827,240 @@ check(
     "scenario panel: the long-skip guard applies in EVERY view (the single-direction skip and each Both-mode group use the same SkipControl, no off switch) and the threshold is two minutes",
     /<SkipControl data=\{dd\} \/>/.test(panelSource) && /<SkipControl data=\{target\} \/>/.test(panelSource) && !/<SkipControl[^>]*warn/.test(panelSource) && /const heavy = plan !== null && estimateMs !== null && estimateMs > SKIP_WARN_MS;/.test(panelSource) && /export const SKIP_WARN_MS = 120_000;/.test(panelSource),
   );
+}
+
+// --- rain intensity: light, moderate, heavy each cap traffic to their own assumed speed
+{
+  const caps = ASSUMPTIONS.RAIN_SPEED_KMH.value;
+  check("rain intensity: the caps are ordered — light > moderate > heavy — and every one is below the engine's free-flow speed (108) and above zero", caps.light > caps.moderate && caps.moderate > caps.heavy && caps.light < 108 && caps.heavy > 0, JSON.stringify(caps));
+  check("rain intensity: heavy is 60, exactly the single cap this family had before intensities existed (so an old rain event means what it did)", caps.heavy === 60);
+  check("rain intensity: the template offers exactly light, moderate, heavy, in that order, each with a label", (() => { const tpl = TEMPLATE_BY_FAMILY.rain; return tpl.intensities.map((i) => i.id).join() === "light,moderate,heavy" && tpl.intensities.every((i) => i.label.length > 0) && RAIN_INTENSITIES.join() === "light,moderate,heavy"; })());
+  check("rain intensity: the family is named Rain and its default intensity is offered", TEMPLATE_BY_FAMILY.rain.displayName === "Rain" && TEMPLATE_BY_FAMILY.rain.intensities.some((i) => i.id === TEMPLATE_BY_FAMILY.rain.defaultIntensity));
+  const dv = defaultVariant("rain");
+  check("rain intensity: defaultVariant carries the template's default intensity", dv.family === "rain" && dv.intensity === TEMPLATE_BY_FAMILY.rain.defaultIntensity);
+  let names = "";
+  let appliedOk = true;
+  for (const [i, intensity] of RAIN_INTENSITIES.entries()) {
+    const ev = must([], rainSpec(330, 0, manualMinutes(30), "NB", intensity), i + 1).event;
+    names += `${ev.name};`;
+    const c = composeInterventions({ ...idle, incidents: [] }, [ev], abs(1), road600);
+    if (c.interventions.speedLimitKmh !== caps[intensity] || c.interventions.speedZone[0] !== 0 || c.interventions.speedZone[1] !== 600 || c.owners.closure !== null) appliedOk = false;
+  }
+  check("rain intensity: each intensity is applied as ITS OWN cap over the whole segment and blocks no lane", appliedOk);
+  check("rain intensity: the event name says how hard it rains (Light rain #1; Moderate rain #2; Heavy rain #3)", names === "Light rain #1;Moderate rain #2;Heavy rain #3;", names);
+  check("rain intensity: the panel's phase says Raining, so a light event is not labelled heavy", TEMPLATE_BY_FAMILY.rain.phases[0].label === "Raining");
+}
+
+// --- scene marks: what the canvas draws for an event is a pure function of the event, the clock and what the engine owns
+const roadMarks = (evs: readonly ScenarioEvent[], min: number, owners = NO_OWNERS): readonly SceneMark[] => sceneMarks(evs, road600, abs(min), owners);
+{
+  const ev = must([], collisionSpec("minor_collision", 1, 330, 5, manualMinutes(10), "NB"), 1).event;
+  const owns = composeInterventions({ ...idle, incidents: [] }, [ev], abs(6), road600).owners;
+  const [active] = roadMarks([ev], 6, owns);
+  check("scene marks: an event that has not started is 'pending', has no phase, holds no lanes and no stretch", (() => { const [p] = roadMarks([ev], 1); return p.state === "pending" && p.phaseId === null && p.phaseFraction === 0 && p.closedLanes.length === 0 && p.stretch === null; })());
+  check(
+    "scene marks: a running collision reports its family, phase, and EXACTLY the lanes and stretch the engine's closure owner holds",
+    active.state === "active" && active.family === "minor_collision" && active.phaseId === "blocked" && owns.closure !== null &&
+      active.closedLanes.join() === owns.closure.lanes.join() && active.closedLanes.length > 0 &&
+      active.stretch !== null && active.stretch.fromM === owns.closure.closurePointM && active.stretch.toM === owns.closure.closureEndM,
+  );
+  check("scene marks: the phase fraction is 0 at the start of a phase and rises toward 1 within it", roadMarks([ev], 5.02, owns)[0].phaseFraction < 0.05 && roadMarks([ev], 8, owns)[0].phaseFraction > roadMarks([ev], 6, owns)[0].phaseFraction);
+  const yielded = composeInterventions({ ...idle, closedLanes: [true, false, false, false], closurePoint: 100, closureEnd: 200, incidents: [] }, [ev], abs(6), road600).owners;
+  const [y] = roadMarks([ev], 6, yielded);
+  check("scene marks: an event that yielded its closure to the operator's own is still active but holds NO lanes and NO stretch (so no wreck is drawn where traffic is not blocked)", y.state === "active" && y.closedLanes.length === 0 && y.stretch === null && yielded.closure === null && hasSceneArt(y) === false);
+  check("scene marks: a finished event is gone", roadMarks([ev], 60, owns).length === 0);
+  const rain = roadMarks([must([], rainSpec(330, 0, manualMinutes(30), "NB", "light"), 1).event], 1)[0];
+  check("scene marks: rain carries its intensity and holds nothing on the road; other families carry none", rain.intensity === "light" && rain.closedLanes.length === 0 && rain.stretch === null && active.intensity === null);
+  check(
+    "scene marks: rain carries the cap its intensity applies (light 90, moderate 75, heavy 60) for the speed sign; nothing else carries one",
+    RAIN_INTENSITIES.every((i, n) => roadMarks([must([], rainSpec(330, 0, manualMinutes(30), "NB", i), n + 1).event], 1)[0].capKmh === ASSUMPTIONS.RAIN_SPEED_KMH.value[i]) && active.capKmh === null,
+  );
+  const ev2 = must([], collisionSpec("minor_collision", 1, 330, 5, manualMinutes(10), "NB"), 2).event;
+  const owns2 = composeInterventions({ ...idle, incidents: [] }, [ev2], abs(6), road600).owners;
+  const both = roadMarks([ev, ev2], 6, owns2);
+  const markOf = (id: string): SceneMark | undefined => both.find((m) => m.eventId === id);
+  check(
+    "scene marks: with two events on one road, ONLY the one the engine's closure owner names holds lanes (the other draws no wreck, whatever its own dates say)",
+    owns2.closure !== null && owns2.closure.eventId === ev2.id && (markOf(ev2.id)?.closedLanes.length ?? 0) > 0 && markOf(ev.id)?.closedLanes.length === 0 && markOf(ev.id)?.stretch === null,
+  );
+  const truck = roadMarks([must([], inLaneSpec("truck", 3, 330, 0, manualMinutes(10)), 1).event], 1)[0];
+  check("scene marks: a breakdown carries its vehicle; a collision does not", truck.vehicle === "truck" && active.vehicle === null);
+  check(
+    "scene marks: hasSceneArt — rain and breakdowns always; flood, roadworks and collisions only while they hold lanes (a collision also in its clearing phase, when the cones and police remain)",
+    hasSceneArt(rain) && hasSceneArt(truck) &&
+      hasSceneArt(active) &&
+      !hasSceneArt({ ...active, closedLanes: [], stretch: null }) &&
+      hasSceneArt({ ...active, closedLanes: [], stretch: null, phaseId: "clearing" }) &&
+      !hasSceneArt({ ...active, family: "flood", closedLanes: [], stretch: null }) && hasSceneArt({ ...active, family: "flood" }) &&
+      !hasSceneArt({ ...active, family: "scheduled_roadworks", closedLanes: [], stretch: null }) && hasSceneArt({ ...active, family: "scheduled_roadworks" }) &&
+      !hasSceneArt({ ...active, state: "pending" }),
+  );
+}
+
+// --- scene art, run in Node against a recording context: how much is painted, what freezes, what draws nothing
+{
+  class Recorder implements SceneCtx {
+    readonly calls: string[] = [];
+    readonly texts: string[] = [];
+    fillStyle: SceneCtx["fillStyle"] = "#000";
+    strokeStyle: SceneCtx["strokeStyle"] = "#000";
+    lineWidth = 1;
+    lineJoin: CanvasLineJoin = "miter";
+    font = "10px sans-serif";
+    textAlign: CanvasTextAlign = "start";
+    textBaseline: CanvasTextBaseline = "alphabetic";
+    private log(name: string, ...nums: number[]): void {
+      this.calls.push(`${name} ${nums.map((n) => n.toFixed(2)).join(" ")}`.trim());
+    }
+    save(): void { this.log("save"); }
+    restore(): void { this.log("restore"); }
+    translate(x: number, y: number): void { this.log("translate", x, y); }
+    scale(x: number, y: number): void { this.log("scale", x, y); }
+    rotate(a: number): void { this.log("rotate", a); }
+    beginPath(): void { this.log("beginPath"); }
+    closePath(): void { this.log("closePath"); }
+    moveTo(x: number, y: number): void { this.log("moveTo", x, y); }
+    lineTo(x: number, y: number): void { this.log("lineTo", x, y); }
+    arc(x: number, y: number, r: number): void { this.log("arc", x, y, r); }
+    arcTo(x1: number, y1: number, x2: number, y2: number): void { this.log("arcTo", x1, y1, x2, y2); }
+    ellipse(x: number, y: number, rx: number, ry: number): void { this.log("ellipse", x, y, rx, ry); }
+    rect(x: number, y: number, w: number, h: number): void { this.log("rect", x, y, w, h); }
+    fill(): void { this.log("fill"); }
+    stroke(): void { this.log("stroke"); }
+    clip(): void { this.log("clip"); }
+    fillRect(x: number, y: number, w: number, h: number): void { this.log("fillRect", x, y, w, h); }
+    strokeRect(x: number, y: number, w: number, h: number): void { this.log("strokeRect", x, y, w, h); }
+    fillText(text: string, x: number, y: number): void { this.texts.push(text); this.log("fillText", x, y); }
+    createLinearGradient(): CanvasGradient { this.log("gradient"); return { addColorStop: () => undefined }; }
+    setLineDash(): void { this.log("setLineDash"); }
+    count(prefix: string): number { return this.calls.filter((c) => c === prefix || c.startsWith(`${prefix} `)).length; }
+  }
+  const geom = (ctx: SceneCtx, t: number, fwd: 1 | -1 = 1): SceneGeometry => ({
+    ctx, cssW: 800, roadTop: 20, roadH: 120, laneH: 30, xPx: (m) => (fwd === 1 ? m * 1.3 : 800 - m * 1.3), fwd,
+    laneCenterY: (l) => 20 + l * 30 + 15, outerEdgeY: 140, outward: 1, carLen: 24, carWid: 13, t,
+  });
+  const base: SceneMark = {
+    eventId: "e1", name: "x", kind: "speed_zone", state: "active", xM: 300, lane: null, text: "", family: "rain", phaseId: "active", phaseFraction: 0.5,
+    closedLanes: [], stretch: null, intensity: "heavy", capKmh: 60, vehicle: null,
+  };
+  const paintWeather = (marks: readonly SceneMark[], t: number): Recorder => { const r = new Recorder(); drawWeather(geom(r, t), marks); return r; };
+  const drops = (r: Recorder): number => r.count("lineTo");
+  const light = paintWeather([{ ...base, intensity: "light" }], 1.0);
+  const moderate = paintWeather([{ ...base, intensity: "moderate" }], 1.0);
+  const heavy = paintWeather([{ ...base, intensity: "heavy" }], 1.0);
+  check("rain art: the harder it rains, the more drops are drawn (light < moderate < heavy, heavy more than double light)", drops(light) < drops(moderate) && drops(moderate) < drops(heavy) && drops(heavy) > 2 * drops(light), `${drops(light)} < ${drops(moderate)} < ${drops(heavy)}`);
+  check("rain art: the drops are clipped to the carriageway (a clip is applied before any drop is drawn)", heavy.calls.indexOf("clip") > -1 && heavy.calls.indexOf("clip") < heavy.calls.findIndex((c) => c.startsWith("lineTo")));
+  check("rain art: the drops and the wet tint stay inside the carriageway (the clip is exactly the road's rectangle, not a margin around it)", heavy.calls.includes("rect 0.00 20.00 800.00 120.00") && heavy.calls.filter((c) => c.startsWith("rect ")).length === 1);
+  check("rain art: a speed-limit sign shows the intensity's cap (60 heavy, 90 light), and no sign is drawn for a mark with no cap", paintWeather([{ ...base, intensity: "heavy", capKmh: 60 }], 1).texts.join() === "60" && paintWeather([{ ...base, intensity: "light", capKmh: 90 }], 1).texts.join() === "90" && paintWeather([{ ...base, capKmh: null }], 1).texts.length === 0);
+  check("rain art: it is deterministic — the same clock paints the same picture, exactly (which is what makes a paused run freeze)", paintWeather([base], 2.5).calls.join("|") === paintWeather([base], 2.5).calls.join("|"));
+  check("rain art: a later clock moves the drops (the animation actually animates)", paintWeather([base], 2.5).calls.join("|") !== paintWeather([base], 2.6).calls.join("|"));
+  const dropPath = (r: Recorder): string => r.calls.filter((c) => c.startsWith("moveTo ") || c.startsWith("lineTo ")).join("|");
+  check("rain art: the DROPS themselves fall — their positions change with the clock (not just the ripples)", dropPath(paintWeather([base], 2.5)) !== dropPath(paintWeather([base], 2.6)) && dropPath(paintWeather([base], 2.5)).length > 0);
+  check("rain art: an event that has not started draws no rain, and neither does an empty list", paintWeather([{ ...base, state: "pending" }], 1).calls.length === 0 && paintWeather([], 1).calls.length === 0);
+  check("rain art: two rain events at once draw the STRONGER one only (one sky, not two)", paintWeather([{ ...base, intensity: "light" }, { ...base, eventId: "e2", intensity: "heavy" }], 1).calls.join("|") === heavy.calls.join("|"));
+
+  const floodMark: SceneMark = { ...base, family: "flood", kind: "closure", phaseId: "active", closedLanes: [2], stretch: { fromM: 250, toM: 400 }, intensity: null, lane: 2 };
+  const paintWater = (marks: readonly SceneMark[], t: number): Recorder => { const r = new Recorder(); drawWater(geom(r, t), marks); return r; };
+  const water = paintWater([floodMark], 1.0);
+  check("flood art: water is drawn over the flooded lane (clipped to its shoreline, with a gradient body)", water.count("clip") >= 1 && water.count("gradient") >= 1 && water.count("stroke") > 3);
+  check("flood art: the water FLOWS — the picture changes with the clock", paintWater([floodMark], 1.0).calls.join("|") !== paintWater([floodMark], 1.4).calls.join("|"));
+  const streakPath = (r: Recorder): string => { const from = r.calls.indexOf("gradient"); const to = r.calls.findIndex((c, i) => i > from && c.startsWith("ellipse")); return r.calls.slice(from, to).join("|"); };
+  check("flood art: the flowing streaks themselves move with the clock (not just the shoreline and glints), and there are several of them", streakPath(paintWater([floodMark], 1.0)) !== streakPath(paintWater([floodMark], 1.4)) && water.count("stroke") >= 5);
+  check("flood art: a flood that holds no lane (yielded to the operator) draws no water, and a pending one draws none", paintWater([{ ...floodMark, closedLanes: [], stretch: null }], 1).calls.length === 0 && paintWater([{ ...floodMark, state: "pending" }], 1).calls.length === 0);
+  check("flood art: the water spans the flooded stretch — it is drawn at the stretch's own x range and nowhere near a far-away lane position", (() => { const xs = water.calls.filter((c) => c.startsWith("lineTo ")).map((c) => Number(c.split(" ")[1])).filter((x) => Number.isFinite(x)); return Math.min(...xs) >= 250 * 1.3 - 12 && Math.max(...xs) <= 400 * 1.3 + 12; })());
+
+  const collision: SceneMark = { ...base, family: "multi_vehicle_collision", kind: "closure", phaseId: "blocked", closedLanes: [1], stretch: { fromM: 250, toM: 350 }, intensity: null, lane: 1, phaseFraction: 0.9 };
+  const paintScene = (marks: readonly SceneMark[], t = 1): Recorder => { const r = new Recorder(); drawScenes(geom(r, t), marks); return r; };
+  const blocked = paintScene([collision]);
+  const towing = paintScene([{ ...collision, phaseId: "tow", phaseFraction: 0.6 }]);
+  const clearing = paintScene([{ ...collision, phaseId: "clearing", closedLanes: [], stretch: null }]);
+  check("scene art: a wreck is painted while lanes are blocked, more is painted with the tow trucks in, and far less once only the cones remain", blocked.calls.length > 300 && towing.calls.length > blocked.calls.length * 0.9 && clearing.calls.length < blocked.calls.length / 2, `${blocked.calls.length} / ${towing.calls.length} / ${clearing.calls.length}`);
+  check("scene art: an event holding no lane and not clearing paints nothing (no wreck the engine is not honouring)", paintScene([{ ...collision, closedLanes: [], stretch: null }]).calls.length === 0);
+  check("scene art: a pending event paints nothing (it keeps the faint marker)", paintScene([{ ...collision, state: "pending" }]).calls.length === 0);
+  check("scene art: hazard lights and beacons blink — the picture changes with the clock (and repeats exactly for the same clock)", paintScene([collision], 1.0).calls.join("|") !== paintScene([collision], 1.25).calls.join("|") && paintScene([collision], 1.0).calls.join("|") === paintScene([collision], 1.0).calls.join("|"));
+  check("scene art: southbound is the mirror — traffic drawn right to left still paints a scene of the same size", Math.abs(paintScene([collision], 1).calls.length - (() => { const r = new Recorder(); drawScenes(geom(r, 1, -1), [collision]); return r.calls.length; })()) < 40);
+  const allFamilies: readonly FamilyKey[] = ["breakdown_in_lane", "breakdown_shoulder", "minor_collision", "multi_vehicle_collision", "self_accident", "overturned_vehicle", "scheduled_roadworks"];
+  check(
+    "scene art: every family that draws a scene paints something when it holds what it needs, without throwing",
+    allFamilies.every((f) => paintScene([{ ...collision, family: f, phaseId: f === "breakdown_in_lane" || f === "breakdown_shoulder" ? "waiting" : "blocked", vehicle: f.startsWith("breakdown") ? "truck" : null }]).calls.length > 20),
+  );
+  const roadworks = paintScene([{ ...collision, family: "scheduled_roadworks", phaseId: "active" }]);
+  check("scene art: roadworks paint a work zone — cones, barrels, a truck and its lit arrow board (many arcs and filled rects)", roadworks.count("arc") > 15 && roadworks.count("fillRect") > 5);
+  const barrierA = new Recorder();
+  drawMovableBarrier(barrierA, 800, 200, 6, 1, 1);
+  const barrierB = new Recorder();
+  drawMovableBarrier(barrierB, 800, 200, 6, 3, 1);
+  check("zipper art: the movable barrier is a chain of segments with a transfer vehicle that MOVES along it", barrierA.count("arcTo") > 100 && barrierA.calls.join("|") !== barrierB.calls.join("|"));
+  const lanesR = new Recorder();
+  drawBorrowedLanes(geom(lanesR, 1), 1, "ZIPPER LANE");
+  const noLanes = new Recorder();
+  drawBorrowedLanes(geom(noLanes, 1), 0, "ZIPPER LANE");
+  check("zipper art: borrowed lanes are marked (wash, chevrons, an edge line and the scheme's name); none borrowed paints nothing", lanesR.count("fillRect") >= 1 && lanesR.count("fillText") === 1 && lanesR.count("stroke") > 5 && noLanes.calls.length === 0);
+}
+
+// --- zipper lane / counterflow: the lane-transfer rules, pure
+{
+  const b44 = { NB: 4, SB: 4 } as const;
+  const okNB1 = planZipper(b44, "NB", 1);
+  const okNB2 = planZipper(b44, "NB", 2);
+  const okSB2 = planZipper(b44, "SB", 2);
+  check("zipper: from 4 + 4, one lane moves either way (5 + 3, 3 + 5) and the total stays 8", okNB1.ok && okNB1.counts.NB === 5 && okNB1.counts.SB === 3 && planZipper(b44, "SB", 1).ok && (() => { const p = planZipper(b44, "SB", 1); return p.ok && p.counts.SB === 5 && p.counts.NB === 3; })());
+  check("zipper: from 4 + 4, counterflow moves two lanes (6 + 2, 2 + 6), the most the limits allow, total kept", okNB2.ok && okNB2.counts.NB === 6 && okNB2.counts.SB === 2 && okSB2.ok && okSB2.counts.SB === 6 && okSB2.counts.NB === 2);
+  const tooFew = planZipper({ NB: 3, SB: 3 }, "NB", 2);
+  const tooMany = planZipper({ NB: 5, SB: 5 }, "NB", 2);
+  const nonsense = [planZipper(b44, "NB", 0), planZipper(b44, "NB", 3), planZipper(b44, "NB", 1.5)];
+  check("zipper: a transfer that would leave the donor below 2 lanes is refused, saying which carriageway and how many lanes", !tooFew.ok && tooFew.reason.includes("SB") && tooFew.reason.includes("1 lane") && tooFew.reason.includes("at least 2"), tooFew.ok ? "" : tooFew.reason);
+  check("zipper: a transfer that would take the recipient past 6 lanes is refused, saying so", !tooMany.ok && tooMany.reason.includes("NB") && tooMany.reason.includes("7") && tooMany.reason.includes("6"), tooMany.ok ? "" : tooMany.reason);
+  check("zipper: 0, 3 or a fractional number of lanes is refused", nonsense.every((p) => !p.ok));
+  check("zipper: the limits are the recorded assumption (min 2, max 6, at most 2 moved), not numbers scattered in the code", ASSUMPTIONS.ZIPPER_LANES.value.minLanes === 2 && ASSUMPTIONS.ZIPPER_LANES.value.maxLanes === 6 && ASSUMPTIONS.ZIPPER_LANES.value.maxTransfer === 2);
+  check("zipper: the lane total is conserved by every accepted transfer, over every base 2..5 + 2..5, both directions, 1 and 2 lanes", (() => {
+    for (let a = 2; a <= 5; a++) for (let b = 2; b <= 5; b++) for (const to of ["NB", "SB"] as const) for (const n of [1, 2]) {
+      const p = planZipper({ NB: a, SB: b }, to, n);
+      if (p.ok && (p.counts.NB + p.counts.SB !== a + b || p.counts.NB < 2 || p.counts.SB < 2 || p.counts.NB > 6 || p.counts.SB > 6)) return false;
+    }
+    return true;
+  })());
+  if (!okNB1.ok) throw new Error("fixture");
+  const held = { NB: 5, SB: 3 };
+  check("zipper: zipperCounts reproduces what the plan set, and zipperHolds is true only while the lane counts are exactly those", zipperCounts(okNB1.state).NB === 5 && zipperCounts(okNB1.state).SB === 3 && zipperHolds(okNB1.state, held) && !zipperHolds(okNB1.state, { NB: 4, SB: 3 }) && !zipperHolds(okNB1.state, { NB: 5, SB: 4 }) && !zipperHolds(okNB1.state, b44));
+  check("zipper: only the carriageway that GAINED lanes has borrowed ones (the innermost n); the donor and 'no scheme' have none", borrowedLanes(okNB1.state, "NB") === 1 && borrowedLanes(okNB1.state, "SB") === 0 && borrowedLanes(okNB2.ok ? okNB2.state : null, "NB") === 2 && borrowedLanes(null, "NB") === 0);
+  check("zipper: one lane is a 'Zipper lane', two is 'Counterflow'", zipperName(1) === "Zipper lane" && zipperName(2) === "Counterflow");
+  // the engine really does run at the lane counts a scheme produces (2 and 6), fills them and stays finite
+  let runs = "";
+  for (const lanes of [2, 6]) {
+    const e = new TrafficSim({ length: 600, laneCount: lanes, inflowVehPerHour: 4500, seed: 7, warmupS: 60 });
+    for (let i = 0; i < 6000; i++) e.step(0.05);
+    const m = e.metrics();
+    const maxLane = Math.max(-1, ...e.vehicles.map((v) => v.lane));
+    if (!(m.activeAgents > 0) || !Number.isFinite(m.avgSpeedKmh) || maxLane > lanes - 1) runs += `${lanes} lanes failed (agents ${m.activeAgents}, max lane ${maxLane}); `;
+  }
+  check("zipper: the engine runs at 2 and at 6 lanes (the extremes a scheme can produce) — vehicles are present, speeds finite, none outside the lanes", runs === "", runs);
+}
+
+// --- Rain intensity / scene art / zipper wiring in the page and panel (source checks: page.tsx cannot be imported by Node)
+{
+  const pageSource = readFileSync(new URL("../page.tsx", import.meta.url), "utf8");
+  const panelSource = readFileSync(new URL("../components/ScenarioPanel.tsx", import.meta.url), "utf8");
+  const artSource = readFileSync(new URL("../sceneArt.ts", import.meta.url), "utf8");
+  const previewSource = readFileSync(new URL("../components/ScenePreview.tsx", import.meta.url), "utf8");
+  const imports = artSource.match(/^import .*$/gm) ?? [];
+  check("scene art is pure drawing: it imports only TYPES (no engine, no adapter logic), and never touches the engine's interventions or a TrafficSim", imports.length > 0 && imports.every((l) => l.startsWith("import type ")) && !/TrafficSim|\.interventions|simRef/.test(artSource));
+  check("scene art: the animation clock advances only while the run is running (a paused road freezes its rain, water and beacons)", /if \(running\) animClockRef\.current \+= dtReal;/.test(pageSource));
+  check("scene art: the road draws scenes from sceneMarks(events, road, sim.time, owners) — what the engine's binding owns, not a second reading of the events", /sceneMarks\(overlay\.events, roadOf\(sim, overlay\.frame\), sim\.time, overlay\.owners\)/.test(pageSource) && /owners: nb\.owners/.test(pageSource) && /owners: sb\.owners/.test(pageSource));
+  check("scene art: the amber triangle marker is now only for an event with no scene to show (not started, or holding nothing)", /if \(!hasSceneArt\(m\)\) drawScenarioMarker\(ctx, x, laneY, g\.r, faint\);/.test(pageSource) && /if \(overlay && overlay\.isScenarioIncident\(inc\)\) continue;/.test(pageSource));
+  check("scene art: water goes under the traffic and scenes, weather over both, labels last", pageSource.indexOf("drawWater(") > -1 && pageSource.indexOf("drawWater(") < pageSource.indexOf("drawScenes(sceneGeom") && pageSource.indexOf("drawScenes(sceneGeom") < pageSource.indexOf("drawWeather(sceneGeom") && pageSource.indexOf("drawWeather(sceneGeom") < pageSource.indexOf("drawScenarioLabels(ctx, scenes"));
+  check("rain: the engine's orange speed-zone wash is skipped when the zone is a rain event's (the sign and the rain say it; the orange made the road look brown)", /const rainOwnsZone =/.test(pageSource) && /e\.variant\.family === "rain"/.test(pageSource) && /sim\.interventions\.speedLimitKmh != null && !rainOwnsZone/.test(pageSource));
+  check("scene art: a label for a scene that holds lanes sits on the seam just past them (or before, at the road's edge), centred on the stretch — never on top of the water, works or wreck", /if \(hasSceneArt\(m\) && m\.closedLanes\.length > 0\) \{/.test(pageSource) && /const cx = heldStretch === null \? x : g\.xPx\(\(heldStretch\.fromM \+ heldStretch\.toM\) \/ 2\);/.test(pageSource));
+  check("zipper: while a scheme is on, both Lanes sliders reach the zipper limit (a 6-lane carriageway is not shown as 5), and they are the corridor's 5 otherwise", (pageSource.match(/max=\{laneSliderMax\}/g) ?? []).length === 2 && !/max=\{5\}/.test(pageSource) && /zipper === null \? 5 : Math\.max\(5, ASSUMPTIONS\.ZIPPER_LANES\.value\.maxLanes\)/.test(pageSource));
+  check("zipper: the shared km axis gets a dark chip behind its numbers while the striped barrier is drawn", /backdrop: zipper !== null/.test(pageSource));
+  check("rain intensity: the panel offers a Light / Moderate / Heavy radio group for rain only, each choice titled with its cap, and passes the choice into the variant", /template\.family === "rain" && \(/.test(panelSource) && /data-scn-intensity=\{o\.id\}/.test(panelSource) && /variantFor\(family, vehicle, cause, label, intensity\)/.test(panelSource) && /case "rain":\s*return \{ family, intensity \};/.test(panelSource));
+  check("panel: every family chip carries its pictogram, and the preview is the SAME scene art the road uses", /<FamilyIcon family=\{t\.family\} \/>/.test(panelSource) && /<ScenePreview family=\{family\}/.test(panelSource) && /from "\.\.\/sceneArt"/.test(previewSource) && /reduce/.test(previewSource));
+  check(
+    "zipper: the control is Both-mode only, plans every change through planZipper, and a scheme is dropped the moment the lane counts stop matching it",
+    /\{both && <ZipperControl /.test(pageSource) && /const plan = planZipper\(zipper === null \? laneCounts : zipper\.base, toward, lanes\);/.test(pageSource) && /if \(zipper !== null && !zipperHolds\(zipper, \{ NB: nb\.laneCount, SB: sb\.laneCount \}\)\) setZipper\(null\);/.test(pageSource),
+  );
+  check("zipper: 'Off' restores the lane counts the road had before the scheme", /nb\.setLaneCount\(zipper\.base\.NB\);\s*sb\.setLaneCount\(zipper\.base\.SB\);/.test(pageSource));
+  check("zipper: the canvas draws the movable barrier and the borrowed lanes only when a scheme is on (borrowedLanes(zipper, ...) feeds each carriageway)", /borrowed: borrowedLanes\(zipper, "NB"\)/.test(pageSource) && /borrowed: borrowedLanes\(zipper, "SB"\)/.test(pageSource) && /if \(zipper === null\) \{\s*drawMedian/.test(pageSource));
 }
 
 /* ───────────────────────────── report ───────────────────────────── */

@@ -6,10 +6,11 @@ import {
   type FamilyKey,
   type NoCalibrationFamilyKey,
   type PhaseIdOf,
+  type RainIntensity,
   type VehicleKind,
 } from "./assumptions";
 
-export type { BreakdownCause, BreakdownFamilyKey, ClosureFamilyKey, FamilyKey, NoCalibrationFamilyKey, PhaseIdOf, SpeedZoneFamilyKey, VehicleKind } from "./assumptions";
+export type { BreakdownCause, BreakdownFamilyKey, ClosureFamilyKey, FamilyKey, NoCalibrationFamilyKey, PhaseIdOf, RainIntensity, SpeedZoneFamilyKey, VehicleKind } from "./assumptions";
 
 /* ══════════════════════════════════════════════════════════════════════════════
    SCENARIO CATALOGUE
@@ -182,7 +183,11 @@ export type ScheduledRoadworksTemplate = TemplateCommon<"scheduled_roadworks"> &
 /** No calibrationKey. Speed zone, not closure_stretch — see ASSUMPTIONS.RAIN_ZONE / RAIN_SPEED_KMH. */
 export type RainTemplate = TemplateCommon<"rain"> & {
   readonly durationSource: "manual_only";
+  /** What the operator picks: how hard it rains. Each has its own speed cap (ASSUMPTIONS.RAIN_SPEED_KMH). */
+  readonly intensities: readonly RainIntensityOption[];
+  readonly defaultIntensity: RainIntensity;
 };
+export type RainIntensityOption = { readonly id: RainIntensity; readonly label: string };
 
 export type ScenarioTemplate =
   | BreakdownInLaneTemplate
@@ -207,7 +212,7 @@ export type ScenarioVariant =
   | { readonly family: "overturned_vehicle" }
   | { readonly family: "flood" }
   | { readonly family: "scheduled_roadworks" }
-  | { readonly family: "rain" };
+  | { readonly family: "rain"; readonly intensity: RainIntensity };
 
 export function assertNever(value: never): never {
   throw new Error(`Unhandled case: ${JSON.stringify(value)}`);
@@ -421,14 +426,20 @@ const SCHEDULED_ROADWORKS: ScheduledRoadworksTemplate = {
 
 const RAIN: RainTemplate = {
   family: "rain",
-  displayName: "Heavy rain",
+  displayName: "Rain",
   description:
-    "A speed zone across the WHOLE simulated stretch, for a duration the operator enters directly. NLEX does record weather on accidents, but checked properly (the same population and exclusion rules the calibration file itself uses) it shows no real difference in how long anything takes to clear during rain — so this is not a calibrated slowdown, just a round, assumed speed cap standing in for reduced grip and visibility. No lane is blocked. The engine has a single speed zone, so this cannot run alongside a hand-set speed limit or a shoulder breakdown's gawk zone.",
-  phases: singlePhase("Heavy rain"),
+    "Light, moderate or heavy rain: a speed zone across the WHOLE simulated stretch, for a duration the operator enters directly, with a lower speed cap the harder it rains. NLEX does record weather on accidents, but checked properly (the same population and exclusion rules the calibration file itself uses) it shows no real difference in how long anything takes to clear during rain — so these are not calibrated slowdowns, just round, assumed speed caps standing in for reduced grip and visibility. No lane is blocked. The engine has a single speed zone, so this cannot run alongside a hand-set speed limit or a shoulder breakdown's gawk zone.",
+  phases: singlePhase("Raining"),
   defaultLane: { kind: "outermost" },
   defaultPlacement: DEFAULT_PLACEMENT,
   resources: ["speed_zone"],
   durationSource: "manual_only",
+  intensities: [
+    { id: "light", label: "Light" },
+    { id: "moderate", label: "Moderate" },
+    { id: "heavy", label: "Heavy" },
+  ],
+  defaultIntensity: "moderate",
 };
 
 /** In the order they should be offered. */
@@ -480,7 +491,7 @@ export function defaultVariant(family: FamilyKey): ScenarioVariant {
     case "scheduled_roadworks":
       return { family };
     case "rain":
-      return { family };
+      return { family, intensity: RAIN.defaultIntensity };
     default:
       return assertNever(family);
   }

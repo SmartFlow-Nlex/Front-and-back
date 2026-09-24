@@ -65,6 +65,10 @@ export type PhaseIdOf = {
   readonly rain: "active";
 };
 
+/** How hard it is raining. Each intensity caps traffic to its own speed (ASSUMPTIONS.RAIN_SPEED_KMH). */
+export type RainIntensity = "light" | "moderate" | "heavy";
+export const RAIN_INTENSITIES: readonly RainIntensity[] = ["light", "moderate", "heavy"];
+
 /** Engine vehicle classes 1 / 2 / 3. */
 export type VehicleKind = "car" | "bus" | "truck";
 export type BreakdownCause = "tire" | "engine" | "mechanical" | "fuel" | "electrical";
@@ -248,19 +252,28 @@ export const ASSUMPTIONS = {
     },
   ),
 
-  RAIN_SPEED_KMH: assume(
-    60,
-    "The speed a Heavy rain event caps traffic to, for as long as it runs. Unlike GAWK_SPEED_KMH (drivers slowing to look at something beside the road), this is meant to stand in for reduced grip and visibility over the WHOLE simulated stretch, not a local effect near one vehicle — so the speed zone for a rain event is [0, segment length] regardless of where the event is placed (RAIN_ZONE below), and the cap is set lower than the shoulder-breakdown gawk speed (60 against 70). The warehouse holds no observed corridor operating speed at all (see GAWK_SPEED_KMH), and the weather-split check that would have anchored a real number instead found no measurable effect (see NO_CALIBRATION_FAMILIES) — so, like GAWK_SPEED_KMH, this is a round number below the engine's free-flow class-1 speed, not a measurement.",
+  RAIN_SPEED_KMH: assume<Readonly<Record<RainIntensity, number>>>(
+    { light: 90, moderate: 75, heavy: 60 },
+    "The speed each rain intensity caps traffic to, for as long as the event runs. Unlike GAWK_SPEED_KMH (drivers slowing to look at something beside the road), this stands in for reduced grip and visibility over the WHOLE simulated stretch, not a local effect near one vehicle — so the speed zone for a rain event is [0, segment length] regardless of where the event is placed (RAIN_ZONE below). Heavy is 60, exactly the single value this family had before intensities existed, so a rain event added then still means what it did. Light and moderate are placed at 90 and 75 so the three are ordered and roughly evenly spaced between the engine's free-flow class-1 speed (108) and the heavy cap: steps of 18, 15 and 15 km/h. They are ROUND NUMBERS, not measurements, and have not been checked against any published figure. The warehouse holds no observed corridor operating speed at all (see GAWK_SPEED_KMH), and the weather-split check that would have anchored a real number instead found no measurable effect on clearance time (see NO_CALIBRATION_FAMILIES).",
     {
-      evidence: "The engine's own free-flow class-1 speed is 108 km/h; GAWK_SPEED_KMH (a narrower, one-vehicle effect) is already set at 70. 60 is lower again because rain is modelled corridor-wide, not local.",
-      settledBy: "Probe / loop-detector speeds during recorded rain events, which do not exist in the warehouse.",
+      evidence: "The engine's own free-flow class-1 speed is 108 km/h; GAWK_SPEED_KMH (a narrower, one-vehicle effect) is 70. The old single rain cap, 60, is kept as heavy. The intensity picker exists so an operator can compare a lighter and a heavier assumption, not because the values are known.",
+      settledBy: "Probe / loop-detector speeds during recorded rain events of known intensity, which do not exist in the warehouse.",
     },
   ),
 
   RAIN_ZONE: assume<"whole_segment">(
     "whole_segment",
-    "A Heavy rain event's speed zone is the WHOLE simulated stretch (0 to the segment length), not a position-relative zone like GAWK_ZONE_M: rain is corridor-wide by nature, and sizing a local zone around a chosen point would misrepresent that. The event still carries a positionKm, for the canvas label only — it has no effect on the zone's extent.",
+    "A rain event's speed zone (at any intensity) is the WHOLE simulated stretch (0 to the segment length), not a position-relative zone like GAWK_ZONE_M: rain is corridor-wide by nature, and sizing a local zone around a chosen point would misrepresent that. The event still carries a positionKm, for the canvas label only — it has no effect on the zone's extent.",
     { settledBy: "Nothing external: a modelling choice about what \"corridor-wide\" should mean in a sandbox of a fixed simulated stretch." },
+  ),
+
+  ZIPPER_LANES: assume<{ readonly minLanes: number; readonly maxLanes: number; readonly maxTransfer: number }>(
+    { minLanes: 2, maxLanes: 6, maxTransfer: 2 },
+    "Limits on the zipper lane / counterflow control, which moves 1 lane (zipper) or 2 lanes (counterflow) from one carriageway to the other by changing each carriageway's lane count. A carriageway never drops below 2 lanes (the same floor as the lane slider: a single lane is not a road this sandbox models), may not exceed 6 (one more than the lane slider's 5, which is what lets a 4-lane carriageway take 2 lanes from the other), and at most 2 lanes are moved (a zipper lane moves the barrier one lane; a counterflow scheme takes over up to two). These are modelling bounds, not operating rules: nothing in the data says whether NLEX runs a movable barrier or contraflow on this corridor, and how many lanes a real scheme could move depends on the road and the barrier system.",
+    {
+      evidence: "The lane slider runs 2 to 5 (lib/nlex-lanes holds no lane data yet, so there is no corridor figure to check the 6 against). The engine itself takes any lane count: verify.ts runs it at 2 and at 6, and 6 was looked at in Both mode (8 lanes in total in either split) and draws legibly.",
+      settledBy: "NLEX guidance on whether a movable barrier or contraflow operation exists on this corridor and how many lanes it can move.",
+    },
   ),
 
   BREAKDOWN_DURATION_SCOPE: assume<"response_plus_service_per_event">(

@@ -1,5 +1,5 @@
 import type { Interventions } from "../simulation";
-import { ASSUMPTIONS, closureStretch, incidentSlotsFor, operatorLaneToEngineIndex, type ClosureStretch } from "./assumptions";
+import { ASSUMPTIONS, closureStretch, incidentSlotsFor, operatorLaneToEngineIndex, type ClosureStretch, type RainIntensity } from "./assumptions";
 import { TEMPLATE_BY_FAMILY, assertNever, phaseOffsetFractions, type FamilyKey, type PhaseDef, type ScenarioVariant, type VehicleKind } from "./catalogue";
 import { resolveDuration, type CalibrationLevel, type DurationMode, type ResolvedDuration } from "./sampler";
 
@@ -290,11 +290,12 @@ function breakdownVehicle(variant: ScenarioVariant): VehicleKind | null {
  * `road`. Null for a family whose effect is not speed_zone (effectOf would not
  * have routed it here; the caller breaks rather than applying anything). A
  * shoulder breakdown's zone is local to its position (GAWK_ZONE_M); rain's is
- * the WHOLE segment regardless of position (RAIN_ZONE) — positionKm still
- * drives the event's canvas marker, just not the zone extent.
+ * the WHOLE segment regardless of position (RAIN_ZONE) at the cap for its
+ * intensity (RAIN_SPEED_KMH) — positionKm still drives the event's canvas marker,
+ * just not the zone extent.
  */
-function speedZoneWindow(family: FamilyKey, positionM: number, road: Road): { readonly zone: readonly [number, number]; readonly limitKmh: number } | null {
-  switch (family) {
+function speedZoneWindow(variant: ScenarioVariant, positionM: number, road: Road): { readonly zone: readonly [number, number]; readonly limitKmh: number } | null {
+  switch (variant.family) {
     case "breakdown_shoulder": {
       const zone = ASSUMPTIONS.GAWK_ZONE_M.value;
       return {
@@ -303,7 +304,7 @@ function speedZoneWindow(family: FamilyKey, positionM: number, road: Road): { re
       };
     }
     case "rain":
-      return { zone: [0, road.segmentLengthM], limitKmh: ASSUMPTIONS.RAIN_SPEED_KMH.value };
+      return { zone: [0, road.segmentLengthM], limitKmh: ASSUMPTIONS.RAIN_SPEED_KMH.value[variant.intensity] };
     case "breakdown_in_lane":
     case "minor_collision":
     case "multi_vehicle_collision":
@@ -313,7 +314,7 @@ function speedZoneWindow(family: FamilyKey, positionM: number, road: Road): { re
     case "scheduled_roadworks":
       return null;
     default:
-      return assertNever(family);
+      return assertNever(variant);
   }
 }
 
@@ -499,6 +500,12 @@ function firstClosureStretch(event: ScenarioEvent, road: Road): ClosureStretch |
   return closureStretch(road.metresAt(event.positionKm), phase.wreckLengthM, road.segmentLengthM);
 }
 
+/** "Breakdown in a lane #2"; rain names its intensity instead ("Heavy rain #1", "Light rain #2"). */
+export function eventName(variant: ScenarioVariant, seq: number): string {
+  if (variant.family === "rain") return `${variant.intensity[0].toUpperCase()}${variant.intensity.slice(1)} rain #${seq}`;
+  return `${TEMPLATE_BY_FAMILY[variant.family].displayName} #${seq}`;
+}
+
 /**
  * Store a new event, or refuse it and say why. The duration is resolved here,
  * once. `seq` numbers the event for its name and id ("Breakdown in a lane #2"),
@@ -516,8 +523,7 @@ function firstClosureStretch(event: ScenarioEvent, road: Road): ClosureStretch |
  */
 export function addEvent(events: readonly ScenarioEvent[], spec: NewEventSpec, road: Road, seq: number, manual: ManualClosure): AddResult {
   if (!Number.isInteger(seq) || seq < 1) throw new RangeError(`seq must be a positive integer, got ${seq}`);
-  const template = TEMPLATE_BY_FAMILY[spec.variant.family];
-  const name = `${template.displayName} #${seq}`;
+  const name = eventName(spec.variant, seq);
   if (!Number.isFinite(spec.startMinutes) || spec.startMinutes < 0) {
     return { ok: false, reason: `Cannot add "${name}": its start must be zero or more minutes after warm-up, got ${spec.startMinutes}.` };
   }
@@ -843,7 +849,7 @@ export function composeInterventions(
           suppressed.push({ eventId: event.id, eventName: event.name, resource: "speed_zone", heldBy: speedZone.eventId });
           break;
         }
-        const window = speedZoneWindow(event.variant.family, positionM, road);
+        const window = speedZoneWindow(event.variant, positionM, road);
         if (window === null) break;
         speedZone = { ...ownerOf(event, phase), zone: window.zone, limitKmh: window.limitKmh };
         break;
@@ -1200,4 +1206,60 @@ export function canvasMarks(events: readonly ScenarioEvent[], road: Road, simTim
     });
   }
   return marks;
+}
+
+/**
+ * What the canvas needs to DRAW a scenario event as a scene (stalled vehicle, wreck, responders, water,
+ * work zone, rain) rather than a marker: a CanvasMark plus the family, the running phase and how far
+ * through it, which lanes and what stretch the event is actually holding closed, and the rain
+ * intensity / breakdown vehicle where they apply.
+ */
+export type SceneMark = CanvasMark & {
+  readonly family: FamilyKey;
+  /** The running phase ("blocked", "tow", "clearing", "waiting", "service", "active"); null before the event starts. */
+  readonly phaseId: string | null;
+  /** How far through that phase it is, 0 to 1; 0 before it starts. */
+  readonly phaseFraction: number;
+  /** Engine lanes this event is holding closed right now. Empty when it holds none — including when it yielded the closure to the operator's own, so no wreck is drawn where traffic is not actually blocked. */
+  readonly closedLanes: readonly number[];
+  /** The closure stretch it holds, metres along the road in the direction of travel; null when it holds none. */
+  readonly stretch: { readonly fromM: number; readonly toM: number } | null;
+  /** Rain only. */
+  readonly intensity: RainIntensity | null;
+  /** Rain only: the speed the event caps traffic to (ASSUMPTIONS.RAIN_SPEED_KMH), for the speed-limit sign. */
+  readonly capKmh: number | null;
+  /** Breakdowns only. */
+  readonly vehicle: VehicleKind | null;
+};
+
+/**
+ * One SceneMark per event that has not finished and can run on this road. `owners` is what the engine
+ * binding last applied for this carriageway: an event is drawn holding lanes only if it OWNS the
+ * closure, so the picture never shows a wreck the engine is not honouring. Pure; the canvas calls it
+ * each frame.
+ */
+export function sceneMarks(events: readonly ScenarioEvent[], road: Road, simTimeS: number, owners: Ownership): readonly SceneMark[] {
+  const t = scenarioTimeS(simTimeS, road);
+  const byId = new Map(events.map((e) => [e.id, e] as const));
+  const out: SceneMark[] = [];
+  for (const mark of canvasMarks(events, road, simTimeS)) {
+    const e = byId.get(mark.eventId);
+    if (e === undefined) continue;
+    const phase = mark.state === "pending" ? null : phaseAt(e, t);
+    const start = phase === null ? 0 : e.startS + phase.offsetS;
+    const fraction = phase === null || !(phase.durationS > 0) ? 0 : Math.max(0, Math.min(1, (t - start) / phase.durationS));
+    const holds = owners.closure !== null && owners.closure.eventId === e.id ? owners.closure : null;
+    out.push({
+      ...mark,
+      family: e.variant.family,
+      phaseId: phase === null ? null : phase.id,
+      phaseFraction: fraction,
+      closedLanes: holds === null ? [] : holds.lanes,
+      stretch: holds === null ? null : { fromM: holds.closurePointM, toM: holds.closureEndM },
+      intensity: e.variant.family === "rain" ? e.variant.intensity : null,
+      capKmh: e.variant.family === "rain" ? ASSUMPTIONS.RAIN_SPEED_KMH.value[e.variant.intensity] : null,
+      vehicle: breakdownVehicle(e.variant),
+    });
+  }
+  return out;
 }

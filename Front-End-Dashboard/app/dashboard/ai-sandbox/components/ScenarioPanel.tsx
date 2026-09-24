@@ -25,12 +25,16 @@ import {
   type BreakdownCause,
   type CollisionLabel,
   type FamilyKey,
+  type RainIntensity,
   type ScenarioTemplate,
   type ScenarioVariant,
   type VehicleKind,
 } from "../scenarios/catalogue";
+import { ASSUMPTIONS } from "../scenarios/assumptions";
 import { resolveDuration, type DurationMode, type ResolvedDuration } from "../scenarios/sampler";
 import DirectionPill, { DIRECTION_NAME } from "./DirectionPill";
+import FamilyIcon from "./FamilyIcon";
+import ScenePreview from "./ScenePreview";
 
 /**
  * The Add-event panel and the event list (phase 3).
@@ -116,7 +120,7 @@ const DURATION_CHOICES: readonly { readonly id: DurationChoice; readonly label: 
   { id: "manual", label: "Manual" },
 ];
 
-function variantFor(family: FamilyKey, vehicle: VehicleKind, cause: BreakdownCause, label: CollisionLabel): ScenarioVariant {
+function variantFor(family: FamilyKey, vehicle: VehicleKind, cause: BreakdownCause, label: CollisionLabel, intensity: RainIntensity): ScenarioVariant {
   switch (family) {
     case "breakdown_in_lane":
       return { family, vehicle, cause };
@@ -135,7 +139,7 @@ function variantFor(family: FamilyKey, vehicle: VehicleKind, cause: BreakdownCau
     case "scheduled_roadworks":
       return { family };
     case "rain":
-      return { family };
+      return { family, intensity };
     default:
       return assertNever(family);
   }
@@ -336,7 +340,12 @@ function EventRow({
         : "Active";
   // "Shoulder" is right for a breakdown beside the road; rain has no location at all (its zone is the whole
   // segment, see ASSUMPTIONS.RAIN_ZONE) so it gets its own word instead of borrowing a place that isn't true of it.
-  const place = event.variant.family === "rain" ? "Corridor-wide" : event.lane === null ? "Shoulder" : `Lane ${event.lane}`;
+  const place =
+    event.variant.family === "rain"
+      ? `Corridor-wide · ${ASSUMPTIONS.RAIN_SPEED_KMH.value[event.variant.intensity]} km/h cap`
+      : event.lane === null
+        ? "Shoulder"
+        : `Lane ${event.lane}`;
   const where = `${place} · Km ${event.positionKm.toFixed(2)} · starts +${Number((event.startS / 60).toFixed(1))} min`;
   return (
     <div className={`sandbox-scn-event${invalid ? " is-invalid" : ""}`} data-scn-event={event.id}>
@@ -386,6 +395,7 @@ export default function ScenarioPanel(props: Props) {
   const [vehicle, setVehicle] = useState<VehicleKind>("truck");
   const [cause, setCause] = useState<BreakdownCause>("engine");
   const [label, setLabel] = useState<CollisionLabel>("rear_end");
+  const [intensity, setIntensity] = useState<RainIntensity>("moderate");
   const [lane, setLane] = useState<number | null>(null);
   const [posKm, setPosKm] = useState<number | null>(null);
   const [startMin, setStartMin] = useState(1);
@@ -412,12 +422,14 @@ export default function ScenarioPanel(props: Props) {
       case "minor_collision":
         setLabel(t.defaultLabel);
         break;
+      case "rain":
+        setIntensity(t.defaultIntensity);
+        break;
       case "multi_vehicle_collision":
       case "self_accident":
       case "overturned_vehicle":
       case "flood":
       case "scheduled_roadworks":
-      case "rain":
         break;
       default:
         assertNever(t);
@@ -426,7 +438,7 @@ export default function ScenarioPanel(props: Props) {
 
   const laneNow = lane === null ? defaultOperatorLane(template, laneCount) : Math.min(Math.max(1, lane), laneCount);
   const kmNow = Math.min(toKm, Math.max(fromKm, posKm === null ? kmAtPct(template.defaultPlacement.pct) : posKm));
-  const variant = variantFor(family, vehicle, cause, label);
+  const variant = variantFor(family, vehicle, cause, label, intensity);
   const duration: DurationMode =
     choice === "sampled" ? { kind: "sampled", seed } : choice === "p50" ? { kind: "p50" } : choice === "p90" ? { kind: "p90" } : { kind: "manual", minutes: manualMin };
   const spec: NewEventSpec = { variant, direction, lane: hasLane(family) ? laneNow : null, positionKm: kmNow, startMinutes: startMin, duration };
@@ -471,7 +483,8 @@ export default function ScenarioPanel(props: Props) {
       <div className="sandbox-scn-families">
         {SCENARIO_TEMPLATES.map((t) => (
           <button key={t.family} className={`sandbox-scn-fam${family === t.family ? " active" : ""}`} data-scn-family={t.family} onClick={() => pickFamily(t.family)}>
-            {t.displayName}
+            <FamilyIcon family={t.family} />
+            <span>{t.displayName}</span>
           </button>
         ))}
         {UNSUPPORTED_FAMILIES.map((u) => (
@@ -481,7 +494,31 @@ export default function ScenarioPanel(props: Props) {
           </button>
         ))}
       </div>
+      <ScenePreview family={family} vehicle={vehicle} intensity={intensity} />
       <p className="sandbox-scn-desc">{template.description}</p>
+      {template.family === "rain" && (
+        <div className="sandbox-scn-intensity" data-scn="intensity" role="radiogroup" aria-label="Rain intensity">
+          <span className="sandbox-mini-label">How hard is it raining?</span>
+          <div className="sandbox-speed-seg">
+            {template.intensities.map((o) => (
+              <button
+                key={o.id}
+                role="radio"
+                aria-checked={intensity === o.id}
+                className={intensity === o.id ? "active" : ""}
+                data-scn-intensity={o.id}
+                onClick={() => setIntensity(o.id)}
+                title={`Caps traffic at ${ASSUMPTIONS.RAIN_SPEED_KMH.value[o.id]} km/h`}
+              >
+                {o.label}
+              </button>
+            ))}
+          </div>
+          <span className="sandbox-scn-cap" data-scn="rain-cap">
+            Caps traffic at {ASSUMPTIONS.RAIN_SPEED_KMH.value[intensity]} km/h — an assumed figure, not a measurement.
+          </span>
+        </div>
+      )}
 
       {(template.family === "breakdown_in_lane" || template.family === "breakdown_shoulder") && (
         <div className="sandbox-scn-row">

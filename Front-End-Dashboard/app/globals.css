@@ -6365,10 +6365,33 @@ body:has(.sandbox-main.is-expanded) {
   color: var(--text-primary);
   cursor: pointer;
 }
+.sandbox-scn-fam { display: flex; align-items: center; gap: 7px; }
+.sandbox-scn-fam .fam-ico { flex: none; opacity: 0.9; }
 .sandbox-scn-fam.active { background: var(--color-info-bg); border-color: var(--color-info-border); color: var(--color-info); }
 .sandbox-scn-fam:disabled { opacity: 0.6; cursor: not-allowed; }
 .sandbox-scn-fam small { display: block; margin-top: 2px; font-size: 0.66rem; font-weight: 600; color: var(--text-muted); }
 .sandbox-scn-desc { margin: 8px 0 0; font-size: 0.72rem; line-height: 1.4; color: var(--text-muted); }
+
+/* The live preview of the scenario about to be added, drawn by the same scene art as the road. */
+.sandbox-scn-preview {
+  display: block;
+  width: 100%;
+  height: 96px;
+  margin-top: 8px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-default);
+  background: #20293a;
+}
+.sandbox-scn-intensity { margin-top: 10px; }
+.sandbox-scn-cap { display: block; margin-top: 6px; font-size: 0.72rem; color: var(--text-muted); }
+
+/* Zipper lane / counterflow: the amber of a movable barrier, not a carriageway's colour. */
+.sandbox-dir-seg.zip { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); width: 100%; box-sizing: border-box; }
+.sandbox-dir-seg.zip button { padding: 6px 2px; font-size: 0.74rem; white-space: nowrap; }
+.sandbox-zipper .sandbox-slider-header { flex-wrap: wrap; gap: 2px 8px; }
+.sandbox-dir-seg.zip button.active { background: #ca8a04; color: #fff; }
+.sandbox-dir-seg.zip button:disabled { opacity: 0.4; cursor: not-allowed; }
+.sandbox-zipper { border-top: 1px dashed var(--border-default); padding-top: 10px; margin-top: 10px; }
 /* Controls sit on the same baseline even when one label wraps, and number boxes match the selects beside them. */
 .sandbox-scn-row { display: flex; align-items: flex-end; gap: 8px; }
 .sandbox-scn-row > label { flex: 1; min-width: 0; }

@@ -2,12 +2,14 @@
 
 Front-end-only feature for the AI Simulation Sandbox (`app/dashboard/ai-sandbox/`). Lets an
 operator add realistic incident events to a running simulation — a breakdown, a collision, an
-overturned vehicle, a flood, scheduled roadworks, heavy rain — and have each one drive the
+overturned vehicle, a flood, scheduled roadworks, rain (light, moderate or heavy) — and have each one drive the
 **existing** engine levers (`simulation.ts`'s `Interventions`: `closedLanes`, `closurePoint` /
 `closureEnd`, `incidents`, `speedLimitKmh`, `speedZone`) on a schedule, instead of the operator
 setting those levers by hand. `simulation.ts`, the Back-End and `replicate()` are never modified by
 this feature — it is a layer that composes the engine's own inputs, nothing more. The same
-folder also carries the NB / SB / Both dual-carriageway view; see [Dual-carriageway view](#dual-carriageway-view-nb--sb--both).
+folder also carries the NB / SB / Both dual-carriageway view; see [Dual-carriageway view](#dual-carriageway-view-nb--sb--both),
+the [scene art](#scene-art-what-each-event-looks-like-on-the-road) that draws each event on the road, and
+the [zipper lane / counterflow](#zipper-lane--counterflow) control.
 
 ## Files
 
@@ -17,6 +19,9 @@ folder also carries the NB / SB / Both dual-carriageway view; see [Dual-carriage
 | `catalogue.ts` | What an operator can add: the 9 `ScenarioTemplate`s, their phases, resources, defaults, and the `FamilyKey`/`ScenarioVariant` type machinery. Structure only — no numbers live here except display labels/ordering. |
 | `sampler.ts` | Turns a variant + a `DurationMode` (`sampled` / `p50` / `p90` / `manual`) into a `ResolvedDuration`, via `calibration.json`'s quantiles and the breakdown fallback hierarchy (cause × vehicle → cause → vehicle → family). `resolveDuration` is the one entry point; `calibratedVariantOf()` is where it branches for a family with no calibration entry. |
 | `adapter.ts` | The pure core: `composeInterventions(manual, events, simTime, road, previous) -> { interventions, owners }` is the ONE function that decides what the engine holds, given the operator's own settings and the scenario events. Also: scheduling (`schedulePhases`, `boundaryTimes`), conflict/ownership rules, the `EngineBinding` that applies a composition to a real `TrafficSim`, and every view the UI reads (`resolutionView`, `canvasMarks`, `effectiveState`, …). |
+| `../sceneArt.ts` | The drawing of every event on the canvas: rain, flowing flood water, roadworks, breakdowns, collisions and their responders, the movable barrier and borrowed lanes. Pure canvas drawing that reads `SceneMark`s and imports only types, so `verify.ts` runs it in Node against a recording context. |
+| `../zipper.ts` | The zipper / counterflow rules: `planZipper` (what a transfer does, or why it is refused), `zipperHolds`, `borrowedLanes`. Pure. |
+| `../components/FamilyIcon.tsx`, `../components/ScenePreview.tsx` | The pictogram on each family chip, and the small animated preview under the chips (drawn by the same `sceneArt.ts` the road uses). Decoration only — they read nothing from the simulation. |
 | `verify.ts` | The test suite (see below). Not a framework — a flat script of `check(name, boolean)` calls. |
 | `tools/build_calibration.py` | Regenerates `calibration.json` from the client's raw CSV exports (see below). Read-only on the CSVs. |
 | `calibration.json` | Generated, not hand-edited. Duration quantiles + breakdown response-share quantiles, per family and per hierarchy cell, plus the generator's own provenance (when, from what, what `min_n` it used). |
@@ -154,6 +159,63 @@ slow end is a queue still growing (step cost rises with the vehicles on the road
 draining, so a draining phase is sometimes flagged when it need not be. In the runs used to set it, no
 skip over two minutes went unflagged.
 
+## Rain intensity
+
+Choosing Rain in the Add panel offers **Light / Moderate / Heavy** (default Moderate). Each is a cap on
+the speed of the whole simulated stretch for as long as the event runs, through the engine's one speed
+zone (`speedLimitKmh` + `speedZone` = `[0, segment length]`): **90, 75 and 60 km/h**
+(`ASSUMPTIONS.RAIN_SPEED_KMH`). Heavy is the single value rain had before intensities existed. Light and
+moderate are round numbers placed between the engine's free-flow class-1 speed (108) and that value.
+**They are assumptions, not measurements** — nothing in the warehouse gives a corridor operating speed in
+rain — and the panel says so next to the cap. The event is named for its intensity (`Heavy rain #1`), and
+its row shows `Corridor-wide · 60 km/h cap`. Rain still shares the engine's single speed zone, so it
+conflicts with an overlapping shoulder breakdown, exactly as before.
+
+## Scene art: what each event looks like on the road
+
+`sceneMarks(events, road, simTime, owners)` (in `adapter.ts`) turns each running event into a `SceneMark`:
+its family, phase and how far through the phase it is, and — the important part — **the lanes and stretch
+the engine's closure owner actually holds**. An event is drawn holding lanes only if it *owns* the closure,
+so the picture never shows a wreck, flood or work zone the engine is not honouring (an event that yielded
+its closure to the operator's own is drawn as the amber marker only). `sceneArt.ts` then draws, in this
+order: flood water (under the traffic), the vehicles, the scenes (breakdown with hazards and cones,
+collision with skid marks, debris and smoke, the responders arriving and leaving by phase, roadworks
+with taper, barrels, work truck and arrow board), rain over everything, then the event labels — which
+sit on the seam just past the lanes an event holds rather than on top of it.
+
+- **Rain**: two layers of falling drops (density, speed, length and brightness set by intensity), rings
+  where drops land, a cool wet tint on the asphalt, and a speed-limit roundel showing the cap. The
+  engine's orange speed-zone wash is not drawn for a rain-owned zone (the whole-segment zone tinted the
+  entire road brown); the roundel and the rain say it instead. Two rain events draw the stronger one only.
+- **Flood**: water over the flooded lane(s) — a rippling shoreline, streaks and glints that move with the
+  direction of travel, foam at the edge, a caution sign and a depth gauge.
+- **Animation clock**: one clock in `page.tsx` that advances only while the run is running, so pausing
+  freezes the rain, the flowing water and the blinking beacons. The drops are a pure function of the
+  clock (nothing stored per drop).
+- **Picker**: each family chip has a pictogram and an animated preview shows the selected family (accident
+  families cycle through their phases). It freezes for people who ask for reduced motion.
+
+The scenes are illustrations of the engine's state, not measurements: the wreck's angle, the debris and the
+number of responders are decoration. Wreck *length*, lanes and duration are still the recorded assumptions.
+
+## Zipper lane / counterflow
+
+In Both mode, a control under the Lanes sliders moves **1 lane (zipper lane)** or **2 (counterflow)** from
+one carriageway to the other: `NB +1`, `NB +2`, `SB +1`, `SB +2`, or Off. The canvas draws the movable
+barrier (yellow and black, with the transfer vehicle) in the median in place of the fixed one, and marks the
+borrowed lanes (the recipient's innermost n, against the barrier) with reversible-lane chevrons.
+
+**What it models, and what it does not.** The engine cannot change a carriageway's lane count mid-run and
+the carriageways still never interact (see the limitation above), so this is a **lane-count transfer**: the
+two `setLaneCount`s change together, the total is conserved, and **both runs restart** (any lane-count
+change does). What changes is the capacity of each carriageway — not flow crossing the median. There is
+deliberately **no timed zipper event**: a scheme that switches on at some minute would need the engine to
+change lanes mid-run. The limits (a carriageway keeps at least 2 lanes and takes at most 6; at most 2
+lanes move) are `ASSUMPTIONS.ZIPPER_LANES` — modelling bounds, not operating rules; the Lanes sliders reach 6
+while a scheme is on. The scheme is dropped the moment either lane count stops matching what it set (the
+Lanes slider, a segment change), so the barrier is never drawn where it is not. Off restores the original
+lane counts. Whether NLEX runs a movable barrier on this corridor is not recorded anywhere here.
+
 ## Which families are calibrated
 
 9 families total. 5 draw a duration from real NLEX data; 4 do not and are **manual-duration-only**:
@@ -163,7 +225,7 @@ skip over two minutes went unflagged.
 | Breakdown in a lane | Overturned vehicle |
 | Breakdown on the shoulder | Flooding |
 | Minor collision (rear-end / side-swipe / hit-and-run) | Scheduled roadworks |
-| Multi-vehicle collision | Heavy rain |
+| Multi-vehicle collision | Rain (Light / Moderate / Heavy) |
 | Self accident | |
 
 The 4 manual-only families and *why* each has no entry are recorded in one place:
@@ -202,7 +264,7 @@ cd Back-End
 ./node_modules/.bin/tsx ../Front-End-Dashboard/app/dashboard/ai-sandbox/scenarios/verify.ts
 ```
 
-Read-only, exits 1 on any failure, prints every `FAIL` with its name. As of this write-up: **1,323
+Read-only, exits 1 on any failure, prints every `FAIL` with its name. As of this write-up: **1,389
 checks**. It guards, in order: the sampler reproduces the calibrated quantiles and response shares
 exactly (distribution, cap behaviour, reproducibility per seed); the breakdown hierarchy fallback and
 its cap-source chain; the catalogue/assumptions' internal consistency (phases, shares, lanes,
@@ -219,7 +281,11 @@ what stops that looping). For the dual-carriageway view it also pins the directi
 each other, every corridor-aggregation rule in `bothMetrics.ts` (including zero flow and unequal
 flow), and — as source checks, since `page.tsx` cannot be imported by a Node script — the structure
 of click routing, the pinned command direction and the Both-mode tile labels; rendered behaviour is
-checked in a browser rather than here.
+checked in a browser rather than here. It also pins the rain intensities (order, caps, names, what the
+engine applies), `sceneMarks` (including which event owns the lanes), the scene art itself — run in Node
+against a recording canvas context: drop counts per intensity, determinism, that the clock moves the drops
+and the flood streaks, what is clipped to the road, what a paused or pending event draws — and the
+zipper's pure rules and its wiring.
 
 There is also a strict `tsc` pass (two scratch tsconfigs — one for `scenarios/**` + `components/**`,
 one for `page.tsx` — both extending the project's own `tsconfig.json` with `noUnusedLocals`,
@@ -280,3 +346,9 @@ time they were written.
 
   If "the four client questions" already discussed elsewhere is a different set than this, treat
   this list as this feature's own candidates, not a claim that it's the canonical one.
+- **Rain caps and zipper limits are assumptions**: `RAIN_SPEED_KMH` (90 / 75 / 60) and `ZIPPER_LANES`
+  are recorded with what would settle them (probe speeds in recorded rain of known intensity; NLEX
+  guidance on movable barriers). Neither is measured.
+- **A zipper cannot be timed and does not carry traffic across**: see the zipper section. Timing it would
+  need a lane change mid-run in `simulation.ts`, and carrying traffic across the median would end the
+  independence of the two carriageways, which is the model's core simplification.

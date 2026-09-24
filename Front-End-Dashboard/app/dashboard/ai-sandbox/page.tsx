@@ -12,20 +12,24 @@ import {
 } from "./simulation";
 import {
   applyAtBoundary,
-  canvasMarks,
   describeBoundary,
   describeOwner,
   nextBoundaryAfter,
   roadOf,
-  type CanvasMark,
+  sceneMarks,
   type Direction,
   type Incident,
+  type Ownership,
   type RoadFrame,
+  type SceneMark,
   type ScenarioEvent,
 } from "./scenarios/adapter";
 import ScenarioPanel, { type DirectionScenarioData, type SkipPlan } from "./components/ScenarioPanel";
 import DirectionPill, { DIRECTION_NAME } from "./components/DirectionPill";
 import { combineBaselines, combineMetrics } from "./bothMetrics";
+import { drawBorrowedLanes, drawMovableBarrier, drawScenes, drawWater, drawWeather, hasSceneArt, type SceneGeometry } from "./sceneArt";
+import { ASSUMPTIONS } from "./scenarios/assumptions";
+import { borrowedLanes, planZipper, zipperHolds, zipperName, type ZipperState } from "./zipper";
 import { useDirectionSim, type DirectionApi, type SharedRoadInputs } from "./useDirectionSim";
 
 const BACKEND = process.env.NEXT_PUBLIC_BACKEND_URL ?? "http://localhost:4000";
@@ -296,6 +300,10 @@ export default function AiSandboxPage() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const rafRef = useRef<number>(0);
   const lastFrameRef = useRef<number>(0);
+  /** Seconds of animation clock for the scene art (rain, water, beacons): advances in real time, but only while the run is not paused. */
+  const animClockRef = useRef<number>(0);
+  /** The zipper lane / counterflow scheme in force, for the canvas (the rAF loop reads it outside React). */
+  const zipperRef = useRef<ZipperState | null>(null);
   const metricAccRef = useRef<number>(0);
   const simAccRef = useRef<number>(0);
   /** Running cost of one sim.step(), ms, per direction — what a skip's estimated duration is worked out from. Null until the animation loop has stepped that direction. */
@@ -665,6 +673,40 @@ export default function AiSandboxPage() {
   };
   const placingArmed = activeDirections.some((dn) => byDirection[dn].placingIncident || byDirection[dn].placingClosure);
 
+  /* ── Zipper lane / counterflow ────────────────────────────────────────────
+   *
+   * Moves 1 lane (zipper) or 2 (counterflow) from one carriageway to the other by changing both lane
+   * counts together — see zipper.ts for what that models and what it does not. Both mode only. While a
+   * scheme is on, the canvas draws the movable barrier and marks the borrowed lanes; the moment either lane
+   * count stops matching what the scheme set (the Lanes slider, a new segment resetting to the corridor's
+   * own count) the scheme is dropped, so the barrier is never drawn where it is not. */
+  const [zipper, setZipper] = useState<ZipperState | null>(null);
+  zipperRef.current = zipper;
+  const laneCounts = { NB: nb.laneCount, SB: sb.laneCount };
+  // The Lanes sliders stop at 5, the corridor's own range. A scheme can take a carriageway to the zipper limit
+  // (recorded in ASSUMPTIONS.ZIPPER_LANES), so while one is on the sliders reach it — otherwise the thumb would
+  // sit at 5 while the road has 6.
+  const laneSliderMax = zipper === null ? 5 : Math.max(5, ASSUMPTIONS.ZIPPER_LANES.value.maxLanes);
+  const laneSliderPct = (n: number) => `${((Math.min(n, laneSliderMax) - 2) / (laneSliderMax - 2)) * 100}%`;
+  useEffect(() => {
+    if (zipper !== null && !zipperHolds(zipper, { NB: nb.laneCount, SB: sb.laneCount })) setZipper(null);
+  }, [zipper, nb.laneCount, sb.laneCount]);
+  const chooseZipper = (toward: Direction | null, lanes: number) => {
+    if (toward === null) {
+      if (zipper !== null) {
+        nb.setLaneCount(zipper.base.NB);
+        sb.setLaneCount(zipper.base.SB);
+      }
+      setZipper(null);
+      return;
+    }
+    const plan = planZipper(zipper === null ? laneCounts : zipper.base, toward, lanes);
+    if (!plan.ok) return;
+    nb.setLaneCount(plan.counts.NB);
+    sb.setLaneCount(plan.counts.SB);
+    setZipper(plan.state);
+  };
+
   /* ── Confidence run ──────────────────────────────────────────────────────
    *
    * The animation is one seed. Any number an operator is going to act on
@@ -737,11 +779,11 @@ export default function AiSandboxPage() {
   // outside React) and refreshed whenever either direction's own events/binding change — mirrors the
   // single-sim page's old scenarioOverlayRef assignment, just done once per direction instead of once.
   useEffect(() => {
-    scenarioOverlayRef.current.NB = { events: nb.scenarioEvents, frame: nb.scenarioFrame, isScenarioIncident: nb.scenarioBinding.isScenarioIncident };
-  }, [nb.scenarioEvents, nb.scenarioFrame, nb.scenarioBinding]);
+    scenarioOverlayRef.current.NB = { events: nb.scenarioEvents, frame: nb.scenarioFrame, owners: nb.owners, isScenarioIncident: nb.scenarioBinding.isScenarioIncident };
+  }, [nb.scenarioEvents, nb.scenarioFrame, nb.owners, nb.scenarioBinding]);
   useEffect(() => {
-    scenarioOverlayRef.current.SB = { events: sb.scenarioEvents, frame: sb.scenarioFrame, isScenarioIncident: sb.scenarioBinding.isScenarioIncident };
-  }, [sb.scenarioEvents, sb.scenarioFrame, sb.scenarioBinding]);
+    scenarioOverlayRef.current.SB = { events: sb.scenarioEvents, frame: sb.scenarioFrame, owners: sb.owners, isScenarioIncident: sb.scenarioBinding.isScenarioIncident };
+  }, [sb.scenarioEvents, sb.scenarioFrame, sb.owners, sb.scenarioBinding]);
 
   // Animation + physics loop: steps every ACTIVE direction's sim in the same tick, in the same
   // ~25ms-equivalent-per-frame slice budget the single-sim loop always used (there is no separate
@@ -757,6 +799,7 @@ export default function AiSandboxPage() {
       rafRef.current = requestAnimationFrame(loop);
       const dtReal = Math.min(0.1, (now - (lastFrameRef.current || now)) / 1000);
       lastFrameRef.current = now;
+      if (running) animClockRef.current += dtReal;
 
       // The accumulator is shared across directions deliberately: both sims advance sim time at the
       // same simSpeed from the same real dtReal, so one accumulator drives both step loops in lockstep
@@ -809,12 +852,13 @@ export default function AiSandboxPage() {
             { fromKm: marksRef.current.fromKm, toKm: marksRef.current.toKm },
             maxLaneRef.current, exitsRef.current,
             scenarioOverlayRef.current.NB ?? null, scenarioOverlayRef.current.SB ?? null,
+            animClockRef.current, zipperRef.current,
           );
         }
       } else {
         const focusedSim = byDirection[focusDirection].simRef.current;
         if (focusedSim) {
-          render(ctx, canvas, focusedSim, locationRef.current, marksRef.current, maxLaneRef.current, exitsRef.current, scenarioOverlayRef.current[focusDirection] ?? null);
+          render(ctx, canvas, focusedSim, locationRef.current, marksRef.current, maxLaneRef.current, exitsRef.current, scenarioOverlayRef.current[focusDirection] ?? null, animClockRef.current);
         }
       }
     };
@@ -1914,12 +1958,12 @@ export default function AiSandboxPage() {
             <input
               type="range"
               min={2}
-              max={5}
+              max={laneSliderMax}
               step={1}
               value={focused.laneCount}
               onChange={(e) => focused.setLaneCount(Number(e.target.value))}
               className="sandbox-range lanes"
-              style={{ "--range-pct": `${((focused.laneCount - 2) / 3) * 100}%` } as React.CSSProperties}
+              style={{ "--range-pct": laneSliderPct(focused.laneCount) } as React.CSSProperties}
             />
             <span className="sandbox-slider-hint">
               {segmentLanes == null
@@ -1941,15 +1985,16 @@ export default function AiSandboxPage() {
               <input
                 type="range"
                 min={2}
-                max={5}
+                max={laneSliderMax}
                 step={1}
                 value={byDirection[focusDirection === "NB" ? "SB" : "NB"].laneCount}
                 onChange={(e) => byDirection[focusDirection === "NB" ? "SB" : "NB"].setLaneCount(Number(e.target.value))}
                 className="sandbox-range lanes"
-                style={{ "--range-pct": `${((byDirection[focusDirection === "NB" ? "SB" : "NB"].laneCount - 2) / 3) * 100}%` } as React.CSSProperties}
+                style={{ "--range-pct": laneSliderPct(byDirection[focusDirection === "NB" ? "SB" : "NB"].laneCount) } as React.CSSProperties}
               />
             </div>
           )}
+          {both && <ZipperControl counts={laneCounts} state={zipper} onChoose={chooseZipper} />}
 
           </RailSection>
 
@@ -2257,6 +2302,67 @@ function KmInput({
         }
       }}
     />
+  );
+}
+
+/**
+ * The zipper lane / counterflow control: move 1 or 2 lanes between the carriageways with a movable barrier.
+ * Each option shows whether it is possible from the lane counts the road would have with the scheme off, and
+ * says why not when it is not; "Off" puts the original counts back. Both mode only.
+ */
+function ZipperControl({
+  counts,
+  state,
+  onChoose,
+}: {
+  counts: Readonly<Record<Direction, number>>;
+  state: ZipperState | null;
+  onChoose: (toward: Direction | null, lanes: number) => void;
+}) {
+  const base = state === null ? counts : state.base;
+  const options: readonly { readonly toward: Direction; readonly lanes: number }[] = [
+    { toward: "NB", lanes: 1 },
+    { toward: "NB", lanes: 2 },
+    { toward: "SB", lanes: 1 },
+    { toward: "SB", lanes: 2 },
+  ];
+  return (
+    <div className="sandbox-slider-group sandbox-zipper" data-zipper={state === null ? "off" : `${state.toward}+${state.lanes}`}>
+      <div className="sandbox-slider-header">
+        <span className="sandbox-slider-label">Zipper lane / counterflow</span>
+        <span className="sandbox-slider-value" style={{ color: state === null ? "var(--text-muted)" : "#ca8a04" }}>
+          {state === null ? "off" : `${zipperName(state.lanes)} · ${state.toward} +${state.lanes}`}
+        </span>
+      </div>
+      <div className="sandbox-dir-seg zip" role="radiogroup" aria-label="Move lanes between the carriageways">
+        <button role="radio" aria-checked={state === null} className={state === null ? "active" : ""} data-zipper-option="off" onClick={() => onChoose(null, 0)}>
+          Off
+        </button>
+        {options.map((o) => {
+          const plan = planZipper(base, o.toward, o.lanes);
+          const on = state !== null && state.toward === o.toward && state.lanes === o.lanes;
+          return (
+            <button
+              key={`${o.toward}${o.lanes}`}
+              role="radio"
+              aria-checked={on}
+              className={on ? "active" : ""}
+              disabled={!plan.ok && !on}
+              data-zipper-option={`${o.toward}+${o.lanes}`}
+              title={plan.ok ? `${o.toward} takes ${o.lanes} lane${o.lanes === 1 ? "" : "s"} from ${o.toward === "NB" ? "SB" : "NB"}` : plan.reason}
+              onClick={() => onChoose(o.toward, o.lanes)}
+            >
+              {o.toward} +{o.lanes}
+            </button>
+          );
+        })}
+      </div>
+      <span className="sandbox-slider-hint">
+        {state === null
+          ? "A movable barrier: one carriageway gains 1 lane (zipper) or 2 (counterflow), the other loses the same. Restarts both runs. The carriageways still do not interact — only their lane counts change."
+          : `NB ${counts.NB} lanes · SB ${counts.SB} lanes (was ${state.base.NB} + ${state.base.SB}). ${state.toward}'s lane 1 is the borrowed lane, against the barrier. Changing either Lanes slider ends the scheme.`}
+      </span>
+    </div>
   );
 }
 
@@ -2819,6 +2925,8 @@ function ClosureHint({
 type ScenarioOverlay = {
   events: readonly ScenarioEvent[];
   frame: RoadFrame;
+  /** What the engine binding last applied on this carriageway: an event is drawn holding lanes only if it owns the closure. */
+  owners: Ownership;
   /** True for an incident in the engine's list that a scenario put there. */
   isScenarioIncident: (i: Incident) => boolean;
 };
@@ -2848,7 +2956,7 @@ function drawScenarioMarker(ctx: CanvasRenderingContext2D, x: number, y: number,
 /** A label per scenario event at its location: name, phase and time left; stacked so two never sit on top of each other. */
 function drawScenarioLabels(
   ctx: CanvasRenderingContext2D,
-  marks: readonly CanvasMark[],
+  marks: readonly SceneMark[],
   g: {
     xPx: (m: number) => number;
     roadTop: number;
@@ -2876,15 +2984,28 @@ function drawScenarioLabels(
       ? (g.reverseLanes ? g.roadTop + 3 : g.roadTop + g.roadH - 3)
       : laneSlotTop(m.lane ?? 0, g.roadTop, g.laneH, g.lanes, g.reverseLanes) + g.laneH * 0.5;
     const faint = m.state === "pending";
-    // An in-lane breakdown's obstacles are drawn as incidents once it starts; everything else gets a marker here.
-    if (m.kind !== "incident" || faint) drawScenarioMarker(ctx, x, laneY, g.r, faint);
+    // A scene draws itself. The amber triangle is what is left for an event that has not started, or that is
+    // running but holds nothing on the road (it yielded its closure to the operator's own).
+    if (!hasSceneArt(m)) drawScenarioMarker(ctx, x, laneY, g.r, faint);
     const text = `${m.name} · ${m.text}`;
     const w = ctx.measureText(text).width + 14;
     const h = 18;
-    const lx = Math.max(4, Math.min(x - w / 2, g.cssW - w - 4));
+    const heldStretch = hasSceneArt(m) && m.closedLanes.length > 0 ? m.stretch : null;
+    const cx = heldStretch === null ? x : g.xPx((heldStretch.fromM + heldStretch.toM) / 2);
+    const lx = Math.max(4, Math.min(cx - w / 2, g.cssW - w - 4));
     // Above the marker; but the canvas prints its own header along the top edge of the road, so near the top go below it.
     let ly = laneY - g.r - h - 3;
     if (ly < g.roadTop + 20) ly = laneY + g.r + 3;
+    // A scene that holds lanes is drawn across them, so the label goes on the seam just past the lanes it
+    // holds (or just before them at the road's edge) rather than on top of the water, works or wreck.
+    if (hasSceneArt(m) && m.closedLanes.length > 0) {
+      const tops = m.closedLanes.map((l) => laneSlotTop(l, g.roadTop, g.laneH, g.lanes, g.reverseLanes));
+      const heldTop = Math.min(...tops);
+      const heldBottom = Math.max(...tops) + g.laneH;
+      const below = heldBottom + 3;
+      const above = heldTop - h - 3;
+      ly = below + h <= g.roadTop + g.roadH ? below : above >= g.roadTop + 20 ? above : ly;
+    }
     for (let tries = 0; tries < 6; tries++) {
       const clash = placed.some((p) => lx < p.x1 && lx + w > p.x0 && ly < p.y1 && ly + h > p.y0);
       if (!clash) break;
@@ -2945,11 +3066,17 @@ function drawCarriageway(
     flowLabel: string;
     /** Corner label — the full location string for single-direction, just "Northbound"/"Southbound" for Both. */
     location: string;
+    /** Animation clock, seconds (frozen while paused): drives rain, flowing water, beacons and hazard lights. */
+    animT: number;
+    /** How many of this carriageway's innermost lanes it has borrowed from the other (zipper / counterflow); 0 otherwise. */
+    borrowed: number;
+    /** What to call the scheme on those lanes ("Zipper lane" / "Counterflow"). */
+    borrowedLabel: string;
   },
 ) {
   const {
     cssW, cssH, roadTop, laneH, roadH, rampGutter, rampsAbove, reverseLanes,
-    mToPx, sb, xPx, wPx, fromKm, toKm, exits, overlay, drawAxis, flowLabel, location,
+    mToPx, sb, xPx, wPx, fromKm, toKm, exits, overlay, drawAxis, flowLabel, location, animT, borrowed, borrowedLabel,
   } = opts;
   const lanes = sim.cfg.laneCount;
 
@@ -2958,8 +3085,13 @@ function drawCarriageway(
   roundRect(ctx, 0, roadTop, cssW, roadH, 10);
   ctx.fill();
 
-  // speed-limit zone
-  if (sim.interventions.speedLimitKmh != null) {
+  // speed-limit zone. Not when it is a rain event's: rain's zone is the whole segment, so the wash would
+  // tint the entire carriageway orange; rain shows a speed-limit sign and the rain itself instead.
+  const rainOwnsZone =
+    overlay !== null &&
+    overlay.owners.speedZone !== null &&
+    overlay.events.some((e) => overlay.owners.speedZone !== null && e.id === overlay.owners.speedZone.eventId && e.variant.family === "rain");
+  if (sim.interventions.speedLimitKmh != null && !rainOwnsZone) {
     const [z0, z1] = sim.interventions.speedZone;
     ctx.fillStyle = "rgba(234,88,12,0.16)";
     // A zone measured in metres is sub-pixel once the span is kilometres long,
@@ -2985,6 +3117,11 @@ function drawCarriageway(
     ctx.stroke();
   }
   ctx.setLineDash([]);
+
+  // What each scenario event looks like this frame (family, phase, the lanes and stretch it actually holds).
+  const scenes: readonly SceneMark[] = overlay ? sceneMarks(overlay.events, roadOf(sim, overlay.frame), sim.time, overlay.owners) : [];
+  // Set once the traffic's own scale is known (below); the water, scenes and weather share it.
+  const laneCenterY = (engineLane: number): number => laneSlotTop(engineLane, roadTop, laneH, lanes, reverseLanes) + laneH / 2;
 
   // closed-lane hatching + taper
   for (let l = 0; l < lanes; l++) {
@@ -3076,6 +3213,21 @@ function drawCarriageway(
     ctx.fillText(label, lx, roadTop + 7);
     ctx.restore();
   }
+
+  // Zipper / counterflow: this carriageway's borrowed lanes, marked as reversible, under the traffic.
+  const fwd: 1 | -1 = sb ? -1 : 1;
+  if (borrowed > 0) {
+    drawBorrowedLanes(
+      { ctx, cssW, roadTop, roadH, laneH, xPx, fwd, laneCenterY, outerEdgeY: reverseLanes ? roadTop : roadTop + roadH, outward: reverseLanes ? -1 : 1, carLen: 18, carWid: 9, t: animT },
+      borrowed,
+      borrowedLabel,
+    );
+  }
+  // Flood water goes UNDER the traffic and over the closure hatch: the lane reads as under (flowing) water.
+  drawWater(
+    { ctx, cssW, roadTop, roadH, laneH, xPx, fwd, laneCenterY, outerEdgeY: reverseLanes ? roadTop : roadTop + roadH, outward: reverseLanes ? -1 : 1, carLen: 18, carWid: 9, t: animT },
+    scenes,
+  );
 
   // vehicles — top-down sprites, front facing the direction of travel (right).
   // Length is true-to-scale; width uses the true vehicle width with a small
@@ -3203,11 +3355,9 @@ function drawCarriageway(
   // incidents
   for (const inc of sim.interventions.incidents) {
     const y = laneSlotTop(inc.lane, roadTop, laneH, lanes, reverseLanes) + laneH * 0.5;
-    // A scenario's obstacle is amber and triangular, so it cannot be mistaken for one the operator dropped.
-    if (overlay && overlay.isScenarioIncident(inc)) {
-      drawScenarioMarker(ctx, xPx(inc.x), y, Math.min(9, laneH * 0.36), false);
-      continue;
-    }
+    // A scenario's obstacle is drawn by the scene art (a stalled vehicle with its hazard lights), so it
+    // cannot be mistaken for the operator's red "!" dot, which is all that is drawn here.
+    if (overlay && overlay.isScenarioIncident(inc)) continue;
     ctx.fillStyle = "#dc2626";
     ctx.beginPath();
     ctx.arc(xPx(inc.x), y, Math.min(8, laneH * 0.32), 0, Math.PI * 2);
@@ -3219,9 +3369,28 @@ function drawCarriageway(
     ctx.fillText("!", xPx(inc.x), y);
   }
 
-  // scenario events: a marker where each one is and a label with its phase and the time left in it
+  // Scenario events as scenes: stalled and crashed vehicles, responders, cones, the work zone — then the
+  // weather over everything, then each event's label (phase and time left) on top.
+  const heroLen = Math.max(18, Math.min(drawnCarLen * 2.4, laneH * 1.25));
+  const sceneGeom: SceneGeometry = {
+    ctx,
+    cssW,
+    roadTop,
+    roadH,
+    laneH,
+    xPx,
+    fwd,
+    laneCenterY,
+    outerEdgeY: reverseLanes ? roadTop : roadTop + roadH,
+    outward: reverseLanes ? -1 : 1,
+    carLen: heroLen,
+    carWid: Math.max(9, Math.min(heroLen * 0.46, laneH * 0.62)),
+    t: animT,
+  };
+  drawScenes(sceneGeom, scenes);
+  drawWeather(sceneGeom, scenes);
   if (overlay) {
-    drawScenarioLabels(ctx, canvasMarks(overlay.events, roadOf(sim, overlay.frame), sim.time), {
+    drawScenarioLabels(ctx, scenes, {
       xPx,
       roadTop,
       laneH,
@@ -3400,6 +3569,7 @@ function render(
   maxLaneH: number,
   exits: { name: string; km: number }[],
   overlay: ScenarioOverlay | null,
+  animT: number,
 ) {
   const dpr = window.devicePixelRatio || 1;
   const cssW = canvas.clientWidth;
@@ -3470,6 +3640,9 @@ function render(
     drawAxis: true,
     flowLabel: "▶ traffic flow",
     location,
+    animT,
+    borrowed: 0,
+    borrowedLabel: "",
   });
 }
 
@@ -3492,6 +3665,8 @@ function renderBoth(
   exits: { name: string; km: number }[],
   overlayNB: ScenarioOverlay | null,
   overlaySB: ScenarioOverlay | null,
+  animT: number,
+  zipper: ZipperState | null,
 ) {
   const dpr = window.devicePixelRatio || 1;
   const cssW = canvas.clientWidth;
@@ -3519,8 +3694,18 @@ function renderBoth(
   const xPxSB = (x: number) => cssW - x * mToPx; // SB: right to left, mirrored
   const wPx = (m: number) => m * mToPx;
 
-  drawMedian(ctx, cssW, medianTop, MEDIAN_GUTTER_PX);
-  drawSharedKmAxis(ctx, { xPx: xPxNB, fromKm: marks.fromKm, toKm: marks.toKm, cssW, axisY: medianTop + MEDIAN_GUTTER_PX / 2 });
+  if (zipper === null) {
+    drawMedian(ctx, cssW, medianTop, MEDIAN_GUTTER_PX);
+  } else {
+    // The barrier has been moved: a chain of movable-barrier segments with the transfer vehicle on it.
+    drawMovableBarrier(ctx, cssW, medianTop + (MEDIAN_GUTTER_PX - 6) / 2, 6, animT, 1);
+    ctx.font = "800 9px system-ui";
+    ctx.textAlign = "left";
+    ctx.textBaseline = "top";
+    ctx.fillStyle = "rgba(253,224,71,0.95)";
+    ctx.fillText(`${zipperName(zipper.lanes).toUpperCase()} · ${zipper.toward} +${zipper.lanes} lane${zipper.lanes === 1 ? "" : "s"}, ${zipper.toward === "NB" ? "SB" : "NB"} −${zipper.lanes}`, 8, medianTop + 2);
+  }
+  drawSharedKmAxis(ctx, { xPx: xPxNB, fromKm: marks.fromKm, toKm: marks.toKm, cssW, axisY: medianTop + MEDIAN_GUTTER_PX / 2, backdrop: zipper !== null });
 
   drawCarriageway(ctx, simNB, {
     cssW,
@@ -3542,6 +3727,9 @@ function renderBoth(
     drawAxis: false,
     flowLabel: "▶ traffic flow",
     location: "Northbound",
+    animT,
+    borrowed: borrowedLanes(zipper, "NB"),
+    borrowedLabel: zipper === null ? "" : zipperName(zipper.lanes).toUpperCase(),
   });
   drawCarriageway(ctx, simSB, {
     cssW,
@@ -3563,6 +3751,9 @@ function renderBoth(
     drawAxis: false,
     flowLabel: "traffic flow ◀",
     location: "Southbound",
+    animT,
+    borrowed: borrowedLanes(zipper, "SB"),
+    borrowedLabel: zipper === null ? "" : zipperName(zipper.lanes).toUpperCase(),
   });
 }
 
@@ -3591,9 +3782,9 @@ function drawMedian(ctx: CanvasRenderingContext2D, cssW: number, medianTop: numb
  */
 function drawSharedKmAxis(
   ctx: CanvasRenderingContext2D,
-  g: { xPx: (m: number) => number; fromKm: number; toKm: number; cssW: number; axisY: number },
+  g: { xPx: (m: number) => number; fromKm: number; toKm: number; cssW: number; axisY: number; /** a dark chip behind each number, for the movable barrier's stripes */ backdrop: boolean },
 ) {
-  const { xPx, fromKm, toKm, cssW, axisY } = g;
+  const { xPx, fromKm, toKm, cssW, axisY, backdrop } = g;
   const spanKm = Math.max(1e-6, toKm - fromKm);
   const step = kmTickStep(spanKm);
   const first = Math.ceil(fromKm / step) * step;
@@ -3604,8 +3795,14 @@ function drawSharedKmAxis(
   for (let km = first; km <= toKm + 1e-9; km += step) {
     const x = xPx((km - fromKm) * 1000);
     if (x < 2 || x > cssW - 2) continue;
-    ctx.fillStyle = "rgba(255,255,255,0.7)";
-    ctx.fillText(`${km.toFixed(step < 0.1 ? 2 : step < 1 ? 2 : 1)}`, x, axisY);
+    const text = `${km.toFixed(step < 0.1 ? 2 : step < 1 ? 2 : 1)}`;
+    if (backdrop) {
+      const tw = ctx.measureText(text).width;
+      ctx.fillStyle = "rgba(15,23,42,0.9)";
+      ctx.fillRect(x - tw / 2 - 3, axisY - 7, tw + 6, 14);
+    }
+    ctx.fillStyle = backdrop ? "rgba(255,255,255,0.95)" : "rgba(255,255,255,0.7)";
+    ctx.fillText(text, x, axisY);
   }
   ctx.restore();
 }

@@ -6379,6 +6379,22 @@ body:has(.sandbox-main.is-expanded) {
 .sandbox-scn-fam:disabled { opacity: 0.6; cursor: not-allowed; }
 .sandbox-scn-fam small { display: block; margin-top: 2px; font-size: 0.66rem; font-weight: 600; color: var(--text-muted); }
 .sandbox-scn-desc { margin: 8px 0 0; font-size: 0.72rem; line-height: 1.4; color: var(--text-muted); }
+/* The picture of the chosen scenario, with an "i" at its top right that opens the description over it. */
+.sandbox-scn-scene { position: relative; }
+.sandbox-scn-info {
+  position: absolute; top: 6px; right: 6px; z-index: 2;
+  width: 22px; height: 22px; padding: 0; border-radius: 50%; display: grid; place-items: center;
+  border: 1.5px solid rgba(255, 255, 255, 0.85); background: rgba(15, 23, 42, 0.72); color: #fff;
+  font: italic 700 13px/1 Georgia, "Times New Roman", serif; cursor: pointer;
+}
+.sandbox-scn-info:hover, .sandbox-scn-info:focus-visible, .sandbox-scn-info[aria-expanded="true"] { background: var(--brand-primary, #2563eb); outline: none; }
+.sandbox-scn-info-pop {
+  position: absolute; z-index: 3; top: 34px; left: 6px; right: 6px; max-height: 260px; overflow: auto;
+  padding: 10px 12px; border-radius: 8px; background: rgba(15, 23, 42, 0.97); color: #e2e8f0;
+  box-shadow: 0 8px 24px rgba(2, 6, 23, 0.35); font-size: 0.74rem; line-height: 1.45;
+}
+.sandbox-scn-info-pop b { display: block; margin-bottom: 4px; color: #fff; font-size: 0.78rem; }
+.sandbox-scn-info-pop p { margin: 0; }
 
 /* The live preview of the scenario about to be added, drawn by the same scene art as the road. */
 .sandbox-scn-preview {

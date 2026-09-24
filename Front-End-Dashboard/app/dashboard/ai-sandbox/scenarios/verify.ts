@@ -19,6 +19,7 @@ import { CLASS_META, TrafficSim, type Interventions, type Metrics } from "../sim
 import { combineBaselines, combineMetrics, flowWeightedSpeed } from "../bothMetrics";
 import { drawBorrowedLanes, drawMovableBarrier, drawScenes, drawWater, drawWeather, hasSceneArt, type SceneCtx, type SceneGeometry } from "../sceneArt";
 import { borrowedLanes, planZipper, REALLOCATION_NAME, zipperCounts, zipperHolds } from "../zipper";
+import { BUS_PAINTS, CAB_PAINTS, CAR_PAINTS, PAINT_WHITE, TRAILER_PAINTS, paintFor, trailerPaintFor, type Paint } from "../vehiclePaint";
 import {
   ASSUMPTIONS,
   CHAINAGE_DERIVATION,
@@ -1664,7 +1665,7 @@ check(
 
 // --- Phase D3: Both mode draws two carriageways in one canvas, not one (the whole point of the
 // phase), and lane 1 must still land against the median on BOTH sides even though only one of them
-// (NB, drawn above the median) needs its internal draw order reversed to get there. page.tsx's
+// (SB, drawn above the median) needs its internal draw order reversed to get there. page.tsx's
 // render()/renderBoth() run real canvas code and are checked live in the browser (see the D3 report's
 // screenshots and the geometry probe); what is checked here is the STRUCTURE regex can see reliably:
 // which function calls which, with which literal flag, and that render() (single-direction) is
@@ -1686,23 +1687,23 @@ check(
   const nbCallStart = renderBothSource.indexOf("simNB, {");
   const sbCallStart = renderBothSource.indexOf("simSB, {");
   check(
-    "renderBoth: NB is drawn reversed (lane 1 ends up against the median, which is BELOW the NB block since NB is drawn above it) and SB is not (its lane 1 is already against the median above it)",
+    "renderBoth: SB (drawn ABOVE the median, running right to left) is drawn reversed — lane 1 ends up against the median, which is below its block — and NB (below the median, running left to right) is not (its lane 1 is already against the median above it)",
     nbCallStart > -1 && sbCallStart > nbCallStart &&
-      /reverseLanes: true/.test(renderBothSource.slice(nbCallStart, sbCallStart)) &&
-      /reverseLanes: false/.test(renderBothSource.slice(sbCallStart)),
+      /reverseLanes: false/.test(renderBothSource.slice(nbCallStart, sbCallStart)) &&
+      /reverseLanes: true/.test(renderBothSource.slice(sbCallStart)),
   );
   check(
-    "renderBoth: NB keeps its ramps on the outer edge (above, away from the median) and SB keeps its ramps below (also away from the median) — unchanged from single-direction's own rampsAbove convention",
-    /rampsAbove: true,[\s\S]{0,80}reverseLanes: true/.test(renderBothSource.slice(nbCallStart)) &&
-      /rampsAbove: false,[\s\S]{0,80}reverseLanes: false/.test(renderBothSource.slice(sbCallStart)),
+    "renderBoth: each carriageway keeps its ramps on its OUTER edge — SB (top) above, NB (bottom) below, both away from the median",
+    /rampsAbove: false,[\s\S]{0,80}reverseLanes: false/.test(renderBothSource.slice(nbCallStart, sbCallStart)) &&
+      /rampsAbove: true,[\s\S]{0,80}reverseLanes: true/.test(renderBothSource.slice(sbCallStart)),
   );
   check(
     // Exactly one reversed call (NB in Both mode) anywhere in the file; single-direction render()'s
     // own call to drawCarriageway must be among the non-reversed ones, or NB-only/SB-only would
     // silently start drawing lane 1 at the wrong edge — the one regression D3 must not cause.
-    "exactly one reversed carriageway in the whole file (Both mode's NB), and render()'s own call is not it",
+    "exactly one reversed carriageway in the whole file (Both mode's SB), and render()'s own call is not it",
     (pageSource.match(/reverseLanes: true/g) ?? []).length === 1 &&
-      (pageSource.match(/reverseLanes: false/g) ?? []).length === 2, // render()'s call + renderBoth's SB call
+      (pageSource.match(/reverseLanes: false/g) ?? []).length === 2, // render()'s call + renderBoth's NB call
   );
   check(
     "renderBoth shares ONE km axis (drawSharedKmAxis, called once) rather than drawing it per carriageway (both drawCarriageway calls pass drawAxis: false)",
@@ -1794,7 +1795,12 @@ check(
       /td\.setPlacingClosure\(true\);\s*\}\s*if \(both && target !== focusDirection\) setFocusedDirection\(target\);/.test(clickSource) &&
       !/focused\./.test(clickSource),
   );
-  check("click routing: NB's drawn slot is un-reversed back to the engine lane (NB is drawn with lane 1 at the bottom)", /const lane = both && target === "NB" \? lanes - 1 - drawnSlot : drawnSlot;/.test(clickSource));
+  check("click routing: SB's drawn slot is un-reversed back to the engine lane (SB is drawn with lane 1 at the bottom of its block)", /const lane = both && target === "SB" \? lanes - 1 - drawnSlot : drawnSlot;/.test(clickSource));
+  check(
+    "Both mode layout: Southbound (right to left) is the TOP carriageway and Northbound (left to right) the bottom one, with the median and shared km axis between them, and the tab opens on Both",
+    /const sbRoadTop = CANVAS_PAD \+ rampGutter;\s*const medianTop = sbRoadTop \+ sbRoadH;\s*const nbRoadTop = medianTop \+ MEDIAN_GUTTER_PX;/.test(pageSource) &&
+      /useState<Direction \| "Both">\("Both"\)/.test(pageSource) && !/useState<Direction \| "Both">\("NB"\)/.test(pageSource),
+  );
   check(
     "click routing: arming anything disarms everything first, and changing focus drops an armed mode (no invisible armed state)",
     /const armPlacing = [\s\S]{0,400}disarmPlacing\(\);/.test(pageSource) && /const chooseFocus = \(d: Direction\) => \{\s*if \(d !== focusDirection\) disarmPlacing\(\);/.test(pageSource),
@@ -2110,10 +2116,35 @@ const roadMarks = (evs: readonly ScenarioEvent[], min: number, owners = NO_OWNER
     /\{\(\["Both", "NB", "SB"\] as const\)\.map\(\(v\) => \(/.test(pageSource) && !/\{\(\["NB", "SB", "Both"\] as const\)\.map\(\(v\) => \(/.test(pageSource) && /const MIN_LEN_PX = 15;/.test(pageSource),
   );
   check(
-    "traffic sprites: vehicles are drawn in a metallic white / silver / grey palette (paint chosen from the vehicle's id, so it never changes frame to frame), classes are told apart by shape, and the legend shows the shapes rather than class colours",
-    /const PAINT_WHITE: Paint = \{ hi: "#ffffff"/.test(pageSource) && /const roll = \(Math\.imul\(id \+ 1, 2654435761\) >>> 0\) % 100;/.test(pageSource) &&
-      /drawVehicle\(ctx, xPx\(v\.x\), y, len, wid, v\.vClass, paintFor\(v\.id, v\.vClass\), braking, sb\);/.test(pageSource) && !/v\.color/.test(pageSource) &&
+    "traffic sprites: vehicles are painted from vehiclePaint.ts by the vehicle's id (trailer painted separately), classes are told apart by shape, and the legend shows the shapes rather than class colours",
+    /import \{ PAINT_WHITE, paintFor, trailerPaintFor, type Paint \} from "\.\/vehiclePaint";/.test(pageSource) &&
+      /drawVehicle\(ctx, xPx\(v\.x\), y, len, wid, v\.vClass, paintFor\(v\.id, v\.vClass\), braking, sb, trailerPaintFor\(v\.id\)\);/.test(pageSource) && !/v\.color/.test(pageSource) &&
       /<i className="veh veh-1" \/>/.test(pageSource) && /<i className="veh veh-3" \/>/.test(pageSource) && !/CLASS_META\[[123]\]\.color/.test(pageSource),
+  );
+  // ── the colours themselves: a realistic spread, stable per vehicle ─────────
+  {
+    const N = 20000;
+    const share = (table: readonly (readonly [Paint, number])[], of: (id: number) => Paint): readonly number[] => {
+      const counts = table.map(() => 0);
+      for (let id = 0; id < N; id++) counts[table.findIndex(([p]) => p === of(id))]++;
+      return counts.map((c) => (c / N) * 100);
+    };
+    const near = (table: readonly (readonly [Paint, number])[], got: readonly number[], tol: number): boolean => table.every(([, w], i) => Math.abs(got[i] - w) <= tol);
+    const sum = (table: readonly (readonly [Paint, number])[]): number => table.reduce((a, [, w]) => a + w, 0);
+    check("vehicle colours: every palette table's weights add to 100", [CAR_PAINTS, BUS_PAINTS, CAB_PAINTS, TRAILER_PAINTS].every((tb) => sum(tb) === 100));
+    const cars = share(CAR_PAINTS, (id) => paintFor(id, 1));
+    check("vehicle colours: cars come out in the stated mix over 20,000 vehicles (white, silver, grey and black lead; blues, reds and the rest follow), every share within 2 points", near(CAR_PAINTS, cars, 2), cars.map((c) => c.toFixed(1)).join(" "));
+    check("vehicle colours: a realistic spread — cars use at least 12 different paints, and the four neutrals (white, silver, grey, black) are about two thirds, not all of them", CAR_PAINTS.length >= 12 && new Set(Array.from({ length: N }, (_, id) => paintFor(id, 1))).size >= 12 && cars[0] + cars[1] + cars[2] + cars[3] > 55 && cars[0] + cars[1] + cars[2] + cars[3] < 75);
+    check("vehicle colours: buses wear liveries (white, blue, red, green, yellow, orange) in their stated mix, and truck cabs and trailers are drawn from their own tables", near(BUS_PAINTS, share(BUS_PAINTS, (id) => paintFor(id, 2)), 2) && near(CAB_PAINTS, share(CAB_PAINTS, (id) => paintFor(id, 3)), 2) && near(TRAILER_PAINTS, share(TRAILER_PAINTS, (id) => trailerPaintFor(id)), 2));
+    check("vehicle colours: a vehicle keeps its colour — the same id always gets the same paint, and a truck's trailer is chosen independently of its cab (they differ for a good share of trucks)", Array.from({ length: 500 }, (_, id) => paintFor(id, 1) === paintFor(id, 1) && paintFor(id, 3) === paintFor(id, 3) && trailerPaintFor(id) === trailerPaintFor(id)).every(Boolean) && Array.from({ length: 2000 }, (_, id) => paintFor(id, 3) !== trailerPaintFor(id)).filter(Boolean).length > 900 && (() => { const both = Array.from({ length: N }, (_, id) => paintFor(id, 3) === PAINT_WHITE && trailerPaintFor(id) === PAINT_WHITE).filter(Boolean).length / N; return Math.abs(both - 0.3 * 0.45) < 0.025; })());
+    check("vehicle colours: every paint is a light-to-dark pair, and dark paints carry a lighter rim and glass so they do not vanish into the asphalt", [...CAR_PAINTS, ...BUS_PAINTS, ...CAB_PAINTS, ...TRAILER_PAINTS].every(([p]) => /^#[0-9a-f]{6}$/i.test(p.hi) && /^#[0-9a-f]{6}$/i.test(p.lo)) && CAR_PAINTS.filter(([p]) => p.lo === "#171d29" || p.lo === "#1b2a5e" || p.lo === "#5a1822" || p.lo === "#2a323f").every(([p]) => p.edge !== undefined && p.glass !== undefined));
+  }
+  check(
+    "panel: the scenario's description is behind an 'i' at the top right of its picture (a button that toggles it, closes on Escape and when another scenario is picked), not a paragraph in the panel",
+    /<div\s+className="sandbox-scn-scene"\s+onKeyDown=\{\(e\) => \{\s*if \(e\.key === "Escape"\) setInfoOpen\(false\);\s*\}\}\s*>\s*<ScenePreview /s.test(panelSource) &&
+      /className="sandbox-scn-info"[\s\S]{0,450}onClick=\{\(\) => setInfoOpen\(\(o\) => !o\)\}/.test(panelSource) && /\{infoOpen && \(\s*<div className="sandbox-scn-info-pop"/.test(panelSource) &&
+      /setFamily\(f\);\s*setInfoOpen\(false\);/.test(panelSource) && !/<p className="sandbox-scn-desc">\{template\.description\}<\/p>/.test(panelSource) &&
+      /\.sandbox-scn-info \{[^}]*top: 6px; right: 6px;/.test(readFileSync(new URL("../../../globals.css", import.meta.url), "utf8")),
   );
   const operatorText = [pageSource, artSource, panelSource, previewSource, readFileSync(new URL("./assumptions.ts", import.meta.url), "utf8"), readFileSync(new URL("./catalogue.ts", import.meta.url), "utf8"), readFileSync(new URL("../../../globals.css", import.meta.url), "utf8")].join("\n");
   check("lane reallocation: nothing the operator can read still calls it a zipper lane or counterflow (UI strings, canvas labels, assumption text)", !/Zipper lane|ZIPPER LANE|Counterflow|COUNTERFLOW|zipper lane|counterflow/.test(operatorText));

@@ -30,6 +30,7 @@ import { combineBaselines, combineMetrics } from "./bothMetrics";
 import { drawBorrowedLanes, drawMovableBarrier, drawScenes, drawWater, drawWeather, hasSceneArt, type SceneGeometry } from "./sceneArt";
 import { ASSUMPTIONS } from "./scenarios/assumptions";
 import { borrowedLanes, planZipper, REALLOCATION_NAME, zipperHolds, type ZipperState } from "./zipper";
+import { PAINT_WHITE, paintFor, trailerPaintFor, type Paint } from "./vehiclePaint";
 import { useDirectionSim, type DirectionApi, type SharedRoadInputs } from "./useDirectionSim";
 
 const BACKEND = process.env.NEXT_PUBLIC_BACKEND_URL ?? "http://localhost:4000";
@@ -142,9 +143,10 @@ function roadLayout(opts: {
 
 /**
  * Both mode's geometry: two carriageways stacked in ONE canvas with a shared
- * median between them — NB on top, SB below, each keeping its own outer ramp
- * gutter (NB's above, SB's below, exactly roadLayout's existing convention),
- * with the km axis shared in the median rather than duplicated per side.
+ * median between them — SB (running right to left) on top, NB (running left to
+ * right) below, each keeping its own OUTER ramp gutter (the top one's above it,
+ * the bottom one's below it), with the km axis shared in the median rather than
+ * duplicated per side.
  *
  * `laneH` is ONE value for both carriageways, not two independently-fitted
  * ones: a 4-lane carriageway and a 5-lane one stacked at different lane
@@ -180,9 +182,9 @@ function dualRoadLayout(opts: {
   );
   const nbRoadH = laneH * lanesNB;
   const sbRoadH = laneH * lanesSB;
-  const nbRoadTop = CANVAS_PAD + rampGutter;
-  const medianTop = nbRoadTop + nbRoadH;
-  const sbRoadTop = medianTop + MEDIAN_GUTTER_PX;
+  const sbRoadTop = CANVAS_PAD + rampGutter;
+  const medianTop = sbRoadTop + sbRoadH;
+  const nbRoadTop = medianTop + MEDIAN_GUTTER_PX;
   return { rampGutter, laneH, nbRoadH, sbRoadH, nbRoadTop, medianTop, sbRoadTop, mToPx };
 }
 
@@ -192,11 +194,11 @@ function dualRoadLayout(opts: {
  * direction carriageway there has ever been: index 0 (operator lane 1, the
  * innermost lane per LANE1_IS_INNERMOST) at the top of the block.
  *
- * `reverseLanes` is Both mode's NB carriageway ONLY. NB is drawn above the
+ * `reverseLanes` is Both mode's SB carriageway ONLY. SB is drawn above the
  * median, so the block's BOTTOM edge is the one actually next to the median
  * — reversing which end lane 0 draws at is what keeps "lane 1, innermost"
- * true on the drawn road instead of just true in the data. SB sits below the
- * median, so its top edge is already the median-adjacent one; SB never
+ * true on the drawn road instead of just true in the data. NB sits below the
+ * median, so its top edge is already the median-adjacent one; NB never
  * reverses, and single-direction NB/SB never reverses either (roadLayout()
  * callers all pass false, unchanged from before D3).
  */
@@ -377,7 +379,8 @@ export default function AiSandboxPage() {
   const routeToKm = Math.max(originExit?.km ?? 0, destExit?.km ?? 0);
 
   /** NB only, SB only, or both carriageways at once (median-separated on the canvas — renderBoth). */
-  const [view, setView] = useState<Direction | "Both">("NB");
+  // The tab opens on Both: the whole road, both carriageways. NB-only / SB-only are one click away.
+  const [view, setView] = useState<Direction | "Both">("Both");
   const activeDirections: readonly Direction[] = view === "Both" ? ["NB", "SB"] : [view];
   /**
    * The carriageway the few things that can only address ONE road at a time act on, in Both
@@ -970,10 +973,10 @@ export default function AiSandboxPage() {
     const L = sim.cfg.length;
     const lanes = sim.cfg.laneCount;
     // The drawn slot (0 at roadTop, downward) is the engine lane index UNLESS this is Both mode's
-    // NB carriageway, which draws lane 0 at the BOTTOM of its block (laneSlotTop's reverseLanes) —
+    // SB carriageway, which draws lane 0 at the BOTTOM of its block (laneSlotTop's reverseLanes) —
     // same inversion the renderer applies, read backwards.
     const drawnSlot = Math.max(0, Math.min(lanes - 1, Math.floor((cy - roadTop) / laneH)));
-    const lane = both && target === "NB" ? lanes - 1 - drawnSlot : drawnSlot;
+    const lane = both && target === "SB" ? lanes - 1 - drawnSlot : drawnSlot;
     const alongFrac = target === "SB" ? 1 - cx / cssW : cx / cssW;
     const x = Math.max(0, Math.min(L, alongFrac * L));
     setPlaceNote(null);
@@ -3370,7 +3373,7 @@ function drawCarriageway(
       // than any negative value, so brake lights do not flicker on the small
       // corrections every car-following model makes continuously.
       const braking = v.accel < -0.6 || v.v < 3;
-      drawVehicle(ctx, xPx(v.x), y, len, wid, v.vClass, paintFor(v.id, v.vClass), braking, sb);
+      drawVehicle(ctx, xPx(v.x), y, len, wid, v.vClass, paintFor(v.id, v.vClass), braking, sb, trailerPaintFor(v.id));
     } catch (err) {
       // One unusable sprite must not take the remaining traffic with it: a
       // throw here previously painted the road and skipped every vehicle after
@@ -3749,8 +3752,8 @@ function renderBoth(
     laneH,
     roadH: nbRoadH,
     rampGutter,
-    rampsAbove: true,
-    reverseLanes: true, // NB sits above the median: its bottom edge is the median-adjacent one
+    rampsAbove: false,
+    reverseLanes: false, // NB sits below the median: its top edge is already the median-adjacent one
     mToPx,
     sb: false,
     xPx: xPxNB,
@@ -3773,8 +3776,8 @@ function renderBoth(
     laneH,
     roadH: sbRoadH,
     rampGutter,
-    rampsAbove: false,
-    reverseLanes: false, // SB sits below the median: its top edge is already the median-adjacent one
+    rampsAbove: true,
+    reverseLanes: true, // SB sits above the median: its bottom edge is the median-adjacent one
     mToPx,
     sb: true,
     xPx: xPxSB,
@@ -3842,27 +3845,6 @@ function drawSharedKmAxis(
   ctx.restore();
 }
 
-/**
- * How a vehicle is painted. The traffic is drawn in a metallic, mostly light palette — white, silver and grey
- * bodies shaded from a highlight to a shadow across their width, dark glass, a thin dark outline — rather than
- * one colour per class. A car, a bus and a truck are told apart by SHAPE (length, the run of bus windows, the
- * truck's cab and ribbed trailer), and the one saturated colour left on the road is the red of the brake
- * lights. A vehicle keeps its paint for its whole life: it is picked from its id, never from the frame.
- */
-type Paint = { readonly hi: string; readonly lo: string };
-const PAINT_WHITE: Paint = { hi: "#ffffff", lo: "#c9d1dc" };
-const PAINT_SILVER: Paint = { hi: "#f1f5f9", lo: "#a7b2c1" };
-const PAINT_GREY: Paint = { hi: "#d3dae4", lo: "#7d8999" };
-const PAINT_DARK: Paint = { hi: "#94a0b0", lo: "#3f4859" };
-const PAINT_CHARCOAL: Paint = { hi: "#64707f", lo: "#262e3b" };
-
-function paintFor(id: number, vClass: 1 | 2 | 3): Paint {
-  const roll = (Math.imul(id + 1, 2654435761) >>> 0) % 100;
-  // Buses are kept light; cars and truck cabs take the whole range (mostly white and silver, some grey, few dark).
-  if (vClass === 2) return roll < 55 ? PAINT_WHITE : PAINT_SILVER;
-  return roll < 34 ? PAINT_WHITE : roll < 62 ? PAINT_SILVER : roll < 82 ? PAINT_GREY : roll < 93 ? PAINT_DARK : PAINT_CHARCOAL;
-}
-
 // Top-down vehicle sprite. Local frame: front (nose) at x=0, body extends to
 // -len (behind). Class 1 = car, 2 = bus, 3 = articulated semi.
 function drawVehicle(
@@ -3885,7 +3867,9 @@ function drawVehicle(
    * bodies the lit lamp also gets a glow so the pulse still reads. */
   braking: boolean,
   /** Southbound: the sprite is drawn mirrored so the nose leads. */
-  faceLeft = false
+  faceLeft = false,
+  /** A truck's trailer is painted apart from its cab. */
+  trailer: Paint = PAINT_WHITE
 ) {
   const glass = "rgba(20,28,44,0.95)";
   const glint = "rgba(190,208,232,0.55)";
@@ -3907,10 +3891,12 @@ function drawVehicle(
     ctx.fillStyle = g;
     roundRect(ctx, x, -wid / 2, w, wid, radius);
     ctx.fill();
-    ctx.strokeStyle = outline;
+    ctx.strokeStyle = tone.edge ?? outline;
     ctx.lineWidth = 0.9;
     ctx.stroke();
   };
+  // Glass is dark on light paint and paler on dark paint, so a black car still shows its windows.
+  const glassOf = (tone: Paint): string => tone.glass ?? glass;
 
   // soft shadow
   ctx.fillStyle = "rgba(0,0,0,0.32)";
@@ -3921,7 +3907,7 @@ function drawVehicle(
     // ---- articulated semi: ribbed trailer (back) + cab (front), joined by a hitch ----
     const cabLen = len * 0.3;
     const trailerLen = len * 0.62;
-    panel(-len, trailerLen, PAINT_WHITE, Math.min(2.5, wid * 0.3));
+    panel(-len, trailerLen, trailer, Math.min(2.5, wid * 0.3));
     if (detail) {
       ctx.strokeStyle = "rgba(15,23,42,0.22)";
       ctx.lineWidth = 0.8;
@@ -3938,7 +3924,7 @@ function drawVehicle(
     ctx.fillRect(-len * 0.38, -wid * 0.14, len * 0.08, wid * 0.28);
     panel(-cabLen, cabLen, paint, Math.min(3.5, wid * 0.4));
     if (detail) {
-      ctx.fillStyle = glass;
+      ctx.fillStyle = glassOf(paint);
       roundRect(ctx, -cabLen * 0.52, -wid / 2 + wid * 0.14, cabLen * 0.36, wid * 0.72, 1.2);
       ctx.fill();
     }
@@ -3946,7 +3932,7 @@ function drawVehicle(
     // ---- bus: a long pale body with a run of dark side windows and a windshield ----
     panel(-len, len, paint, Math.min(3, wid * 0.32));
     if (detail) {
-      ctx.fillStyle = glass;
+      ctx.fillStyle = glassOf(paint);
       roundRect(ctx, -len * 0.15, -wid / 2 + wid * 0.14, len * 0.08, wid * 0.72, 1);
       ctx.fill();
       const n = Math.max(3, Math.min(9, Math.floor(len / 4.5)));
@@ -3964,7 +3950,7 @@ function drawVehicle(
       ctx.fillStyle = "rgba(255,255,255,0.28)";
       roundRect(ctx, -len * 0.7, -wid / 2 + wid * 0.18, len * 0.36, wid * 0.64, wid * 0.2);
       ctx.fill();
-      ctx.fillStyle = glass;
+      ctx.fillStyle = glassOf(paint);
       roundRect(ctx, -len * 0.34, -wid / 2 + wid * 0.14, len * 0.15, wid * 0.72, wid * 0.16);
       ctx.fill();
       roundRect(ctx, -len * 0.86, -wid / 2 + wid * 0.2, len * 0.12, wid * 0.6, wid * 0.14);

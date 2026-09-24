@@ -20,6 +20,7 @@ the [lane reallocation](#lane-reallocation) control.
 | `sampler.ts` | Turns a variant + a `DurationMode` (`sampled` / `p50` / `p90` / `manual`) into a `ResolvedDuration`, via `calibration.json`'s quantiles and the breakdown fallback hierarchy (cause × vehicle → cause → vehicle → family). `resolveDuration` is the one entry point; `calibratedVariantOf()` is where it branches for a family with no calibration entry. |
 | `adapter.ts` | The pure core: `composeInterventions(manual, events, simTime, road, previous) -> { interventions, owners }` is the ONE function that decides what the engine holds, given the operator's own settings and the scenario events. Also: scheduling (`schedulePhases`, `boundaryTimes`), conflict/ownership rules, the `EngineBinding` that applies a composition to a real `TrafficSim`, and every view the UI reads (`resolutionView`, `canvasMarks`, `effectiveState`, …). |
 | `../sceneArt.ts` | The drawing of every event on the canvas: rain, flowing flood water, roadworks, breakdowns, collisions and their responders, the movable barrier and borrowed lanes. Pure canvas drawing that reads `SceneMark`s and imports only types, so `verify.ts` runs it in Node against a recording context. |
+| `../vehiclePaint.ts` | The colour mix of the traffic: palettes and weights for cars, buses, truck cabs and trailers, and `paintFor(id, class)`. Pure decoration; `verify.ts` checks the spread. |
 | `../zipper.ts` | The lane reallocation rules: `planZipper` (what a transfer does, or why it is refused), `zipperHolds`, `borrowedLanes`. Pure. The file and its identifiers (`planZipper`, `ZIPPER_LANES`, `data-zipper`) keep the name the feature was first built under, a zipper lane / counterflow scheme; everything an operator reads says "Lane reallocation". The engine's own "zipper merge" (vehicles merging at a closure) is unrelated. |
 | `tools/measure_rain_cap.ts` | Runs the real engine with and without a whole-segment speed cap, at busy and saturating demand: the measurement quoted in `ASSUMPTIONS.RAIN_SPEED_KMH`'s evidence. Read-only; about a minute. |
 | `../components/FamilyIcon.tsx`, `../components/ScenePreview.tsx` | The pictogram on each family chip, and the small animated preview under the chips (drawn by the same `sceneArt.ts` the road uses). Decoration only — they read nothing from the simulation. |
@@ -34,13 +35,14 @@ the [lane reallocation](#lane-reallocation) control.
 
 ## Dual-carriageway view (NB / SB / Both)
 
-A selector above the road chooses **Northbound**, **Southbound** or **Both**. Origin and destination
+A selector above the road chooses **Both**, **Northbound** or **Southbound** (in that order); the tab opens
+on **Both**. Origin and destination
 now choose the km window only; direction is the selector's job (it used to be derived from which end
 of the route was picked first). NB-only and SB-only run and look as the single-carriageway page always
-did. Both simulates and draws the two together: stacked with a median between them, NB above running
-left to right, SB below running right to left, one shared km axis, and lane 1 (engine index 0,
-`LANE1_IS_INNERMOST`) against the median on both sides (NB is drawn with its lane order reversed to
-make that true).
+did. Both simulates and draws the two together: stacked with a median between them, **SB above running
+right to left, NB below running left to right**, one shared km axis, and lane 1 (engine index 0,
+`LANE1_IS_INNERMOST`) against the median on both sides (SB, the top block, is drawn with its lane order
+reversed to make that true). Each carriageway's ramps sit on its outer edge: SB's above it, NB's below.
 
 **How it is built.** `useDirectionSim(direction, shared)` owns one carriageway completely — its own
 `TrafficSim`, its own `createEngineBinding()`, scenario events and ownership, manual interventions,
@@ -250,14 +252,20 @@ sit on the seam just past the lanes an event holds rather than on top of it.
   freezes the rain, the flowing water and the blinking beacons. The drops are a pure function of the
   clock (nothing stored per drop).
 - **Picker**: each family chip has a pictogram and an animated preview shows the selected family (accident
-  families cycle through their phases). It freezes for people who ask for reduced motion.
+  families cycle through their phases). It freezes for people who ask for reduced motion. The scenario's
+  description is behind an **"i"** at the top right of that picture: a button that opens it over the panel,
+  closes on Escape or when another scenario is picked.
 
-- **The traffic itself** is drawn as silver / white / grey vehicles — a highlight-to-shadow gradient across the
-  body, dark glass, a thin dark outline — with the paint picked from the vehicle's id so it never changes
-  frame to frame. Cars, buses and trucks are told apart by shape (length, a run of bus windows, a truck's cab
-  and ribbed trailer) rather than by colour, so the legend shows the shapes; the brake lights stay red and
-  glow when lit. Sprites have a 15 px legibility floor (`MIN_LEN_PX` in `page.tsx`), capped so they cannot
-  overlap their neighbour or outgrow their lane.
+- **The traffic itself** is drawn as metallic vehicles — a highlight-to-shadow gradient across the body, dark
+  glass, a thin outline — in a realistic spread of colours (`vehiclePaint.ts`): cars mostly white, silver,
+  grey and black (about two thirds), then blues, reds and a few greens, beiges, yellows and oranges; buses in
+  liveries (white, blue, red, green, yellow, orange); truck cabs in fleet colours with trailers mostly white or
+  silver, chosen independently of the cab. The paint is picked from the vehicle's id so it never changes frame
+  to frame, and dark paint gets a lighter rim and paler glass so it does not vanish into the asphalt. Cars,
+  buses and trucks are told apart by shape (length, a run of bus windows, a truck's cab and ribbed trailer)
+  rather than by colour, so the legend shows the shapes; the brake lights stay red and glow when lit. Sprites
+  have a 15 px legibility floor (`MIN_LEN_PX` in `page.tsx`), capped so they cannot overlap their neighbour or
+  outgrow their lane.
 
 The scenes are illustrations of the engine's state, not measurements: the wreck's angle, the debris and the
 number of responders are decoration. Wreck *length*, lanes and duration are still the recorded assumptions.
@@ -349,7 +357,7 @@ cd Back-End
 ./node_modules/.bin/tsx ../Front-End-Dashboard/app/dashboard/ai-sandbox/scenarios/verify.ts
 ```
 
-Read-only, exits 1 on any failure, prints every `FAIL` with its name. As of this write-up: **1,409
+Read-only, exits 1 on any failure, prints every `FAIL` with its name. As of this write-up: **1,417
 checks**. It guards, in order: the sampler reproduces the calibrated quantiles and response shares
 exactly (distribution, cap behaviour, reproducibility per seed); the breakdown hierarchy fallback and
 its cap-source chain; the catalogue/assumptions' internal consistency (phases, shares, lanes,

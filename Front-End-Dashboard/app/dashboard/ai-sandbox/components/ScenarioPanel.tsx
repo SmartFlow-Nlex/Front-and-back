@@ -411,10 +411,13 @@ export default function ScenarioPanel(props: Props) {
   const [refusal, setRefusal] = useState<string | null>(null);
   // Both mode only: add to both carriageways at once (the default for a family that reaches both).
   const [wantBoth, setWantBoth] = useState(false);
+  // The scenario's description lives behind the "i" on its picture rather than taking up the panel.
+  const [infoOpen, setInfoOpen] = useState(false);
 
   const pickFamily = (f: FamilyKey) => {
     const t = getTemplate(f);
     setFamily(f);
+    setInfoOpen(false);
     setWantBoth(t.carriageways === "one_or_both");
     setLane(null);
     setPosKm(null);
@@ -545,8 +548,31 @@ export default function ScenarioPanel(props: Props) {
           </span>
         </div>
       )}
-      <ScenePreview family={family} vehicle={vehicle} intensity={intensity} />
-      <p className="sandbox-scn-desc">{template.description}</p>
+      <div
+        className="sandbox-scn-scene"
+        onKeyDown={(e) => {
+          if (e.key === "Escape") setInfoOpen(false);
+        }}
+      >
+        <ScenePreview family={family} vehicle={vehicle} intensity={intensity} />
+        <button
+          type="button"
+          className="sandbox-scn-info"
+          data-scn="info"
+          aria-label={`About ${template.displayName}`}
+          aria-expanded={infoOpen}
+          title={infoOpen ? "Hide the description" : `About ${template.displayName}`}
+          onClick={() => setInfoOpen((o) => !o)}
+        >
+          i
+        </button>
+        {infoOpen && (
+          <div className="sandbox-scn-info-pop" data-scn="description" role="note">
+            <b>{template.displayName}</b>
+            <p>{template.description}</p>
+          </div>
+        )}
+      </div>
       {template.family === "rain" && (
         <div className="sandbox-scn-intensity" data-scn="intensity" role="radiogroup" aria-label="Rain intensity">
           <span className="sandbox-mini-label">How hard is it raining?</span>

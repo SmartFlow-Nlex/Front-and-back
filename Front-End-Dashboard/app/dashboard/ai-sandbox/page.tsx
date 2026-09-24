@@ -29,7 +29,7 @@ import DirectionPill, { DIRECTION_NAME } from "./components/DirectionPill";
 import { combineBaselines, combineMetrics } from "./bothMetrics";
 import { drawBorrowedLanes, drawMovableBarrier, drawScenes, drawWater, drawWeather, hasSceneArt, type SceneGeometry } from "./sceneArt";
 import { ASSUMPTIONS } from "./scenarios/assumptions";
-import { borrowedLanes, planZipper, REALLOCATION_NAME, zipperHolds, type ZipperState } from "./zipper";
+import { borrowedLanes, defaultStretch, planStretch, planZipper, REALLOCATION_NAME, zipperHolds, type ZipperState } from "./zipper";
 import { PAINT_WHITE, isMotorcycle, motorcyclePaintFor, paintFor, trailerPaintFor, type Paint } from "./vehiclePaint";
 import { drawMotorcycle } from "./motorcycleArt";
 import { useDirectionSim, type DirectionApi, type SharedRoadInputs } from "./useDirectionSim";
@@ -695,20 +695,71 @@ export default function AiSandboxPage() {
   useEffect(() => {
     if (zipper !== null && !zipperHolds(zipper, { NB: nb.laneCount, SB: sb.laneCount })) setZipper(null);
   }, [zipper, nb.laneCount, sb.laneCount]);
+  // Which stretch the reallocation covers. Off: what the operator has typed (or, untouched, a suggested stretch of the
+  // recorded length). On: the simulated window itself — the engine cannot vary lanes along a road, so the stretch IS
+  // the road it simulates (see zipper.ts).
+  const [reallocFrom, setReallocFrom] = useState<number | null>(null);
+  const [reallocTo, setReallocTo] = useState<number | null>(null);
+  const [reallocError, setReallocError] = useState<string | null>(null);
+  const windowBeforeRef = useRef<{ from: number | null; to: number | null; setFrom: number; setTo: number } | null>(null);
+  const stretchLimits = { routeFromKm, routeToKm, minKm: MIN_SEG_M / 1000, maxKm: MAX_SEG_M / 1000 };
+  const suggested = defaultStretch(fromKm, toKm, routeToKm, ASSUMPTIONS.ZIPPER_LANES.value.defaultStretchKm);
+  const stretchNow = zipper !== null ? { fromKm, toKm } : { fromKm: reallocFrom ?? suggested.fromKm, toKm: reallocTo ?? suggested.toKm };
+  const stretchPlan = planStretch(stretchNow.fromKm, stretchNow.toKm, stretchLimits);
+
+  /** Undo the scheme: the lane counts come back, and so does the window it was set to — unless the operator has moved the window since. */
+  const endReallocation = () => {
+    if (zipper !== null) {
+      nb.setLaneCount(zipper.base.NB);
+      sb.setLaneCount(zipper.base.SB);
+      const before = windowBeforeRef.current;
+      if (before !== null && segFromKm === before.setFrom && segToKm === before.setTo) {
+        setSegFromKm(before.from);
+        setSegToKm(before.to);
+      }
+    }
+    windowBeforeRef.current = null;
+    setZipper(null);
+    setReallocError(null);
+  };
   const chooseZipper = (toward: Direction | null, lanes: number) => {
     if (toward === null) {
-      if (zipper !== null) {
-        nb.setLaneCount(zipper.base.NB);
-        sb.setLaneCount(zipper.base.SB);
-      }
-      setZipper(null);
+      endReallocation();
       return;
     }
     const plan = planZipper(zipper === null ? laneCounts : zipper.base, toward, lanes);
     if (!plan.ok) return;
+    const stretch = planStretch(stretchNow.fromKm, stretchNow.toKm, stretchLimits);
+    if (!stretch.ok) {
+      setReallocError(stretch.reason);
+      return;
+    }
+    setReallocError(null);
+    if (zipper === null) windowBeforeRef.current = { from: segFromKm, to: segToKm, setFrom: stretch.fromKm, setTo: stretch.toKm };
+    setSegFromKm(stretch.fromKm);
+    setSegToKm(stretch.toKm);
     nb.setLaneCount(plan.counts.NB);
     sb.setLaneCount(plan.counts.SB);
     setZipper(plan.state);
+  };
+  /** One end of the stretch was edited. Off it is only an entry; on it moves the simulated window. */
+  const editStretch = (which: "from" | "to", km: number) => {
+    const next = which === "from" ? { from: km, to: stretchNow.toKm } : { from: stretchNow.fromKm, to: km };
+    if (zipper === null) {
+      setReallocFrom(next.from);
+      setReallocTo(next.to);
+      setReallocError(null);
+      return;
+    }
+    const plan = planStretch(next.from, next.to, stretchLimits);
+    if (!plan.ok) {
+      setReallocError(plan.reason);
+      return;
+    }
+    setReallocError(null);
+    setSegFromKm(plan.fromKm);
+    setSegToKm(plan.toKm);
+    if (windowBeforeRef.current !== null) windowBeforeRef.current = { ...windowBeforeRef.current, setFrom: plan.fromKm, setTo: plan.toKm };
   };
 
   /* ── Confidence run ──────────────────────────────────────────────────────
@@ -739,11 +790,9 @@ export default function AiSandboxPage() {
    * back on its defaults. The route, the Lanes / Inflow sliders and the view are the setup and stay. */
   const [scenarioFormKey, setScenarioFormKey] = useState(0);
   const resetEverything = () => {
-    if (zipper !== null) {
-      nb.setLaneCount(zipper.base.NB);
-      sb.setLaneCount(zipper.base.SB);
-      setZipper(null);
-    }
+    endReallocation();
+    setReallocFrom(null);
+    setReallocTo(null);
     nb.resetAll();
     sb.resetAll();
     disarmPlacing();
@@ -1954,6 +2003,7 @@ export default function AiSandboxPage() {
                   min={routeFromKm}
                   max={routeToKm}
                   onCommit={setSegFromKm}
+                  testId="window-from"
                 />
               </label>
               <label style={{ flex: 1, minWidth: 0 }}>
@@ -1963,6 +2013,7 @@ export default function AiSandboxPage() {
                   min={routeFromKm}
                   max={routeToKm}
                   onCommit={setSegToKm}
+                  testId="window-to"
                 />
               </label>
             </div>
@@ -2029,7 +2080,19 @@ export default function AiSandboxPage() {
               />
             </div>
           )}
-          {both && <ZipperControl counts={laneCounts} state={zipper} onChoose={chooseZipper} />}
+          {both && (
+            <ZipperControl
+              counts={laneCounts}
+              state={zipper}
+              onChoose={chooseZipper}
+              stretch={stretchNow}
+              stretchError={reallocError ?? (stretchPlan.ok ? null : stretchPlan.reason)}
+              stretchOk={stretchPlan.ok}
+              routeFromKm={routeFromKm}
+              routeToKm={routeToKm}
+              onStretch={editStretch}
+            />
+          )}
 
           </RailSection>
 
@@ -2300,12 +2363,15 @@ function KmInput({
   max,
   onCommit,
   disabled = false,
+  testId,
 }: {
   value: number;
   min: number;
   max: number;
   onCommit: (km: number) => void;
   disabled?: boolean;
+  /** A stable hook for the browser checks. */
+  testId?: string;
 }) {
   const [draft, setDraft] = useState<string | null>(null);
 
@@ -2321,6 +2387,7 @@ function KmInput({
     <input
       type="number"
       className="sandbox-km-input"
+      data-km={testId}
       min={min}
       max={max}
       step={0.05}
@@ -2349,10 +2416,23 @@ function ZipperControl({
   counts,
   state,
   onChoose,
+  stretch,
+  stretchError,
+  stretchOk,
+  routeFromKm,
+  routeToKm,
+  onStretch,
 }: {
   counts: Readonly<Record<Direction, number>>;
   state: ZipperState | null;
   onChoose: (toward: Direction | null, lanes: number) => void;
+  /** The stretch the barrier moves over (km), and whether it can be simulated; why not when it cannot. */
+  stretch: { readonly fromKm: number; readonly toKm: number };
+  stretchError: string | null;
+  stretchOk: boolean;
+  routeFromKm: number;
+  routeToKm: number;
+  onStretch: (which: "from" | "to", km: number) => void;
 }) {
   const base = state === null ? counts : state.base;
   const options: readonly { readonly toward: Direction; readonly lanes: number }[] = [
@@ -2369,6 +2449,26 @@ function ZipperControl({
           {state === null ? "off" : `${state.toward} +${state.lanes}`}
         </span>
       </div>
+      <div className="sandbox-realloc-km" data-zipper-stretch>
+        <span className="sandbox-slider-hint" style={{ display: "block", marginBottom: 3 }}>
+          Which stretch does the barrier move over? Usually about a kilometre, not the whole corridor.
+        </span>
+        <div className="sandbox-realloc-km-row">
+          <label>
+            <span className="sandbox-slider-hint" style={{ display: "block", marginBottom: 3 }}>From km</span>
+            <KmInput value={stretch.fromKm} min={routeFromKm} max={routeToKm} onCommit={(km) => onStretch("from", km)} testId="realloc-from" />
+          </label>
+          <label>
+            <span className="sandbox-slider-hint" style={{ display: "block", marginBottom: 3 }}>To km</span>
+            <KmInput value={stretch.toKm} min={routeFromKm} max={routeToKm} onCommit={(km) => onStretch("to", km)} testId="realloc-to" />
+          </label>
+        </div>
+        {stretchError !== null && (
+          <span className="sandbox-slider-hint sandbox-realloc-error" data-zipper-note="stretch-error">
+            {stretchError}
+          </span>
+        )}
+      </div>
       <div className="sandbox-dir-seg zip" role="radiogroup" aria-label="Move lanes between the carriageways">
         <button role="radio" aria-checked={state === null} className={state === null ? "active" : ""} data-zipper-option="off" onClick={() => onChoose(null, 0)}>
           Off
@@ -2382,9 +2482,9 @@ function ZipperControl({
               role="radio"
               aria-checked={on}
               className={on ? "active" : ""}
-              disabled={!plan.ok && !on}
+              disabled={(!plan.ok || !stretchOk) && !on}
               data-zipper-option={`${o.toward}+${o.lanes}`}
-              title={plan.ok ? `${o.toward} takes ${o.lanes} lane${o.lanes === 1 ? "" : "s"} from ${o.toward === "NB" ? "SB" : "NB"}` : plan.reason}
+              title={!plan.ok ? plan.reason : !stretchOk && !on ? (stretchError ?? "Give a stretch first.") : `${o.toward} takes ${o.lanes} lane${o.lanes === 1 ? "" : "s"} from ${o.toward === "NB" ? "SB" : "NB"}`}
               onClick={() => onChoose(o.toward, o.lanes)}
             >
               {o.toward} +{o.lanes}
@@ -2397,11 +2497,14 @@ function ZipperControl({
       </span>
       <span className="sandbox-slider-hint" data-zipper-note="state">
         {state === null
-          ? "One carriageway gains 1 or 2 lanes and the other loses the same."
-          : `NB ${counts.NB} lanes · SB ${counts.SB} lanes (was ${state.base.NB} + ${state.base.SB}). ${state.toward}'s lane 1 is the reallocated lane, against the barrier. Changing either Lanes slider ends it.`}
+          ? "One carriageway gains 1 or 2 lanes and the other loses the same, over the stretch above."
+          : `Km ${stretch.fromKm.toFixed(2)}–${stretch.toKm.toFixed(2)}: NB ${counts.NB} lanes · SB ${counts.SB} lanes (was ${state.base.NB} + ${state.base.SB}). ${state.toward}'s lane 1 is the reallocated lane, against the barrier. Changing either Lanes slider ends it.`}
+      </span>
+      <span className="sandbox-slider-hint" data-zipper-note="stretch">
+        The sandbox simulates only this stretch (100 m to 3 km) and reallocates the lanes along all of it; the road either side is not simulated.
       </span>
       <span className="sandbox-slider-hint" data-zipper-note="restart">
-        Changing it restarts BOTH carriageways: clocks, baselines, and hand-set closures, speed limits and incidents are cleared. Scenario events stay and replay from their start.
+        Changing it restarts BOTH carriageways: clocks, baselines, and hand-set closures, speed limits and incidents are cleared. Scenario events stay and replay from their start. The simulated window becomes the stretch (Off puts it back).
       </span>
     </div>
   );
@@ -3755,7 +3858,7 @@ function renderBoth(
     ctx.textAlign = "left";
     ctx.textBaseline = "top";
     ctx.fillStyle = "rgba(253,224,71,0.95)";
-    ctx.fillText(`${REALLOCATION_NAME.toUpperCase()} · ${zipper.toward} +${zipper.lanes} lane${zipper.lanes === 1 ? "" : "s"}, ${zipper.toward === "NB" ? "SB" : "NB"} −${zipper.lanes}`, 8, medianTop + 2);
+    ctx.fillText(`${REALLOCATION_NAME.toUpperCase()} · ${zipper.toward} +${zipper.lanes} lane${zipper.lanes === 1 ? "" : "s"}, ${zipper.toward === "NB" ? "SB" : "NB"} −${zipper.lanes} · Km ${marks.fromKm.toFixed(2)}–${marks.toKm.toFixed(2)}`, 8, medianTop + 2);
   }
   drawSharedKmAxis(ctx, { xPx: xPxNB, fromKm: marks.fromKm, toKm: marks.toKm, cssW, axisY: medianTop + MEDIAN_GUTTER_PX / 2, backdrop: zipper !== null });
 

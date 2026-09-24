@@ -18,7 +18,7 @@ import calibrationJson from "./calibration.json";
 import { CLASS_META, TrafficSim, type Interventions, type Metrics } from "../simulation";
 import { combineBaselines, combineMetrics, flowWeightedSpeed } from "../bothMetrics";
 import { drawBorrowedLanes, drawMovableBarrier, drawScenes, drawWater, drawWeather, hasSceneArt, type SceneCtx, type SceneGeometry } from "../sceneArt";
-import { borrowedLanes, planZipper, REALLOCATION_NAME, zipperCounts, zipperHolds } from "../zipper";
+import { borrowedLanes, defaultStretch, planStretch, planZipper, REALLOCATION_NAME, zipperCounts, zipperHolds, type StretchLimits } from "../zipper";
 import { drawMotorcycle, type BikeCtx } from "../motorcycleArt";
 import { BUS_PAINTS, CAB_PAINTS, CAR_PAINTS, MOTORCYCLE_PAINTS, PAINT_WHITE, TRAILER_PAINTS, isMotorcycle, motorcyclePaintFor, paintFor, trailerPaintFor, type Paint } from "../vehiclePaint";
 import {
@@ -2100,7 +2100,7 @@ const roadMarks = (evs: readonly ScenarioEvent[], min: number, owners = NO_OWNER
   check(
     "reset: the button resets EVERYTHING, scenarios included — both carriageways (resetAll), a lane reallocation undone, a command proposal and old confidence result dropped, and the Add-event form remounted on its defaults",
     /onClick=\{resetEverything\}/.test(pageSource) && !/onClick=\{\(\) => \{ nb\.rebuild\(\); sb\.rebuild\(\); \}\}/.test(pageSource) &&
-      /const resetEverything = \(\) => \{\s*if \(zipper !== null\) \{\s*nb\.setLaneCount\(zipper\.base\.NB\);\s*sb\.setLaneCount\(zipper\.base\.SB\);\s*setZipper\(null\);\s*\}\s*nb\.resetAll\(\);\s*sb\.resetAll\(\);\s*disarmPlacing\(\);\s*setPlan\(null\);\s*setCommandError\(null\);\s*setRepResult\(null\);\s*setScenarioFormKey\(\(k\) => k \+ 1\);\s*\};/.test(pageSource) &&
+      /const resetEverything = \(\) => \{\s*endReallocation\(\);\s*setReallocFrom\(null\);\s*setReallocTo\(null\);\s*nb\.resetAll\(\);\s*sb\.resetAll\(\);\s*disarmPlacing\(\);\s*setPlan\(null\);\s*setCommandError\(null\);\s*setRepResult\(null\);\s*setScenarioFormKey\(\(k\) => k \+ 1\);\s*\};/.test(pageSource) &&
       /<ScenarioPanel\s+key=\{scenarioFormKey\}/.test(pageSource),
   );
   check(
@@ -2205,6 +2205,29 @@ const roadMarks = (evs: readonly ScenarioEvent[], min: number, owners = NO_OWNER
         /data-legend="motorcycle"/.test(pageSource) && /from NLEX&apos;s records/.test(pageSource) && /ctx\.canvas\.dataset\[sb \? "motoSb" : "motoNb"\]/.test(pageSource) && /if \(motorcycle\) \{/.test(pageSource),
     );
   }
+  // ── which stretch the reallocation covers: asked for, checked, and it becomes the simulated road ──────
+  {
+    const limits: StretchLimits = { routeFromKm: 0, routeToKm: 11.73, minKm: 0.1, maxKm: 3 };
+    const ok = (a: number, b: number): { fromKm: number; toKm: number } | null => { const p = planStretch(a, b, limits); return p.ok ? { fromKm: p.fromKm, toKm: p.toKm } : null; };
+    const why = (a: number, b: number): string => { const p = planStretch(a, b, limits); return p.ok ? "" : p.reason; };
+    check("stretch: a km range inside the route and within the sandbox's limits is accepted as given, in either order, rounded to the metre", ok(3, 4)?.fromKm === 3 && ok(3, 4)?.toKm === 4 && ok(4, 3)?.fromKm === 3 && ok(4, 3)?.toKm === 4 && ok(3.0004, 4.0006)?.fromKm === 3 && ok(3.0004, 4.0006)?.toKm === 4.001 && ok(0, 3)?.toKm === 3);
+    check("stretch: too short, too long, outside the route, or not a number is refused with its own reason", /at least 0\.10 km/.test(why(3, 3.05)) && /at most 3\.00 km/.test(why(0, 3.5)) && /inside the route, Km 0\.00 to Km 11\.73/.test(why(-1, 0.5)) && /inside the route/.test(why(11, 12)) && /Enter a km post/.test(why(Number.NaN, 2)) && /Enter a km post/.test(why(2, Number.POSITIVE_INFINITY)) && ok(3, 3.05) === null && ok(0, 3.5) === null);
+    check("stretch: the suggested stretch is 1 km — the middle km of a longer window, or a shorter window's start run on downstream (and never past the route's end)",
+      (() => {
+        const a = defaultStretch(0, 3, 11.73, 1); const b = defaultStretch(0, 0.6, 11.73, 1); const c = defaultStretch(11, 11.6, 11.73, 1); const d = defaultStretch(5, 5.3, 11.73, 1);
+        return a.fromKm === 1 && a.toKm === 2 && b.fromKm === 0 && b.toKm === 1 && c.fromKm === 11 && c.toKm === 11.73 && d.fromKm === 5 && d.toKm === 6;
+      })());
+    check("stretch: the default length is the recorded assumption (1 km, the operator's description of a real scheme, not data)", ASSUMPTIONS.ZIPPER_LANES.value.defaultStretchKm === 1 && /WHICH STRETCH/.test(ASSUMPTIONS.ZIPPER_LANES.reason) && /not a figure from data/.test(ASSUMPTIONS.ZIPPER_LANES.reason) && /the road either side is not simulated/.test(ASSUMPTIONS.ZIPPER_LANES.reason));
+    check(
+      "stretch: the control asks for From km / To km before anything is applied, refuses an unusable stretch with its reason (options disabled), and choosing an option sets the simulated window to the stretch; Off puts the window back only if it has not been moved since",
+      /data-km=\{testId\}/.test(pageSource) && /testId="realloc-from"/.test(pageSource) && /testId="realloc-to"/.test(pageSource) && /data-zipper-note="stretch-error"/.test(pageSource) &&
+        /disabled=\{\(!plan\.ok \|\| !stretchOk\) && !on\}/.test(pageSource) &&
+        /const stretch = planStretch\(stretchNow\.fromKm, stretchNow\.toKm, stretchLimits\);\s*if \(!stretch\.ok\) \{\s*setReallocError\(stretch\.reason\);\s*return;\s*\}/.test(pageSource) &&
+        /setSegFromKm\(stretch\.fromKm\);\s*setSegToKm\(stretch\.toKm\);\s*nb\.setLaneCount\(plan\.counts\.NB\);/.test(pageSource) &&
+        /if \(before !== null && segFromKm === before\.setFrom && segToKm === before\.setTo\) \{\s*setSegFromKm\(before\.from\);\s*setSegToKm\(before\.to\);\s*\}/.test(pageSource),
+    );
+    check("stretch: the canvas label and the hint name the stretch (Km from-to) and the control says the road either side is not simulated", /Km \$\{marks\.fromKm\.toFixed\(2\)\}–\$\{marks\.toKm\.toFixed\(2\)\}/.test(pageSource) && /The sandbox simulates only this stretch \(100 m to 3 km\)/.test(pageSource) && /The simulated window becomes the stretch \(Off puts it back\)\./.test(pageSource));
+  }
   const operatorText = [pageSource, artSource, panelSource, previewSource, readFileSync(new URL("./assumptions.ts", import.meta.url), "utf8"), readFileSync(new URL("./catalogue.ts", import.meta.url), "utf8"), readFileSync(new URL("../../../globals.css", import.meta.url), "utf8")].join("\n");
   check("lane reallocation: nothing the operator can read still calls it a zipper lane or counterflow (UI strings, canvas labels, assumption text)", !/Zipper lane|ZIPPER LANE|Counterflow|COUNTERFLOW|zipper lane|counterflow/.test(operatorText));
   check(
@@ -2268,7 +2291,7 @@ const roadMarks = (evs: readonly ScenarioEvent[], min: number, owners = NO_OWNER
   check("panel: every family chip carries its pictogram, and the preview is the SAME scene art the road uses", /<FamilyIcon family=\{t\.family\} \/>/.test(panelSource) && /<ScenePreview family=\{family\}/.test(panelSource) && /from "\.\.\/sceneArt"/.test(previewSource) && /reduce/.test(previewSource));
   check(
     "lane reallocation: the control is Both-mode only, plans every change through planZipper, and a scheme is dropped the moment the lane counts stop matching it",
-    /\{both && <ZipperControl /.test(pageSource) && /const plan = planZipper\(zipper === null \? laneCounts : zipper\.base, toward, lanes\);/.test(pageSource) && /if \(zipper !== null && !zipperHolds\(zipper, \{ NB: nb\.laneCount, SB: sb\.laneCount \}\)\) setZipper\(null\);/.test(pageSource),
+    /\{both && \(\s*<ZipperControl\s/.test(pageSource) && /const plan = planZipper\(zipper === null \? laneCounts : zipper\.base, toward, lanes\);/.test(pageSource) && /if \(zipper !== null && !zipperHolds\(zipper, \{ NB: nb\.laneCount, SB: sb\.laneCount \}\)\) setZipper\(null\);/.test(pageSource),
   );
   check("lane reallocation: 'Off' restores the lane counts the road had before the scheme", /nb\.setLaneCount\(zipper\.base\.NB\);\s*sb\.setLaneCount\(zipper\.base\.SB\);/.test(pageSource));
   check("lane reallocation: the canvas draws the movable barrier and the borrowed lanes only when a scheme is on (borrowedLanes(zipper, ...) feeds each carriageway)", /borrowed: borrowedLanes\(zipper, "NB"\)/.test(pageSource) && /borrowed: borrowedLanes\(zipper, "SB"\)/.test(pageSource) && /if \(zipper === null\) \{\s*drawMedian/.test(pageSource));

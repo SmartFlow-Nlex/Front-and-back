@@ -281,6 +281,19 @@ black, with the transfer vehicle) in the median in place of the fixed one, and m
 was given (its innermost n, against the barrier) with reversible-lane chevrons. (It was first built as a
 "zipper lane" for one lane and "counterflow" for two; those names are gone from everything an operator reads.)
 
+**Which stretch.** A real reallocation covers a stretch of road, usually about a kilometre, not the whole
+corridor, so the control **asks for it**: *From km* and *To km* (either order), suggested at 1 km (the middle
+km of a longer window; a shorter window's start run on downstream). It must lie inside the route and be
+100 m to 3 km long (the km window's own limits); anything else is refused with the reason and the options stay
+disabled. The engine cannot change a carriageway's lane count along its length, so **the stretch you give
+becomes the road the sandbox simulates**: choosing an option sets the km window to the stretch and reallocates
+the lanes along all of it. The road either side is not simulated — that is the limit, stated in the control.
+While the scheme is on the two km fields *are* the window (edit either and the window moves; the window's own
+inputs in the Corridor section do the same). Off, or Reset, puts the lane counts back and the window back to
+what it was before, unless the operator has moved the window since, in which case it is left where they put
+it. The suggested length is `ASSUMPTIONS.ZIPPER_LANES.defaultStretchKm` (1 km, the operator's description of a
+real scheme, not a figure from data). The canvas label names the stretch (`Km 3.00–4.00`).
+
 **What it models, and what it does not.** The engine cannot change a carriageway's lane count mid-run and
 the carriageways still never interact (see the limitation above), so this is a **lane-count transfer**: the
 two `setLaneCount`s change together, the total is conserved, and **both runs restart** (any lane-count
@@ -381,7 +394,7 @@ cd Back-End
 ./node_modules/.bin/tsx ../Front-End-Dashboard/app/dashboard/ai-sandbox/scenarios/verify.ts
 ```
 
-Read-only, exits 1 on any failure, prints every `FAIL` with its name. As of this write-up: **1,425
+Read-only, exits 1 on any failure, prints every `FAIL` with its name. As of this write-up: **1,431
 checks**. It guards, in order: the sampler reproduces the calibrated quantiles and response shares
 exactly (distribution, cap behaviour, reproducibility per seed); the breakdown hierarchy fallback and
 its cap-source chain; the catalogue/assumptions' internal consistency (phases, shares, lanes,
@@ -470,6 +483,10 @@ time they were written.
   study (see [Rain intensity](#rain-intensity)) and is still an assumption — one site, one season — and a
   cap cannot lengthen headways, which is where most of rain's effect on capacity lies. Settling it needs
   loop-detector data from more sites and a following-headway lever in `simulation.ts`.
+- **A reallocation simulates only its own stretch**: the engine has one lane count per carriageway, so the
+  stretch is the simulated road and there is no upstream approach or downstream road around it. Showing
+  lanes appear and disappear inside a longer window would need lane counts that vary along the road in
+  `simulation.ts`.
 - **A lane reallocation cannot be timed and does not carry traffic across**: see the lane reallocation
   section. `ZIPPER_LANES` (2 to 6 lanes, at most 2 moved) is a modelling bound and needs NLEX guidance on
   movable barriers. Timing it would need a lane change mid-run in `simulation.ts`, and carrying traffic across

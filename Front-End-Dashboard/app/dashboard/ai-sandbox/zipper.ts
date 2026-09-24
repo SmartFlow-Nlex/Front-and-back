@@ -76,3 +76,53 @@ export function borrowedLanes(state: ZipperState | null, direction: Direction): 
   return state !== null && state.toward === direction ? state.lanes : 0;
 }
 
+/* ── Which stretch ─────────────────────────────────────────────────────────────
+ *
+ * A reallocation covers a stretch of road, usually about a kilometre, not the whole corridor. The engine cannot
+ * change a carriageway's lane count along its length, so the stretch the operator gives becomes the road the
+ * sandbox simulates: both carriageways run it with the reallocated lane counts from end to end, and the road
+ * either side is not simulated. These two pure functions decide what stretch is allowed and what to suggest.
+ */
+
+export type StretchLimits = {
+  /** The route the operator has chosen; the stretch must lie inside it. */
+  readonly routeFromKm: number;
+  readonly routeToKm: number;
+  /** The shortest and longest road the sandbox will simulate at once. */
+  readonly minKm: number;
+  readonly maxKm: number;
+};
+
+export type StretchPlan =
+  | { readonly ok: true; readonly fromKm: number; readonly toKm: number }
+  | { readonly ok: false; readonly reason: string };
+
+const EPS = 1e-9;
+const km2 = (km: number): string => km.toFixed(2);
+
+/** The stretch between two km posts (either order), or why it cannot be simulated. Rounded to the metre. */
+export function planStretch(aKm: number, bKm: number, limits: StretchLimits): StretchPlan {
+  if (!Number.isFinite(aKm) || !Number.isFinite(bKm)) return { ok: false, reason: "Enter a km post for both ends of the stretch." };
+  const lo = Math.min(aKm, bKm);
+  const hi = Math.max(aKm, bKm);
+  if (lo < limits.routeFromKm - EPS || hi > limits.routeToKm + EPS) {
+    return { ok: false, reason: `The stretch must lie inside the route, Km ${km2(limits.routeFromKm)} to Km ${km2(limits.routeToKm)}.` };
+  }
+  const len = hi - lo;
+  if (len < limits.minKm - EPS) return { ok: false, reason: `The stretch must be at least ${km2(limits.minKm)} km (it is ${km2(len)} km).` };
+  if (len > limits.maxKm + EPS) return { ok: false, reason: `The sandbox simulates at most ${km2(limits.maxKm)} km at once; ${km2(len)} km is too long.` };
+  return { ok: true, fromKm: Number(lo.toFixed(3)), toKm: Number(hi.toFixed(3)) };
+}
+
+/**
+ * The stretch to suggest: `lengthKm` long. A window already at least that long gets the middle of it; a shorter
+ * one keeps its start and runs on downstream (as far as the route goes).
+ */
+export function defaultStretch(windowFromKm: number, windowToKm: number, routeToKm: number, lengthKm: number): { readonly fromKm: number; readonly toKm: number } {
+  const windowLen = windowToKm - windowFromKm;
+  if (windowLen >= lengthKm - EPS) {
+    const from = windowFromKm + (windowLen - lengthKm) / 2;
+    return { fromKm: Number(from.toFixed(3)), toKm: Number((from + lengthKm).toFixed(3)) };
+  }
+  return { fromKm: Number(windowFromKm.toFixed(3)), toKm: Number(Math.min(routeToKm, windowFromKm + lengthKm).toFixed(3)) };
+}

@@ -6416,6 +6416,10 @@ body:has(.sandbox-main.is-expanded) {
 .sandbox-zipper .sandbox-slider-header { flex-wrap: wrap; gap: 2px 8px; }
 .sandbox-dir-seg.zip button.active { background: #ca8a04; color: #fff; }
 .sandbox-dir-seg.zip button:disabled { opacity: 0.4; cursor: not-allowed; }
+.sandbox-realloc-km { margin: 2px 0 8px; }
+.sandbox-realloc-km-row { display: flex; gap: 8px; }
+.sandbox-realloc-km-row label { flex: 1; min-width: 0; }
+.sandbox-realloc-error { display: block; margin-top: 4px; color: #b91c1c; font-weight: 600; }
 .sandbox-zipper { border-top: 1px dashed var(--border-default); padding-top: 10px; margin-top: 10px; }
 /* Controls sit on the same baseline even when one label wraps, and number boxes match the selects beside them. */
 .sandbox-scn-row { display: flex; align-items: flex-end; gap: 8px; }

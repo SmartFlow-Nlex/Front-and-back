@@ -19,7 +19,8 @@ import { CLASS_META, TrafficSim, type Interventions, type Metrics } from "../sim
 import { combineBaselines, combineMetrics, flowWeightedSpeed } from "../bothMetrics";
 import { drawBorrowedLanes, drawMovableBarrier, drawScenes, drawWater, drawWeather, hasSceneArt, type SceneCtx, type SceneGeometry } from "../sceneArt";
 import { borrowedLanes, planZipper, REALLOCATION_NAME, zipperCounts, zipperHolds } from "../zipper";
-import { BUS_PAINTS, CAB_PAINTS, CAR_PAINTS, PAINT_WHITE, TRAILER_PAINTS, paintFor, trailerPaintFor, type Paint } from "../vehiclePaint";
+import { drawMotorcycle, type BikeCtx } from "../motorcycleArt";
+import { BUS_PAINTS, CAB_PAINTS, CAR_PAINTS, MOTORCYCLE_PAINTS, PAINT_WHITE, TRAILER_PAINTS, isMotorcycle, motorcyclePaintFor, paintFor, trailerPaintFor, type Paint } from "../vehiclePaint";
 import {
   ASSUMPTIONS,
   CHAINAGE_DERIVATION,
@@ -2117,8 +2118,8 @@ const roadMarks = (evs: readonly ScenarioEvent[], min: number, owners = NO_OWNER
   );
   check(
     "traffic sprites: vehicles are painted from vehiclePaint.ts by the vehicle's id (trailer painted separately), classes are told apart by shape, and the legend shows the shapes rather than class colours",
-    /import \{ PAINT_WHITE, paintFor, trailerPaintFor, type Paint \} from "\.\/vehiclePaint";/.test(pageSource) &&
-      /drawVehicle\(ctx, xPx\(v\.x\), y, len, wid, v\.vClass, paintFor\(v\.id, v\.vClass\), braking, sb, trailerPaintFor\(v\.id\)\);/.test(pageSource) && !/v\.color/.test(pageSource) &&
+    /import \{ PAINT_WHITE, isMotorcycle, motorcyclePaintFor, paintFor, trailerPaintFor, type Paint \} from "\.\/vehiclePaint";/.test(pageSource) &&
+      /paintFor\(v\.id, v\.vClass\), braking, sb, trailerPaintFor\(v\.id\)/.test(pageSource) && !/v\.color/.test(pageSource) &&
       /<i className="veh veh-1" \/>/.test(pageSource) && /<i className="veh veh-3" \/>/.test(pageSource) && !/CLASS_META\[[123]\]\.color/.test(pageSource),
   );
   // ── the colours themselves: a realistic spread, stable per vehicle ─────────
@@ -2146,6 +2147,64 @@ const roadMarks = (evs: readonly ScenarioEvent[], min: number, owners = NO_OWNER
       /setFamily\(f\);\s*setInfoOpen\(false\);/.test(panelSource) && !/<p className="sandbox-scn-desc">\{template\.description\}<\/p>/.test(panelSource) &&
       /\.sandbox-scn-info \{[^}]*top: 6px; right: 6px;/.test(readFileSync(new URL("../../../globals.css", import.meta.url), "utf8")),
   );
+  // ── motorcycles: drawn at the share NLEX's own records give, and honest about what that is ─────────────
+  {
+    const m = ASSUMPTIONS.MOTORCYCLE_SHARE_OF_CLASS_1;
+    check(
+      "motorcycles: the drawn share is the recorded assumption — 944 motorcycle records out of 73,662 Class 1 records in the breakdown exports (1.28%), rounded to 0.0128 — with the evidence and what would settle it",
+      m.status === "ASSUMPTION" && m.value === 0.0128 && Math.abs(m.value - 944 / 73662) < 0.0001 &&
+        /944/.test(m.evidence ?? "") && /73,662/.test(m.evidence ?? "") && /1\.2815%/.test(m.evidence ?? "") && /motorcycle_share\.py/.test(m.evidence ?? "") &&
+        /toll transactions or loop detectors/.test(m.settledBy ?? ""),
+    );
+    check(
+      "motorcycles: the assumption says plainly it is a PICTURE (the engine has no motorcycle class and keeps a car's behaviour), that it is a fleet share only if motorcycles break down as often as other Class 1 vehicles, and that the traffic table has no motorcycle count (motorcycles are filed under Class 1)",
+      /944 motorcycle records out of 73,662 Class 1 records/.test(m.reason) && /picture, not a model/.test(m.reason) && /keeps a car's length, gap and lane behaviour/.test(m.reason) && /FLEET share only if motorcycles break down as often/.test(m.reason) &&
+        /no motorcycle count of its own/.test(m.reason) && /every motorcycle under Class 1/.test(m.reason),
+    );
+    const NM = 200000;
+    const ofClass1 = Array.from({ length: NM }, (_, id) => isMotorcycle(id, 1, m.value)).filter(Boolean).length / NM;
+    check("motorcycles: about 1.28% of Class 1 vehicles are drawn as motorcycles (over 200,000 vehicles, within 0.15 points)", Math.abs(ofClass1 - m.value) < 0.0015, `${(ofClass1 * 100).toFixed(3)}%`);
+    check(
+      "motorcycles: a bus or a truck is never a motorcycle, a vehicle is always or never one (stable per id), and share 0 means none",
+      Array.from({ length: 5000 }, (_, id) => !isMotorcycle(id, 2, 1) && !isMotorcycle(id, 3, 1)).every(Boolean) &&
+        Array.from({ length: 5000 }, (_, id) => isMotorcycle(id, 1, m.value) === isMotorcycle(id, 1, m.value)).every(Boolean) &&
+        Array.from({ length: 5000 }, (_, id) => !isMotorcycle(id, 1, 0)).every(Boolean),
+    );
+    check("motorcycles: bikes come in a spread of paints (weights add to 100, at least 6 different paints in use, none of them black — a rider is a small thing to see on dark asphalt)", MOTORCYCLE_PAINTS.reduce((a, [, w]) => a + w, 0) === 100 && new Set(Array.from({ length: 5000 }, (_, id) => motorcyclePaintFor(id))).size >= 6 && MOTORCYCLE_PAINTS.every(([p]) => p.lo !== "#171d29"));
+    // the sprite itself, run against a recording context: a slim bike, shoulders and helmet, lights; braking adds a glow
+    class BikeRecorder implements BikeCtx {
+      readonly calls: string[] = [];
+      fillStyle: BikeCtx["fillStyle"] = "#000";
+      strokeStyle: BikeCtx["strokeStyle"] = "#000";
+      lineWidth = 1;
+      beginPath(): void { this.calls.push("beginPath"); }
+      moveTo(): void { this.calls.push("moveTo"); }
+      lineTo(): void { this.calls.push("lineTo"); }
+      arcTo(): void { this.calls.push("arcTo"); }
+      closePath(): void { this.calls.push("closePath"); }
+      ellipse(): void { this.calls.push("ellipse"); }
+      arc(): void { this.calls.push("arc"); }
+      fill(): void { this.calls.push("fill"); }
+      stroke(): void { this.calls.push("stroke"); }
+      fillRect(): void { this.calls.push("fillRect"); }
+      createLinearGradient(): CanvasGradient { this.calls.push("gradient"); return { addColorStop: () => undefined }; }
+      count(name: string): number { return this.calls.filter((c) => c === name).length; }
+    }
+    const bike = (braking: boolean): BikeRecorder => { const r = new BikeRecorder(); drawMotorcycle(r, 15, 9, MOTORCYCLE_PAINTS[0][0], braking); return r; };
+    check(
+      "motorcycle sprite: two wheels and a body, handlebars, the rider's shoulders (an ellipse) and helmet, head and tail lights; it is deterministic, and braking adds a glow",
+      bike(false).count("gradient") === 1 && bike(false).count("ellipse") === 1 && bike(false).count("arc") >= 3 && bike(false).count("fillRect") >= 2 && bike(false).count("arcTo") >= 12 &&
+        bike(false).calls.join() === bike(false).calls.join() && bike(true).count("fillRect") === bike(false).count("fillRect") + 1,
+    );
+    const moto = readFileSync(new URL("./tools/motorcycle_share.py", import.meta.url), "utf8");
+    check("motorcycle tool: no built-in data path, requires --csv-dir (or NLEX_CSV_DIR), reads only the vehicle type and class columns (never a plate or a driver)", !/onedrive/i.test(moto) && !/[A-Za-z]:\\/.test(moto) && /NLEX_CSV_DIR/.test(moto) && /"--csv-dir"/.test(moto) && /TypeOfVehicle/.test(moto) && /VehicleClass/.test(moto) && !/row\.get\("(PlateNumber|Driver)"\)/.test(moto));
+    check(
+      "motorcycles: the road draws a vehicle as a motorcycle only through isMotorcycle at the recorded share (Class 1 only), the legend says where the figure comes from, and the counts are published for the browser checks",
+      /const motoShare = ASSUMPTIONS\.MOTORCYCLE_SHARE_OF_CLASS_1\.value;/.test(pageSource) && /const moto = isMotorcycle\(v\.id, v\.vClass, motoShare\);/.test(pageSource) &&
+        /moto \? motorcyclePaintFor\(v\.id\) : paintFor\(v\.id, v\.vClass\), braking, sb, trailerPaintFor\(v\.id\), moto\);/.test(pageSource) &&
+        /data-legend="motorcycle"/.test(pageSource) && /from NLEX&apos;s records/.test(pageSource) && /ctx\.canvas\.dataset\[sb \? "motoSb" : "motoNb"\]/.test(pageSource) && /if \(motorcycle\) \{/.test(pageSource),
+    );
+  }
   const operatorText = [pageSource, artSource, panelSource, previewSource, readFileSync(new URL("./assumptions.ts", import.meta.url), "utf8"), readFileSync(new URL("./catalogue.ts", import.meta.url), "utf8"), readFileSync(new URL("../../../globals.css", import.meta.url), "utf8")].join("\n");
   check("lane reallocation: nothing the operator can read still calls it a zipper lane or counterflow (UI strings, canvas labels, assumption text)", !/Zipper lane|ZIPPER LANE|Counterflow|COUNTERFLOW|zipper lane|counterflow/.test(operatorText));
   check(

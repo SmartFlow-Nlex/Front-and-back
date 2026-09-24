@@ -21,6 +21,8 @@ the [lane reallocation](#lane-reallocation) control.
 | `adapter.ts` | The pure core: `composeInterventions(manual, events, simTime, road, previous) -> { interventions, owners }` is the ONE function that decides what the engine holds, given the operator's own settings and the scenario events. Also: scheduling (`schedulePhases`, `boundaryTimes`), conflict/ownership rules, the `EngineBinding` that applies a composition to a real `TrafficSim`, and every view the UI reads (`resolutionView`, `canvasMarks`, `effectiveState`, …). |
 | `../sceneArt.ts` | The drawing of every event on the canvas: rain, flowing flood water, roadworks, breakdowns, collisions and their responders, the movable barrier and borrowed lanes. Pure canvas drawing that reads `SceneMark`s and imports only types, so `verify.ts` runs it in Node against a recording context. |
 | `../vehiclePaint.ts` | The colour mix of the traffic: palettes and weights for cars, buses, truck cabs and trailers, and `paintFor(id, class)`. Pure decoration; `verify.ts` checks the spread. |
+| `../motorcycleArt.ts` | The motorcycle sprite (slim bike, rider's shoulders and helmet, lights), pure drawing that `verify.ts` runs against a recording context. |
+| `tools/motorcycle_share.py` | Counts the motorcycle records in the client's breakdown exports and where NLEX files them (reads only the vehicle type and class columns, never a plate or a driver). Read-only. |
 | `../zipper.ts` | The lane reallocation rules: `planZipper` (what a transfer does, or why it is refused), `zipperHolds`, `borrowedLanes`. Pure. The file and its identifiers (`planZipper`, `ZIPPER_LANES`, `data-zipper`) keep the name the feature was first built under, a zipper lane / counterflow scheme; everything an operator reads says "Lane reallocation". The engine's own "zipper merge" (vehicles merging at a closure) is unrelated. |
 | `tools/measure_rain_cap.ts` | Runs the real engine with and without a whole-segment speed cap, at busy and saturating demand: the measurement quoted in `ASSUMPTIONS.RAIN_SPEED_KMH`'s evidence. Read-only; about a minute. |
 | `../components/FamilyIcon.tsx`, `../components/ScenePreview.tsx` | The pictogram on each family chip, and the small animated preview under the chips (drawn by the same `sceneArt.ts` the road uses). Decoration only — they read nothing from the simulation. |
@@ -309,6 +311,28 @@ pins a shorter version (6 lanes within 5% of 4 lanes per lane at saturation).
 This tests the engine's arithmetic on a plain road only: it does not show that a real 6-lane NLEx carriageway
 behaves like this, and the engine's lane rules (e.g. heavy vehicles kept out of lane 1) were not tuned for 6.
 
+## Motorcycles
+
+**What our data says.** NLEX's own breakdown exports (2022–2026, 156,939 records) list **944 motorcycles**
+(0.60% of records), and **every one is filed under Class 1** (of 73,662 Class 1 records: 1.28%). The hourly
+traffic table (`gold.fact_traffic_hourly`, as `smartflow_scripts/1_data_loading/traffic/load_fact.js` builds it)
+holds `class_1`, `class_2`, `class_3` and a total — **no motorcycle count**. NLEX counts motorcycles inside
+Class 1, so they are already part of the Class 1 share the engine runs on; nothing we hold says how many
+motorcycles *pass*. The accident exports carry a vehicle count but no vehicle type. (When this was written the
+warehouse could not be reached from this machine — the connection's TLS handshake was being reset — so the
+traffic table's columns were read from its loader, not from the live database.)
+
+**What the sandbox does with it.** It draws **1.28% of the Class 1 vehicles as motorcycles**
+(`ASSUMPTIONS.MOTORCYCLE_SHARE_OF_CLASS_1` = 944 / 73,662), chosen by vehicle id so a vehicle stays a
+motorcycle for its whole life; buses and trucks never are. The legend has a Motorcycle row saying where the
+figure comes from. That share is the *only* motorcycle number in our data, and it is a **fleet share only if
+motorcycles break down as often, per vehicle, as other Class 1 vehicles do** — an assumption, recorded as one,
+with what would settle it (toll transactions or loop detectors, which NLEX has and the warehouse does not).
+
+**It is a picture, not a model.** The engine has no motorcycle class and `simulation.ts` is not touched, so a
+vehicle it treats as a car is *drawn* as a motorcycle: it keeps a car's length, gap and lane behaviour (no
+filtering between lanes, no different braking). Motorcycles therefore change nothing in any metric.
+
 ## Which families are calibrated
 
 9 families total. 5 draw a duration from real NLEX data; 4 do not and are **manual-duration-only**:
@@ -357,7 +381,7 @@ cd Back-End
 ./node_modules/.bin/tsx ../Front-End-Dashboard/app/dashboard/ai-sandbox/scenarios/verify.ts
 ```
 
-Read-only, exits 1 on any failure, prints every `FAIL` with its name. As of this write-up: **1,417
+Read-only, exits 1 on any failure, prints every `FAIL` with its name. As of this write-up: **1,425
 checks**. It guards, in order: the sampler reproduces the calibrated quantiles and response shares
 exactly (distribution, cap behaviour, reproducibility per seed); the breakdown hierarchy fallback and
 its cap-source chain; the catalogue/assumptions' internal consistency (phases, shares, lanes,
@@ -379,7 +403,7 @@ engine applies), `sceneMarks` (including which event owns the lanes), the scene 
 against a recording canvas context: drop counts per intensity, determinism, that the clock moves the drops
 and the flood streaks, what is clipped to the road, what a paused or pending event draws, the drops' colour —
 and the lane reallocation's pure rules, its wiring, the clear-on-add behaviour of the panel, that the
-engine's per-lane capacity holds at 6 lanes, which carriageways an Add goes to (`addTargets`, and the
+engine's per-lane capacity holds at 6 lanes, the motorcycle share and sprite, which carriageways an Add goes to (`addTargets`, and the
 panel's all-or-nothing handling of Both), what Reset clears, and that every one-road-at-a-time control has
 its own NB / SB choice.
 

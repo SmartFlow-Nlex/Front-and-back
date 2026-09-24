@@ -288,6 +288,17 @@ export const ASSUMPTIONS = {
     },
   ),
 
+  MOTORCYCLE_SHARE_OF_CLASS_1: assume<number>(
+    0.0128,
+    "How many of the Class 1 vehicles are DRAWN as motorcycles. The engine has no motorcycle class (and simulation.ts is not touched), so this is a picture, not a model: a vehicle the engine treats as a car is drawn as a motorcycle and keeps a car's length, gap and lane behaviour. The share is 944 motorcycle records out of 73,662 Class 1 records in NLEX's own breakdown exports (2022-2026): 1.28%. It is a FLEET share only if motorcycles break down as often, per vehicle, as the other Class 1 vehicles do — an assumption, because there is no count of motorcycles passing. The hourly traffic table (gold.fact_traffic_hourly, as its loader smartflow_scripts/1_data_loading/traffic/load_fact.js builds it) carries class_1 / class_2 / class_3 and a total, with no motorcycle count of its own, and NLEX files every motorcycle under Class 1 (all 944 records are Class 1), so motorcycles are already inside the Class 1 share the engine runs on: this figure only decides how many of those are drawn as motorcycles.",
+    {
+      evidence:
+        "breakdown_data_2022..2026.csv, 156,939 records: TypeOfVehicle 'Motorcycle' 944 (0.60% of all records), every one with VehicleClass 'Class 1'; Class 1 records 73,662, so 944 / 73,662 = 1.2815%. Reproduce with scenarios/tools/motorcycle_share.py --csv-dir <folder> (reads only TypeOfVehicle and VehicleClass, never a plate or a driver). The accident exports carry a vehicle COUNT but no vehicle type, so they say nothing about motorcycles.",
+      settledBy:
+        "Motorcycle counts from NLEX's toll transactions or loop detectors, which see every vehicle by type and which the warehouse does not hold; or a motorcycle class in the engine (out of scope: simulation.ts).",
+    },
+  ),
+
   BREAKDOWN_DURATION_SCOPE: assume<"response_plus_service_per_event">(
     "response_plus_service_per_event",
     "AMENDED in Phase 1b. A breakdown's simulated duration is the event's TOTAL, first dispatch to last departure (response + service), replacing the Phase 1 choice of on-scene service time only. The obstacle exists while it waits for the responder as well as while it is served, so service-only understated it by roughly 2.7x at the median in-lane. Still understated: the clock starts at the first dispatch, not at the breakdown, and any delay before dispatch is not recorded.",

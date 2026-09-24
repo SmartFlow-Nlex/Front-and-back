@@ -82,14 +82,19 @@ export const TRAILER_PAINTS: Weighted = [
   [PAINT_GREEN, 5],
 ];
 
-/** A stable pseudo-random 0..99 for a vehicle id and a purpose (`salt`), so body and trailer colours are independent. */
-export const rollFor = (id: number, salt: number): number => {
+const mixed = (id: number, salt: number): number => {
   let h = Math.imul(id + 1, 2654435761) ^ Math.imul(salt + 1, 0x9e3779b1);
   h ^= h >>> 15;
   h = Math.imul(h, 2246822519);
   h ^= h >>> 13;
-  return (h >>> 0) % 100;
+  return h >>> 0;
 };
+
+/** A stable pseudo-random 0..99 for a vehicle id and a purpose (`salt`), so body and trailer colours are independent. */
+export const rollFor = (id: number, salt: number): number => mixed(id, salt) % 100;
+
+/** The same, in 0..9999, for rare things (a motorcycle is about one Class 1 vehicle in eighty). */
+export const fineRollFor = (id: number, salt: number): number => mixed(id, salt) % 10000;
 
 function pick(roll: number, table: Weighted): Paint {
   let upTo = 0;
@@ -108,4 +113,27 @@ export function paintFor(id: number, vClass: 1 | 2 | 3): Paint {
 /** A truck's trailer, painted independently of its cab. */
 export function trailerPaintFor(id: number): Paint {
   return pick(rollFor(id, 2), TRAILER_PAINTS);
+}
+
+/** Bikes are kept to paints that show up on dark asphalt (no black), since a rider is a small thing to see. */
+export const MOTORCYCLE_PAINTS: Weighted = [
+  [PAINT_RED, 25],
+  [PAINT_BLUE, 20],
+  [PAINT_WHITE, 15],
+  [PAINT_ORANGE, 10],
+  [PAINT_YELLOW, 10],
+  [PAINT_GREEN, 10],
+  [PAINT_GREY, 10],
+]; 
+
+/**
+ * Is this vehicle DRAWN as a motorcycle? Only a Class 1 vehicle can be, and `share` (0..1) of them are — the
+ * share comes from the data (ASSUMPTIONS.MOTORCYCLE_SHARE_OF_CLASS_1). Picture only: the engine still sees a car.
+ */
+export function isMotorcycle(id: number, vClass: 1 | 2 | 3, share: number): boolean {
+  return vClass === 1 && fineRollFor(id, 3) < Math.round(share * 10000);
+}
+
+export function motorcyclePaintFor(id: number): Paint {
+  return pick(rollFor(id, 4), MOTORCYCLE_PAINTS);
 }

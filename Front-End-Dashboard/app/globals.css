@@ -6112,6 +6112,7 @@ body:has(.sandbox-main.is-expanded) {
 .sandbox-legend i.veh-1 { width: 16px; }
 .sandbox-legend i.veh-2 { width: 24px; }
 .sandbox-legend i.veh-3 { width: 32px; }
+.sandbox-legend i.veh-m { width: 14px; height: 7px; border-radius: 3px; border: 1px solid rgba(9, 14, 28, 0.7); background: linear-gradient(90deg, #111827 0 22%, #ef4444 22% 68%, #f8fafc 68% 100%); }
 
 .sandbox-reco {
   margin-top: 14px;

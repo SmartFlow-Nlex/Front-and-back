@@ -30,7 +30,8 @@ import { combineBaselines, combineMetrics } from "./bothMetrics";
 import { drawBorrowedLanes, drawMovableBarrier, drawScenes, drawWater, drawWeather, hasSceneArt, type SceneGeometry } from "./sceneArt";
 import { ASSUMPTIONS } from "./scenarios/assumptions";
 import { borrowedLanes, planZipper, REALLOCATION_NAME, zipperHolds, type ZipperState } from "./zipper";
-import { PAINT_WHITE, paintFor, trailerPaintFor, type Paint } from "./vehiclePaint";
+import { PAINT_WHITE, isMotorcycle, motorcyclePaintFor, paintFor, trailerPaintFor, type Paint } from "./vehiclePaint";
+import { drawMotorcycle } from "./motorcycleArt";
 import { useDirectionSim, type DirectionApi, type SharedRoadInputs } from "./useDirectionSim";
 
 const BACKEND = process.env.NEXT_PUBLIC_BACKEND_URL ?? "http://localhost:4000";
@@ -1629,6 +1630,9 @@ export default function AiSandboxPage() {
             <span><i className="veh veh-1" /> Class 1 · light (car)</span>
             <span><i className="veh veh-2" /> Class 2 · medium (bus)</span>
             <span><i className="veh veh-3" /> Class 3 · heavy (truck)</span>
+            <span data-legend="motorcycle">
+              <i className="veh veh-m" /> Motorcycle · {(ASSUMPTIONS.MOTORCYCLE_SHARE_OF_CLASS_1.value * 100).toFixed(1)}% of Class 1, from NLEX&apos;s records
+            </span>
             <span><i style={{ background: "#dc2626" }} /> stopped / incident</span>
             <span><i style={{ background: "#f59e0b" }} /> scenario event</span>
           </div>
@@ -3358,6 +3362,9 @@ function drawCarriageway(
     ctx.textBaseline = "top";
   }
 
+  const motoShare = ASSUMPTIONS.MOTORCYCLE_SHARE_OF_CLASS_1.value;
+  let motorcycles = 0;
+  let class1 = 0;
   for (const v of sim.vehicles) {
     try {
       // One factor for every class, so a bus still reads as longer than a car.
@@ -3373,7 +3380,10 @@ function drawCarriageway(
       // than any negative value, so brake lights do not flicker on the small
       // corrections every car-following model makes continuously.
       const braking = v.accel < -0.6 || v.v < 3;
-      drawVehicle(ctx, xPx(v.x), y, len, wid, v.vClass, paintFor(v.id, v.vClass), braking, sb, trailerPaintFor(v.id));
+      const moto = isMotorcycle(v.id, v.vClass, motoShare);
+      if (v.vClass === 1) class1++;
+      if (moto) motorcycles++;
+      drawVehicle(ctx, xPx(v.x), y, len, wid, v.vClass, moto ? motorcyclePaintFor(v.id) : paintFor(v.id, v.vClass), braking, sb, trailerPaintFor(v.id), moto);
     } catch (err) {
       // One unusable sprite must not take the remaining traffic with it: a
       // throw here previously painted the road and skipped every vehicle after
@@ -3389,6 +3399,10 @@ function drawCarriageway(
       }
     }
   }
+
+  // What is on this carriageway right now, for the browser checks (a motorcycle is rare, so the picture alone is a poor test).
+  ctx.canvas.dataset[sb ? "motoSb" : "motoNb"] = String(motorcycles);
+  ctx.canvas.dataset[sb ? "class1Sb" : "class1Nb"] = String(class1);
 
   // incidents
   for (const inc of sim.interventions.incidents) {
@@ -3869,7 +3883,9 @@ function drawVehicle(
   /** Southbound: the sprite is drawn mirrored so the nose leads. */
   faceLeft = false,
   /** A truck's trailer is painted apart from its cab. */
-  trailer: Paint = PAINT_WHITE
+  trailer: Paint = PAINT_WHITE,
+  /** Drawn as a motorcycle with its rider (Class 1 only; the engine still sees a car of `len` x `wid`). */
+  motorcycle = false
 ) {
   const glass = "rgba(20,28,44,0.95)";
   const glint = "rgba(190,208,232,0.55)";
@@ -3897,6 +3913,13 @@ function drawVehicle(
   };
   // Glass is dark on light paint and paler on dark paint, so a black car still shows its windows.
   const glassOf = (tone: Paint): string => tone.glass ?? glass;
+
+  if (motorcycle) {
+    // A motorcycle with its rider, inside the car-sized slot the engine simulates (see motorcycleArt.ts).
+    drawMotorcycle(ctx, len, wid, paint, braking);
+    ctx.restore();
+    return;
+  }
 
   // soft shadow
   ctx.fillStyle = "rgba(0,0,0,0.32)";

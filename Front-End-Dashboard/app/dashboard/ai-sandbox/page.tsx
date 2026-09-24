@@ -727,6 +727,28 @@ export default function AiSandboxPage() {
   const [repProgress, setRepProgress] = useState<number | null>(null);
   const repCancel = useRef(false);
 
+  /* ── Reset ─────────────────────────────────────────────────────────────────
+   *
+   * Everything goes back, the scenarios with it: both carriageways are reset (events, hand-set controls,
+   * baseline, clock — see resetAll), a lane reallocation is undone (the lane counts it changed are put back),
+   * a command proposal and an old confidence result are dropped, and the Add-event form is remounted so it is
+   * back on its defaults. The route, the Lanes / Inflow sliders and the view are the setup and stay. */
+  const [scenarioFormKey, setScenarioFormKey] = useState(0);
+  const resetEverything = () => {
+    if (zipper !== null) {
+      nb.setLaneCount(zipper.base.NB);
+      sb.setLaneCount(zipper.base.SB);
+      setZipper(null);
+    }
+    nb.resetAll();
+    sb.resetAll();
+    disarmPlacing();
+    setPlan(null);
+    setCommandError(null);
+    setRepResult(null);
+    setScenarioFormKey((k) => k + 1);
+  };
+
   const runReplications = useCallback(() => {
     // replicate() runs one static Interventions snapshot on one carriageway: it cannot follow a timed
     // event, and it cannot run two roads at once (Both mode disables it outright — Phase D4.6).
@@ -1264,6 +1286,18 @@ export default function AiSandboxPage() {
       {/* Live metric tiles */}
       {/* The prescriptive seam: the three forecasts choose the conditions this
           scenario starts from. */}
+      {both && (
+        <div className="sandbox-dir-pick" data-forecast="direction" role="tablist" aria-label="Carriageway the forecast loads into">
+          <span className="k">Load forecast into</span>
+          <div className="sandbox-dir-seg">
+            {activeDirections.map((dn) => (
+              <button key={dn} role="tab" aria-selected={focusDirection === dn} className={`dir-${dn}${focusDirection === dn ? " active" : ""}`} onClick={() => chooseFocus(dn)}>
+                {DIRECTION_NAME[dn]}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
       <ScenarioForecastPanel
         onApplyInflow={(v, day) => {
           // The forecast is one corridor prediction, not one per carriageway (D2 §3): applies to
@@ -1395,7 +1429,7 @@ export default function AiSandboxPage() {
               <button className="btn-primary" onClick={() => setRunning((r) => !r)}>
                 {running ? "Pause" : "Play"}
               </button>
-              <button className="btn-muted" onClick={() => { nb.rebuild(); sb.rebuild(); }}>
+              <button className="btn-muted" onClick={resetEverything} title="Back to a clean start: scenarios, closures, speed limits, incidents, baselines and any lane reallocation are all cleared">
                 Reset
               </button>
               <button
@@ -1428,18 +1462,6 @@ export default function AiSandboxPage() {
                 </button>
               ))}
             </div>
-            {view === "Both" && (
-              <>
-                <span className="k" style={{ marginLeft: 10 }} title="The carriageway the Add-event picker, the Command prompt, the full-screen bar and the forecast loader act on. Clicking a road with a placing tool armed moves it.">Focus</span>
-                <div className="sandbox-speed-seg" role="tablist" aria-label="Focused carriageway">
-                  {(["NB", "SB"] as const).map((d) => (
-                    <button key={d} role="tab" aria-selected={focusedDirection === d} className={focusedDirection === d ? "active" : ""} onClick={() => setFocusedDirection(d)}>
-                      {d}
-                    </button>
-                  ))}
-                </div>
-              </>
-            )}
           </div>
           {both && placeNote !== null && !expanded && (
             <p className="sandbox-place-hint" data-place-note>
@@ -1450,9 +1472,9 @@ export default function AiSandboxPage() {
             <p className="sandbox-live-note">
               Both carriageways run together, median-separated, lane 1 against the median on each
               side. Every control, event and readout below belongs to one carriageway and says which.
-              {" "}<b>Focus</b> (<b>{focusedDirection}</b>, chosen above) is the road the Command prompt,
-              the full-screen bar and &ldquo;Load into simulation&rdquo; act on; with a placing tool
-              armed, clicking a lane on either road changes that road and moves focus to it.
+              The few things that can address only one road at a time — the Command prompt, the Add-event
+              picker, loading a forecast and the full-screen bar — each carry their own NB / SB choice;
+              with a placing tool armed, clicking a lane on either road changes that road.
             </p>
           )}
 
@@ -1466,7 +1488,13 @@ export default function AiSandboxPage() {
               {both && (
                 <span className="sandbox-fs-dir" data-fs-dir={focusDirection}>
                   <span className="k">Acting on</span>
-                  <DirectionPill direction={focusDirection} long />
+                  <div className="sandbox-dir-seg" role="tablist" aria-label="Carriageway the full-screen controls act on">
+                    {activeDirections.map((dn) => (
+                      <button key={dn} role="tab" aria-selected={focusDirection === dn} className={`dir-${dn}${focusDirection === dn ? " active" : ""}`} data-fs-dir-option={dn} onClick={() => chooseFocus(dn)}>
+                        {DIRECTION_NAME[dn]}
+                      </button>
+                    ))}
+                  </div>
                 </span>
               )}
               <span className="k">Close lane</span>
@@ -2032,6 +2060,7 @@ export default function AiSandboxPage() {
                 directions' events grouped under their own headings with their own Skip, and the skip
                 guard for long fast-forwards. */}
             <ScenarioPanel
+              key={scenarioFormKey}
               directions={activeDirections}
               focus={focusDirection}
               onFocus={chooseFocus}

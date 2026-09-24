@@ -473,6 +473,27 @@ export function useDirectionSim(direction: Direction, shared: SharedRoadInputs) 
     setScenarioEvents(scenarioEventsRef.current);
   }, []);
 
+  /**
+   * Reset pressed: this carriageway back to a clean start, scenarios included. Every event is removed and the
+   * numbering restarts, the operator's closure / speed-zone stretch positions and any armed placing tool are
+   * put away, and the run is rebuilt (rebuild(): a new engine; hand-set closed lanes, speed limit, incidents and
+   * the baseline cleared; a skip in progress cancelled). The route, lane count and inflow are the setup, not the
+   * run, and stay as they are.
+   */
+  const resetAll = useCallback(() => {
+    scenarioEventsRef.current = [];
+    setScenarioEvents([]);
+    scenarioSeqRef.current = 0;
+    setClosureKm(null);
+    setClosureEndKm(null);
+    setZoneFromKm(null);
+    setZoneToKm(null);
+    setPlacingIncident(false);
+    setPlacingClosure(false);
+    setClosureDraftKm(null);
+    rebuild();
+  }, [rebuild]);
+
   const cancelSkip = useCallback(() => {
     if (skipRef.current) skipRef.current.cancel = true;
   }, []);
@@ -579,6 +600,7 @@ export function useDirectionSim(direction: Direction, shared: SharedRoadInputs) 
     kmAt, mAt, clampKm, spanM,
     ramps,
     rebuild,
+    resetAll,
     publishOwners,
     scenarioCtxRef, scenarioDueRef, scenarioSeqRef, skipRef,
   };

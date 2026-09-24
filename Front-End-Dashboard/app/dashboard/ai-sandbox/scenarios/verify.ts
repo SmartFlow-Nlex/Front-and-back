@@ -2089,6 +2089,22 @@ const roadMarks = (evs: readonly ScenarioEvent[], min: number, owners = NO_OWNER
   check("scene art: a label for a scene that holds lanes sits on the seam just past them (or before, at the road's edge), centred on the stretch — never on top of the water, works or wreck", /if \(hasSceneArt\(m\) && m\.closedLanes\.length > 0\) \{/.test(pageSource) && /const cx = heldStretch === null \? x : g\.xPx\(\(heldStretch\.fromM \+ heldStretch\.toM\) \/ 2\);/.test(pageSource));
   check("lane reallocation: while a scheme is on, both Lanes sliders reach the zipper limit (a 6-lane carriageway is not shown as 5), and they are the corridor's 5 otherwise", (pageSource.match(/max=\{laneSliderMax\}/g) ?? []).length === 2 && !/max=\{5\}/.test(pageSource) && /zipper === null \? 5 : Math\.max\(5, ASSUMPTIONS\.ZIPPER_LANES\.value\.maxLanes\)/.test(pageSource));
   check("lane reallocation: the shared km axis gets a dark chip behind its numbers while the striped barrier is drawn", /backdrop: zipper !== null/.test(pageSource));
+  const resetHookSource = readFileSync(new URL("../useDirectionSim.ts", import.meta.url), "utf8");
+  check(
+    "reset: the button resets EVERYTHING, scenarios included — both carriageways (resetAll), a lane reallocation undone, a command proposal and old confidence result dropped, and the Add-event form remounted on its defaults",
+    /onClick=\{resetEverything\}/.test(pageSource) && !/onClick=\{\(\) => \{ nb\.rebuild\(\); sb\.rebuild\(\); \}\}/.test(pageSource) &&
+      /const resetEverything = \(\) => \{\s*if \(zipper !== null\) \{\s*nb\.setLaneCount\(zipper\.base\.NB\);\s*sb\.setLaneCount\(zipper\.base\.SB\);\s*setZipper\(null\);\s*\}\s*nb\.resetAll\(\);\s*sb\.resetAll\(\);\s*disarmPlacing\(\);\s*setPlan\(null\);\s*setCommandError\(null\);\s*setRepResult\(null\);\s*setScenarioFormKey\(\(k\) => k \+ 1\);\s*\};/.test(pageSource) &&
+      /<ScenarioPanel\s+key=\{scenarioFormKey\}/.test(pageSource),
+  );
+  check(
+    "reset: resetAll on each carriageway removes every scenario event and restarts the numbering, puts away the closure / zone stretch positions and any armed placing tool, then rebuilds the run",
+    /const resetAll = useCallback\(\(\) => \{\s*scenarioEventsRef\.current = \[\];\s*setScenarioEvents\(\[\]\);\s*scenarioSeqRef\.current = 0;\s*setClosureKm\(null\);\s*setClosureEndKm\(null\);\s*setZoneFromKm\(null\);\s*setZoneToKm\(null\);\s*setPlacingIncident\(false\);\s*setPlacingClosure\(false\);\s*setClosureDraftKm\(null\);\s*rebuild\(\);\s*\}, \[rebuild\]\);/.test(resetHookSource) && /\n    resetAll,\n/.test(resetHookSource),
+  );
+  check(
+    "focus: there is no separate Focus control in the toolbar — every one-road-at-a-time thing carries its own NB / SB choice (Add to, Commands apply to, Load forecast into, and the full-screen Acting on switch), all moving the same state",
+    !/aria-label="Focused carriageway"/.test(pageSource) && !/>Focus<\/span>/.test(pageSource) && /data-forecast="direction"/.test(pageSource) && /Commands apply to/.test(pageSource) &&
+      /aria-label="Carriageway the full-screen controls act on"/.test(pageSource) && /data-scn="direction-pick"/.test(panelSource) && (pageSource.match(/onClick=\{\(\) => chooseFocus\(dn\)\}/g) ?? []).length === 3,
+  );
   const operatorText = [pageSource, artSource, panelSource, previewSource, readFileSync(new URL("./assumptions.ts", import.meta.url), "utf8"), readFileSync(new URL("./catalogue.ts", import.meta.url), "utf8"), readFileSync(new URL("../../../globals.css", import.meta.url), "utf8")].join("\n");
   check("lane reallocation: nothing the operator can read still calls it a zipper lane or counterflow (UI strings, canvas labels, assumption text)", !/Zipper lane|ZIPPER LANE|Counterflow|COUNTERFLOW|zipper lane|counterflow/.test(operatorText));
   check(

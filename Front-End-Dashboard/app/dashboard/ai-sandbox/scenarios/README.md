@@ -53,7 +53,9 @@ side's "who owns the closure right now" overwrite the other's (`verify.ts`'s bin
 pin that applying one never touches the other). A **focus** direction exists only for the few things
 that can address one road at a time — the Command prompt (its request carries no direction), the
 full-screen bar, the "Add to" picker and "Load into simulation"; everything else in Both mode shows
-both carriageways, each named.
+both carriageways, each named. There is no separate Focus control: each of those carries **its own NB / SB
+choice** (Add to, Commands apply to, Load forecast into, and the full-screen Acting on switch), and they
+all move the same state, so choosing on one is seen on the others.
 
 ### The two carriageways are independent (modelling limitation)
 
@@ -159,6 +161,18 @@ scenario is chosen and offers what applies to it (one carriageway in NB-only or 
 
 Which carriageways a click means is `addTargets` in `adapter.ts` (pure, pinned in `verify.ts`); which
 families reach both is data on the template.
+
+### Reset
+
+Reset takes **everything back, the scenarios with it**, on both carriageways (and on the one, in a single
+view): every scenario event is removed and the numbering restarts (the next rain is `#1` again); hand-set
+closed lanes, speed limit and incidents, the closure and speed-zone stretch positions and any armed placing
+tool are cleared; the before/after baselines are discarded; the run is rebuilt (new engine, clock and
+warm-up); a **lane reallocation is undone** (the lane counts it changed are put back); a pending Command
+proposal and an old confidence-run result are dropped; and the Add-event form goes back to its defaults.
+What stays is the setup rather than the run: the route and km window, the **Lanes and Inflow sliders**, the
+hour of day, the view (NB / SB / Both) and the run speed. `useDirectionSim`'s `resetAll` does each
+carriageway's part; `page.tsx`'s `resetEverything` does the rest.
 
 ### Fast-forward cost and the skip guard
 
@@ -328,7 +342,7 @@ cd Back-End
 ./node_modules/.bin/tsx ../Front-End-Dashboard/app/dashboard/ai-sandbox/scenarios/verify.ts
 ```
 
-Read-only, exits 1 on any failure, prints every `FAIL` with its name. As of this write-up: **1,404
+Read-only, exits 1 on any failure, prints every `FAIL` with its name. As of this write-up: **1,407
 checks**. It guards, in order: the sampler reproduces the calibrated quantiles and response shares
 exactly (distribution, cap behaviour, reproducibility per seed); the breakdown hierarchy fallback and
 its cap-source chain; the catalogue/assumptions' internal consistency (phases, shares, lanes,
@@ -350,8 +364,9 @@ engine applies), `sceneMarks` (including which event owns the lanes), the scene 
 against a recording canvas context: drop counts per intensity, determinism, that the clock moves the drops
 and the flood streaks, what is clipped to the road, what a paused or pending event draws, the drops' colour —
 and the lane reallocation's pure rules, its wiring, the clear-on-add behaviour of the panel, that the
-engine's per-lane capacity holds at 6 lanes, and which carriageways an Add goes to (`addTargets`, and the
-panel's all-or-nothing handling of Both).
+engine's per-lane capacity holds at 6 lanes, which carriageways an Add goes to (`addTargets`, and the
+panel's all-or-nothing handling of Both), what Reset clears, and that every one-road-at-a-time control has
+its own NB / SB choice.
 
 There is also a strict `tsc` pass (two scratch tsconfigs — one for `scenarios/**` + `components/**`,
 one for `page.tsx` — both extending the project's own `tsconfig.json` with `noUnusedLocals`,

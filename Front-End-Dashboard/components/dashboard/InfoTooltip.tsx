@@ -17,14 +17,26 @@ import { Info } from "lucide-react";
 // absolutely-positioned tooltip before it ever reaches the page. Rendering
 // into document.body via a portal, positioned in viewport (`fixed`)
 // coordinates measured from the trigger, escapes that entirely.
+//
+// The popup is centred on the icon, but an icon close to a screen edge (a label
+// at the left of a narrow, stacked layout) would push half of it off-screen. So
+// the centre is clamped to keep the box inside the viewport, and `arrow` records
+// how far that moved it so the pointer still lands on the icon.
+const TIP_MAX_W = 300;
+const TIP_EDGE = 8;
+
 export default function InfoTooltip({ text }: { text: string }) {
   const [show, setShow] = useState(false);
-  const [pos, setPos] = useState<{ top: number; left: number } | null>(null);
+  const [pos, setPos] = useState<{ top: number; left: number; arrow: number } | null>(null);
   const ref = useRef<HTMLSpanElement>(null);
 
   const measure = () => {
     const rect = ref.current?.getBoundingClientRect();
-    if (rect) setPos({ top: rect.top, left: rect.left + rect.width / 2 });
+    if (!rect) return;
+    const center = rect.left + rect.width / 2;
+    const half = Math.min(TIP_MAX_W, window.innerWidth - TIP_EDGE * 2) / 2;
+    const left = Math.min(Math.max(center, half + TIP_EDGE), window.innerWidth - half - TIP_EDGE);
+    setPos({ top: rect.top, left, arrow: center - left });
   };
   const open = () => {
     measure();
@@ -79,7 +91,7 @@ export default function InfoTooltip({ text }: { text: string }) {
               fontWeight: 400,
               lineHeight: 1.5,
               width: "max-content",
-              maxWidth: 300,
+              maxWidth: `min(${TIP_MAX_W}px, calc(100vw - ${TIP_EDGE * 2}px))`,
               zIndex: 2147483647,
               boxShadow: "0 12px 30px rgba(15,23,42,0.4), 0 0 0 1px rgba(255,255,255,0.08)",
               textAlign: "left",
@@ -91,7 +103,7 @@ export default function InfoTooltip({ text }: { text: string }) {
               style={{
                 position: "absolute",
                 top: "100%",
-                left: "50%",
+                left: `calc(50% + ${pos.arrow}px)`,
                 transform: "translateX(-50%)",
                 width: 0,
                 height: 0,

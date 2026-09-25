@@ -55,10 +55,10 @@ run/pause state, sim speed and the fixed-step accumulator in `page.tsx`. Two sep
 matter: a binding closes over private ownership state, so one shared between directions would let each
 side's "who owns the closure right now" overwrite the other's (`verify.ts`'s binding-isolation checks
 pin that applying one never touches the other). A **focus** direction exists only for the few things
-that can address one road at a time — the Command prompt (its request carries no direction), the
-full-screen bar, the "Add to" picker and "Load into simulation"; everything else in Both mode shows
+that can address one road at a time — the Command prompt (its request carries no direction) and the
+"Add to" picker; everything else in Both mode shows
 both carriageways, each named. There is no separate Focus control: each of those carries **its own NB / SB
-choice** (Add to, Commands apply to, Load forecast into, and the full-screen Acting on switch), and they
+choice** (Add to, Commands apply to), and they
 all move the same state, so choosing on one is seen on the others.
 
 ### The two carriageways are independent (modelling limitation)
@@ -275,7 +275,7 @@ number of responders are decoration. Wreck *length*, lanes and duration are stil
 ## Lane reallocation
 
 In Both mode, a control under the Lanes sliders moves **1 or 2 lanes** from one carriageway to the other:
-`NB +1`, `NB +2`, `SB +1`, `SB +2`, or Off. The control says, in one line, what it does: *Lanes are reassigned
+`NB +1`, `NB +2`, `SB +1`, `SB +2`, or Off. The control's "i" says what it does: *Lanes are reassigned
 between carriageways; vehicles do not cross the median.* The canvas draws a movable barrier (yellow and
 black, with the transfer vehicle) in the median in place of the fixed one, and marks the lanes the recipient
 was given (its innermost n, against the barrier) with reversible-lane chevrons. (It was first built as a

@@ -1799,7 +1799,7 @@ check(
   check("click routing: SB's drawn slot is un-reversed back to the engine lane (SB is drawn with lane 1 at the bottom of its block)", /const lane = both && target === "SB" \? lanes - 1 - drawnSlot : drawnSlot;/.test(clickSource));
   check(
     "Both mode layout: Southbound (right to left) is the TOP carriageway and Northbound (left to right) the bottom one, with the median and shared km axis between them, and the tab opens on Both",
-    /const sbRoadTop = CANVAS_PAD \+ rampGutter;\s*const medianTop = sbRoadTop \+ sbRoadH;\s*const nbRoadTop = medianTop \+ MEDIAN_GUTTER_PX;/.test(pageSource) &&
+    /const sbRoadTop = CANVAS_PAD \+ rampGutter \+ Math\.max\(0, \(cssH - CANVAS_PAD \* 2 - usedH\) \/ 2\);\s*const medianTop = sbRoadTop \+ sbRoadH;\s*const nbRoadTop = medianTop \+ MEDIAN_GUTTER_PX;/.test(pageSource) &&
       /useState<Direction \| "Both">\("Both"\)/.test(pageSource) && !/useState<Direction \| "Both">\("NB"\)/.test(pageSource),
   );
   check(
@@ -2108,9 +2108,10 @@ const roadMarks = (evs: readonly ScenarioEvent[], min: number, owners = NO_OWNER
     /const resetAll = useCallback\(\(\) => \{\s*scenarioEventsRef\.current = \[\];\s*setScenarioEvents\(\[\]\);\s*scenarioSeqRef\.current = 0;\s*setClosureKm\(null\);\s*setClosureEndKm\(null\);\s*setZoneFromKm\(null\);\s*setZoneToKm\(null\);\s*setPlacingIncident\(false\);\s*setPlacingClosure\(false\);\s*setClosureDraftKm\(null\);\s*rebuild\(\);\s*\}, \[rebuild\]\);/.test(resetHookSource) && /\n    resetAll,\n/.test(resetHookSource),
   );
   check(
-    "focus: there is no separate Focus control in the toolbar — every one-road-at-a-time thing carries its own NB / SB choice (Add to, Commands apply to, Load forecast into, and the full-screen Acting on switch), all moving the same state",
-    !/aria-label="Focused carriageway"/.test(pageSource) && !/>Focus<\/span>/.test(pageSource) && /data-forecast="direction"/.test(pageSource) && /Commands apply to/.test(pageSource) &&
-      /aria-label="Carriageway the full-screen controls act on"/.test(pageSource) && /data-scn="direction-pick"/.test(panelSource) && (pageSource.match(/onClick=\{\(\) => chooseFocus\(dn\)\}/g) ?? []).length === 3,
+    "focus: there is no separate Focus control in the toolbar — the one-road-at-a-time things (Add to, Commands apply to) carry their own NB / SB choice, all moving the same state; the forecast has no direction pick of its own and seeds every carriageway the Carriageway control shows",
+    !/aria-label="Focused carriageway"/.test(pageSource) && !/>Focus<\/span>/.test(pageSource) && !/Load forecast into/.test(pageSource) && !/data-forecast="direction"/.test(pageSource) &&
+      /activeDirections\.forEach\(\(dn\) => byDirection\[dn\]\.setInflow\(v\)\)/.test(pageSource) && /Commands apply to/.test(pageSource) &&
+      !/aria-label="Carriageway the full-screen controls act on"/.test(pageSource) && /data-scn="direction-pick"/.test(panelSource) && (pageSource.match(/onClick=\{\(\) => chooseFocus\(dn\)\}/g) ?? []).length === 1,
   );
   check(
     "carriageway view buttons read Both, Northbound, Southbound (in that order), and the vehicle sprites have a 15 px legibility floor",
@@ -2231,8 +2232,8 @@ const roadMarks = (evs: readonly ScenarioEvent[], min: number, owners = NO_OWNER
   const operatorText = [pageSource, artSource, panelSource, previewSource, readFileSync(new URL("./assumptions.ts", import.meta.url), "utf8"), readFileSync(new URL("./catalogue.ts", import.meta.url), "utf8"), readFileSync(new URL("../../../globals.css", import.meta.url), "utf8")].join("\n");
   check("lane reallocation: nothing the operator can read still calls it a zipper lane or counterflow (UI strings, canvas labels, assumption text)", !/Zipper lane|ZIPPER LANE|Counterflow|COUNTERFLOW|zipper lane|counterflow/.test(operatorText));
   check(
-    "lane reallocation: the control is titled with the name, states the model in one line — 'Lanes are reassigned between carriageways; vehicles do not cross the median.' — and warns what a change restarts",
-    /<span className="sandbox-slider-label">\{REALLOCATION_NAME\}<\/span>/.test(pageSource) && /Lanes are reassigned between carriageways; vehicles do not cross the median\./.test(pageSource) &&
+    "lane reallocation: the control is titled with the name and its \"i\" states the model — 'Lanes are reassigned between carriageways; vehicles do not cross the median.' — and warns what a change restarts",
+    /<InfoLabel info=\{REALLOCATION_INFO\}>\{REALLOCATION_NAME\}<\/InfoLabel>/.test(pageSource) && /Lanes are reassigned between carriageways; vehicles do not cross the median\./.test(pageSource) &&
       /Changing it restarts BOTH carriageways: clocks, baselines, and hand-set closures, speed limits and incidents are cleared\. Scenario events stay and replay from their start\./.test(pageSource) &&
       /\$\{REALLOCATION_NAME\.toUpperCase\(\)\} · /.test(pageSource),
   );

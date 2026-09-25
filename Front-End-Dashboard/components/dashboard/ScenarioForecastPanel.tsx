@@ -1,7 +1,6 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import ForecastDayPicker from "./ForecastDayPicker";
 
 /**
  * The seam between the three predictive modules and the sandbox.
@@ -11,7 +10,10 @@ import ForecastDayPicker from "./ForecastDayPicker";
  * champion's prediction — so a scenario runs against a predicted Saturday rather
  * than against a flat annual average.
  *
- * The day picker runs the full traffic/CO₂ horizon (3 months). The incident
+ * The day is chosen in the page's top filter row (ForecastDayPicker), not here: the
+ * fetch and the chosen day live in useScenarioForecast() so the page can own the
+ * picker while this card only shows what the chosen day predicts. The picker runs
+ * the full traffic/CO₂ horizon (3 months). The incident
  * model's horizon is shorter: days inside it carry a dot in the calendar, and
  * days past it show incident figures as "no forecast" — never a number borrowed
  * from another day. When the incident horizon grows, the dots follow.
@@ -71,13 +73,16 @@ const dayLabel = (iso: string) =>
 const shortDay = (iso: string) =>
   new Date(`${iso}T00:00:00`).toLocaleDateString("en-US", { month: "short", day: "numeric" });
 
-export default function ScenarioForecastPanel({
-  onApplyInflow,
+/**
+ * Fetches the forecast for the chosen day and holds which day that is, so the
+ * page can put the day picker in its top filter row while ScenarioForecastPanel
+ * shows the result. `selectDay` also forgets that a forecast was applied — a
+ * different day is a different forecast.
+ */
+export function useScenarioForecast({
   onHotspot,
   onIncidentCoverage,
 }: {
-  /** Hands the derived arrival rate, and the day it came from, to the page. */
-  onApplyInflow: (vehPerHour: number, forecastDate: string) => void;
   /**
    * The exit the incident model rates most likely to need attention on the
    * chosen day. The sandbox opens there, so the forecast chooses the day and
@@ -93,7 +98,6 @@ export default function ScenarioForecastPanel({
   const [busy, setBusy] = useState(true);
   const [failed, setFailed] = useState(false);
   const [applied, setApplied] = useState<string | null>(null);
-  const [showHelp, setShowHelp] = useState(false);
 
   const mounted = useRef(true);
   const reqId = useRef(0);
@@ -131,6 +135,27 @@ export default function ScenarioForecastPanel({
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [date]);
 
+  const selectDay = (d: string) => {
+    setDate(d);
+    setApplied(null);
+  };
+
+  return { data, date, busy, failed, applied, setApplied, selectDay };
+}
+
+export type ScenarioForecast = ReturnType<typeof useScenarioForecast>;
+
+export default function ScenarioForecastPanel({
+  forecast,
+  onApplyInflow,
+}: {
+  forecast: ScenarioForecast;
+  /** Hands the derived arrival rate, and the day it came from, to the page. */
+  onApplyInflow: (vehPerHour: number, forecastDate: string) => void;
+}) {
+  const { data, busy, failed, applied, setApplied } = forecast;
+  const [showHelp, setShowHelp] = useState(false);
+
   if (failed && !data) return null;
 
   const v = data?.volume;
@@ -155,17 +180,6 @@ export default function ScenarioForecastPanel({
           <h3>Simulate a Forecast Day</h3>
           <p>Starts the scenario from what the traffic, incident and emission models predict</p>
         </div>
-
-        <ForecastDayPicker
-          value={date}
-          dates={data?.availableDates ?? []}
-          coverageEnd={coverageEnd}
-          onChange={(d) => {
-            setDate(d);
-            setApplied(null);
-          }}
-          disabled={!data}
-        />
 
         <button
           className={`sandbox-forecast-apply${isApplied ? " is-applied" : ""}`}
@@ -235,7 +249,8 @@ export default function ScenarioForecastPanel({
 
           {showHelp && (
             <div className="sandbox-forecast-foot" style={{ display: "block" }}>
-              Only the <b>segment inflow</b> is loaded into the simulation. The incident and CO₂
+              Only the <b>segment inflow</b> is loaded into the simulation, on each carriageway the
+              Carriageway control at the top shows. The incident and CO₂
               figures are the conditions forecast for that day — place incidents yourself to test a
               response. The simulation&apos;s own CO₂ rate covers one 280 m stretch and is not
               comparable to the corridor-wide tonnage.

@@ -5969,6 +5969,11 @@ details[open] > .evidence-summary .evidence-close-label { display: inline; }
 .sandbox-main.is-expanded .sandbox-canvas {
   flex: 1 1 auto;
   min-height: 0;
+  /* The docked rule above caps the canvas at 460px so the card can end level
+     with the control rail. That cap has the same specificity as this rule and
+     nothing here unset it, so full screen stopped at 460px too and left the
+     legend bar floating halfway up an empty page. */
+  max-height: none;
   width: 100%;
   height: auto;
   margin: 0;
@@ -6189,8 +6194,7 @@ body:has(.sandbox-main.is-expanded) {
 .sandbox-view-buttons button.active { background: var(--brand-primary); color: #fff; box-shadow: var(--shadow-sm); }
 
 /* Full screen forces its own dark overlay regardless of the page theme (see .sandbox-main.is-expanded
-   above), so this reuses the same fixed dark-overlay palette the rest of the full-screen bar already
-   has (.sandbox-fs-bar .btn-muted.active), rather than the light-mode-only tokens above. */
+   above), rather than the light-mode-only tokens above. */
 .sandbox-main.is-expanded .sandbox-view-seg {
   flex: 0 0 auto;
   margin: 0;
@@ -6327,11 +6331,10 @@ body:has(.sandbox-main.is-expanded) {
 }
 .sandbox-scn-skipwarn b { color: var(--color-warning); }
 
-/* Both mode: before/after placeholder for a carriageway with none yet, the command proposal's target, the full-screen bar's "acting on". */
+/* Both mode: before/after placeholder for a carriageway with none yet, and the command proposal's target. */
 .sandbox-compare-none { margin: 10px 0 0; font-size: 0.78rem; color: var(--text-muted); }
 .sandbox-main.is-expanded .sandbox-compare-none { display: none; }
 .ai-plan-target { display: flex; align-items: center; gap: 6px; margin: 0 0 6px; font-size: 0.78rem; font-weight: 700; }
-.sandbox-fs-dir { display: inline-flex; align-items: center; gap: 6px; }
 
 .sandbox-mini-label {
   display: block;
@@ -6472,25 +6475,6 @@ body:has(.sandbox-main.is-expanded) {
 .sandbox-scn-skip-head { display: flex; align-items: center; gap: 8px; }
 .sandbox-scn-skip-head b { color: var(--text-primary); }
 .sandbox-scn-cancel { margin-left: auto; font-weight: 800; }
-/* In the full-screen bar the toggles sit in an unsized flex row, so `flex: 1`
-   collapsed them to slivers and the closed state was hard to see on the dark
-   background. Give them a real size and a dark-bar palette. */
-.sandbox-fs-bar .sandbox-lane-toggles button {
-  flex: 0 0 auto;
-  min-width: 38px;
-  padding: 5px 10px;
-  background: rgba(255, 255, 255, 0.07);
-  border-color: rgba(255, 255, 255, 0.16);
-  color: #e2e8f0;
-}
-.sandbox-fs-bar .sandbox-lane-toggles button:hover {
-  background: rgba(255, 255, 255, 0.13);
-}
-.sandbox-fs-bar .sandbox-lane-toggles button.closed {
-  background: rgba(220, 38, 38, 0.35);
-  border-color: rgba(252, 165, 165, 0.85);
-  color: #ffffff;
-}
 .sandbox-btn-row { display: flex; gap: 8px; margin-top: 10px; }
 .sandbox-btn-row .btn-primary, .sandbox-btn-row .btn-muted { margin-left: 0; }
 
@@ -6622,20 +6606,8 @@ body:has(.sandbox-main.is-expanded) {
 }
 .sandbox-hour-head b { color: var(--text-primary); font-weight: 700; }
 .sandbox-hour input[type="range"] { width: 100%; margin: 4px 0 2px; }
-.sandbox-hour-note {
-  margin: 0;
-  font-size: 0.7rem;
-  line-height: 1.35;
-  color: var(--text-muted);
-}
 
 /* Confidence run. */
-.sandbox-hour-note.src {
-  margin-top: 4px;
-  padding-top: 4px;
-  border-top: 1px dashed var(--border-default);
-  color: var(--text-secondary);
-}
 
 .sandbox-reps-label {
   display: flex;
@@ -6944,6 +6916,26 @@ body:has(.sandbox-main.is-expanded) {
   flex-shrink: 0;
 }
 
+/* The strip under the page header that holds the two choices that apply to the whole sandbox —
+   which carriageway(s) and which forecast day — laid out like the Traffic and Incident tabs' filter
+   row: pinned under the top bar, groups wrapping at narrow widths. The negative margin cancels
+   .ds-content's 24px padding so the pinned background reaches the page edges. Its controls take
+   their look from traffic.module.css (filterGroup, filterLabel, segmented). */
+.sandbox-page .sandbox-toprow {
+  position: sticky;
+  top: var(--ds-topbar-h, 64px);
+  z-index: 10;
+  flex-shrink: 0;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 24px;
+  margin: 0 -24px 14px;
+  padding: 12px 24px;
+  background: var(--bg-body, #f3f5f9);
+  border-bottom: 1px solid var(--border-default);
+}
+
 .sandbox-forecast {
   border: 1px solid var(--border-default);
   border-radius: var(--radius-lg);
@@ -7141,47 +7133,3 @@ body:has(.sandbox-main.is-expanded) {
 .sandbox-compare-row .d.bad { color: var(--color-danger, #dc2626); }
 .sandbox-main.is-expanded .sandbox-compare { display: none; }
 
-/* Intervention controls carried into the expanded view. */
-.sandbox-fs-bar {
-  flex: 0 0 auto;
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  flex-wrap: wrap;
-  padding: 8px 20px;
-  background: rgba(11, 16, 32, 0.9);
-  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
-}
-.sandbox-fs-bar .k {
-  font-size: 0.74rem;
-  font-weight: 700;
-  letter-spacing: 0.02em;
-  text-transform: uppercase;
-  color: #94a3b8;
-  white-space: nowrap;
-}
-.sandbox-fs-bar .btn-muted {
-  background: rgba(255, 255, 255, 0.07);
-  color: #e2e8f0;
-  border: 1px solid rgba(255, 255, 255, 0.12);
-}
-.sandbox-fs-bar .btn-muted:hover:not(:disabled) { background: rgba(255, 255, 255, 0.13); }
-.sandbox-fs-bar .btn-muted.active {
-  background: rgba(124, 58, 237, 0.35);
-  border-color: rgba(167, 139, 250, 0.8);
-  color: #fff;
-}
-.sandbox-fs-bar .btn-muted:disabled { opacity: 0.45; }
-
-/* Km fields inside the expanded control bar. */
-.sandbox-fs-bar .sandbox-km-input {
-  background: rgba(255, 255, 255, 0.08);
-  border-color: rgba(255, 255, 255, 0.16);
-  color: #f1f5f9;
-  padding: 5px 8px;
-  font-size: 0.8rem;
-}
-.sandbox-fs-bar .sandbox-km-input:focus {
-  border-color: #a78bfa;
-  box-shadow: 0 0 0 3px rgba(167, 139, 250, 0.25);
-}

@@ -5,7 +5,10 @@ import { displayExitName, useNlexExits, type NlexExit } from "../../../lib/nlex-
 import { lanesForSegment, laneSources } from "../../../lib/nlex-lanes";
 import { Car } from "lucide-react";
 import PageHeader from "../../../components/dashboard/PageHeader";
-import ScenarioForecastPanel from "../../../components/dashboard/ScenarioForecastPanel";
+import ScenarioForecastPanel, { useScenarioForecast } from "../../../components/dashboard/ScenarioForecastPanel";
+import ForecastDayPicker from "../../../components/dashboard/ForecastDayPicker";
+import InfoTooltip from "../../../components/dashboard/InfoTooltip";
+import filterStyles from "../traffic/traffic.module.css";
 import {
   TrafficSim, visualLane, replicate,
   type Metrics, type ReplicationResult, type RepStat,
@@ -70,6 +73,12 @@ const CANVAS_PAD = 8;
  *  covers a rail about 650px tall, and past that a band is the right answer —
  *  a two-lane road drawn 300px per lane is a diagram of nothing. */
 const DOCKED_LANE_MAX = 160;
+
+/** The carriageway choice is drawn twice — in the top filter row, and inside the card in full screen
+ *  (which covers that row) — so its wording lives in one place. */
+const viewLabel = (v: "Both" | "NB" | "SB") => (v === "NB" ? "Northbound" : v === "SB" ? "Southbound" : "Both (NB + SB)");
+const viewTitle = (v: "Both" | "NB" | "SB") =>
+  v === "Both" ? "Both carriageways at once, median-separated — the whole road" : v === "NB" ? "Northbound only" : "Southbound only";
 
 /** Below this many pixels a Class 1 car stops reading as a vehicle. */
 const MIN_CAR_PX = 3;
@@ -183,7 +192,10 @@ function dualRoadLayout(opts: {
   );
   const nbRoadH = laneH * lanesNB;
   const sbRoadH = laneH * lanesSB;
-  const sbRoadTop = CANVAS_PAD + rampGutter;
+  // Centre the whole block (ramp gutters, both roads, median) when lanes hit maxLaneH before
+  // the canvas is used up — the single-carriageway roadLayout() does the same.
+  const usedH = rampGutter * 2 + sbRoadH + MEDIAN_GUTTER_PX + nbRoadH;
+  const sbRoadTop = CANVAS_PAD + rampGutter + Math.max(0, (cssH - CANVAS_PAD * 2 - usedH) / 2);
   const medianTop = sbRoadTop + sbRoadH;
   const nbRoadTop = medianTop + MEDIAN_GUTTER_PX;
   return { rampGutter, laneH, nbRoadH, sbRoadH, nbRoadTop, medianTop, sbRoadTop, mToPx };
@@ -385,7 +397,7 @@ export default function AiSandboxPage() {
   const activeDirections: readonly Direction[] = view === "Both" ? ["NB", "SB"] : [view];
   /**
    * The carriageway the few things that can only address ONE road at a time act on, in Both
-   * mode: the Command prompt (the request fields carry no direction), the full-screen bar, the
+   * mode: the Command prompt (the request fields carry no direction), the
    * "Add to" picker in Scenario events, "Load into simulation", and the km-window sliders' primary
    * slot. Everything else in Both mode — tiles, Interventions, Baseline, before/after,
    * recommendations, event lists — shows BOTH carriageways, each named. Clicking a road with a
@@ -1328,6 +1340,21 @@ export default function AiSandboxPage() {
   const baselineSummaryOf = (d: DirectionApi) => (d.baseline ? `${fmt(d.baseline.avgSpeedKmh)} km/h · ${fmt(d.baseline.throughputPerMin)}/min captured` : "not captured");
   const baselineSummary = both ? `NB ${nb.baseline ? "captured" : "not captured"} · SB ${sb.baseline ? "captured" : "not captured"}` : baselineSummaryOf(focused);
 
+  const forecast = useScenarioForecast({
+    onHotspot: (name, km) => {
+      // Only reposition while the operator has not chosen a span of their
+      // own — a suggestion should not overwrite a deliberate choice.
+      if (segFromKm != null || segToKm != null) return;
+      if (km < routeFromKm || km > routeToKm) return;
+      const half = DEFAULT_SEG_M / 2000;
+      const from = Math.max(routeFromKm, Math.min(km - half, routeToKm - DEFAULT_SEG_M / 1000));
+      setSegFromKm(Number(from.toFixed(2)));
+      setSegToKm(Number((from + DEFAULT_SEG_M / 1000).toFixed(2)));
+      setHotspot(name);
+    },
+    onIncidentCoverage: setIncidentCovered,
+  });
+
   return (
     <section className="ds-content sandbox-page">
       <PageHeader
@@ -1336,40 +1363,45 @@ export default function AiSandboxPage() {
         subtitle={`Agent-based what-if simulation · ${originExit ? displayExitName(originExit.exit_name) : ""} → ${destExit ? displayExitName(destExit.exit_name) : ""} · Km ${fromKm.toFixed(2)}–${toKm.toFixed(2)}`}
       />
 
-      {/* Live metric tiles */}
-      {/* The prescriptive seam: the three forecasts choose the conditions this
-          scenario starts from. */}
-      {both && (
-        <div className="sandbox-dir-pick" data-forecast="direction" role="tablist" aria-label="Carriageway the forecast loads into">
-          <span className="k">Load forecast into</span>
-          <div className="sandbox-dir-seg">
-            {activeDirections.map((dn) => (
-              <button key={dn} role="tab" aria-selected={focusDirection === dn} className={`dir-${dn}${focusDirection === dn ? " active" : ""}`} onClick={() => chooseFocus(dn)}>
-                {DIRECTION_NAME[dn]}
+      {/* The two choices that apply to the whole sandbox — which carriageway(s), and which forecast day —
+          in one strip under the header, the way the Traffic and Incident tabs hold their Range. Full
+          screen covers this strip, so the card carries its own copy of the Carriageway choice there. */}
+      <div className="sandbox-toprow">
+        <div className={filterStyles.filterGroup}>
+          <svg width="15" height="15" viewBox="0 0 16 16" fill="none" style={{ color: "var(--text-muted)" }} aria-hidden="true"><path d="M4 14 6 2M12 14 10 2" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" /><path d="M8 3v1.5M8 7v2M8 11.5V13" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" /></svg>
+          <span className={filterStyles.filterLabel}>Carriageway</span>
+          <div className={filterStyles.segmented} role="tablist" aria-label="Carriageway view">
+            {(["Both", "NB", "SB"] as const).map((v) => (
+              <button key={v} role="tab" aria-selected={view === v} className={view === v ? "active" : ""} onClick={() => setView(v)} title={viewTitle(v)}>
+                {view === v && <svg width="12" height="12" viewBox="0 0 16 16" fill="none" style={{ marginRight: 4, marginBottom: -1 }}><path d="M3.5 8.5l3 3 6-7" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" /></svg>}
+                {viewLabel(v)}
               </button>
             ))}
           </div>
         </div>
-      )}
+        <div className={filterStyles.filterGroup}>
+          <span className={filterStyles.filterLabel}>Forecast day</span>
+          <ForecastDayPicker
+            value={forecast.date}
+            dates={forecast.data?.availableDates ?? []}
+            coverageEnd={forecast.data?.incidents.coverageEnd ?? null}
+            onChange={forecast.selectDay}
+            disabled={!forecast.data}
+          />
+        </div>
+      </div>
+
+      {/* The prescriptive seam: the three forecasts choose the conditions this
+          scenario starts from. */}
       <ScenarioForecastPanel
+        forecast={forecast}
         onApplyInflow={(v, day) => {
-          // The forecast is one corridor prediction, not one per carriageway (D2 §3): applies to
-          // whichever direction is focused (Both mode) or the only one there is otherwise.
-          focused.setInflow(v);
+          // The forecast is one segment-level prediction, not one per carriageway (D2 §3), so it
+          // seeds every carriageway the Carriageway control shows: the one road in NB / SB, both in
+          // Both. Each road's own Inflow slider still moves it afterwards.
+          activeDirections.forEach((dn) => byDirection[dn].setInflow(v));
           setForecastDay(day);
         }}
-        onHotspot={(name, km) => {
-          // Only reposition while the operator has not chosen a span of their
-          // own — a suggestion should not overwrite a deliberate choice.
-          if (segFromKm != null || segToKm != null) return;
-          if (km < routeFromKm || km > routeToKm) return;
-          const half = DEFAULT_SEG_M / 2000;
-          const from = Math.max(routeFromKm, Math.min(km - half, routeToKm - DEFAULT_SEG_M / 1000));
-          setSegFromKm(Number(from.toFixed(2)));
-          setSegToKm(Number((from + DEFAULT_SEG_M / 1000).toFixed(2)));
-          setHotspot(name);
-        }}
-        onIncidentCoverage={setIncidentCovered}
       />
 
       {/* Metric tiles. NB-only/SB-only: one tile per metric, exactly as always. Both mode: the corridor
@@ -1495,27 +1527,27 @@ export default function AiSandboxPage() {
             </div>
           </div>
 
-          {/* The PRIMARY control on this card, not a peer of the speed buttons above: with the old
-              swap button gone, this is the only place a carriageway is chosen at all, and in Both
-              mode the road below draws exactly what it says (two carriageways, one median) — it
-              needs to read as the thing that decides that, at a glance, in a screenshot. */}
-          <div className="sandbox-view-seg" role="tablist" aria-label="Carriageway view">
-            <span className="k">Carriageway</span>
-            <div className="sandbox-view-buttons">
-              {(["Both", "NB", "SB"] as const).map((v) => (
-                <button
-                  key={v}
-                  role="tab"
-                  aria-selected={view === v}
-                  className={view === v ? "active" : ""}
-                  onClick={() => setView(v)}
-                  title={v === "Both" ? "Both carriageways at once, median-separated — the whole road" : v === "NB" ? "Northbound only" : "Southbound only"}
-                >
-                  {v === "NB" ? "Northbound" : v === "SB" ? "Southbound" : "Both (NB + SB)"}
-                </button>
-              ))}
+          {/* Docked, the Carriageway choice is the strip under the page header. Full screen covers
+              that strip, so the same choice is drawn here, on the card, while it is open. */}
+          {expanded && (
+            <div className="sandbox-view-seg" role="tablist" aria-label="Carriageway view, full screen">
+              <span className="k">Carriageway</span>
+              <div className="sandbox-view-buttons">
+                {(["Both", "NB", "SB"] as const).map((v) => (
+                  <button
+                    key={v}
+                    role="tab"
+                    aria-selected={view === v}
+                    className={view === v ? "active" : ""}
+                    onClick={() => setView(v)}
+                    title={viewTitle(v)}
+                  >
+                    {viewLabel(v)}
+                  </button>
+                ))}
+              </div>
             </div>
-          </div>
+          )}
           {both && placeNote !== null && !expanded && (
             <p className="sandbox-place-hint" data-place-note>
               {placeNote}
@@ -1525,88 +1557,10 @@ export default function AiSandboxPage() {
             <p className="sandbox-live-note">
               Both carriageways run together, median-separated, lane 1 against the median on each
               side. Every control, event and readout below belongs to one carriageway and says which.
-              The few things that can address only one road at a time — the Command prompt, the Add-event
-              picker, loading a forecast and the full-screen bar — each carry their own NB / SB choice;
+              The few things that can address only one road at a time — the Command prompt and the
+              Add-event picker — each carry their own NB / SB choice;
               with a placing tool armed, clicking a lane on either road changes that road.
             </p>
-          )}
-
-          {/* Full screen hides the controls panel, so the road could be studied
-              but not acted on — an operator had to leave the view to place the
-              closure they were looking at. The controls that matter while
-              watching the road come with it. Full-screen controls act on the
-              FOCUSED direction, same as the docked ones (see the note above). */}
-          {expanded && (
-            <div className="sandbox-fs-bar">
-              {both && (
-                <span className="sandbox-fs-dir" data-fs-dir={focusDirection}>
-                  <span className="k">Acting on</span>
-                  <div className="sandbox-dir-seg" role="tablist" aria-label="Carriageway the full-screen controls act on">
-                    {activeDirections.map((dn) => (
-                      <button key={dn} role="tab" aria-selected={focusDirection === dn} className={`dir-${dn}${focusDirection === dn ? " active" : ""}`} data-fs-dir-option={dn} onClick={() => chooseFocus(dn)}>
-                        {DIRECTION_NAME[dn]}
-                      </button>
-                    ))}
-                  </div>
-                </span>
-              )}
-              <span className="k">Close lane</span>
-              <div className="sandbox-lane-toggles">
-                {Array.from({ length: focused.laneCount }, (_, i) => (
-                  <button
-                    key={i}
-                    className={focused.closedLanes[i] || focused.lockedLanes[i] ? "closed" : ""}
-                    onClick={() => focused.toggleLane(i)}
-                    disabled={focused.lockedLanes[i]}
-                    title={focused.lockedLanes[i] && focused.owners.closure ? `Driven by: ${describeOwner(focused.owners.closure)}` : undefined}
-                  >
-                    L{i + 1}
-                  </button>
-                ))}
-              </div>
-
-              <span className="k">Closed Km</span>
-              <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                <div style={{ width: 84 }}>
-                  <KmInput value={focused.shownClosureFromKm} min={fromKm} max={toKm} onCommit={focused.commitClosureStart} disabled={focused.owners.closure !== null} />
-                </div>
-                <span className="k" style={{ opacity: 0.7 }}>to</span>
-                <div style={{ width: 84 }}>
-                  <KmInput
-                    value={focused.shownClosureToKm}
-                    min={fromKm}
-                    max={toKm}
-                    onCommit={focused.commitClosureEnd}
-                    disabled={focused.owners.closure !== null}
-                  />
-                </div>
-                <span className="k" style={{ opacity: 0.7 }}>
-                  {Math.round((focused.shownClosureToKm - focused.shownClosureFromKm) * 1000)} m
-                </span>
-              </div>
-              {focused.owners.closure && (
-                <span className="k" style={{ opacity: 0.85 }}>Driven by: {describeOwner(focused.owners.closure)}</span>
-              )}
-
-              <button
-                className={`btn-muted ${focused.placingClosure ? "active" : ""}`}
-                disabled={focused.owners.closure !== null}
-                onClick={() => armPlacing(focusDirection, "closure")}
-              >
-                {focused.placingClosure ? (focused.closureDraftKm == null ? "Click start…" : "Click end…") : "Set closed stretch"}
-              </button>
-              <button
-                className={`btn-muted ${focused.placingIncident ? "active" : ""}`}
-                onClick={() => armPlacing(focusDirection, "incident")}
-              >
-                {focused.placingIncident ? "Click a lane…" : "Drop incident"}
-              </button>
-              <button className="btn-muted" onClick={focused.clearIncidents} disabled={focused.incidentCount === 0}>
-                Clear ({focused.incidentCount})
-              </button>
-              <ClosureHint placing={focused.placingClosure} draftKm={focused.closureDraftKm} anyClosed={focused.closedLanes.some(Boolean)} laneCount={focused.laneCount} dark />
-              {both && placeNote !== null && <span className="k" style={{ textTransform: "none", letterSpacing: 0, color: "#fcd34d" }}>{placeNote}</span>}
-            </div>
           )}
 
           {/* A floor, not a fixed height. This was pinned to the lane count so
@@ -1782,11 +1736,29 @@ export default function AiSandboxPage() {
               simulation runs at what that hour actually carries — volume and
               fleet mix both. It is also the question they actually have: not
               "what happens at 4,500 veh/h" but "which hour is cheapest to
-              close this lane". */}
+              close this lane".
+              What the figures rest on — the measured days, the peak, and where
+              the inflow number came from — sits behind the "i": a wrong basis
+              (an on-ramp volume standing in for a through-flow, once) is exactly
+              what that provenance line exists to catch, so it stays one hover
+              away rather than under the slider. */}
           {focused.demand && hourOfDay != null && (
             <div className="sandbox-hour">
               <div className="sandbox-hour-head">
-                <span>Hour of day</span>
+                <span>
+                  Hour of day
+                  <InfoTooltip
+                    text={[
+                      focused.activeHour
+                        ? `${(focused.activeHour.mix[2] * 100 + focused.activeHour.mix[3] * 100).toFixed(0)}% heavy vehicles at this hour.`
+                        : "",
+                      `Measured at ${displayExitName(String(nearestExit?.exit_name ?? ""))} over ${focused.demand.days.toLocaleString()} days; peak ${focused.demand.peakVehPerHour.toLocaleString()} veh/h at ${String(focused.demand.peakHour).padStart(2, "0")}:00, ${focused.demand.peakingFactor.toFixed(2)}× the daily mean.`,
+                      focused.inflowBasis ?? "",
+                    ]
+                      .filter(Boolean)
+                      .join(" ")}
+                  />
+                </span>
                 <b>
                   {String(hourOfDay).padStart(2, "0")}:00 &middot;{" "}
                   {focused.activeHour?.vehPerHour.toLocaleString()} veh/h
@@ -1802,26 +1774,22 @@ export default function AiSandboxPage() {
                 onChange={(e) => setHourOfDay(Number(e.target.value))}
                 aria-label="Hour of day"
               />
-              <p className="sandbox-hour-note">
-                {focused.activeHour
-                  ? `${(focused.activeHour.mix[2] * 100 + focused.activeHour.mix[3] * 100).toFixed(0)}% heavy vehicles at this hour. `
-                  : ""}
-                Measured at {displayExitName(String(nearestExit?.exit_name ?? ""))} over {focused.demand.days.toLocaleString()} days;
-                peak {focused.demand.peakVehPerHour.toLocaleString()} veh/h at{" "}
-                {String(focused.demand.peakHour).padStart(2, "0")}:00, {focused.demand.peakingFactor.toFixed(2)}&times; the daily mean.
-              </p>
-              {/* Where the inflow figure came from. The panel used to show a
-                  number with no basis, and the basis turned out to be wrong —
-                  an on-ramp volume standing in for a through-flow — which is
-                  precisely the kind of error a visible provenance line catches
-                  before it reaches a recommendation. */}
-              {focused.inflowBasis && <p className="sandbox-hour-note src">{focused.inflowBasis}</p>}
             </div>
           )}
 
           <div className="sandbox-slider-group">
             <div className="sandbox-slider-header">
-              <span className="sandbox-slider-label">{view === "Both" ? `Inflow (${focusDirection})` : "Inflow"}</span>
+              <InfoLabel
+                info={
+                  forecastDay
+                    ? `Loaded from the forecast for ${new Date(`${forecastDay}T00:00:00`).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}.`
+                    : focused.dataAnchor
+                      ? `Observed NLEX peak ≈ ${fmt(focused.dataAnchor)} veh/hr.`
+                      : "Vehicle entry rate."
+                }
+              >
+                {view === "Both" ? `Inflow (${focusDirection})` : "Inflow"}
+              </InfoLabel>
               <span className="sandbox-slider-value" style={{ color: "var(--brand-primary)" }}>{fmt(focused.inflow)} veh/hr</span>
             </div>
             <input
@@ -1834,13 +1802,6 @@ export default function AiSandboxPage() {
               className="sandbox-range inflow"
               style={{ "--range-pct": `${((focused.inflow - 1000) / 7000) * 100}%` } as React.CSSProperties}
             />
-            <span className="sandbox-slider-hint">
-              {forecastDay
-                ? `Forecast for ${new Date(`${forecastDay}T00:00:00`).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}`
-                : focused.dataAnchor
-                  ? `Observed NLEX peak ≈ ${fmt(focused.dataAnchor)} veh/hr`
-                  : "Vehicle entry rate"}
-            </span>
           </div>
           {/* Both mode: the OTHER direction's inflow, right below the focused one's — D2.3's "show
               both inflow sliders in Both mode". Switching focus (the NB/SB tabs above the canvas)
@@ -1973,24 +1934,22 @@ export default function AiSandboxPage() {
               operator scanning the Corridor section for "which way" should still find an answer. */}
           <div className="sandbox-slider-group">
             <div className="sandbox-slider-header">
-              <span className="sandbox-slider-label">Carriageway</span>
+              <InfoLabel info="NLEX runs Balintawak (Km 0) north to Sta. Ines. Choose the carriageway with the Carriageway control at the top of the page. The km axis is fixed — Km 0 is always on-screen-left — and it is the TRAFFIC that runs right to left when southbound; each direction's inflow anchors to its own observed volume, independently. Both mode draws the two carriageways stacked with a median between them, Southbound above and Northbound below, sharing this one axis — lane 1 sits against the median on both sides.">
+                Carriageway
+              </InfoLabel>
               <span className="sandbox-slider-value" style={{ color: "#0ea5e9" }}>
                 {view === "Both" ? `Both (focused: ${focusDirection === "NB" ? "Northbound" : "Southbound"})` : focusDirection === "NB" ? "Northbound" : "Southbound"}
               </span>
             </div>
-            <span className="sandbox-slider-hint">
-              NLEX runs Balintawak (Km 0) north to Sta. Ines. Use the Carriageway control above the
-              road to choose. The km axis is fixed — Km 0 is always on-screen-left — and it is the
-              TRAFFIC that runs right to left when southbound; each direction&apos;s inflow anchors to
-              its own observed volume, independently. Both mode draws the two carriageways stacked
-              with a median between them, NB above and SB below, sharing this one axis — lane 1 sits
-              against the median on both sides.
-            </span>
           </div>
 
           <div className="sandbox-slider-group">
             <div className="sandbox-slider-header">
-              <span className="sandbox-slider-label">Segment</span>
+              <InfoLabel
+                info={`Route runs Km ${routeFromKm.toFixed(2)}–${routeToKm.toFixed(2)}.${nearestExit ? ` Nearest exit: ${displayExitName(nearestExit.exit_name)}.` : ""} Changing the segment resets the run.`}
+              >
+                Segment
+              </InfoLabel>
               <span className="sandbox-slider-value" style={{ color: "#7c3aed" }}>
                 {(segLengthM / 1000).toFixed(2)} km
               </span>
@@ -2017,26 +1976,38 @@ export default function AiSandboxPage() {
                 />
               </label>
             </div>
-            <span className="sandbox-slider-hint">
-              {hotspot
-                ? incidentCovered
-                  ? `Opened at ${hotspot} — the highest incident risk on this route for the selected day. `
-                  : `Opened at ${hotspot}, chosen on an earlier forecast day — the selected day has no incident forecast yet. `
-                : ""}
-              {`Route runs Km ${routeFromKm.toFixed(2)}–${routeToKm.toFixed(2)}.`}
-              {tooFineToDraw
-                ? ` At ${(segLengthM / 1000).toFixed(2)} km a car is ${carPx.toFixed(1)} px wide, so the road switches to a density view — colour is mean speed, green running to red stopped. Narrow to roughly ${(maxLegibleM / 1000).toFixed(1)} km or less to see individual vehicles.`
-                : spanCapped
-                  ? ` Drawing is capped at ${(MAX_SEG_M / 1000).toFixed(1)} km. Narrow the range to study a longer route in parts.`
-                  : nearestExit
-                    ? ` Nearest exit: ${displayExitName(nearestExit.exit_name)}. Changing the segment resets the run.`
-                    : " Changing the segment resets the run."}
-            </span>
+            {/* Only what is true of THIS view right now stays under the field — where the window opened,
+                and why the road has switched to a density view or been capped. The static explanation
+                (route, nearest exit, that a change resets the run) is behind the "i". */}
+            {(hotspot || tooFineToDraw || spanCapped) && (
+              <span className="sandbox-slider-hint">
+                {hotspot
+                  ? incidentCovered
+                    ? `Opened at ${hotspot} — the highest incident risk on this route for the selected day. `
+                    : `Opened at ${hotspot}, chosen on an earlier forecast day — the selected day has no incident forecast yet. `
+                  : ""}
+                {tooFineToDraw
+                  ? `At ${(segLengthM / 1000).toFixed(2)} km a car is ${carPx.toFixed(1)} px wide, so the road switches to a density view — colour is mean speed, green running to red stopped. Narrow to roughly ${(maxLegibleM / 1000).toFixed(1)} km or less to see individual vehicles.`
+                  : spanCapped
+                    ? `Drawing is capped at ${(MAX_SEG_M / 1000).toFixed(1)} km. Narrow the range to study a longer route in parts.`
+                    : ""}
+              </span>
+            )}
           </div>
 
           <div className="sandbox-slider-group">
             <div className="sandbox-slider-header">
-              <span className="sandbox-slider-label">{view === "Both" ? `Lanes (${focusDirection})` : "Lanes"}</span>
+              <InfoLabel
+                info={
+                  segmentLanes == null
+                    ? "No verified lane count for this segment — set it manually. Changing lanes resets the run."
+                    : laneOverridden
+                      ? `Overriding the corridor: ${displayExitName(originExit?.exit_name ?? "")} → ${displayExitName(destExit?.exit_name ?? "")} is ${segmentLanes} lanes. Changing lanes resets the run.`
+                      : `Matches the corridor between ${displayExitName(originExit?.exit_name ?? "")} and ${displayExitName(destExit?.exit_name ?? "")}${laneProvenance.length ? ` · ${laneProvenance.join(", ")}` : ""}. Changing lanes resets the run.`
+                }
+              >
+                {view === "Both" ? `Lanes (${focusDirection})` : "Lanes"}
+              </InfoLabel>
               <span className="sandbox-slider-value" style={{ color: laneOverridden ? "#b45309" : "#16a34a" }}>
                 {focused.laneCount}
               </span>
@@ -2051,13 +2022,6 @@ export default function AiSandboxPage() {
               className="sandbox-range lanes"
               style={{ "--range-pct": laneSliderPct(focused.laneCount) } as React.CSSProperties}
             />
-            <span className="sandbox-slider-hint">
-              {segmentLanes == null
-                ? "No verified lane count for this segment — set it manually. Changing lanes resets the run."
-                : laneOverridden
-                  ? `Overriding the corridor: ${displayExitName(originExit?.exit_name ?? "")} → ${displayExitName(destExit?.exit_name ?? "")} is ${segmentLanes} lanes. Changing lanes resets the run.`
-                  : `Matches the corridor between ${displayExitName(originExit?.exit_name ?? "")} and ${displayExitName(destExit?.exit_name ?? "")}${laneProvenance.length ? ` · ${laneProvenance.join(", ")}` : ""}. Changing lanes resets the run.`}
-            </span>
           </div>
           {/* Both mode: the other direction's own lane count, independently adjustable — D2.4's "per-direction lane count, defaulting to the same value" (both start from segmentLanes; either can diverge from here). */}
           {view === "Both" && (
@@ -2137,6 +2101,7 @@ export default function AiSandboxPage() {
               data={{ NB: scenarioDataFor("NB"), SB: scenarioDataFor("SB") }}
               fromKm={fromKm}
               toKm={toKm}
+              clockStartMin={(hourOfDay ?? focused.demand?.peakHour ?? 8) * 60}
             />
           </RailSection>
 
@@ -2444,15 +2409,12 @@ function ZipperControl({
   return (
     <div className="sandbox-slider-group sandbox-zipper" data-zipper={state === null ? "off" : `${state.toward}+${state.lanes}`}>
       <div className="sandbox-slider-header">
-        <span className="sandbox-slider-label">{REALLOCATION_NAME}</span>
+        <InfoLabel info={REALLOCATION_INFO}>{REALLOCATION_NAME}</InfoLabel>
         <span className="sandbox-slider-value" style={{ color: state === null ? "var(--text-muted)" : "#ca8a04" }}>
           {state === null ? "off" : `${state.toward} +${state.lanes}`}
         </span>
       </div>
       <div className="sandbox-realloc-km" data-zipper-stretch>
-        <span className="sandbox-slider-hint" style={{ display: "block", marginBottom: 3 }}>
-          Which stretch does the barrier move over? Usually about a kilometre, not the whole corridor.
-        </span>
         <div className="sandbox-realloc-km-row">
           <label>
             <span className="sandbox-slider-hint" style={{ display: "block", marginBottom: 3 }}>From km</span>
@@ -2492,20 +2454,13 @@ function ZipperControl({
           );
         })}
       </div>
-      <span className="sandbox-slider-hint" data-zipper-note="model">
-        Lanes are reassigned between carriageways; vehicles do not cross the median.
-      </span>
-      <span className="sandbox-slider-hint" data-zipper-note="state">
-        {state === null
-          ? "One carriageway gains 1 or 2 lanes and the other loses the same, over the stretch above."
-          : `Km ${stretch.fromKm.toFixed(2)}–${stretch.toKm.toFixed(2)}: NB ${counts.NB} lanes · SB ${counts.SB} lanes (was ${state.base.NB} + ${state.base.SB}). ${state.toward}'s lane 1 is the reallocated lane, against the barrier. Changing either Lanes slider ends it.`}
-      </span>
-      <span className="sandbox-slider-hint" data-zipper-note="stretch">
-        The sandbox simulates only this stretch (100 m to 3 km) and reallocates the lanes along all of it; the road either side is not simulated.
-      </span>
-      <span className="sandbox-slider-hint" data-zipper-note="restart">
-        Changing it restarts BOTH carriageways: clocks, baselines, and hand-set closures, speed limits and incidents are cleared. Scenario events stay and replay from their start. The simulated window becomes the stretch (Off puts it back).
-      </span>
+      {/* What is true right now stays visible while the scheme is on; what the control IS and what a change
+          restarts is behind the "i". */}
+      {state !== null && (
+        <span className="sandbox-slider-hint" data-zipper-note="state">
+          {`Km ${stretch.fromKm.toFixed(2)}–${stretch.toKm.toFixed(2)}: NB ${counts.NB} lanes · SB ${counts.SB} lanes (was ${state.base.NB} + ${state.base.SB}). ${state.toward}'s lane 1 is the reallocated lane, against the barrier. Changing either Lanes slider ends it.`}
+        </span>
+      )}
     </div>
   );
 }
@@ -3028,19 +2983,36 @@ function kmTickStep(spanKm: number): number {
   return 10;
 }
 
+/** A slider's label with its "i": the explanation lives in the popup, not in a paragraph under the control.
+ *  What is true of the view right now (a warning, an error) still belongs inline, next to the field. */
+function InfoLabel({ info, children }: { info: string; children: React.ReactNode }) {
+  return (
+    <span className="sandbox-slider-label" style={{ display: "inline-flex", alignItems: "center" }}>
+      {children}
+      <InfoTooltip text={info} />
+    </span>
+  );
+}
+
+/** What the lane-reallocation control is, over which stretch, and what changing it restarts. */
+const REALLOCATION_INFO = [
+  "Lanes are reassigned between carriageways; vehicles do not cross the median.",
+  "One carriageway gains 1 or 2 lanes and the other loses the same, over the stretch you give — usually about a kilometre, not the whole corridor.",
+  "The sandbox simulates only this stretch (100 m to 3 km) and reallocates the lanes along all of it; the road either side is not simulated.",
+  "Changing it restarts BOTH carriageways: clocks, baselines, and hand-set closures, speed limits and incidents are cleared. Scenario events stay and replay from their start. The simulated window becomes the stretch (Off puts it back).",
+].join(" ");
+
 /** Tells the operator the one step a closure needs that the controls don't show. */
 function ClosureHint({
   placing,
   draftKm,
   anyClosed,
   laneCount,
-  dark,
 }: {
   placing: boolean;
   draftKm: number | null;
   anyClosed: boolean;
   laneCount: number;
-  dark?: boolean;
 }) {
   const text = placing
     ? draftKm == null
@@ -3054,15 +3026,9 @@ function ClosureHint({
    *
    * Both of these are guidance — "click the road where the closure starts",
    * "pick a lane for the closure to apply to". Rendered in the danger colour
-   * they read as a failure the operator has already caused, and the full
-   * screen bar showed one permanently, so the panel looked broken at rest. */
-  return dark ? (
-    <span className="k" style={{ textTransform: "none", letterSpacing: 0, color: "#fcd34d" }}>
-      {text}
-    </span>
-  ) : (
-    <p className="sandbox-place-hint">{text}</p>
-  );
+   * they read as a failure the operator has already caused, and one of them
+   * is showing whenever no lane is closed, so the panel looked broken at rest. */
+  return <p className="sandbox-place-hint">{text}</p>;
 }
 
 /** What render() needs to draw scenario events. */

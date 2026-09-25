@@ -111,6 +111,12 @@ type Props = {
   data: Readonly<Record<Direction, DirectionScenarioData>>;
   fromKm: number;
   toKm: number;
+  /**
+   * The time of day, in minutes since midnight, at which the scenario clock reads zero — the top of the
+   * hour chosen in Hour of day, since the road is simulated at that hour's flow. Events are stored as minutes
+   * after warm-up (the engine's clock); this is what lets the form and the list speak in time of day.
+   */
+  clockStartMin: number;
 };
 
 type DurationChoice = "sampled" | "p50" | "p90" | "manual";
@@ -148,6 +154,60 @@ function variantFor(family: FamilyKey, vehicle: VehicleKind, cause: BreakdownCau
 
 function hasLane(family: FamilyKey): boolean {
   return family !== "breakdown_shoulder" && family !== "rain";
+}
+
+/** Minutes since midnight as HH:MM. Past midnight it wraps and says so ("00:20 next day"). */
+function clockLabel(totalMin: number): string {
+  const m = Math.round(totalMin);
+  const day = Math.floor(m / 1440);
+  const inDay = ((m % 1440) + 1440) % 1440;
+  const hh = String(Math.floor(inDay / 60)).padStart(2, "0");
+  const mm = String(inDay % 60).padStart(2, "0");
+  return `${hh}:${mm}${day > 0 ? " next day" : ""}`;
+}
+
+/**
+ * A time-of-day box (HH:MM, 24-hour value) that commits on blur or Enter, like NumberField, so a half-typed
+ * time is never acted on. It speaks in minutes since midnight and clamps to [minMin, maxMin]: the run only
+ * goes forward from the top of the selected hour, and one day has no times past 23:59.
+ */
+function TimeField({
+  valueMin,
+  minMin,
+  maxMin,
+  onCommit,
+  scn,
+}: {
+  valueMin: number;
+  minMin: number;
+  maxMin: number;
+  onCommit: (totalMin: number) => void;
+  scn: string;
+}) {
+  const [draft, setDraft] = useState<string | null>(null);
+  const rounded = Math.round(valueMin);
+  const shown = `${String(Math.floor(rounded / 60) % 24).padStart(2, "0")}:${String(rounded % 60).padStart(2, "0")}`;
+  const commit = () => {
+    if (draft === null) return;
+    const m = /^(\d{1,2}):(\d{2})$/.exec(draft);
+    setDraft(null);
+    if (m) onCommit(Math.min(maxMin, Math.max(minMin, Number(m[1]) * 60 + Number(m[2]))));
+  };
+  return (
+    <input
+      type="time"
+      className="sandbox-km-input"
+      step={60}
+      data-scn={scn}
+      value={draft ?? shown}
+      onChange={(e) => setDraft(e.target.value)}
+      onBlur={commit}
+      onKeyDown={(e) => {
+        if (e.key === "Enter") commit();
+        else if (e.key === "Escape") setDraft(null);
+      }}
+    />
+  );
 }
 
 /** A number box that commits on blur or Enter, so a half-typed value is never acted on. */
@@ -320,11 +380,14 @@ function EventRow({
   nowS,
   onRemove,
   showDirection,
+  clockStartMin,
 }: {
   event: ScenarioEvent;
   owners: Ownership;
   nowS: number;
   onRemove: () => void;
+  /** Time of day at which the scenario clock reads zero, so the row can say when the event starts on the clock. */
+  clockStartMin: number;
   /** Both mode: name the carriageway on the row itself, not only on the group it sits in. */
   showDirection: boolean;
 }) {
@@ -347,7 +410,7 @@ function EventRow({
       : event.lane === null
         ? "Shoulder"
         : `Lane ${event.lane}`;
-  const where = `${place} · Km ${event.positionKm.toFixed(2)} · starts +${Number((event.startS / 60).toFixed(1))} min`;
+  const where = `${place} · Km ${event.positionKm.toFixed(2)} · starts ${clockLabel(clockStartMin + event.startS / 60)}`;
   return (
     <div className={`sandbox-scn-event${invalid ? " is-invalid" : ""}`} data-scn-event={event.id}>
       <div className="sandbox-scn-event-head">
@@ -389,7 +452,7 @@ const DEFAULT_START_MIN = 1;
 const DEFAULT_MANUAL_MIN = 30;
 
 export default function ScenarioPanel(props: Props) {
-  const { directions, focus: direction, data, fromKm, toKm } = props;
+  const { directions, focus: direction, data, fromKm, toKm, clockStartMin } = props;
   const both = directions.length > 1;
   // The form reads the FOCUSED carriageway's events, and the verdict is worked out per target carriageway
   // (conflicts and locks are scoped within a direction): its events, its road, its manual closure. Weather and
@@ -639,9 +702,15 @@ export default function ScenarioPanel(props: Props) {
             </select>
           </label>
         )}
-        <label>
-          Start (min after warm-up)
-          <NumberField value={startMin} min={0} max={1440} step={0.5} decimals={1} scn="start" onCommit={setStartMin} />
+        <label title={`The road is simulated at the flow of the hour chosen in Hour of day, so the clock starts at ${clockLabel(clockStartMin)}: an event can start then or later that day.`}>
+          Start (time of day)
+          <TimeField
+            valueMin={clockStartMin + startMin}
+            minMin={clockStartMin}
+            maxMin={1439}
+            scn="start"
+            onCommit={(t) => setStartMin(t - clockStartMin)}
+          />
         </label>
       </div>
       <div className="sandbox-scn-row">
@@ -700,7 +769,7 @@ export default function ScenarioPanel(props: Props) {
       {both
         ? directions.some((d) => data[d].events.length > 0) && (
             <>
-              <span className="sandbox-mini-label">Events · timed from the end of warm-up</span>
+              <span className="sandbox-mini-label">Events · time of day, the clock starts at {clockLabel(clockStartMin)}</span>
               {directions.map((d) => {
                 const dd = data[d];
                 if (dd.events.length === 0) return null;
@@ -714,7 +783,7 @@ export default function ScenarioPanel(props: Props) {
                     </div>
                     <SkipControl data={dd} />
                     {dd.events.map((e) => (
-                      <EventRow key={e.id} event={e} owners={dd.owners} nowS={dd.nowS} onRemove={() => dd.onRemove(e.id)} showDirection />
+                      <EventRow key={e.id} event={e} owners={dd.owners} nowS={dd.nowS} onRemove={() => dd.onRemove(e.id)} showDirection clockStartMin={clockStartMin} />
                     ))}
                   </div>
                 );
@@ -723,10 +792,10 @@ export default function ScenarioPanel(props: Props) {
           )
         : events.length > 0 && (
             <>
-              <span className="sandbox-mini-label">Events · timed from the end of warm-up</span>
+              <span className="sandbox-mini-label">Events · time of day, the clock starts at {clockLabel(clockStartMin)}</span>
               <SkipControl data={target} />
               {events.map((e) => (
-                <EventRow key={e.id} event={e} owners={target.owners} nowS={target.nowS} onRemove={() => target.onRemove(e.id)} showDirection={false} />
+                <EventRow key={e.id} event={e} owners={target.owners} nowS={target.nowS} onRemove={() => target.onRemove(e.id)} showDirection={false} clockStartMin={clockStartMin} />
               ))}
             </>
           )}

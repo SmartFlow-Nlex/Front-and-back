@@ -1,0 +1,30 @@
+import pandas as pd, glob, numpy as np
+src = "D:/OneDrive_2026-09-08/shared files/"
+acc = pd.concat([pd.read_csv(f, dtype=str) for f in sorted(glob.glob(src+"accident_data_*.csv"))], ignore_index=True)
+for c in ["event_start_date","BlockageCleared","SiteCleared"]: acc[c]=pd.to_datetime(acc[c], errors="coerce")
+for c in ["NumberOfInjured","NumberOfFatality","NumberOfVehicles","deployment_count","StartKM"]: acc[c]=pd.to_numeric(acc[c], errors="coerce")
+print("null BlockageCleared %.1f%%  SiteCleared %.1f%%" % (acc.BlockageCleared.isna().mean()*100, acc.SiteCleared.isna().mean()*100))
+acc["blk"]=(acc.BlockageCleared-acc.event_start_date).dt.total_seconds()/60
+acc["site"]=(acc.SiteCleared-acc.event_start_date).dt.total_seconds()/60
+print(acc[["blk","site"]].describe(percentiles=[.5,.75,.9,.95,.99]).round(1).to_string())
+print("neg blk", (acc.blk<0).sum(), "neg site", (acc.site<0).sum(), "blk==0 %.1f%%"%((acc.blk==0).mean()*100), "site==0 %.1f%%"%((acc.site==0).mean()*100))
+print("site<blk", (acc.site<acc.blk).sum())
+ok = acc[(acc.blk>=0)&(acc.blk<=1440)&(acc.EventStatus!="DELETED")].copy()
+print("usable rows", len(ok))
+ok["sev"]=np.where(ok.NumberOfFatality>0,"Fatal",np.where(ok.NumberOfInjured>0,"Injury","Damage-only"))
+print("\nclearance by severity (min)")
+print(ok.groupby("sev")[["blk","site","deployment_count"]].agg(["count","median",lambda s:s.quantile(.9)]).round(1).to_string())
+print("\nclearance by TypeOfEvent")
+print(ok.groupby("TypeOfEvent")[["blk","site"]].agg(["count","median",lambda s:s.quantile(.9)]).round(1).sort_values(("blk","count"),ascending=False).head(12).to_string())
+print("\nby location")
+print(ok.groupby("Location")[["blk","site","deployment_count"]].agg(["count","median"]).round(1).to_string())
+print("\nby weather"); print(ok.groupby("WeatherCondition")[["blk","site"]].agg(["count","median",lambda s:s.quantile(.9)]).round(1).to_string())
+print("\nby detection"); print(ok.groupby("Detection")[["blk","site"]].agg(["count","median",lambda s:s.quantile(.9)]).round(1).to_string())
+ok["hr"]=ok.event_start_date.dt.hour
+ok["band"]=pd.cut(ok.hr,[-1,5,9,15,19,23],labels=["00-05","06-09","10-15","16-19","20-23"])
+print("\nby hour band"); print(ok.groupby("band",observed=True)[["blk","site","deployment_count"]].agg(["count","median",lambda s:s.quantile(.9)]).round(1).to_string())
+print("\ndeployment_count by severity / vehicles")
+print(ok.groupby("sev").deployment_count.describe().round(2).to_string())
+print(ok.groupby(pd.cut(ok.NumberOfVehicles,[0,1,2,3,100])).deployment_count.describe().round(2).to_string())
+print("\ncorrelation deployment_count vs blk:", ok[["deployment_count","blk","NumberOfInjured","NumberOfVehicles"]].corr().round(2).to_string())
+print("\nzero-deployment share by severity"); print(ok.groupby("sev").apply(lambda g:(g.deployment_count==0).mean()*100).round(1))

@@ -4,6 +4,7 @@ import {
   modelNarrative,
   congestionNarrative,
   eventSurgeNarrative,
+  rankingNarrative,
   insightStatus,
   explainFeature,
 } from "../controllers/ai-insight.controller.js";
@@ -21,6 +22,7 @@ router.get("/status", asyncHandler(insightStatus));
 router.post("/model-narrative", asyncHandler(modelNarrative));
 router.post("/congestion-narrative", asyncHandler(congestionNarrative));
 router.post("/event-surge-narrative", asyncHandler(eventSurgeNarrative));
+router.post("/ranking-narrative", asyncHandler(rankingNarrative));
 router.post("/explain", asyncHandler(explainFeature));
 
 export default router;

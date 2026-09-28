@@ -80,6 +80,33 @@ const viewLabel = (v: "Both" | "NB" | "SB") => (v === "NB" ? "Northbound" : v ==
 const viewTitle = (v: "Both" | "NB" | "SB") =>
   v === "Both" ? "Both carriageways at once, median-separated — the whole road" : v === "NB" ? "Northbound only" : "Southbound only";
 
+/**
+ * The live sandbox clock: "Forecast time" picks which hour's conditions the road runs at, but that hour
+ * was a fixed seed that never moved once picked — the road kept running while the displayed time stood
+ * still. This turns `clockStartMin` (the top of that hour) plus the engine's own elapsed scenario time
+ * into a 24h clock that ticks forward exactly when the simulation does (paused when it's paused, faster
+ * under a speed multiplier), in minutes since the same zero point `clockStartMin` in ScenarioPanel event
+ * labels is written against — so "now" and "starts at" are always readable against one shared clock.
+ */
+function liveClockParts(totalMin: number): { hh: string; mm: string; ss: string; dayOffset: number } {
+  const s = Math.round(totalMin * 60);
+  const dayOffset = Math.floor(s / 86400);
+  const inDay = ((s % 86400) + 86400) % 86400;
+  return {
+    hh: String(Math.floor(inDay / 3600)).padStart(2, "0"),
+    mm: String(Math.floor((inDay % 3600) / 60)).padStart(2, "0"),
+    ss: String(inDay % 60).padStart(2, "0"),
+    dayOffset,
+  };
+}
+
+/** ISO date plus a day offset (from a clock that has wrapped past midnight), as "Mon, Jan 5". */
+function liveDateLabel(iso: string, dayOffset: number): string {
+  const d = new Date(`${iso}T00:00:00`);
+  d.setDate(d.getDate() + dayOffset);
+  return d.toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" });
+}
+
 /** Below this many pixels a Class 1 car stops reading as a vehicle. */
 const MIN_CAR_PX = 3;
 /** Length of a Class 1 car, for the legibility estimate. */
@@ -238,7 +265,7 @@ const SIM_DT = 0.05;
 /** Seconds the road is left to fill before its readings mean anything. Scenario events are timed from the end of it. */
 const WARMUP_S = 60;
 
-const SPEED_STEPS = [0.5, 1, 2, 4] as const;
+const SPEED_STEPS = [0.5, 1, 5, 10] as const;
 
 /**
  * A skip's predicted wall time is (simulated seconds / SIM_DT) x the running cost of one sim.step(),
@@ -1418,6 +1445,16 @@ export default function AiSandboxPage() {
   const baselineSummaryOf = (d: DirectionApi) => (d.baseline ? `${fmt(d.baseline.avgSpeedKmh)} km/h · ${fmt(d.baseline.throughputPerMin)}/min captured` : "not captured");
   const baselineSummary = both ? `NB ${nb.baseline ? "captured" : "not captured"} · SB ${sb.baseline ? "captured" : "not captured"}` : baselineSummaryOf(focused);
 
+  /* The top of the picked "Forecast time" hour, in minutes since midnight — the zero point both the live
+   * clock below and every scenario event's "starts HH:MM" label (ScenarioPanel) are written against. NB
+   * and SB share one engine clock (see the render loop's accumulator note), so `focused.scenarioNowS` is
+   * the same instant on either carriageway. */
+  const clockStartMin = (hourOfDay ?? focused.demand?.peakHour ?? 8) * 60;
+  const live = hourOfDay != null ? liveClockParts(clockStartMin + focused.scenarioNowS / 60) : null;
+  const liveClockText = live
+    ? `${forecast.date ? `${liveDateLabel(forecast.date, live.dayOffset)} · ` : ""}${live.hh}:${live.mm}:${live.ss}`
+    : null;
+
   // The metric tiles, once, so full screen can put the same ones inside the card (the row above the grid is
   // covered by it) and the page draws them in their usual place otherwise.
   const metricTiles = (
@@ -1552,8 +1589,10 @@ export default function AiSandboxPage() {
             disabled={!forecast.data}
           />
         </div>
-        {/* The hour of that day. The same shared hour as the Hour of day slider in the rail (one value, two
-            controls), so the road, the forecast tiles and that slider always agree on the time. */}
+        {/* The hour of that day: which hour's demand profile the road is seeded with. The Corridor rail
+            used to carry a second "Hour of day" slider on the same value — removed as a duplicate control
+            now that the simulation clock (next to Play/Pause) shows the live time continuously, ticking
+            forward from the top of this hour as the run plays. */}
         <div className={filterStyles.filterGroup}>
           <span className={filterStyles.filterLabel}>Forecast time</span>
           <select
@@ -1595,6 +1634,15 @@ export default function AiSandboxPage() {
         <article ref={mainCardRef} className={`sandbox-main${expanded ? " is-expanded" : ""}`}>
           <div className="sandbox-head">
             <h2>Traffic Simulation</h2>
+            {liveClockText && (
+              <div
+                className="sandbox-live-clock"
+                title="The simulated date and time of day: the top of the picked Forecast time hour, running forward with the simulation (paused when it's paused, faster at higher speeds)."
+              >
+                <span className="sandbox-live-clock-label">Simulation time</span>
+                <span className="sandbox-live-clock-value">{liveClockText}</span>
+              </div>
+            )}
             <div>
               <div className="sandbox-speed-seg">
                 {SPEED_STEPS.map((s) => (
@@ -1640,9 +1688,6 @@ export default function AiSandboxPage() {
               </div>
             </div>
           )}
-          {/* Full screen is the road and its analytics and nothing else: the tiles the page draws above the
-              grid are covered by the card, so the same ones are drawn here. */}
-          {expanded && metricTiles}
           {both && placeNote !== null && !expanded && (
             <p className="sandbox-place-hint" data-place-note>
               {placeNote}
@@ -1830,54 +1875,6 @@ export default function AiSandboxPage() {
               </select>
             </label>
           </div>
-          {/* Hour of day.
-              The inflow used to be a daily mean times an assumed peaking
-              factor of 1.6, a number nobody had checked. The warehouse holds
-              the measured 24-hour shape, so the operator picks an HOUR and the
-              simulation runs at what that hour actually carries — volume and
-              fleet mix both. It is also the question they actually have: not
-              "what happens at 4,500 veh/h" but "which hour is cheapest to
-              close this lane".
-              What the figures rest on — the measured days, the peak, and where
-              the inflow number came from — sits behind the "i": a wrong basis
-              (an on-ramp volume standing in for a through-flow, once) is exactly
-              what that provenance line exists to catch, so it stays one hover
-              away rather than under the slider. */}
-          {focused.demand && hourOfDay != null && (
-            <div className="sandbox-hour">
-              <div className="sandbox-hour-head">
-                <span>
-                  Hour of day
-                  <InfoTooltip
-                    text={[
-                      focused.activeHour
-                        ? `${(focused.activeHour.mix[2] * 100 + focused.activeHour.mix[3] * 100).toFixed(0)}% heavy vehicles at this hour.`
-                        : "",
-                      `Measured at ${displayExitName(String(nearestExit?.exit_name ?? ""))} over ${focused.demand.days.toLocaleString()} days; peak ${focused.demand.peakVehPerHour.toLocaleString()} veh/h at ${String(focused.demand.peakHour).padStart(2, "0")}:00, ${focused.demand.peakingFactor.toFixed(2)}× the daily mean.`,
-                      focused.inflowBasis ?? "",
-                    ]
-                      .filter(Boolean)
-                      .join(" ")}
-                  />
-                </span>
-                <b>
-                  {String(hourOfDay).padStart(2, "0")}:00 &middot;{" "}
-                  {focused.activeHour?.vehPerHour.toLocaleString()} veh/h
-                  {hourOfDay === focused.demand.peakHour ? " · peak" : ""}
-                </b>
-              </div>
-              <input
-                type="range"
-                min={0}
-                max={23}
-                step={1}
-                value={hourOfDay}
-                onChange={(e) => setHourOfDay(Number(e.target.value))}
-                aria-label="Hour of day"
-              />
-            </div>
-          )}
-
           <div className="sandbox-slider-group">
             <div className="sandbox-slider-header">
               <InfoLabel
@@ -2202,7 +2199,7 @@ export default function AiSandboxPage() {
               data={{ NB: scenarioDataFor("NB"), SB: scenarioDataFor("SB") }}
               fromKm={fromKm}
               toKm={toKm}
-              clockStartMin={(hourOfDay ?? focused.demand?.peakHour ?? 8) * 60}
+              clockStartMin={clockStartMin}
             />
           </RailSection>
 
@@ -2633,7 +2630,7 @@ function DirectionPanel({ direction, note, children }: { direction: Direction; n
     <div className={`sandbox-dir-panel dir-${direction}`} data-dir-panel={direction}>
       <div className="sandbox-dir-panel-head">
         <DirectionPill direction={direction} long />
-        {note && <span>{note}</span>}
+        {note && <InfoTooltip text={note} />}
       </div>
       {children}
     </div>
@@ -2660,7 +2657,10 @@ function InterventionControls({
 }) {
   return (
     <>
-      <span className="sandbox-mini-label">Close a lane (traffic must merge out)</span>
+      <span className="sandbox-mini-label">
+        Close a lane (traffic must merge out)
+        <InfoTooltip text="A closure applies to closed lanes only — pick L1 to L4 above to apply it." />
+      </span>
       <div className="sandbox-lane-toggles">
         {Array.from({ length: d.laneCount }, (_, i) => (
           <button
@@ -2727,7 +2727,7 @@ function InterventionControls({
           Clear ({d.incidentCount})
         </button>
       </div>
-      <ClosureHint placing={d.placingClosure} draftKm={d.closureDraftKm} anyClosed={d.closedLanes.some(Boolean)} laneCount={d.laneCount} />
+      <ClosureHint placing={d.placingClosure} draftKm={d.closureDraftKm} />
       {d.placingIncident && (
         <p className="sandbox-place-hint">
           {both
@@ -3040,7 +3040,7 @@ function RailSection({
   onToggle,
   children,
 }: {
-  title: string;
+  title: React.ReactNode;
   summary: string;
   open: boolean;
   onToggle: () => void;
@@ -3216,32 +3216,19 @@ const REALLOCATION_INFO = [
   "Changing it restarts BOTH carriageways: clocks, baselines, and hand-set closures, speed limits and incidents are cleared. Scenario events stay and replay from their start. The simulated window becomes the stretch (Off puts it back).",
 ].join(" ");
 
-/** Tells the operator the one step a closure needs that the controls don't show. */
-function ClosureHint({
-  placing,
-  draftKm,
-  anyClosed,
-  laneCount,
-}: {
-  placing: boolean;
-  draftKm: number | null;
-  anyClosed: boolean;
-  laneCount: number;
-}) {
-  const text = placing
-    ? draftKm == null
-      ? "Click the road where the closure starts · Esc to cancel"
-      : `Starts at Km ${draftKm.toFixed(2)} — now click where it ends · Esc to cancel`
-    : !anyClosed
-      ? `A closure applies to closed lanes only — pick L1–L${laneCount} to apply it`
-      : null;
-  if (!text) return null;
-  /* Amber, not red.
-   *
-   * Both of these are guidance — "click the road where the closure starts",
-   * "pick a lane for the closure to apply to". Rendered in the danger colour
-   * they read as a failure the operator has already caused, and one of them
-   * is showing whenever no lane is closed, so the panel looked broken at rest. */
+/**
+ * Tells the operator the one step of PLACING a closure that the controls don't show —
+ * live, click-by-click guidance, so it stays inline text rather than an "i" tooltip (there
+ * is no natural moment to hover an icon mid-click). The "closures apply to closed lanes
+ * only" reminder that used to live here at rest, before anything was clicked, is reference
+ * material read once, not a live status — it now sits behind the "i" beside "Close a lane"
+ * instead (see InterventionControls), same as every other read-once explainer in this rail.
+ */
+function ClosureHint({ placing, draftKm }: { placing: boolean; draftKm: number | null }) {
+  if (!placing) return null;
+  const text = draftKm == null
+    ? "Click the road where the closure starts · Esc to cancel"
+    : `Starts at Km ${draftKm.toFixed(2)} — now click where it ends · Esc to cancel`;
   return <p className="sandbox-place-hint">{text}</p>;
 }
 
@@ -3602,19 +3589,36 @@ function drawCarriageway(
    * the gap to the vehicle ahead as something to fill produced 101 px cars sitting
    * nose to tail. Only when true scale falls below what the eye can resolve does
    * the sprite grow, and even then it is capped so it cannot overlap its neighbour
-   * or outgrow its lane. The floor is 15 px (it was 10, which left the traffic as
-   * specks on a narrower road view).
+   * or outgrow its lane.
+   *
+   * The floor used to be a flat 15 px, which reads as a speck once laneH grows
+   * past a hundred-odd pixels — the lane got taller to stay legible but the
+   * traffic inside it didn't. Tying the floor to laneH (a car at ~42% of the
+   * lane's own drawn height) makes "big enough to see" track "big enough to
+   * look like it's using its lane" instead of sitting still at 15 px on every
+   * view. laneH*0.9 below is still the hard ceiling, so this only ever pulls
+   * the sprite UP toward it, never past it.
    */
   const MIN_LEN_PX = 15;
+  const LANE_LEN_FRAC = 0.42;
   const trueCarLen = 4.6 * mToPx;
   const perLane = Math.max(1, sim.vehicles.length / Math.max(1, lanes));
   const spacingPx = cssW / perLane;
-  const drawnCarLen = Math.min(
-    Math.max(trueCarLen, MIN_LEN_PX),
-    Math.max(2, spacingPx * 0.9),
-    laneH * 0.9,
-  );
-  const k = drawnCarLen / Math.max(0.01, trueCarLen);
+  const lenFloor = Math.max(MIN_LEN_PX, laneH * LANE_LEN_FRAC);
+  const kFloor = Math.max(trueCarLen, lenFloor) / Math.max(0.01, trueCarLen);
+  /* The anti-overlap and lane-overflow ceilings used to be measured in CAR
+   * lengths, so a floor big enough to make a car look right could still push
+   * the shared k past what a much longer bus or truck (same k, real length up
+   * to 16.5 m) can fit in its own slot. Measuring the ceilings in BUS lengths
+   * (12 m — most of the fleet, short of the rare articulated truck) keeps k
+   * honest for nearly everything sharing the road, at the cost of being a
+   * little more conservative for cars specifically when traffic is dense. */
+  const trueBusLen = 12 * mToPx;
+  const kSpacingCap = Math.max(2, spacingPx * 0.9) / Math.max(0.01, trueBusLen);
+  const kOverflowCap = (laneH * 0.9) / Math.max(0.01, trueBusLen);
+  const k = Math.min(kFloor, kSpacingCap, kOverflowCap);
+  /** A car's own drawn length under that k — the scenario art's reference size for a "hero" vehicle. */
+  const drawnCarLen = trueCarLen * k;
 
   /* Lane identifiers.
    *
@@ -3654,7 +3658,7 @@ function drawCarriageway(
       const len = Math.max(2, v.length * mToPx * k);
       const wid = Math.max(
         2,
-        Math.min(laneH * 0.8, widthM[v.vClass] * mToPx * k * widScale),
+        Math.min(laneH * 0.85, widthM[v.vClass] * mToPx * k * widScale),
       );
       // visualLane, not v.lane: the integer flips the instant MOBIL accepts
       // the move, which drew the change as a one-frame jump across a whole lane.

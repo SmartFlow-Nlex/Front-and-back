@@ -1535,6 +1535,43 @@ check(
   check("effective state: an event the road no longer suits is not listed as running", effectiveState({ closedLanes: [false, false], speedLimitKmh: null }, bad.owners, events, 60, 2).active.every((a) => a.name !== "Multi-vehicle collision #2") && bad.owners.invalid.length >= 1);
 }
 
+// --- extra lanes: the operator can hand-pick exactly which lanes a closure family blocks,
+// replacing the automatic outward-spill guess (blockedLanes()) for that event only
+{
+  // Baseline confirmed just above: multi_vehicle_collision at operator lane 1 with NO extra
+  // lanes blocks lanes 1,2 automatically (outward-spill). Adding extra lane 4 by hand should
+  // give exactly {1,4} instead — not the automatic {1,2}, and not {1,2,4}.
+  const manualEvent = must([], { ...collisionSpec("multi_vehicle_collision", 1, 200, 20, manualMinutes(30)), extraLanes: [4] }, 1).event;
+  check("extra lanes: an operator-chosen set replaces the automatic outward-spill guess", manualEvent.extraLanes.join() === "4");
+  const c = composeInterventions({ ...idle, incidents: [] }, [manualEvent], abs(21), road600);
+  const state = effectiveState({ closedLanes: [false, false, false, false], speedLimitKmh: null }, c.owners, [manualEvent], 21 * 60, 4);
+  check("extra lanes: composeInterventions closes exactly the requested set (lanes 1 and 4), not the automatic 1 and 2", state.closedLanes.join() === "true,false,false,true");
+
+  // An event with no extra lanes is untouched: same outcome as before extraLanes existed.
+  const autoEvent = must([], collisionSpec("multi_vehicle_collision", 1, 200, 20, manualMinutes(30)), 1).event;
+  check("extra lanes: an event with none set still gets the automatic outward-spill guess", autoEvent.extraLanes.length === 0);
+  const autoC = composeInterventions({ ...idle, incidents: [] }, [autoEvent], abs(21), road600);
+  const autoState = effectiveState({ closedLanes: [false, false, false, false], speedLimitKmh: null }, autoC.owners, [autoEvent], 21 * 60, 4);
+  check("extra lanes: unset stays exactly the pre-existing automatic behaviour (lanes 1 and 2)", autoState.closedLanes.join() === "true,true,false,false");
+
+  // Validity: an out-of-range extra lane is caught the same way an out-of-range primary lane is.
+  const outOfRange = { ...collisionSpec("overturned_vehicle", 1, 330, 5, manualMinutes(20)), extraLanes: [9] };
+  check("extra lanes: an out-of-range extra lane is refused with a clear reason", (refused([], outOfRange, 1) ?? "").includes("extra lane 9 does not exist"));
+
+  // Validity: "every lane" is judged against what was actually requested when extras are present,
+  // even though the family's own LANES_BLOCKED figure alone would have been fine.
+  const everyLane = { ...collisionSpec("scheduled_roadworks", 1, 330, 5, manualMinutes(20)), extraLanes: [2, 3, 4] };
+  check("extra lanes: requesting every lane on the road is refused, using the requested count not the assumption default", (refused([], everyLane, 1) ?? "").includes("every lane"));
+
+  // A duplicate of the primary lane, or of another extra, is silently deduped rather than treated
+  // as a distinct lane (matches manualBlockedLanes' Set-based resolution).
+  const dup = { ...collisionSpec("flood", 1, 330, 5, manualMinutes(20)), extraLanes: [1, 2, 2] };
+  const dupEvent = must([], dup, 1).event;
+  const dupC = composeInterventions({ ...idle, incidents: [] }, [dupEvent], abs(5.2), road600);
+  const dupState = effectiveState({ closedLanes: [false, false, false, false], speedLimitKmh: null }, dupC.owners, [dupEvent], 5.2 * 60, 4);
+  check("extra lanes: duplicates of the primary lane or of each other are deduped, not double-counted", dupState.closedLanes.join() === "true,true,false,false");
+}
+
 // --- what a skip is skipping through
 {
   const multi = must([], collisionSpec("multi_vehicle_collision", 1, 330, 2, manualMinutes(40)), 1);

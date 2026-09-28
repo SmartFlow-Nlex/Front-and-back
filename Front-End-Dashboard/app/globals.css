@@ -10444,17 +10444,31 @@ details[open] > .evidence-summary .evidence-close-label { display: inline; }
   inset: 0;
   z-index: 55;
   align-self: auto;
-  overflow-y: auto;
+  /* THE CARD IS THE COLUMN. The canvas below asks for `flex: 1 1 0`, but this
+     element was never a flex container, so that rule did nothing: the road kept
+     its docked 300px and the rest of the card scrolled past it. Full screen
+     showed two ribbons of road in a page of white. */
+  display: flex;
+  flex-direction: column;
+  /* Nothing scrolls out of the viewport any more; the road absorbs the slack. */
+  overflow: hidden;
   overscroll-behavior: contain;
   border: 0;
   border-radius: 0;
   box-shadow: none;
-  padding: 16px 20px;
+  padding: 12px 16px;
+  gap: 8px;
+  transition: right 180ms ease;
+}
+/* Room for the controls when they are open. */
+.sandbox-page .sandbox-main.is-expanded.with-rail {
+  right: 372px;
 }
 .sandbox-page .sandbox-main.is-expanded .sandbox-canvas {
   flex: 1 1 0;
   height: auto;
-  min-height: 360px;
+  /* A floor here would defeat the flex basis; the road takes what is left. */
+  min-height: 0;
   /* Edge to edge: the road runs the full width of the screen, the text keeps its gutter. */
   width: calc(100% + 40px);
   margin-left: -20px;
@@ -10465,6 +10479,254 @@ details[open] > .evidence-summary .evidence-close-label { display: inline; }
    and stays with the docked page. */
 .sandbox-main.is-expanded .sandbox-metric-caption {
   display: none;
+}
+/* The head, the tiles and the notes are fixed furniture; only the road grows. */
+.sandbox-main.is-expanded > *:not(.sandbox-canvas) {
+  flex: 0 0 auto;
+}
+/* Tiles at a glance, not six cards deep. Full screen had them at docked size,
+   which cost about a fifth of the screen before the road began. */
+.sandbox-main.is-expanded .sandbox-metric-row {
+  gap: 8px;
+}
+.sandbox-main.is-expanded .sandbox-metric {
+  padding: 8px 10px;
+}
+.sandbox-main.is-expanded .sandbox-metric h3 {
+  font-size: 0.62rem;
+  letter-spacing: 0.04em;
+}
+.sandbox-main.is-expanded .sandbox-metric-val {
+  font-size: 1.25rem;
+}
+.sandbox-main.is-expanded .sandbox-head h2 {
+  font-size: 1.05rem;
+}
+/* The explanatory notes, legend and recommendations keep their place but can no
+   longer push the road off screen: they take at most a quarter of the height and
+   scroll within it. */
+.sandbox-main.is-expanded .sandbox-footbar {
+  max-height: 26vh;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+.sandbox-main.is-expanded .sandbox-footbar.is-folded {
+  display: none;
+}
+.sandbox-fs-notes-toggle {
+  align-self: flex-start;
+  background: none;
+  border: 0;
+  padding: 2px 0;
+  font: inherit;
+  font-size: 0.74rem;
+  font-weight: 600;
+  color: var(--text-secondary);
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+.sandbox-fs-notes-toggle:hover { color: var(--text-primary); }
+
+/* Tiles as a readout strip. Six cards at docked size cost about a fifth of the
+   screen before the road began; the same six numbers fit in a band. */
+.sandbox-main.is-expanded .sandbox-metric {
+  padding: 6px 10px;
+}
+.sandbox-main.is-expanded .sandbox-metric h3 {
+  font-size: 0.58rem;
+}
+.sandbox-main.is-expanded .sandbox-metric-val {
+  font-size: 1.1rem;
+  line-height: 1.15;
+}
+.sandbox-main.is-expanded .sandbox-metric-row > * > div:last-child {
+  font-size: 0.68rem;
+}
+.sandbox-fs-keys {
+  margin: 0;
+  font-size: 0.72rem;
+  color: var(--text-muted);
+  letter-spacing: 0.01em;
+}
+.sandbox-fs-keys b {
+  color: var(--text-secondary);
+  font-weight: 700;
+}
+
+/* The controls, pinned beside the road instead of stranded behind the overlay. */
+.sandbox-page .sandbox-side.is-expanded {
+  position: fixed;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: 372px;
+  max-width: 92vw;
+  z-index: 56;
+  border-radius: 0;
+  border-top: 0;
+  border-bottom: 0;
+  border-right: 0;
+  padding: 12px 14px;
+  transition: transform 180ms ease;
+}
+.sandbox-page .sandbox-side.is-expanded.is-folded {
+  transform: translateX(100%);
+}
+@media (max-width: 900px) {
+  /* No room for both: the rail becomes a sheet over the road. */
+  .sandbox-page .sandbox-main.is-expanded.with-rail { right: 0; }
+}
+
+/* --- full screen is a SCREEN, not a taller card ---------------------------
+   Stacking the head, the tiles, the road and the notes in a white column made
+   full screen a stretched dashboard card: the road still had to share the page
+   with its own furniture. Here the road IS the surface, edge to edge, and
+   everything else floats over it as glass. Nothing is in the flow, so nothing
+   takes height away from the carriageway. */
+.sandbox-page .sandbox-main.is-expanded {
+  display: block;
+  padding: 0;
+  gap: 0;
+  background: #05080f;
+  color: #e8eefc;
+  /* Height of the readout strip along the bottom; Both mode's tiles are taller. */
+  --fs-strip: 96px;
+}
+.sandbox-page .sandbox-main.is-expanded.is-both {
+  --fs-strip: 148px;
+}
+.sandbox-page .sandbox-main.is-expanded .sandbox-canvas {
+  position: absolute;
+  /* Inset, not inset:0. A full-bleed canvas put the outer lane under the
+     readout strip and the top lane under the toolbar, so the HUD hid the very
+     traffic it was describing. The road owns the band between them. */
+  top: 104px;
+  left: 0;
+  right: 0;
+  width: 100%;
+  /* An explicit height, never `auto` with a bottom inset: a canvas is a
+     replaced element, so height:auto resolves to its own height ATTRIBUTE --
+     which render() sets from the size it last measured -- and the bottom inset
+     is then dropped as over-constrained. The box grew every frame. */
+  height: calc(104px + var(--fs-strip) + 8px);
+  height: calc(100% - 104px - var(--fs-strip) - 8px);
+  margin: 0;
+  border-radius: 0;
+  min-height: 0;
+}
+/* Every overlay shares one surface: dark enough to read against tarmac,
+   translucent enough that the road is still visibly underneath. */
+.sandbox-main.is-expanded .sandbox-head,
+.sandbox-main.is-expanded .sandbox-view-seg,
+.sandbox-main.is-expanded .sandbox-metric-row,
+.sandbox-main.is-expanded .sandbox-footbar,
+.sandbox-main.is-expanded .sandbox-fs-keys,
+.sandbox-main.is-expanded .sandbox-fs-notes-toggle {
+  position: absolute;
+  z-index: 3;
+  background: rgba(8, 13, 25, 0.72);
+  -webkit-backdrop-filter: blur(12px);
+  backdrop-filter: blur(12px);
+  border: 1px solid rgba(255, 255, 255, 0.10);
+  border-radius: 12px;
+  color: #e8eefc;
+}
+.sandbox-main.is-expanded .sandbox-head {
+  top: 12px;
+  left: 14px;
+  right: 14px;
+  padding: 8px 12px;
+}
+.sandbox-main.is-expanded .sandbox-head h2 {
+  color: #f3f7ff;
+  font-size: 1rem;
+  letter-spacing: 0.01em;
+}
+.sandbox-main.is-expanded .sandbox-view-seg {
+  top: 62px;
+  left: 14px;
+  padding: 6px 10px;
+  gap: 8px;
+}
+.sandbox-main.is-expanded .sandbox-view-seg .k { color: #93a4c4; }
+.sandbox-main.is-expanded .sandbox-fs-keys {
+  top: 62px;
+  left: 50%;
+  transform: translateX(-50%);
+  padding: 7px 12px;
+  margin: 0;
+  color: #93a4c4;
+  white-space: nowrap;
+}
+.sandbox-main.is-expanded .sandbox-fs-keys b { color: #dce6fb; }
+/* The readout sits along the bottom, out of the traffic's way. */
+.sandbox-main.is-expanded .sandbox-metric-row {
+  left: 14px;
+  right: 14px;
+  bottom: 12px;
+  display: flex;
+  gap: 6px;
+  padding: 6px 8px;
+  overflow-x: auto;
+}
+.sandbox-main.is-expanded .sandbox-metric-row > * {
+  flex: 1 1 0;
+  min-width: 132px;
+  background: transparent;
+  border: 0;
+  box-shadow: none;
+  padding: 2px 8px;
+}
+.sandbox-main.is-expanded .sandbox-metric-row > * + * {
+  border-left: 1px solid rgba(255, 255, 255, 0.09);
+}
+.sandbox-main.is-expanded .sandbox-metric::before { display: none; }
+.sandbox-main.is-expanded .sandbox-metric h3 { color: #8fa1c2; }
+.sandbox-main.is-expanded .sandbox-metric-val { color: #f3f7ff; font-size: 1.15rem; }
+.sandbox-main.is-expanded .sandbox-metric-row * { color: inherit; }
+.sandbox-main.is-expanded .sandbox-fs-notes-toggle {
+  top: 62px;
+  right: 14px;
+  padding: 7px 12px;
+  text-decoration: none;
+  color: #cddaf5;
+}
+.sandbox-main.is-expanded .sandbox-fs-notes-toggle:hover { color: #fff; }
+/* Opened, the notes are a panel over the road rather than a slab under it. */
+.sandbox-main.is-expanded .sandbox-footbar {
+  left: 14px;
+  right: 14px;
+  bottom: 160px;
+  max-height: 34vh;
+  padding: 12px;
+  overflow-y: auto;
+}
+/* The buttons in the floating bar: glass, not white chips on a white card. */
+.sandbox-main.is-expanded .sandbox-head .btn-muted,
+.sandbox-main.is-expanded .sandbox-speed-seg,
+.sandbox-main.is-expanded .sandbox-view-buttons {
+  background: rgba(255, 255, 255, 0.07);
+  border-color: rgba(255, 255, 255, 0.14);
+  color: #e8eefc;
+}
+.sandbox-main.is-expanded .sandbox-head .btn-muted:hover {
+  background: rgba(255, 255, 255, 0.14);
+}
+.sandbox-main.is-expanded .sandbox-speed-seg button,
+.sandbox-main.is-expanded .sandbox-view-buttons button {
+  color: #b9c8e6;
+}
+.sandbox-main.is-expanded .sandbox-speed-seg button.active,
+.sandbox-main.is-expanded .sandbox-view-buttons button.active {
+  background: rgba(255, 255, 255, 0.16);
+  color: #fff;
+}
+/* The controls keep their own light surface — a panel of sliders and selects
+   reads better light — but sit flush against the dark road. */
+.sandbox-page .sandbox-side.is-expanded {
+  border-left: 1px solid rgba(255, 255, 255, 0.12);
+  box-shadow: -18px 0 40px rgba(0, 0, 0, 0.45);
 }
 /* Holds the card's docked slot in the grid while it is lifted out (see page.tsx). */
 .sandbox-main-hold {

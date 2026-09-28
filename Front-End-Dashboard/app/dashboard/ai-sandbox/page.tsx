@@ -569,13 +569,49 @@ export default function AiSandboxPage() {
   const [simSpeed, setSimSpeed] = useState<(typeof SPEED_STEPS)[number]>(1);
   const [running, setRunning] = useState(true);
 
+  /* Full screen used to be the road and nothing else: the controls rail stayed
+   * behind the overlay, so the one mode meant for watching the simulation was
+   * the one mode where nothing could be changed. The rail comes with it now,
+   * and can be folded away when the road is all you want. */
+  const [railOpen, setRailOpen] = useState(true);
+  /* The notes, legend and recommendation are reference material. Docked they
+   * sit under the road; full screen they were taking a quarter of the height
+   * the road had just been given, so they start folded and open on request. */
+  const [notesOpen, setNotesOpen] = useState(false);
+
   useEffect(() => {
     if (!expanded) return;
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") setExpanded(false);
+      // Never steal a key from someone typing into the Command prompt.
+      const t = e.target as HTMLElement | null;
+      if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.tagName === "SELECT" || t.isContentEditable)) {
+        if (e.key === "Escape") (t as HTMLInputElement).blur();
+        return;
+      }
+      if (e.key === "Escape") { setExpanded(false); return; }
+      if (e.code === "Space") { e.preventDefault(); setRunning((r) => !r); return; }
+      if (e.key === "c" || e.key === "C") { setRailOpen((o) => !o); return; }
+      const speed = { "1": 0.5, "2": 1, "3": 2, "4": 4 } as const;
+      if (e.key in speed) {
+        const v = speed[e.key as keyof typeof speed];
+        if ((SPEED_STEPS as readonly number[]).includes(v)) setSimSpeed(v as (typeof SPEED_STEPS)[number]);
+        return;
+      }
+      if (e.key === "b" || e.key === "B") setView("Both");
+      if (e.key === "n" || e.key === "N") setView("NB");
+      if (e.key === "s" || e.key === "S") setView("SB");
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
+  }, [expanded]);
+
+  /* The page behind must not scroll under the overlay: a wheel over the road
+   * otherwise moved the dashboard it is covering. */
+  useEffect(() => {
+    if (!expanded) return;
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => { document.body.style.overflow = prev; };
   }, [expanded]);
 
   /** What the canvas draws for scenario events: where each is, its phase, and which incidents in the engine are the scenarios'. Keyed by direction — Phase D3 draws both; today the canvas reads only the focused one. */
@@ -991,13 +1027,17 @@ export default function AiSandboxPage() {
             maxLaneRef.current, exitsRef.current,
             scenarioOverlayRef.current.NB ?? null, scenarioOverlayRef.current.SB ?? null,
             animClockRef.current, zipperRef.current,
+            // Whatever is left in the accumulator is a fraction of a step the
+            // engine has not applied yet; drawing it keeps the traffic moving
+            // on frames where no step ran.
+            running ? simAccRef.current : 0,
           );
           paintVehicleProbe();
         }
       } else {
         const focusedSim = byDirection[focusDirection].simRef.current;
         if (focusedSim) {
-          render(ctx, canvas, focusedSim, locationRef.current, marksRef.current, maxLaneRef.current, exitsRef.current, scenarioOverlayRef.current[focusDirection] ?? null, animClockRef.current);
+          render(ctx, canvas, focusedSim, locationRef.current, marksRef.current, maxLaneRef.current, exitsRef.current, scenarioOverlayRef.current[focusDirection] ?? null, animClockRef.current, running ? simAccRef.current : 0);
           paintVehicleProbe();
         }
       }
@@ -1592,7 +1632,16 @@ export default function AiSandboxPage() {
       <div className="sandbox-grid" style={{ marginTop: 14 }}>
         {/* Simulation canvas + recommendation */}
         {expanded && <div className="sandbox-main-hold" aria-hidden style={{ height: heldHeight }} />}
-        <article ref={mainCardRef} className={`sandbox-main${expanded ? " is-expanded" : ""}`}>
+        <article
+          ref={mainCardRef}
+          className={
+            `sandbox-main${expanded ? " is-expanded" : ""}` +
+            `${expanded && railOpen ? " with-rail" : ""}` +
+            // Both mode stacks a corridor total over per-direction rows, so its
+            // readout strip is taller and the road's band has to allow for it.
+            `${expanded && both ? " is-both" : ""}`
+          }
+        >
           <div className="sandbox-head">
             <h2>Traffic Simulation</h2>
             <div>
@@ -1609,6 +1658,16 @@ export default function AiSandboxPage() {
               <button className="btn-muted" onClick={resetEverything} title="Back to a clean start: scenarios, closures, speed limits, incidents, baselines and any lane reallocation are all cleared">
                 Reset
               </button>
+              {expanded && (
+                <button
+                  className="btn-muted"
+                  onClick={() => setRailOpen((o) => !o)}
+                  title="Show or hide the controls (C)"
+                  aria-pressed={railOpen}
+                >
+                  {railOpen ? "Hide controls" : "Controls"}
+                </button>
+              )}
               <button
                 className="btn-muted"
                 onClick={toggleExpanded}
@@ -1643,6 +1702,11 @@ export default function AiSandboxPage() {
           {/* Full screen is the road and its analytics and nothing else: the tiles the page draws above the
               grid are covered by the card, so the same ones are drawn here. */}
           {expanded && metricTiles}
+          {expanded && (
+            <p className="sandbox-fs-keys" aria-hidden>
+              <b>Space</b> play/pause · <b>1–4</b> speed · <b>B/N/S</b> carriageway · <b>C</b> controls · <b>Esc</b> exit
+            </p>
+          )}
           {both && placeNote !== null && !expanded && (
             <p className="sandbox-place-hint" data-place-note>
               {placeNote}
@@ -1705,7 +1769,19 @@ export default function AiSandboxPage() {
           {/* Wrapper so the legend and the recommendation can sit side by side
               when expanded. `display: contents` while docked means it changes
               nothing there. */}
-          <div className="sandbox-footbar" data-both={both || undefined}>
+          {expanded && (
+            <button
+              className="sandbox-fs-notes-toggle"
+              onClick={() => setNotesOpen((o) => !o)}
+              aria-expanded={notesOpen}
+            >
+              {notesOpen ? "Hide notes" : "Notes, legend & recommendation"}
+            </button>
+          )}
+          <div
+            className={`sandbox-footbar${expanded && !notesOpen ? " is-folded" : ""}`}
+            data-both={both || undefined}
+          >
           {/* Two things the panel must never hide.
               A warm-up reading is the road filling, not the scenario. And when
               demand exceeds what the segment can take, the surplus queues
@@ -1775,7 +1851,7 @@ export default function AiSandboxPage() {
         </article>
 
         {/* Controls */}
-        <aside className="sandbox-side">
+        <aside className={`sandbox-side${expanded ? " is-expanded" : ""}${expanded && !railOpen ? " is-folded" : ""}`}>
           <div className="sandbox-side-head">
             <h2>{sideMode === "command" ? "Command Prompt" : "Simulation Controls"}</h2>
             <div className="sandbox-mode-seg" role="tablist">
@@ -3386,6 +3462,10 @@ function drawCarriageway(
     overlay: ScenarioOverlay | null;
     /** Single-direction draws its own km axis; Both draws one shared axis separately (drawSharedKmAxis). */
     drawAxis: boolean;
+    /** Simulated seconds accrued since the last physics step, 0..SIM_DT. Vehicles
+     *  are drawn this far along their current motion so the traffic moves every
+     *  frame instead of every third one. Drawing only — the engine never sees it. */
+    alphaS: number;
     /** "▶ traffic flow" for single-direction, unchanged; Both passes a direction-aware arrow. */
     flowLabel: string;
     /** Corner label — the full location string for single-direction, just "Northbound"/"Southbound" for Both. */
@@ -3400,7 +3480,7 @@ function drawCarriageway(
 ) {
   const {
     cssW, cssH, roadTop, laneH, roadH, rampGutter, rampsAbove, reverseLanes,
-    mToPx, sb, xPx, wPx, fromKm, toKm, exits, overlay, drawAxis, flowLabel, location, animT, borrowed, borrowedLabel,
+    mToPx, sb, xPx, wPx, fromKm, toKm, exits, overlay, drawAxis, alphaS, flowLabel, location, animT, borrowed, borrowedLabel,
   } = opts;
   const lanes = sim.cfg.laneCount;
 
@@ -3666,7 +3746,12 @@ function drawCarriageway(
       const moto = isMotorcycle(v.id, v.vClass, motoShare);
       if (v.vClass === 1) class1++;
       if (moto) motorcycles++;
-      const xNose = xPx(v.x);
+      /* Where it is NOW, not where it was at the last 0.05 s boundary. Constant
+       * acceleration over a fraction of one step; clamped so a braking vehicle
+       * is never drawn sliding backwards, which the kinematics would allow once
+       * v + a*alpha goes negative. */
+      const xDrawn = v.x + Math.max(0, v.v + 0.5 * v.accel * alphaS) * alphaS;
+      const xNose = xPx(xDrawn);
       drawVehicle(ctx, xNose, y, len, wid, v.vClass, moto ? motorcyclePaintFor(v.id) : paintFor(v.id, v.vClass), braking, sb, trailerPaintFor(v.id), moto);
       // The body trails behind the nose: to the left going north, to the right going south.
       vehicleHits.push({
@@ -3869,14 +3954,22 @@ function drawCarriageway(
      * goes below, and southbound the other way round. Fixing it below for
      * both would have stacked the numbers on top of every southbound ramp. */
     const axisBelow = rampsAbove;
-    const axisY = axisBelow ? roadTop + roadH + 5 : roadTop - 5;
+    /* Chips, not loose digits. At 10px and 55% white the km scale was legible
+       on a 300px docked canvas and lost on a full-screen one, where the road is
+       three times the size and the operator is further from it — the one thing
+       that says WHERE a queue is forming was the hardest thing to read. The
+       ladder scales with the road: a chip the traffic cannot wash out, and the
+       gridline brightened to match. */
+    const tall = roadH >= 260;
+    const axisY = axisBelow ? roadTop + roadH + AXIS_H / 2 : roadTop - AXIS_H / 2;
+    const dp = step < 1 ? 2 : 1;
     ctx.textAlign = "center";
-    ctx.textBaseline = axisBelow ? "top" : "bottom";
-    ctx.font = "10px system-ui";
+    ctx.textBaseline = "middle";
+    ctx.font = tall ? "700 12px system-ui" : "600 10px system-ui";
     for (let km = first; km <= toKm + 1e-9; km += step) {
       const x = xPx(sb ? (toKm - km) * 1000 : (km - fromKm) * 1000);
       if (x < 2 || x > cssW - 2) continue;
-      ctx.strokeStyle = "rgba(255,255,255,0.16)";
+      ctx.strokeStyle = tall ? "rgba(255,255,255,0.26)" : "rgba(255,255,255,0.16)";
       ctx.lineWidth = 1;
       ctx.setLineDash([3, 4]);
       ctx.beginPath();
@@ -3884,9 +3977,27 @@ function drawCarriageway(
       ctx.lineTo(x, roadTop + roadH);
       ctx.stroke();
       ctx.setLineDash([]);
-      ctx.fillStyle = "rgba(255,255,255,0.55)";
-      ctx.fillText(`${km.toFixed(step < 0.1 ? 2 : step < 1 ? 2 : 1)}`, x, axisY);
+      // A solid stub at the carriageway edge ties the number to its line.
+      ctx.strokeStyle = "rgba(255,255,255,0.5)";
+      ctx.beginPath();
+      const edgeY = axisBelow ? roadTop + roadH : roadTop;
+      ctx.moveTo(x, edgeY);
+      ctx.lineTo(x, edgeY + (axisBelow ? 4 : -4));
+      ctx.stroke();
+      const text = `${km.toFixed(dp)}`;
+      const tw = ctx.measureText(text).width;
+      const ch = tall ? 17 : 14;
+      ctx.fillStyle = "rgba(8,13,25,0.82)";
+      roundRect(ctx, x - tw / 2 - 6, axisY - ch / 2, tw + 12, ch, 5);
+      ctx.fill();
+      ctx.fillStyle = "rgba(255,255,255,0.94)";
+      ctx.fillText(text, x, axisY + 0.5);
     }
+    // Says what the ladder counts, once, at the low-km end.
+    ctx.font = tall ? "700 11px system-ui" : "600 9px system-ui";
+    ctx.fillStyle = "rgba(255,255,255,0.6)";
+    ctx.textAlign = "left";
+    ctx.fillText("KM POST", 6, axisY + 0.5);
     ctx.textAlign = "left";
     ctx.textBaseline = "top";
   }
@@ -3920,6 +4031,8 @@ function render(
   exits: { name: string; km: number }[],
   overlay: ScenarioOverlay | null,
   animT: number,
+  /** See drawCarriageway's `alphaS`. */
+  alphaS = 0,
 ) {
   vehicleHits.length = 0; // re-recorded by drawCarriageway() below
   const dpr = window.devicePixelRatio || 1;
@@ -3992,6 +4105,7 @@ function render(
     flowLabel: "▶ traffic flow",
     location,
     animT,
+    alphaS,
     borrowed: 0,
     borrowedLabel: "",
   });
@@ -4018,6 +4132,8 @@ function renderBoth(
   overlaySB: ScenarioOverlay | null,
   animT: number,
   zipper: ZipperState | null,
+  /** See drawCarriageway's `alphaS`. */
+  alphaS = 0,
 ) {
   vehicleHits.length = 0; // re-recorded by both drawCarriageway() calls below
   const dpr = window.devicePixelRatio || 1;
@@ -4080,6 +4196,7 @@ function renderBoth(
     flowLabel: "▶ traffic flow",
     location: "Northbound",
     animT,
+    alphaS,
     borrowed: borrowedLanes(zipper, "NB"),
     borrowedLabel: zipper === null ? "" : "REALLOCATED",
   });
@@ -4104,6 +4221,7 @@ function renderBoth(
     flowLabel: "traffic flow ◀",
     location: "Southbound",
     animT,
+    alphaS,
     borrowed: borrowedLanes(zipper, "SB"),
     borrowedLabel: zipper === null ? "" : "REALLOCATED",
   });
@@ -4143,19 +4261,27 @@ function drawSharedKmAxis(
   ctx.save();
   ctx.textAlign = "center";
   ctx.textBaseline = "middle";
-  ctx.font = "600 10px system-ui";
+  /* The chip is now unconditional. It used to appear only over the movable
+     barrier's stripes; everywhere else the numbers sat at 70% white on whatever
+     the median happened to be, which on a full-screen road is the scale an
+     operator reads a queue's position from. */
+  ctx.font = "700 12px system-ui";
+  const dp = step < 1 ? 2 : 1;
   for (let km = first; km <= toKm + 1e-9; km += step) {
     const x = xPx((km - fromKm) * 1000);
     if (x < 2 || x > cssW - 2) continue;
-    const text = `${km.toFixed(step < 0.1 ? 2 : step < 1 ? 2 : 1)}`;
-    if (backdrop) {
-      const tw = ctx.measureText(text).width;
-      ctx.fillStyle = "rgba(15,23,42,0.9)";
-      ctx.fillRect(x - tw / 2 - 3, axisY - 7, tw + 6, 14);
-    }
-    ctx.fillStyle = backdrop ? "rgba(255,255,255,0.95)" : "rgba(255,255,255,0.7)";
-    ctx.fillText(text, x, axisY);
+    const text = `${km.toFixed(dp)}`;
+    const tw = ctx.measureText(text).width;
+    ctx.fillStyle = backdrop ? "rgba(15,23,42,0.95)" : "rgba(8,13,25,0.82)";
+    roundRect(ctx, x - tw / 2 - 6, axisY - 8.5, tw + 12, 17, 5);
+    ctx.fill();
+    ctx.fillStyle = "rgba(255,255,255,0.94)";
+    ctx.fillText(text, x, axisY + 0.5);
   }
+  ctx.font = "700 11px system-ui";
+  ctx.fillStyle = "rgba(255,255,255,0.6)";
+  ctx.textAlign = "left";
+  ctx.fillText("KM POST", 6, axisY + 0.5);
   ctx.restore();
 }
 

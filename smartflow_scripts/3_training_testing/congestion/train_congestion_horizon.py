@@ -43,6 +43,20 @@ import warnings
 # served forecast are overwritten.
 DRY_RUN = "--dry-run" in sys.argv
 
+# --with-history: train on silver.waze_jam_hourly_exit (Jan 2022 - Apr 2026,
+# aggregated locally from the 38 GB Partner Hub export) as well as the live
+# feed. The live table alone starts 4 Aug 2026, so without this the model sees
+# about eight weeks. The two are NOT contiguous: nobody collected 19 Apr - 3 Aug
+# 2026, and that hole is handled explicitly below rather than smoothed over.
+WITH_HISTORY = "--with-history" in sys.argv
+
+# --fast: skip SARIMAX. refresh_congestion.bat has passed this flag since it was
+# written, documenting it as "about 90% of the runtime and has never been
+# accepted" -- but nothing here read it, so the hourly task ran the full path
+# every hour: ~25 minutes against a 30-minute ExecutionTimeLimit, times three
+# retries. SARIMAX is still available without the flag.
+FAST = "--fast" in sys.argv
+
 import numpy as np
 import pandas as pd
 import psycopg2
@@ -87,6 +101,31 @@ cell = (jams.groupby(["d", "h", "exit_name"])
 cell["speed"] = cell.sp_w / cell.wlen
 cell = cell[["d", "h", "exit_name", "speed", "n_jams"]]
 
+hist_cell = None
+if WITH_HISTORY:
+    # The stored summary splits each exit-hour by on_corridor / at_exit, so the
+    # length-weighted speed is rebuilt from its parts rather than averaged again:
+    # sum(len) = length_m_avg * jam_snapshots, sum(speed*len) = wavg * sum(len).
+    # That reproduces exactly what the live branch above computes from raw rows.
+    hist = pd.read_sql_query("""
+        SELECT h.date_day::date AS d, h.hour_of_day::int AS h,
+               COALESCE(e.exit_name,'id_'||h.nlex_exit_id::text) AS exit_name,
+               (h.length_m_avg * h.jam_snapshots)::float                     AS wlen,
+               (h.speed_kmh_wavg * h.length_m_avg * h.jam_snapshots)::float  AS sp_w,
+               h.jams_distinct::float                                        AS n_jams
+          FROM silver.waze_jam_hourly_exit h
+          LEFT JOIN bronze.nlex_exits e ON e.id = h.nlex_exit_id
+         WHERE h.speed_kmh_wavg IS NOT NULL
+    """, conn)
+    hist_cell = (hist.groupby(["d", "h", "exit_name"])
+                 .agg(sp_w=("sp_w", "sum"), wlen=("wlen", "sum"), n_jams=("n_jams", "sum")).reset_index())
+    hist_cell["speed"] = hist_cell.sp_w / hist_cell.wlen
+    hist_cell = hist_cell[["d", "h", "exit_name", "speed", "n_jams"]]
+    # Live wins on any overlapping day: it is the finer record.
+    hist_cell = hist_cell[~hist_cell.d.isin(set(cell.d))]
+    print(f"  history: {len(hist_cell):,} exit-hours, {hist_cell.d.min()} .. {hist_cell.d.max()}")
+    print(f"  live   : {len(cell):,} exit-hours, {cell.d.min()} .. {cell.d.max()}")
+
 # Trim the trailing INGESTION GAP before building the grid.
 #
 # The label rule treats "no jam reported" as free flow. That is right for a
@@ -117,14 +156,31 @@ if len(_ok):
               f"hour-of-day norm; last complete hour {_last_good}")
     jams = jams[pd.to_datetime(jams.d.astype(str)) + pd.to_timedelta(jams.h, unit="h") <= _last_good]
 
-days = pd.date_range(jams.d.min(), jams.d.max(), freq="D").date
-exits = sorted(jams.exit_name.unique())
+if hist_cell is not None and len(hist_cell):
+    cell = pd.concat([hist_cell, cell], ignore_index=True)
+
+# Days on which SOMETHING was collected. "No jam reported" means free flow on a
+# collected day and means nothing at all on a day nobody was watching -- and
+# between the export (ends 19 Apr 2026) and the live collector (starts 4 Aug
+# 2026) there are 107 such days. Filling those with free flow would invent a
+# clear corridor for three and a half months and teach the model that the road
+# empties every April.
+collected = set(cell.d.unique())
+days = pd.date_range(min(cell.d), max(cell.d), freq="D").date
+exits = sorted(set(jams.exit_name.unique()) | set(cell.exit_name.unique()))
 df = (pd.MultiIndex.from_product([days, range(24), exits], names=["d", "h", "exit_name"])
       .to_frame(index=False).merge(cell, on=["d", "h", "exit_name"], how="left"))
-df["y"] = np.where(df.speed.isna(), 0,
-                   np.where(df.speed < SEVERE_KMH, 2, np.where(df.speed < HEAVY_KMH, 1, 0)))
+df["y"] = np.where(df.speed.isna(), 0.0,
+                   np.where(df.speed < SEVERE_KMH, 2.0, np.where(df.speed < HEAVY_KMH, 1.0, 0.0)))
 df["n_jams"] = df.n_jams.fillna(0)
 df["speed_filled"] = df.speed.fillna(65.0)
+# Uncollected days carry NaN, not zero. The lag and rolling features below then
+# propagate that NaN, so every row whose history reaches into the hole is
+# dropped by the existing dropna rather than trained on a fiction.
+_uncollected = ~df.d.isin(collected)
+if _uncollected.any():
+    df.loc[_uncollected, ["y", "n_jams", "speed_filled"]] = np.nan
+    print(f"  {_uncollected.sum() // (24 * max(1, len(exits))):,} uncollected day(s) held out of the grid")
 df["ts"] = pd.to_datetime(df.d.astype(str)) + pd.to_timedelta(df.h, unit="h")
 # The MultiIndex spans whole days, so the final day's uncollected hours would
 # reappear here as free flow even after trimming the raw jams above.
@@ -147,7 +203,8 @@ for _k in (1, 2, 3, 6):
 df["roll6_y"] = g.y.transform(lambda s_: s_.shift(1).rolling(6, min_periods=1).mean())
 df["roll6_jams"] = g.n_jams.transform(lambda s_: s_.shift(1).rolling(6, min_periods=1).mean())
 df["roll24_y"] = g.y.transform(lambda s_: s_.shift(1).rolling(24, min_periods=1).mean())
-df = df.dropna(subset=["lag24", "lag48", "lag6"]).reset_index(drop=True)
+df = df.dropna(subset=["y", "lag24", "lag48", "lag6"]).reset_index(drop=True)
+df["y"] = df.y.astype(int)
 df["exit_code"] = pd.Categorical(df.exit_name, categories=exits).codes
 
 cut = df.ts.max().normalize() - pd.Timedelta(days=TEST_DAYS - 1)
@@ -228,6 +285,12 @@ banner("STEP 6: GRU (multi-horizon head)")
 gru = None
 piv = df.pivot_table(index="ts", columns="exit_code", values="y").sort_index()
 jm = df.pivot_table(index="ts", columns="exit_code", values="n_jams").sort_index()
+# Reindexed onto a gapless hourly axis so a missing stretch is visible as NaN.
+# Without this the pivot simply omits the 107-day hole and a 24-hour window
+# could run from April straight into August as though the hours were adjacent.
+_full_idx = pd.date_range(piv.index.min(), piv.index.max(), freq="h")
+piv = piv.reindex(_full_idx)
+jm = jm.reindex(_full_idx)
 try:
     import tensorflow as tf
     from tensorflow.keras import layers, Sequential
@@ -246,8 +309,13 @@ try:
             if not keep(t):
                 continue
             for c in range(arr.shape[1]):
-                X.append(np.stack([arr[i - SEQ_LEN:i, c], jarr[i - SEQ_LEN:i, c]], -1))
-                Y.append(arr[i:i + H, c])
+                win, tgt = arr[i - SEQ_LEN:i, c], arr[i:i + H, c]
+                # Any NaN means this window or its target crosses a stretch that
+                # was never collected.
+                if np.isnan(win).any() or np.isnan(tgt).any():
+                    continue
+                X.append(np.stack([win, jarr[i - SEQ_LEN:i, c]], -1))
+                Y.append(tgt)
                 meta.append((t, c))
         return np.array(X, "float32"), np.array(Y, "int32"), meta
 
@@ -279,6 +347,8 @@ except Exception as e:
 # ── 6. SARIMAX — refit at rolling origins ───────────────────────────────────
 banner("STEP 7: SARIMAX (rolling origins, horizon-matched)")
 try:
+    if FAST:
+        raise RuntimeError("--fast: skipped (about 90% of the runtime; never accepted)")
     from statsmodels.tsa.statespace.sarimax import SARIMAX
 
     test_ts = np.sort(te.ts.unique())

@@ -17,7 +17,7 @@ export const ConfigLaneSchema = z.object({
  *
  * The context block mirrors the browser-side simulation's current shape. It is
  * sent by the client rather than held server-side because the sim lives
- * entirely in the browser (see Front-End-Dashboard/app/dashboard/ai-sandbox/
+ * entirely in the browser (see Front-End-Dashboard/app/dashboard/scenario-sandbox/
  * simulation.ts); the backend holds no session for it.
  */
 export const SandboxCommandSchema = z.object({

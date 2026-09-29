@@ -3,7 +3,7 @@
  * ASSUMPTIONS.RAIN_SPEED_KMH's evidence. Read-only use of simulation.ts; nothing is written anywhere.
  *
  *   cd Back-End
- *   ./node_modules/.bin/tsx ../Front-End-Dashboard/app/dashboard/ai-sandbox/scenarios/tools/measure_rain_cap.ts
+ *   ./node_modules/.bin/tsx ../Front-End-Dashboard/app/dashboard/scenario-sandbox/scenarios/tools/measure_rain_cap.ts
  *
  * Method: 4 lanes, 1 km, no ramps, 60 s warm-up, 1,500 simulated seconds, statistics averaged over samples taken
  * every 10 s from t = 900 s, three seeds. Demand is per lane: 1,500 veh/h (busy, not saturated, so the cap acts

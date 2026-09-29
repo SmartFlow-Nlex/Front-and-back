@@ -38,7 +38,7 @@ const tabs = [
   { label: "Maintenance", href: "/dashboard/maintenance", icon: Wrench, group: "Operations" },
   { label: "Mobile App", href: "/dashboard/mobile", icon: Smartphone, group: "Operations" },
 
-  { label: "Scenario Sandbox", href: "/dashboard/ai-sandbox", icon: Car, group: "Planning" },
+  { label: "Scenario Sandbox", href: "/dashboard/scenario-sandbox", icon: Car, group: "Planning" },
 
   { label: "Data Management", href: "/dashboard/data-management", icon: Brain, group: "Admin" },
   { label: "Audit Log", href: "/dashboard/audit-log", icon: ClipboardList, group: "Admin" },
@@ -111,10 +111,10 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
           return false;
         }
       } else if (userRole === "incident-operator") {
-        // Incident Operator cannot see: Emissions, AI Sandbox, Data Management, Audit Log
+        // Incident Operator cannot see: Emissions, Scenario Sandbox, Data Management, Audit Log
         if (
           tab.href === "/dashboard/sustainability" ||
-          tab.href === "/dashboard/ai-sandbox" ||
+          tab.href === "/dashboard/scenario-sandbox" ||
           tab.href === "/dashboard/data-management" ||
           tab.href === "/dashboard/audit-log"
         ) {
@@ -138,7 +138,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
     } else if (userRole === "incident-operator") {
       if (
         pathname === "/dashboard/sustainability" ||
-        pathname === "/dashboard/ai-sandbox" ||
+        pathname === "/dashboard/scenario-sandbox" ||
         pathname === "/dashboard/data-management" ||
         pathname === "/dashboard/audit-log"
       ) {

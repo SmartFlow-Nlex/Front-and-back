@@ -418,7 +418,7 @@ def build(csv_dir: str, date: str, min_n: int) -> dict[str, object]:
     return {
         "provenance": {
             "generated_on": date,
-            "generator": "app/dashboard/ai-sandbox/scenarios/tools/build_calibration.py",
+            "generator": "app/dashboard/scenario-sandbox/scenarios/tools/build_calibration.py",
             "source": DEFAULT_SOURCE_NOTE,
             "source_folder": "/".join(os.path.normpath(csv_dir).split(os.sep)[-2:]),
             "source_files": files_a + files_b,

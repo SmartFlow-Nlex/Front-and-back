@@ -2600,6 +2600,29 @@ body {
   font-weight: 800;
 }
 
+.sandbox-live-clock {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 12px;
+  border-radius: var(--radius-sm);
+  border: 1px solid color-mix(in srgb, var(--brand-primary) 35%, transparent);
+  background: color-mix(in srgb, var(--brand-primary) 10%, transparent);
+}
+.sandbox-live-clock-label {
+  font-size: 0.68rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-secondary);
+}
+.sandbox-live-clock-date {
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+
 .btn-primary,
 .btn-muted,
 .btn-danger {
@@ -10335,6 +10358,9 @@ details[open] > .evidence-summary .evidence-close-label { display: inline; }
   gap: 8px;
   margin-top: 10px;
 }
+.sandbox-main.is-expanded .sandbox-view-seg {
+  margin-top: 6px;
+}
 .sandbox-view-seg .k {
   font-size: 0.68rem;
   font-weight: 700;
@@ -10740,6 +10766,14 @@ details[open] > .evidence-summary .evidence-close-label { display: inline; }
   align-items: start;
   margin-top: 12px;
 }
+/* Both mode has its own NB-left/SB-right paired grid (`.sandbox-footbar[data-both]`,
+   see the "Both mode reads as two columns" rule above) which the generic expanded-mode
+   rule above was silently overriding by specificity, falling back to a plain
+   auto-fit grid even though the child items still carried their NB=col-1/SB=col-2
+   pins. This restores the paired columns in full screen too. */
+.sandbox-main.is-expanded .sandbox-footbar[data-both] {
+  grid-template-columns: 1fr 1fr;
+}
 
 .sandbox-live-note {
   margin: 8px 0 0;
@@ -10755,6 +10789,17 @@ details[open] > .evidence-summary .evidence-close-label { display: inline; }
   border-color: color-mix(in srgb, #b45309 42%, transparent);
   background: color-mix(in srgb, #b45309 10%, transparent);
   color: var(--text-primary);
+}
+/* Full screen: same card, less padding — it's one line of status text, not a
+   docked-mode card competing with the road for vertical space. */
+.sandbox-main.is-expanded .sandbox-live-note {
+  padding: 6px 10px;
+  line-height: 1.3;
+}
+/* Same legend, smaller footprint — reference information, not a primary block. */
+.sandbox-main.is-expanded .sandbox-legend {
+  gap: 10px;
+  font-size: 0.72rem;
 }
 
 .sandbox-baseline-lede {
@@ -10965,20 +11010,6 @@ details[open] > .evidence-summary .evidence-close-label { display: inline; }
   color: #fff;
 }
 .sandbox-steps li.is-now .t b { color: var(--text-primary); }
-
-/* --- hour-of-day ---------------------------------------------------------- */
-.sandbox-hour { margin-top: 12px; }
-.sandbox-hour-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  margin-bottom: 4px;
-  font-size: 0.74rem;
-  font-weight: 600;
-  color: var(--text-secondary);
-}
-.sandbox-hour-head span { display: inline-flex; align-items: center; gap: 4px; }
 
 /* --- lane reallocation ---------------------------------------------------- */
 .sandbox-zipper { margin-top: 12px; }

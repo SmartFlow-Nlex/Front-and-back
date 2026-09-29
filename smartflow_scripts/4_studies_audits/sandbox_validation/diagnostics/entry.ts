@@ -1,4 +1,4 @@
-import { TrafficSim } from "../../../../../Front-End-Dashboard/app/dashboard/ai-sandbox/simulation";
+import { TrafficSim } from "../../../../../Front-End-Dashboard/app/dashboard/scenario-sandbox/simulation";
 const DT = 0.05;
 const sim: any = new TrafficSim(
   { length: 1000, laneCount: 4, inflowVehPerHour: 9600, seed: 12345, warmupS: 120 },

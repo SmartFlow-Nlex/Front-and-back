@@ -1,7 +1,7 @@
 /**
  * Verification for the scenario catalogue, calibration, assumptions and sampler.
  *
- *   cd Back-End && ./node_modules/.bin/tsx ../Front-End-Dashboard/app/dashboard/ai-sandbox/scenarios/verify.ts
+ *   cd Back-End && ./node_modules/.bin/tsx ../Front-End-Dashboard/app/dashboard/scenario-sandbox/scenarios/verify.ts
  *
  * Read-only. Exits 1 on any failure. It guards:
  *   1. the sampler really reproduces the calibrated quantiles (durations AND response shares),

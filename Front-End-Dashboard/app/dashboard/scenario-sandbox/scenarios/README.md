@@ -1,6 +1,6 @@
 # Real NLEX incident scenarios
 
-Front-end-only feature for the AI Simulation Sandbox (`app/dashboard/ai-sandbox/`). Lets an
+Front-end-only feature for the AI Simulation Sandbox (`app/dashboard/scenario-sandbox/`). Lets an
 operator add realistic incident events to a running simulation — a breakdown, a collision, an
 overturned vehicle, a flood, scheduled roadworks, rain (light, moderate or heavy) — and have each one drive the
 **existing** engine levers (`simulation.ts`'s `Interventions`: `closedLanes`, `closurePoint` /
@@ -373,7 +373,7 @@ not `resolved.mode === "manual"`).
 ## Regenerating `calibration.json`
 
 ```
-cd app/dashboard/ai-sandbox/scenarios/tools
+cd app/dashboard/scenario-sandbox/scenarios/tools
 python build_calibration.py --csv-dir <folder with accident_data_*.csv and breakdown_data_*.csv>
 ```
 
@@ -391,7 +391,7 @@ a number is computed — those rules are the actual data contract between this f
 
 ```
 cd Back-End
-./node_modules/.bin/tsx ../Front-End-Dashboard/app/dashboard/ai-sandbox/scenarios/verify.ts
+./node_modules/.bin/tsx ../Front-End-Dashboard/app/dashboard/scenario-sandbox/scenarios/verify.ts
 ```
 
 Read-only, exits 1 on any failure, prints every `FAIL` with its name. As of this write-up: **1,431

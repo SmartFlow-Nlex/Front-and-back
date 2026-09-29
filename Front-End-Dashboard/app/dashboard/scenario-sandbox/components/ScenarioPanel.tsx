@@ -184,7 +184,7 @@ function clockLabel(totalMin: number): string {
  * time is never acted on. It speaks in minutes since midnight and clamps to [minMin, maxMin]: the run only
  * goes forward from the top of the selected hour, and one day has no times past 23:59.
  */
-function TimeField({
+export function TimeField({
   valueMin,
   minMin,
   maxMin,
@@ -724,18 +724,8 @@ export default function ScenarioPanel(props: Props) {
             </select>
           </label>
         )}
-        <label title={`The road is simulated at the flow of the hour chosen in Hour of day, so the clock starts at ${clockLabel(clockStartMin)}: an event can start then or later that day.`}>
-          Start (time of day)
-          <TimeField
-            valueMin={clockStartMin + startMin}
-            minMin={clockStartMin}
-            maxMin={1439}
-            scn="start"
-            onCommit={(t) => setStartMin(t - clockStartMin)}
-          />
-        </label>
       </div>
-      {canAddExtraLanes(family) && (
+      {canAddExtraLanes(family) && lane !== null && (
         <div className="sandbox-scn-row" data-scn="extra-lanes">
           <label style={{ flex: 1, minWidth: 0 }}>
             <span className="sandbox-mini-label" style={{ margin: "0 0 3px" }}>
@@ -786,6 +776,18 @@ export default function ScenarioPanel(props: Props) {
           </label>
         </div>
       )}
+      <div className="sandbox-scn-row">
+        <label title={`The road is simulated at the flow of the hour chosen in Hour of day, so the clock starts at ${clockLabel(clockStartMin)}: an event can start then or later that day.`}>
+          Start (time of day)
+          <TimeField
+            valueMin={clockStartMin + startMin}
+            minMin={clockStartMin}
+            maxMin={1439}
+            scn="start"
+            onCommit={(t) => setStartMin(t - clockStartMin)}
+          />
+        </label>
+      </div>
       <div className="sandbox-scn-row">
         <label>
           Position (km)

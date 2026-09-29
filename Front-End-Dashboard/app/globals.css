@@ -2602,7 +2602,7 @@ body {
 
 .sandbox-live-clock {
   display: inline-flex;
-  align-items: baseline;
+  align-items: center;
   gap: 8px;
   padding: 5px 12px;
   border-radius: var(--radius-sm);
@@ -2616,15 +2616,11 @@ body {
   letter-spacing: 0.06em;
   color: var(--text-secondary);
 }
-.sandbox-live-clock-value {
-  font-size: 1.05rem;
-  font-weight: 800;
-  font-variant-numeric: tabular-nums;
-  letter-spacing: 0.01em;
-  color: var(--brand-primary);
-}
-@media (max-width: 640px) {
-  .sandbox-live-clock-value { font-size: 0.92rem; }
+.sandbox-live-clock-date {
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: var(--text-secondary);
+  white-space: nowrap;
 }
 
 .btn-primary,

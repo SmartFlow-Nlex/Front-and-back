@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { useThemeTokens } from "./useThemeTokens";
 import IncidentModelsNarrative from "./IncidentModelsNarrative";
 import InfoTooltip from "./InfoTooltip";
+import NarrativePanel from "./NarrativePanel";
 import { shadeFor } from "./PredictiveCorridorChart";
 import { fmtInt, fmtNum } from "./incidentPredictive.shared";
 
@@ -48,17 +49,16 @@ type SeverityData = {
   metadata: Metadata | null;
 };
 
-/** "A", "A and B", "A, B and C" -- never "A and B and C". */
-const listPhrase = (names: string[]) =>
-  names.length <= 1
-    ? (names[0] ?? "")
-    : `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}`;
+// Inline rows shown before the reader has to reach for "See more" — mirrors
+// PredictiveCorridorChart's own INLINE_LIMIT so the two ranking cards behave
+// the same way.
+const INLINE_LIMIT = 5;
 
 export default function SecondaryIncidentRiskPanel() {
   const [data, setData] = useState<SeverityData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [view, setView] = useState<"exit" | "km">("exit");
+  const [seeMoreOpen, setSeeMoreOpen] = useState(false);
   // Read before the early returns below -- a hook cannot sit after one.
   const T = useThemeTokens();
 
@@ -121,21 +121,13 @@ export default function SecondaryIncidentRiskPanel() {
   const champion = meta?.severity.champion ?? null;
   const championMetrics = champion ? meta?.severity.metrics[champion] : undefined;
 
-  // Common shape both views reduce to, so one chart/table implementation
-  // serves either grouping. sortKey orders "along the corridor" for
-  // whichever view is active (km for exits, kmStart for segments) — both
-  // are just "position", so one field name covers both.
-  type Row = { key: string; label: string; tooltipDetail: string; sortKey: number; n: number; avgRisk: number; actualSecondaryCount: number };
-  const exitRows: Row[] = data.secondaryRiskByExit.map((x) => ({
-    key: `exit-${x.exitId}`, label: x.exitName, tooltipDetail: `Km ${x.km}`, sortKey: x.km,
+  // Grouped by fixed km segment only now (see PredictiveCorridorChart for
+  // the same call) — sortKey orders "along the corridor" (kmStart).
+  type Row = { key: string; label: string; sortKey: number; n: number; avgRisk: number; actualSecondaryCount: number };
+  const allRows: Row[] = data.secondaryRiskByKmSegment.map((x) => ({
+    key: `seg-${x.kmStart}`, label: x.label, sortKey: x.kmStart,
     n: x.n, avgRisk: x.avgRisk, actualSecondaryCount: x.actualSecondaryCount,
   }));
-  const kmRows: Row[] = data.secondaryRiskByKmSegment.map((x) => ({
-    key: `seg-${x.kmStart}`, label: x.label, tooltipDetail: "", sortKey: x.kmStart,
-    n: x.n, avgRisk: x.avgRisk, actualSecondaryCount: x.actualSecondaryCount,
-  }));
-  const allRows = view === "km" ? kmRows : exitRows;
-  const missingExits = data.exitsWithoutData ?? [];
 
   // Top corridors only, not all of them — cut by evidence, not by a round
   // number. Sorted by n descending, kept until the running total crosses
@@ -172,10 +164,14 @@ export default function SecondaryIncidentRiskPanel() {
   // first, thinnest last.
   const omittedRows = allRows.filter((x) => !topKeys.has(x.key)).sort((a, b) => b.n - a.n);
   // Same row-list visual language as PredictiveCorridorChart's ranking (rank
-  // number, rounded pill bar shaded by the shared indigo ramp, rounded value
+  // number, rounded pill bar shaded by the shared amber ramp, rounded value
   // badge, a "Highest" marker on the peak row, hover-to-inspect tooltip) —
   // kept visually consistent since both cards are ranking the same corridor,
-  // just by a different metric.
+  // just by a different metric. Position-ordered, not split into a "top
+  // tier" the way that card's exit ranking is — this list still answers
+  // "where," not "who's highest," so only the row COUNT is capped inline.
+  const inlineRows = topRows.slice(0, INLINE_LIMIT);
+  const restTopRows = topRows.slice(INLINE_LIMIT);
   const maxAvgRisk = Math.max(...topRows.map((x) => x.avgRisk), 1e-9);
   const highestRow = topRows.length > 0 ? topRows.reduce((a, b) => (b.avgRisk > a.avgRisk ? b : a)) : null;
   const axisTicks = [0, 0.25, 0.5, 0.75, 1].map((f) => maxAvgRisk * f);
@@ -202,7 +198,7 @@ export default function SecondaryIncidentRiskPanel() {
       >
         <span style={{ fontSize: "0.82rem", fontWeight: 700, color: "var(--text-primary)", textAlign: "right" }}>{displayIndex}</span>
         <span
-          title={row.tooltipDetail ? `${row.label} (${row.tooltipDetail})` : row.label}
+          title={row.label}
           style={{ fontSize: "0.8rem", fontWeight: 600, color: "var(--text-secondary)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
         >
           {row.label}
@@ -244,9 +240,7 @@ export default function SecondaryIncidentRiskPanel() {
                 fontSize: "0.72rem", lineHeight: 1.5, minWidth: "200px", boxShadow: "0 10px 24px rgba(15,23,42,0.28)",
               }}
             >
-              <div style={{ fontWeight: 700 }}>
-                {row.label}{row.tooltipDetail ? ` (${row.tooltipDetail})` : ""}
-              </div>
+              <div style={{ fontWeight: 700 }}>{row.label}</div>
               <div>Avg. predicted risk: {(row.avgRisk * 100).toFixed(1)}%</div>
               <div style={{ color: "#94a3b8" }}>
                 {row.actualSecondaryCount} of {row.n} held-out incidents here actually had a secondary incident follow
@@ -276,25 +270,28 @@ export default function SecondaryIncidentRiskPanel() {
             <InfoTooltip text={`Probability another incident starts within ${meta?.secondary_km_radius ?? 2}km while a first one is still being responded to — a logistic regression scored on held-out incidents, not an observed rate.`} />
           </h3>
         </div>
-        <div style={{ display: "inline-flex", gap: "2px", padding: "3px", background: "var(--bg-surface)", border: "1px solid var(--border-default)", borderRadius: "999px", flexShrink: 0 }}>
-          {(["exit", "km"] as const).map((v) => (
-            <button
-              key={v}
-              onClick={() => setView(v)}
-              disabled={v === "km" && data.secondaryRiskByKmSegment.length === 0}
-              title={v === "km" ? "Grouped by quantile km segments instead of nearest exit — equal incident count per segment, unequal width" : "Grouped by exit — the specific interchange to dispatch resources to"}
-              style={{
-                padding: "4px 12px", borderRadius: "999px", border: "none", cursor: "pointer",
-                background: view === v ? "var(--page-accent, #4f46e5)" : "transparent",
-                color: view === v ? "var(--text-on-dark)" : "var(--text-secondary)",
-                fontWeight: 600, fontSize: "0.72rem", whiteSpace: "nowrap",
-                opacity: v === "km" && data.secondaryRiskByKmSegment.length === 0 ? 0.4 : 1,
-              }}
-            >
-              {v === "exit" ? "By Exit" : "By Km"}
-            </button>
-          ))}
-        </div>
+        {/* Named "Severity model", not the bare "Model" the corridor card
+            uses: this endpoint takes no Range/Weather/Volume/model params at
+            all (getIncidentSeverity ignores its request entirely), so there's
+            no toggle-driven Volume/Weather badge to add alongside it, and
+            plain "Model" would misleadingly suggest one card-wide model when
+            this is specifically the severity classifier's champion -- the
+            secondary-risk score above and the clearance model below are each
+            their own single fixed model with no champion of their own to
+            show. */}
+        {champion && (
+          <span
+            title="The severity-classification model below (Predicted severity level) — chosen as its own champion; the secondary-risk score above and the clearance model below are each a single fixed model, not one of several compared."
+            style={{
+              display: "inline-flex", alignItems: "center", padding: "2px 9px",
+              borderRadius: "999px", fontSize: "0.7rem", fontWeight: 600,
+              background: "var(--bg-surface-hover)", color: "var(--text-secondary)",
+              border: "1px solid var(--border-default)", flexShrink: 0,
+            }}
+          >
+            Severity model: {champion}
+          </span>
+        )}
       </div>
       <div style={{ display: "flex", gap: "12px", flexWrap: "wrap" }}>
         <div style={{ flex: "1 1 120px", padding: "10px 14px", borderRadius: "10px", background: "var(--bg-surface-hover)", border: "1px solid var(--border-default)" }}>
@@ -316,7 +313,7 @@ export default function SecondaryIncidentRiskPanel() {
           <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: "10px", flexWrap: "wrap", marginBottom: "6px" }}>
             <div>
               <div style={{ fontSize: "0.68rem", fontWeight: 800, color: "var(--page-accent, #4f46e5)", letterSpacing: "0.04em", textTransform: "uppercase" }}>
-                Top {view === "km" ? "segments" : "corridors"} by evidence
+                Top segments by evidence
               </div>
               <div style={{ fontSize: "0.75rem", color: "var(--text-muted)" }}>Avg. predicted secondary-incident risk</div>
             </div>
@@ -329,19 +326,13 @@ export default function SecondaryIncidentRiskPanel() {
             </div>
           </div>
           <p style={{ color: "var(--text-muted)", fontSize: "0.72rem", margin: "0 0 10px 0" }}>
-            Charting the {topRows.length} of {allRows.length} {view === "km" ? "km segments" : "exits"} that
+            Charting the {topRows.length} of {allRows.length} km segments that
             together account for at least {Math.round(COVERAGE_TARGET * 100)}% of this panel&apos;s {fmtInt(totalN)}{" "}
             held-out incidents — enough evidence to rank with some confidence. Even within this set n still varies,
             so thin bars are less certain than they look; the rest are listed, not dropped, below.
           </p>
-          {view === "exit" && missingExits.length > 0 && (
-            <p style={{ color: "var(--text-muted)", fontSize: "0.72rem", margin: "-4px 0 10px 0" }}>
-              Showing {allRows.length} of {allRows.length + missingExits.length} exits — {listPhrase(missingExits)}{" "}
-              {missingExits.length > 1 ? "have" : "has"} no incident data to score, so {missingExits.length > 1 ? "they are" : "it is"} not listed.
-            </p>
-          )}
           <div style={{ display: "flex", flexDirection: "column", gap: "2px" }}>
-            {topRows.map((row, i) => renderRow(row, i + 1))}
+            {inlineRows.map((row, i) => renderRow(row, i + 1))}
           </div>
           <div style={{ display: "grid", gridTemplateColumns: "26px minmax(120px, 240px) 1fr 64px", columnGap: "10px", marginTop: "6px" }}>
             <span />
@@ -361,31 +352,117 @@ export default function SecondaryIncidentRiskPanel() {
               Avg. predicted secondary-incident risk
             </div>
           </div>
-          {omittedRows.length > 0 && (
-            <div style={{ marginTop: "12px" }}>
-              <p style={{ color: "var(--text-muted)", fontSize: "0.72rem", margin: "0 0 6px 0" }}>
-                Below the coverage threshold — not charted above, but not dropped either:
-              </p>
-              <table style={{ width: "100%", fontSize: "0.76rem", borderCollapse: "collapse" }}>
-                <thead>
-                  <tr style={{ color: "var(--text-muted)", textAlign: "left" }}>
-                    <th style={{ fontWeight: 600, paddingBottom: "4px" }}>{view === "km" ? "Segment" : "Exit"}</th>
-                    <th style={{ fontWeight: 600, paddingBottom: "4px", textAlign: "right" }}>n</th>
-                    <th style={{ fontWeight: 600, paddingBottom: "4px", textAlign: "right" }}>Avg. risk</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {omittedRows.map((x) => (
-                    <tr key={x.key} style={{ borderTop: "1px solid var(--border-default)" }}>
-                      <td style={{ padding: "3px 0", color: "var(--text-muted)" }}>{x.label}</td>
-                      <td style={{ padding: "3px 0", textAlign: "right", color: "var(--text-muted)" }}>{x.n}</td>
-                      <td style={{ padding: "3px 0", textAlign: "right", color: "var(--text-muted)" }}>{(x.avgRisk * 100).toFixed(1)}%</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+          {(restTopRows.length > 0 || omittedRows.length > 0) && (
+            <button
+              type="button"
+              onClick={() => setSeeMoreOpen(true)}
+              style={{
+                marginTop: "12px", width: "100%", padding: "8px 12px", borderRadius: "8px",
+                border: "1px dashed var(--border-default)", background: "var(--bg-surface-hover)",
+                color: accentInk, fontWeight: 600, fontSize: "0.78rem", cursor: "pointer",
+              }}
+            >
+              See {restTopRows.length + omittedRows.length} more segment{restTopRows.length + omittedRows.length === 1 ? "" : "s"}
+            </button>
           )}
+        </div>
+      )}
+
+      {/* Ranked rows are the AI's only input -- same read-only contract as
+          the forecast chart's own Narrative Explanation, and the same
+          ranking-narrative endpoint PredictiveCorridorChart uses, since
+          both cards reduce to "a location, a magnitude, an evidence count."
+          Sent as percent + n here rather than count + share, so the prompt
+          reads this as a risk score, not an incident count. */}
+      {allRows.length > 0 && (
+        <NarrativePanel
+          metrics={allRows.map((r) => ({ model: r.label }))}
+          endpoint="/api/ai-insight/ranking-narrative"
+          subjectKey={JSON.stringify(["secondary-risk", allRows.map((r) => [r.key, r.avgRisk, r.n])])}
+          contextLine={`Avg. predicted secondary-incident risk across ${allRows.length} corridor segments.`}
+          buildBody={() => ({
+            cardTitle: "Secondary Incident Risk",
+            groupBy: "segment",
+            metricLabel: "Avg. secondary-incident risk",
+            metricUnit: "percent",
+            metricDescription: `Probability another incident starts within ${meta?.secondary_km_radius ?? 2}km while a first one is still being responded to — a logistic regression scored on held-out incidents, not an observed rate.`,
+            rows: allRows.map((r) => ({
+              label: r.label,
+              value: r.avgRisk * 100,
+              n: r.n,
+            })),
+          })}
+        />
+      )}
+
+      {seeMoreOpen && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-label="All segments"
+          onClick={() => setSeeMoreOpen(false)}
+          style={{ position: "fixed", inset: 0, zIndex: 200, background: "rgba(15, 23, 42, 0.55)", display: "grid", placeItems: "center", padding: 24 }}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            style={{
+              width: "min(720px, 100%)", maxHeight: "84vh", display: "flex", flexDirection: "column",
+              background: "var(--bg-surface)", borderRadius: 14, border: "1px solid var(--border-default)",
+              boxShadow: "0 24px 60px rgba(15,23,42,0.35)", overflow: "hidden",
+            }}
+          >
+            <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 16, padding: "18px 22px", borderBottom: "1px solid var(--border-default)" }}>
+              <div>
+                <h3 style={{ margin: 0, fontSize: "1.05rem", fontWeight: 700, color: "var(--text-primary)" }}>All segments</h3>
+                <p style={{ margin: "4px 0 0 0", fontSize: "0.8rem", color: "var(--text-muted)" }}>
+                  Avg. predicted secondary-incident risk, in corridor order
+                </p>
+              </div>
+              <button
+                onClick={() => setSeeMoreOpen(false)}
+                aria-label="Close"
+                style={{
+                  flex: "none", width: 32, height: 32, borderRadius: 8, border: "1px solid var(--border-default)",
+                  background: "var(--bg-surface)", color: "var(--text-secondary)", cursor: "pointer",
+                  display: "grid", placeItems: "center", fontSize: "1rem", lineHeight: 1,
+                }}
+              >
+                ✕
+              </button>
+            </div>
+            <div style={{ overflowY: "auto", padding: "10px 22px 20px" }}>
+              {restTopRows.length > 0 && (
+                <div style={{ display: "flex", flexDirection: "column", gap: "1px", marginBottom: omittedRows.length > 0 ? "16px" : 0 }}>
+                  {restTopRows.map((row, i) => renderRow(row, i + INLINE_LIMIT + 1))}
+                </div>
+              )}
+              {omittedRows.length > 0 && (
+                <div>
+                  <p style={{ color: "var(--text-muted)", fontSize: "0.72rem", margin: "0 0 6px 0" }}>
+                    Below the coverage threshold — not ranked above, but not dropped either:
+                  </p>
+                  <table style={{ width: "100%", fontSize: "0.76rem", borderCollapse: "collapse" }}>
+                    <thead>
+                      <tr style={{ color: "var(--text-muted)", textAlign: "left" }}>
+                        <th style={{ fontWeight: 600, paddingBottom: "4px" }}>Segment</th>
+                        <th style={{ fontWeight: 600, paddingBottom: "4px", textAlign: "right" }}>n</th>
+                        <th style={{ fontWeight: 600, paddingBottom: "4px", textAlign: "right" }}>Avg. risk</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {omittedRows.map((x) => (
+                        <tr key={x.key} style={{ borderTop: "1px solid var(--border-default)" }}>
+                          <td style={{ padding: "3px 0", color: "var(--text-muted)" }}>{x.label}</td>
+                          <td style={{ padding: "3px 0", textAlign: "right", color: "var(--text-muted)" }}>{x.n}</td>
+                          <td style={{ padding: "3px 0", textAlign: "right", color: "var(--text-muted)" }}>{(x.avgRisk * 100).toFixed(1)}%</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+          </div>
         </div>
       )}
 

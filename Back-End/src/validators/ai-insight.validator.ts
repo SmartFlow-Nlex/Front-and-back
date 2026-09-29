@@ -386,3 +386,40 @@ export const HighIncidentDayNarrativeSchema = z.object({
     .optional(),
   trainedAt: z.string().max(60).nullable().optional(),
 });
+
+/**
+ * POST /api/ai-insight/ranking-narrative
+ *
+ * Shared by the incident tab's two ranked-list cards -- Predicted Incidents
+ * Ranking and Secondary Incident Risk -- because both reduce to the same
+ * shape (a location label + one magnitude + an optional evidence count),
+ * unlike model-narrative/congestion-narrative/event-surge-narrative, which
+ * are genuinely different error/accuracy/uplift measures and need their own
+ * prompts. What the magnitude actually MEANS travels with the request
+ * (metricLabel/metricUnit/metricDescription) instead of being assumed, so
+ * this one route can't accidentally describe a risk probability as an
+ * incident count or vice versa.
+ */
+export const RankingNarrativeSchema = z.object({
+  cardTitle: z.string().min(1).max(120),
+  groupBy: z.enum(["exit", "segment"]),
+  metricLabel: z.string().min(1).max(60),
+  metricUnit: z.enum(["count", "percent"]),
+  metricDescription: z.string().min(1).max(400),
+  horizonDays: z.number().int().min(1).max(365).nullable().optional(),
+  totalLabel: z.string().max(120).nullable().optional(),
+  // Capped at 30: the largest corridor grouping in the system is ~20
+  // segments/exits, so anything beyond this is a malformed client rather
+  // than a real ranking, and each row costs prompt tokens.
+  rows: z
+    .array(
+      z.object({
+        label: z.string().min(1).max(120),
+        value: z.number(),
+        sharePct: z.number().min(0).max(100).nullable().optional(),
+        n: z.number().int().nonnegative().nullable().optional(),
+      }),
+    )
+    .min(1)
+    .max(30),
+});

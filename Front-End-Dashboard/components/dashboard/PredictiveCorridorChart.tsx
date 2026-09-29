@@ -3,11 +3,12 @@
 import { useState } from "react";
 import { useThemeTokens } from "./useThemeTokens";
 import InfoTooltip from "./InfoTooltip";
+import NarrativePanel from "./NarrativePanel";
 import type { CorridorForecastPoint, KmSegmentForecastPoint } from "./incidentPredictive.shared";
 import { fmtInt } from "./incidentPredictive.shared";
 
 // Sequential ramp (amber, light -> dark) for a magnitude job: each bar's
-// shade tracks its own rank so the highest-risk exits read heavier at a
+// shade tracks its own rank so the highest-risk segments read heavier at a
 // glance, without a legend — the axis labels already name every category, and
 // a single-series bar chart needs no legend box (see the dataviz skill: a
 // legend is for telling series apart, and there is only one here).
@@ -26,29 +27,47 @@ import { fmtInt } from "./incidentPredictive.shared";
 // because the bars carry visible labels (they still do). The flat floor in
 // shadeFor keeps even the smallest bar at least this dark rather than fading
 // toward the surface.
-const RAMP_LIGHT = { r: 217, g: 119, b: 6 }; // amber-600
-const RAMP_DARK = { r: 120, g: 53, b: 15 }; // amber-900
+const RAMP_LIGHT = { r: 217, g: 119, b: 6 }; // amber-600 -- the accessibility floor, see below
+const RAMP_DARK = { r: 69, g: 26, b: 3 }; // amber-950 -- deepened from amber-900 for a wider visible range
 
-// Exported so SecondaryIncidentRiskPanel's per-exit ranked bars can shade
+// Exported so SecondaryIncidentRiskPanel's per-segment ranked bars can shade
 // themselves the same way, rather than a second hand-tuned ramp that could
 // silently drift from this one.
 export function shadeFor(t: number): string {
-  // Floor at 0.15 so the smallest bar in a wide-range set never reads as
-  // washed out — the ramp still tracks magnitude, just never below this.
-  const clamped = Math.max(0.15, Math.min(1, t));
-  const r = Math.round(RAMP_LIGHT.r + (RAMP_DARK.r - RAMP_LIGHT.r) * clamped);
-  const g = Math.round(RAMP_LIGHT.g + (RAMP_DARK.g - RAMP_LIGHT.g) * clamped);
-  const b = Math.round(RAMP_LIGHT.b + (RAMP_DARK.b - RAMP_LIGHT.b) * clamped);
+  const clamped = Math.max(0, Math.min(1, t));
+  // Square-root eased, not linear: these rankings are routinely long-tailed
+  // (one segment can carry 30%+ of a corridor's forecast on its own), so a
+  // linear map crowded every row past the top one or two into
+  // indistinguishable near-identical shades -- three rows tying at 20% of
+  // max used to render as literally the same colour. Easing stretches the
+  // low-to-mid range across more of the ramp so intensity differences read
+  // across the whole list, not just at the peak.
+  const eased = Math.sqrt(clamped);
+  // Floor at 0.15 (post-easing) so the smallest bar in a wide-range set
+  // never reads as washed out — the ramp still tracks magnitude, just never
+  // below this.
+  const scaled = 0.15 + eased * 0.85;
+  const r = Math.round(RAMP_LIGHT.r + (RAMP_DARK.r - RAMP_LIGHT.r) * scaled);
+  const g = Math.round(RAMP_LIGHT.g + (RAMP_DARK.g - RAMP_LIGHT.g) * scaled);
+  const b = Math.round(RAMP_LIGHT.b + (RAMP_DARK.b - RAMP_LIGHT.b) * scaled);
   return `rgb(${r}, ${g}, ${b})`;
 }
+
+// Inline rows shown before the reader has to reach for "See more" — kept
+// small enough that the card's height doesn't dominate the tab, with the
+// full ranking still one click away rather than gone.
+const INLINE_LIMIT = 5;
+const TOP_TIER = 5;
 
 type Props = {
   corridorForecast: CorridorForecastPoint[] | null;
   // Same apportionment as corridorForecast, grouped by fixed 5km corridor
-  // segments instead of nearest exit — see the toggle below for why this is
-  // a genuinely different (not redundant) view: the corridor's inter-exit
-  // gaps run up to ~11.6km, and the exit view snaps every incident in that
-  // whole stretch to whichever endpoint is nearest.
+  // segments instead of nearest exit -- this is the only grouping the card
+  // renders now (see the doc comment on buildKmSegmentForecast for why
+  // segments, not exits: the corridor's inter-exit gaps run up to ~11.6km,
+  // and an exit-only view snaps every incident in that whole stretch to
+  // whichever endpoint is nearest). corridorForecast is kept on the props
+  // only as the loading/availability signal, in lockstep with this one.
   kmSegmentForecast: KmSegmentForecastPoint[] | null;
   unclassifiedLocationShare: number | null;
   forecastHorizon: number;
@@ -58,8 +77,9 @@ type Props = {
   // toggles above it instead of always describing the full-feature forecast.
   showVolume: boolean;
   showWeather: boolean;
-  // Pretty label of whichever model this was apportioned from — the Models
-  // toolbar's active pick, or the champion when nothing was picked yet.
+  // Pretty label of whichever model this was apportioned from -- always the
+  // pipeline's champion (see incident.service.ts: corridorForecastModel is
+  // never per-request), not whatever's toggled in the Models chips above.
   // Null only alongside a null corridorForecast.
   forecastModelLabel: string | null;
   loading: boolean;
@@ -67,9 +87,8 @@ type Props = {
 
 // Mostly presentational — no fetch of its own for corridorForecast, which is
 // part of the same /api/incident/predictive response PredictiveIncidentChart
-// already fetches (Range/Weather/Volume/Weather/Models-toolbar-scoped the
-// same way), lifted here via a callback prop so this card doesn't duplicate
-// that network call.
+// already fetches (Range/Weather/Volume/Weather-scoped the same way), lifted
+// here via a callback prop so this card doesn't duplicate that network call.
 export default function PredictiveCorridorChart({
   corridorForecast,
   kmSegmentForecast,
@@ -80,8 +99,8 @@ export default function PredictiveCorridorChart({
   forecastModelLabel,
   loading,
 }: Props) {
-  const [view, setView] = useState<"exit" | "km">("exit");
   const [hoveredKey, setHoveredKey] = useState<string | null>(null);
+  const [seeMoreOpen, setSeeMoreOpen] = useState(false);
   // Read before the early returns below -- a hook cannot sit after one.
   const T = useThemeTokens();
 
@@ -100,52 +119,36 @@ export default function PredictiveCorridorChart({
     );
   }
 
-  if (corridorForecast === null || corridorForecast.length === 0) {
+  if (corridorForecast === null || corridorForecast.length === 0 || kmSegmentForecast == null || kmSegmentForecast.length === 0) {
     return (
       <article className="chart-card wide" style={{ height: "260px", padding: "20px", display: "grid", placeItems: "center" }}>
         <div style={{ textAlign: "center", maxWidth: "420px" }}>
           <div style={{ fontWeight: 700, color: "var(--text-primary)", marginBottom: "6px" }}>Corridor breakdown unavailable</div>
           <div style={{ fontSize: "0.85rem", color: "var(--text-muted)" }}>
-            No incidents in the current Range had a location that could be matched to a corridor exit.
+            No incidents in the current Range had a location that could be matched to a corridor segment.
           </div>
         </div>
       </article>
     );
   }
 
-  // Common shape both views reduce to, so one chart/callout implementation
-  // serves either grouping instead of two near-duplicate ones.
-  type Row = { key: string; label: string; tooltipDetail: string; predictedIncidents: number; historicalShare: number; historicalCount: number };
-  const useKmView = view === "km" && kmSegmentForecast != null && kmSegmentForecast.length > 0;
-
-  const exitRows: Row[] = corridorForecast.map((x) => ({
-    key: `exit-${x.exitId}`, label: x.exitName, tooltipDetail: `Km ${x.km}`,
+  type Row = { key: string; label: string; predictedIncidents: number; historicalShare: number; historicalCount: number };
+  const rows: Row[] = kmSegmentForecast.map((x) => ({
+    key: `seg-${x.segmentStart}`, label: x.label,
     predictedIncidents: x.predictedIncidents, historicalShare: x.historicalShare, historicalCount: x.historicalCount,
   }));
-  const kmRows: Row[] = (kmSegmentForecast ?? []).map((x) => ({
-    key: `seg-${x.segmentStart}`, label: x.label, tooltipDetail: "",
-    predictedIncidents: x.predictedIncidents, historicalShare: x.historicalShare, historicalCount: x.historicalCount,
-  }));
-
-  const rows = useKmView ? kmRows : exitRows;
   const maxPredicted = Math.max(...rows.map((x) => x.predictedIncidents), 1);
   // Summed from the bars themselves rather than trusting totalPredictedNext7Days
   // to still match — that prop is summary.totalPredictedNext7Days, the fixed
   // full-horizon primary total, while these bars now reflect whatever
   // Volume/Weather/Future window was actually apportioned. Deriving the
   // caption's number from what's on screen means the two can never disagree.
-  // Identical whichever view is active — both are the same apportionment of
-  // the same total, just grouped differently.
-  const displayedTotal = corridorForecast.reduce((s, x) => s + x.predictedIncidents, 0);
+  const displayedTotal = rows.reduce((s, x) => s + x.predictedIncidents, 0);
 
   // The headline this card is actually for: WHERE is the forecast
-  // concentrated. Recomputed on every render from whatever the active view's
-  // rows currently hold, so it tracks the Range/Weather/Volume/Models
-  // toggles above (and the Exit/Km toggle here) exactly the way the chart
-  // and displayedTotal already do — never a stale finding left over from a
-  // previous selection. Ranked by value regardless of which view is
-  // display-ordered by, since the callout's job is "what's the biggest
-  // finding," not "what's first on screen."
+  // concentrated. Recomputed on every render from whatever the current
+  // Range/Weather/Volume toggles produced, so it's never a stale finding
+  // left over from a previous selection.
   const byValue = [...rows].sort((a, b) => b.predictedIncidents - a.predictedIncidents);
   const topRow = byValue[0];
   const topShare = topRow && displayedTotal > 0 ? topRow.predictedIncidents / displayedTotal : 0;
@@ -153,15 +156,16 @@ export default function PredictiveCorridorChart({
   const topNShare =
     displayedTotal > 0 ? byValue.slice(0, topN).reduce((s, x) => s + x.predictedIncidents, 0) / displayedTotal : 0;
 
-  // Exit view is a leaderboard: display order is rank (busiest first), split
-  // into a "top 3" tier and a "remaining" tier below a divider — same
-  // byValue ordering the callout above already ranks by. Km view keeps its
-  // natural corridor order instead (Km 0 first) with no tiering, since the
-  // whole point of that view is walking the corridor and seeing where the
-  // 0-incident stretches are, not who's #1.
-  const orderedRows = useKmView ? kmRows : byValue;
-  const topTierRows = useKmView ? [] : orderedRows.slice(0, 3);
-  const remainingRows = useKmView ? orderedRows : orderedRows.slice(3);
+  // A leaderboard, ranked by value (busiest first) — the card's whole job is
+  // "ranking," so with only one grouping left, this is the natural order.
+  // Only the first INLINE_LIMIT rows show on the card itself (the first
+  // TOP_TIER of those in the bigger "Top 3" style); the rest sit behind
+  // "See more" rather than crowding the card with a 19-segment list.
+  const orderedRows = byValue;
+  const inlineRows = orderedRows.slice(0, INLINE_LIMIT);
+  const restRows = orderedRows.slice(INLINE_LIMIT);
+  const topTierRows = inlineRows.slice(0, TOP_TIER);
+  const remainingInlineRows = inlineRows.slice(TOP_TIER);
   const axisTicks = [0, 0.25, 0.5, 0.75, 1].map((f) => Math.round(maxPredicted * f));
 
   const renderRow = (row: Row, displayIndex: number, tier: "top" | "remaining") => {
@@ -190,7 +194,7 @@ export default function PredictiveCorridorChart({
           {displayIndex}
         </span>
         <span
-          title={row.tooltipDetail ? `${row.label} (${row.tooltipDetail})` : row.label}
+          title={row.label}
           style={{ fontSize: isTop ? "0.85rem" : "0.76rem", fontWeight: isTop ? 700 : 500, color: "var(--text-secondary)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
         >
           {row.label}
@@ -232,9 +236,7 @@ export default function PredictiveCorridorChart({
                 fontSize: "0.72rem", lineHeight: 1.5, minWidth: "180px", boxShadow: "0 10px 24px rgba(15,23,42,0.28)",
               }}
             >
-              <div style={{ fontWeight: 700 }}>
-                {row.label}{row.tooltipDetail ? ` (${row.tooltipDetail})` : ""}
-              </div>
+              <div style={{ fontWeight: 700 }}>{row.label}</div>
               <div>{fmtInt(row.predictedIncidents)} predicted incidents · next {forecastHorizon}d</div>
               <div style={{ color: "#94a3b8" }}>
                 Historical share: {(row.historicalShare * 100).toFixed(1)}% ({fmtInt(row.historicalCount)} logged)
@@ -277,78 +279,46 @@ export default function PredictiveCorridorChart({
       <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: "12px", flexWrap: "wrap" }}>
         <h3 style={{ fontSize: "1.05rem", color: "var(--text-primary)", fontWeight: 700, margin: 0, letterSpacing: "-0.01em" }}>
           Predicted Incidents Ranking
-          <InfoTooltip text="Derived, not separately modeled: splits the total forecast above across exits or km segments by each one's historical share of incidents — there's no per-location trained model behind this chart. Follows the Models toolbar and Volume/Weather toggles above: switching either re-derives it from that selection's own forecast." />
+          <InfoTooltip text="Derived, not separately modeled: splits the total forecast above across fixed 5km corridor segments by each one's historical share of incidents — there's no per-segment trained model behind this chart. Always apportioned from the pipeline's champion model; follows the Volume/Weather toggles above, so switching either re-derives it from that selection's own forecast." />
         </h3>
         {/* Controls pinned top-right, on the title's own row — kept off the
             description below so a long description never has to compete
             with them for width and get squeezed into a sliver. */}
-        <div style={{ display: "flex", alignItems: "center", gap: "6px", flexShrink: 0, flexWrap: "wrap" }}>
-          <div style={{ display: "inline-flex", gap: "2px", padding: "3px", background: "var(--bg-surface)", border: "1px solid var(--border-default)", borderRadius: "999px" }}>
-            {(["exit", "km"] as const).map((v) => (
-              <button
-                key={v}
-                onClick={() => setView(v)}
-                disabled={v === "km" && (kmSegmentForecast == null || kmSegmentForecast.length === 0)}
-                title={v === "km" ? "Grouped by fixed 5km corridor segments instead of nearest exit — shows the long inter-exit stretches an exit-only view snaps entirely to whichever endpoint is closest" : "Grouped by exit — the specific interchange to dispatch resources to"}
-                style={{
-                  padding: "4px 12px", borderRadius: "999px", border: "none", cursor: "pointer",
-                  background: view === v ? "var(--page-accent, #4f46e5)" : "transparent",
-                  color: view === v ? "var(--text-on-dark)" : "var(--text-secondary)",
-                  fontWeight: 600, fontSize: "0.72rem", whiteSpace: "nowrap",
-                  opacity: v === "km" && (kmSegmentForecast == null || kmSegmentForecast.length === 0) ? 0.4 : 1,
-                }}
-              >
-                {v === "exit" ? "By Exit" : "By Km"}
-              </button>
-            ))}
-          </div>
-          <div style={{ display: "flex", alignItems: "center", gap: "6px", flexWrap: "wrap" }} title="Matches the Models toolbar and Volume/Weather toggles on the forecast chart above">
-            {forecastModelLabel && (
-              <span
-                style={{
-                  display: "inline-flex", alignItems: "center", padding: "2px 9px",
-                  borderRadius: "999px", fontSize: "0.7rem", fontWeight: 600,
-                  background: "var(--bg-surface-hover)", color: "var(--text-secondary)",
-                  border: "1px solid var(--border-default)",
-                }}
-              >
-                Model: {forecastModelLabel}
-              </span>
-            )}
-            {badge("Volume", showVolume)}
-            {badge("Weather", showWeather)}
-          </div>
+        <div style={{ display: "flex", alignItems: "center", gap: "6px", flexShrink: 0, flexWrap: "wrap" }} title="Matches the Volume/Weather toggles on the forecast chart above">
+          {forecastModelLabel && (
+            <span
+              style={{
+                display: "inline-flex", alignItems: "center", padding: "2px 9px",
+                borderRadius: "999px", fontSize: "0.7rem", fontWeight: 600,
+                background: "var(--bg-surface-hover)", color: "var(--text-secondary)",
+                border: "1px solid var(--border-default)",
+              }}
+            >
+              Model: {forecastModelLabel}
+            </span>
+          )}
+          {badge("Volume", showVolume)}
+          {badge("Weather", showWeather)}
         </div>
       </div>
-      {((unclassifiedPct != null && Number(unclassifiedPct) > 0) || useKmView) && (
+      {unclassifiedPct != null && Number(unclassifiedPct) > 0 && (
         <p style={{ color: "var(--text-muted)", fontSize: "0.82rem", margin: 0 }}>
-          {unclassifiedPct != null && Number(unclassifiedPct) > 0 && (
-            <>{unclassifiedPct}% of logged locations in this Range couldn&apos;t be matched to a specific exit and are excluded from the split.</>
-          )}
-          {useKmView && (
-            <> Listed top-to-bottom in corridor order (Km 0 first, Km{" "}
-            {kmSegmentForecast?.[kmSegmentForecast.length - 1]?.segmentEnd ?? "76"} last), not by rank — a
-            0-incident stretch stays visible instead of being dropped.</>
-          )}
+          {unclassifiedPct}% of logged locations in this Range couldn&apos;t be matched to a specific segment and are excluded from the split.
         </p>
       )}
       {topRow && (
         <div style={{ padding: "10px 14px", borderRadius: "10px", background: "color-mix(in srgb, var(--page-accent, #4f46e5) 9%, transparent)", border: "1px solid color-mix(in srgb, var(--page-accent, #4f46e5) 28%, transparent)" }}>
           <p style={{ margin: 0, fontSize: "0.85rem", color: accentInk }}>
-            {useKmView ? (
-              <>The <strong>{topRow.label}</strong> stretch</>
-            ) : (
-              <><strong>{topRow.label}</strong></>
-            )}{" "}
-            leads the corridor at <strong>{fmtInt(topRow.predictedIncidents)}</strong> predicted incidents —{" "}
+            The <strong>{topRow.label}</strong> stretch leads the corridor at{" "}
+            <strong>{fmtInt(topRow.predictedIncidents)}</strong> predicted incidents —{" "}
             <strong>{(topShare * 100).toFixed(0)}%</strong> of the {fmtInt(displayedTotal)}-incident total on its own.
             {topN > 1 && (
               <>
                 {" "}
-                The top {topN} {useKmView ? "segments" : "exits"} together account for{" "}
+                The top {topN} segments together account for{" "}
                 <strong>{(topNShare * 100).toFixed(0)}%</strong> of the whole corridor&apos;s forecast —{" "}
                 {topNShare >= 0.5
-                  ? `response resources concentrated at just a few ${useKmView ? "stretches" : "exits"} would cover most of what's expected`
+                  ? "response resources concentrated at just a few stretches would cover most of what's expected"
                   : "risk is spread wider than a handful of hotspots"}.
               </>
             )}
@@ -359,7 +329,7 @@ export default function PredictiveCorridorChart({
         <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: "10px", flexWrap: "wrap", marginBottom: "6px" }}>
           <div>
             <div style={{ fontSize: "0.68rem", fontWeight: 800, color: "var(--page-accent, #4f46e5)", letterSpacing: "0.04em", textTransform: "uppercase" }}>
-              {useKmView ? "Segment" : "Exit"} forecast ranking
+              Segment forecast ranking
             </div>
             <div style={{ fontSize: "0.75rem", color: "var(--text-muted)" }}>
               Predicted incidents · next {forecastHorizon} days
@@ -385,13 +355,13 @@ export default function PredictiveCorridorChart({
           </>
         )}
 
-        {remainingRows.length > 0 && (
+        {remainingInlineRows.length > 0 && (
           <>
             <div style={{ fontSize: "0.66rem", fontWeight: 700, color: "var(--text-muted)", letterSpacing: "0.04em", textTransform: "uppercase", margin: topTierRows.length > 0 ? "12px 0 2px 0" : "10px 0 2px 0" }}>
-              {useKmView ? "All segments, in corridor order" : "Remaining exits"}
+              Next {remainingInlineRows.length}
             </div>
             <div style={{ display: "flex", flexDirection: "column", gap: "1px" }}>
-              {remainingRows.map((row, i) => renderRow(row, useKmView ? i + 1 : i + 4, "remaining"))}
+              {remainingInlineRows.map((row, i) => renderRow(row, i + TOP_TIER + 1, "remaining"))}
             </div>
           </>
         )}
@@ -413,7 +383,93 @@ export default function PredictiveCorridorChart({
             Predicted incidents (next {forecastHorizon}d)
           </div>
         </div>
+
+        {restRows.length > 0 && (
+          <button
+            type="button"
+            onClick={() => setSeeMoreOpen(true)}
+            style={{
+              marginTop: "12px", width: "100%", padding: "8px 12px", borderRadius: "8px",
+              border: "1px dashed var(--border-default)", background: "var(--bg-surface-hover)",
+              color: accentInk, fontWeight: 600, fontSize: "0.78rem", cursor: "pointer",
+            }}
+          >
+            See {restRows.length} more segment{restRows.length === 1 ? "" : "s"}
+          </button>
+        )}
       </div>
+
+      {/* Ranked rows are the AI's only input -- same read-only contract as
+          the forecast chart's own Narrative Explanation. Sent as one
+          shared ranking-narrative payload rather than the forecast-error
+          shape model-narrative expects, since "predicted incidents per
+          segment" isn't a candidate-model comparison. */}
+      <NarrativePanel
+        metrics={orderedRows.map((r) => ({ model: r.label }))}
+        endpoint="/api/ai-insight/ranking-narrative"
+        subjectKey={JSON.stringify(["corridor-ranking", showVolume, showWeather, forecastModelLabel, orderedRows.map((r) => [r.key, r.predictedIncidents])])}
+        horizonDays={forecastHorizon}
+        contextLine={`Predicted incidents across ${orderedRows.length} corridor segments, next ${forecastHorizon} days.`}
+        buildBody={() => ({
+          cardTitle: "Predicted Incidents Ranking",
+          groupBy: "segment",
+          metricLabel: "Predicted incidents",
+          metricUnit: "count",
+          metricDescription:
+            `Apportionment of the corridor's ${fmtInt(displayedTotal)}-incident, ${forecastHorizon}-day forecast across fixed 5km segments by each one's historical share of incidents — derived, not a per-segment trained model.`,
+          horizonDays: forecastHorizon,
+          totalLabel: `${fmtInt(displayedTotal)} incidents over the next ${forecastHorizon} days`,
+          rows: orderedRows.map((r) => ({
+            label: r.label,
+            value: r.predictedIncidents,
+            sharePct: displayedTotal > 0 ? (r.predictedIncidents / displayedTotal) * 100 : null,
+          })),
+        })}
+      />
+
+      {seeMoreOpen && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-label="All ranked segments"
+          onClick={() => setSeeMoreOpen(false)}
+          style={{ position: "fixed", inset: 0, zIndex: 200, background: "rgba(15, 23, 42, 0.55)", display: "grid", placeItems: "center", padding: 24 }}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            style={{
+              width: "min(720px, 100%)", maxHeight: "84vh", display: "flex", flexDirection: "column",
+              background: "var(--bg-surface)", borderRadius: 14, border: "1px solid var(--border-default)",
+              boxShadow: "0 24px 60px rgba(15,23,42,0.35)", overflow: "hidden",
+            }}
+          >
+            <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 16, padding: "18px 22px", borderBottom: "1px solid var(--border-default)" }}>
+              <div>
+                <h3 style={{ margin: 0, fontSize: "1.05rem", fontWeight: 700, color: "var(--text-primary)" }}>All segments, ranked</h3>
+                <p style={{ margin: "4px 0 0 0", fontSize: "0.8rem", color: "var(--text-muted)" }}>
+                  Ranks {INLINE_LIMIT + 1}–{orderedRows.length} of {orderedRows.length} · predicted incidents, next {forecastHorizon}d
+                </p>
+              </div>
+              <button
+                onClick={() => setSeeMoreOpen(false)}
+                aria-label="Close"
+                style={{
+                  flex: "none", width: 32, height: 32, borderRadius: 8, border: "1px solid var(--border-default)",
+                  background: "var(--bg-surface)", color: "var(--text-secondary)", cursor: "pointer",
+                  display: "grid", placeItems: "center", fontSize: "1rem", lineHeight: 1,
+                }}
+              >
+                ✕
+              </button>
+            </div>
+            <div style={{ overflowY: "auto", padding: "10px 22px 20px" }}>
+              <div style={{ display: "flex", flexDirection: "column", gap: "1px" }}>
+                {restRows.map((row, i) => renderRow(row, i + INLINE_LIMIT + 1, "remaining"))}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </article>
   );
 }

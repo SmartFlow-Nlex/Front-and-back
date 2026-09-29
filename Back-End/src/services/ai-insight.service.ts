@@ -460,6 +460,89 @@ export async function generateEventSurgeInsight(req: EventSurgeInsightRequest): 
   });
 }
 
+/* ── Ranking: a ranked list of corridor locations, not a forecast or classifier ── */
+
+export type RankingRowInput = { label: string; value: number; sharePct?: number | null; n?: number | null };
+
+export type RankingInsightRequest = {
+  cardTitle: string;
+  groupBy: "exit" | "segment";
+  metricLabel: string;
+  metricUnit: "count" | "percent";
+  metricDescription: string;
+  horizonDays?: number | null;
+  totalLabel?: string | null;
+  rows: RankingRowInput[];
+};
+
+const RANKING_SYSTEM = `You explain a ranked list of NLEX corridor locations to traffic operations staff who are not statisticians. Reply with JSON only.
+
+OUTPUT SHAPE
+{
+  "summary": "2-4 sentences: where the numbers are concentrated and what that means for where to act",
+  "perModel": [{"model": "<exact location label as given>", "verdict": "one sentence"}],
+  "caveat": "the single most important limitation, or null"
+}
+
+RULES
+- Never state a number that was not given to you. Never estimate one.
+- Every claim must be traceable to a number above. You know NOTHING about why a location scores the way it does, what infrastructure is there, or what caused past incidents. Do not speculate about causes.
+- perModel must contain exactly one entry for EVERY location listed, using its label exactly as given.
+- A location's evidence count (n), when given, matters: a location built from very few observations is a small-sample result, not a confident finding -- say so if the ranking leans on a thin-evidence row.
+- Translate into consequences a control room can act on: where to concentrate response resources, not why the numbers look the way they do.
+- Do not recommend retraining, more data, or model changes. The reader operates this system, they do not build it.
+- Plain English. No jargon that is not defined in the sentence that uses it.
+
+THE CAVEAT FIELD
+Use it ONLY for a limitation the supplied numbers themselves demonstrate -- a ranking that leans on one or two locations with very little evidence, a total dominated by a single location, a percent metric with a narrow spread across the whole list. If the numbers show no such problem, return null. Never invent a limitation about causes, infrastructure, or anything else you were not told.`;
+
+function buildRankingMessage(req: RankingInsightRequest): string {
+  const lines: string[] = [];
+  lines.push(`TASK: rank NLEX corridor ${req.groupBy}s by ${req.metricLabel}.`);
+  lines.push(`METRIC: ${req.metricDescription}`);
+  if (req.horizonDays != null) lines.push(`HORIZON: ${req.horizonDays} days ahead.`);
+  if (req.totalLabel) lines.push(`TOTAL: ${req.totalLabel}.`);
+
+  lines.push("", `${req.groupBy.toUpperCase()} RANKING (${req.metricLabel}${req.metricUnit === "percent" ? ", %" : ""})`);
+  for (const r of req.rows) {
+    const parts: string[] = [
+      `${req.metricLabel} ${
+        req.metricUnit === "percent" ? `${r.value.toFixed(1)}%` : r.value.toLocaleString("en-US", { maximumFractionDigits: 0 })
+      }`,
+    ];
+    if (r.sharePct != null) parts.push(`${r.sharePct.toFixed(1)}% of total`);
+    if (r.n != null) parts.push(`n=${r.n.toLocaleString("en-US")}`);
+    lines.push(`- ${r.label}: ${parts.join(", ")}`);
+  }
+
+  lines.push("", `Write one verdict for each of the ${req.rows.length} locations above, using their exact labels.`);
+  return lines.join("\n");
+}
+
+export async function generateRankingInsight(req: RankingInsightRequest): Promise<Insight> {
+  if (req.rows.length === 0) {
+    throw new GlmError("No ranking rows were supplied.", "bad_model_output");
+  }
+
+  const content = await chat({
+    system: RANKING_SYSTEM,
+    user: buildRankingMessage(req),
+    json: true,
+    maxTokens: 1800,
+    temperature: 0.3,
+  });
+
+  // Reuses the shared forecast-shaped validator: "model" doubles as the
+  // location label here, and validate() only checks it against the supplied
+  // set (guarding hallucinated rows), it never assumes the value is an
+  // algorithm name.
+  return validate(extractJson(content), {
+    quantity: "volume",
+    metrics: req.rows.map((r) => ({ model: r.label })),
+    horizonDays: req.horizonDays ?? 1,
+  });
+}
+
 export async function generateInsight(req: InsightRequest): Promise<Insight> {
   if (req.metrics.length === 0) {
     throw new GlmError("No model metrics were supplied.", "bad_model_output");

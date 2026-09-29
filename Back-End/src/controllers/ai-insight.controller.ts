@@ -4,11 +4,13 @@ import {
   ExplainSchema,
   CongestionNarrativeSchema,
   EventSurgeNarrativeSchema,
+  RankingNarrativeSchema,
 } from "../validators/ai-insight.validator.js";
 import {
   generateInsight,
   generateCongestionInsight,
   generateEventSurgeInsight,
+  generateRankingInsight,
 } from "../services/ai-insight.service.js";
 import { explain } from "../services/ai-explain.service.js";
 import { isGlmConfigured, providerInfo, GlmError } from "../lib/glm.client.js";
@@ -119,6 +121,38 @@ export const eventSurgeNarrative = async (req: Request, res: Response) => {
       return res.status(status).json({ success: false, code: err.code, message: err.message });
     }
     console.error("Event surge narrative failed:", err);
+    return res
+      .status(500)
+      .json({ success: false, code: "internal", message: "Narrative generation failed." });
+  }
+};
+
+/**
+ * POST /api/ai-insight/ranking-narrative
+ *
+ * Same read-only contract as the others: the client sends the ranked rows
+ * it's already showing (Predicted Incidents Ranking or Secondary Incident
+ * Risk), and gets prose back. Nothing is stored and nothing is applied.
+ */
+export const rankingNarrative = async (req: Request, res: Response) => {
+  const parsed = RankingNarrativeSchema.safeParse(req.body);
+  if (!parsed.success) {
+    return res.status(400).json({
+      success: false,
+      code: "bad_request",
+      message: parsed.error.issues.map((i) => `${i.path.join(".")}: ${i.message}`).join("; "),
+    });
+  }
+
+  try {
+    const data = await generateRankingInsight(parsed.data);
+    return res.json({ success: true, data });
+  } catch (err) {
+    if (err instanceof GlmError) {
+      const status = err.code === "bad_model_output" ? 502 : 503;
+      return res.status(status).json({ success: false, code: err.code, message: err.message });
+    }
+    console.error("Ranking narrative failed:", err);
     return res
       .status(500)
       .json({ success: false, code: "internal", message: "Narrative generation failed." });

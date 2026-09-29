@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { useThemeTokens } from "./useThemeTokens";
+import IncidentModelsNarrative from "./IncidentModelsNarrative";
 import InfoTooltip from "./InfoTooltip";
 import { shadeFor } from "./PredictiveCorridorChart";
 import { fmtInt, fmtNum } from "./incidentPredictive.shared";
@@ -111,6 +112,12 @@ export default function SecondaryIncidentRiskPanel() {
   }
 
   const meta = data.metadata;
+  const severityModelRows = Object.entries(meta?.severity.metrics ?? {}).map(([model, m]) => ({
+    model,
+    accuracy: m?.accuracy ?? null,
+    maeOrdinal: m?.MAE_ordinal ?? null,
+    n: m?.n ?? null,
+  }));
   const champion = meta?.severity.champion ?? null;
   const championMetrics = champion ? meta?.severity.metrics[champion] : undefined;
 
@@ -444,6 +451,46 @@ export default function SecondaryIncidentRiskPanel() {
           which pulls the mean well above the median.
         </p>
       </div>
+      <IncidentModelsNarrative
+        champion={champion}
+        severityModels={severityModelRows}
+        severityBreakdown={data.severityBreakdown.map((b) => ({
+          label: b.label,
+          actualCount: b.actualCount,
+          predictedCount: b.predictedCount,
+        }))}
+        clearance={
+          meta
+            ? {
+                concordanceIndex: meta.cox_ph.concordance_index ?? null,
+                maeMinutes: meta.cox_ph.mae_minutes ?? null,
+                n: meta.cox_ph.n ?? null,
+                medianMin: data.avgPredictedClearanceMin ?? null,
+                meanMin: data.meanPredictedClearanceMin ?? null,
+              }
+            : null
+        }
+        secondaryRisk={
+          meta
+            ? {
+                auc: meta.secondary_risk.auc ?? null,
+                baseRate: meta.secondary_risk.base_rate ?? null,
+                n: meta.secondary_risk.n ?? null,
+                kmRadius: meta.secondary_km_radius ?? null,
+                avgRisk: data.avgSecondaryRisk ?? null,
+              }
+            : null
+        }
+        hotspots={[...data.secondaryRiskByExit]
+          .sort((a, b) => b.avgRisk - a.avgRisk)
+          .map((x) => ({
+            name: x.exitName,
+            km: x.km,
+            n: x.n,
+            avgRisk: x.avgRisk,
+            actualSecondaryCount: x.actualSecondaryCount,
+          }))}
+      />
     </article>
   );
 }

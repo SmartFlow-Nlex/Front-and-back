@@ -5,6 +5,7 @@ import type { EChartsOption } from "echarts";
 import DashboardChart from "./DashboardChart";
 import InfoTooltip from "./InfoTooltip";
 import { fmtInt, fmtNum, fmtTrainedAt } from "./incidentPredictive.shared";
+import HighIncidentDayNarrative from "./HighIncidentDayNarrative";
 
 const BACKEND = process.env.NEXT_PUBLIC_BACKEND_URL ?? "http://localhost:4000";
 
@@ -206,6 +207,17 @@ export default function HighIncidentDayRiskPanel() {
         &ldquo;High-incident day&rdquo; is corridor-wide, above this model&apos;s own base rate of{" "}
         {(risk.base_rate * 100).toFixed(1)}% — trained {fmtTrainedAt(data?.trainedAt ?? null)}.
       </p>
+      <HighIncidentDayNarrative
+        auc={risk.auc ?? null}
+        baseRate={risk.base_rate ?? null}
+        n={risk.n ?? null}
+        rainSignificant={risk.rainSignificant ?? null}
+        rainPValue={risk.rainPValue ?? null}
+        topDriver={risk.topDriver ? { feature: FEATURE_LABEL[risk.topDriver.feature] ?? risk.topDriver.feature, effectSize: risk.topDriver.effectSize } : null}
+        rainScenarios={(risk.scenarios ?? []).filter((s) => s.rain_mm != null).map((s) => ({ rainMm: s.rain_mm as number, probability: s.probability }))}
+        volumeScenarios={(risk.volumeScenarios ?? []).filter((s) => s.volume != null).map((s) => ({ volume: s.volume as number, probability: s.probability }))}
+        trainedAt={fmtTrainedAt(data?.trainedAt ?? null)}
+      />
     </article>
   );
 }

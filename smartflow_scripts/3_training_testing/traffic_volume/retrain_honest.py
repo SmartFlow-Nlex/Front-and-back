@@ -232,10 +232,51 @@ def compute_metrics(actual, predicted, insample):
 # 3. MODELS — each is fit(train_df, horizon) -> ndarray[horizon]
 #    Identical signature so the harness cannot favour any of them.
 # ─────────────────────────────────────────────────────
+def _aligned(fitted, train):
+    """statsmodels fitted values, paired with the actuals they predict.
+
+    The first observation of a differenced model has no fitted value and comes
+    back as 0 or NaN; including it would drag the in-sample R2 down for a reason
+    that has nothing to do with fit quality. Both arrays are trimmed to the same
+    length, non-finite pairs dropped, and the differencing warm-up skipped."""
+    f = np.asarray(fitted, dtype=float)
+    a = np.asarray(train["y"].values, dtype=float)
+    n = min(len(f), len(a))
+    f, a = f[-n:], a[-n:]
+    ok = np.isfinite(f) & np.isfinite(a)
+    if ok.sum() > SEASON * 2:
+        ok[:SEASON] = False
+    return (a[ok], f[ok])
+
+
+# ── IN-SAMPLE FIT, FOR THE OVERFITTING DIAGNOSTIC ────────────────────────────
+#
+# Every model returns (forecast, fitted) where `fitted` is its prediction on the
+# TRAINING rows it was just fit to, or None.
+#
+# Why bother: `r2` elsewhere in this file is a held-out score. On its own it
+# cannot distinguish a model that genuinely generalises from one that barely
+# learned anything — both can post a mediocre held-out R2. The gap between the
+# in-sample fit and the held-out score is what separates them: a large gap is
+# memorisation, a small one is a model that is as good (or as limited) on unseen
+# days as on seen ones.
+#
+# `fitted` is None for SeasonalNaive and Climatology on purpose. They are rules,
+# not fits — there are no parameters to overfit, so a train/validation gap for
+# them would be a number with no meaning. NULL is the honest entry, in keeping
+# with this file's rule against manufacturing a value where none exists. The
+# previous pipeline wrote a fabricated train R2 of 0.99; that is the mistake
+# this comment exists to prevent repeating.
+#
+# Alignment note: fitted values must line up with the training rows they
+# predict. statsmodels returns one per observation; the LSTM can only predict
+# from row LSTM_SEQ onward, so its fitted array is shorter and is returned with
+# the matching actuals rather than padded.
+
 def m_seasonal_naive(train, h):
     """Baseline: repeat the last observed week."""
     y = train["y"].values
-    return np.array([y[-SEASON + (i % SEASON)] for i in range(h)])
+    return np.array([y[-SEASON + (i % SEASON)] for i in range(h)]), None
 
 
 def m_climatology(train, h, future_dates):
@@ -243,7 +284,7 @@ def m_climatology(train, h, future_dates):
     recent = train.tail(SEASON * 8)
     means = recent.groupby(recent.ds.dt.dayofweek)["y"].mean()
     overall = recent["y"].mean()
-    return np.array([means.get(d.dayofweek, overall) for d in future_dates])
+    return np.array([means.get(d.dayofweek, overall) for d in future_dates]), None
 
 
 def m_holt_winters(train, h):
@@ -252,13 +293,13 @@ def m_holt_winters(train, h):
         train["y"].values, trend="add", seasonal="add",
         seasonal_periods=SEASON, initialization_method="estimated",
     ).fit()
-    return np.asarray(fit.forecast(h), dtype=float)
+    return np.asarray(fit.forecast(h), dtype=float), _aligned(fit.fittedvalues, train)
 
 
 def m_holts_linear(train, h):
     from statsmodels.tsa.holtwinters import Holt
     fit = Holt(train["y"].values, initialization_method="estimated").fit(optimized=True)
-    return np.asarray(fit.forecast(h), dtype=float)
+    return np.asarray(fit.forecast(h), dtype=float), _aligned(fit.fittedvalues, train)
 
 
 def m_sarimax(train, h, exog_future):
@@ -268,7 +309,7 @@ def m_sarimax(train, h, exog_future):
         order=(1, 1, 1), seasonal_order=(1, 1, 1, SEASON),
         enforce_stationarity=False, enforce_invertibility=False,
     ).fit(disp=False)
-    return np.asarray(fit.forecast(steps=h, exog=exog_future), dtype=float)
+    return np.asarray(fit.forecast(steps=h, exog=exog_future), dtype=float), _aligned(fit.fittedvalues, train)
 
 
 def m_prophet(train, h, future_df):
@@ -277,7 +318,8 @@ def m_prophet(train, h, future_df):
     for c in WEATHER_COLS:
         mdl.add_regressor(c)
     mdl.fit(train[["ds", "y"] + WEATHER_COLS])
-    return mdl.predict(future_df)["yhat"].values
+    _in = mdl.predict(train[["ds"] + WEATHER_COLS])["yhat"].values
+    return mdl.predict(future_df)["yhat"].values, (train["y"].values, _in)
 
 
 def m_lstm(train, h, future_weather):
@@ -321,7 +363,11 @@ def m_lstm(train, h, future_weather):
 
     pad = np.zeros((h, len(feats)))
     pad[:, 0] = out
-    return scaler.inverse_transform(pad)[:, 0]
+    # In-sample: one-step-ahead on the same windows the network was trained on.
+    _ins = mdl.predict(X, verbose=0).ravel()
+    _pad = np.zeros((len(_ins), len(feats))); _pad[:, 0] = _ins
+    _fit_y = scaler.inverse_transform(_pad)[:, 0]
+    return scaler.inverse_transform(pad)[:, 0], (train["y"].values[LSTM_SEQ:], _fit_y)
 
 
 def m_sarimax_nw(train, h):
@@ -331,14 +377,15 @@ def m_sarimax_nw(train, h):
         train["y"].values, order=(1, 1, 1), seasonal_order=(1, 1, 1, SEASON),
         enforce_stationarity=False, enforce_invertibility=False,
     ).fit(disp=False)
-    return np.asarray(fit.forecast(steps=h), dtype=float)
+    return np.asarray(fit.forecast(steps=h), dtype=float), _aligned(fit.fittedvalues, train)
 
 
 def m_prophet_nw(train, h, future_df):
     from prophet import Prophet
     mdl = Prophet(weekly_seasonality=True, yearly_seasonality=True, daily_seasonality=False)
     mdl.fit(train[["ds", "y"]])
-    return mdl.predict(future_df[["ds"]])["yhat"].values
+    _in = mdl.predict(train[["ds"]])["yhat"].values
+    return mdl.predict(future_df[["ds"]])["yhat"].values, (train["y"].values, _in)
 
 
 def m_lstm_nw(train, h):
@@ -368,7 +415,10 @@ def m_lstm_nw(train, h):
         p = float(mdl.predict(window[np.newaxis, ...], verbose=0)[0, 0])
         out.append(p)
         window = np.vstack([window[1:], [[p]]])
-    return scaler.inverse_transform(np.array(out).reshape(-1, 1))[:, 0]
+    _ins = mdl.predict(X, verbose=0).ravel()
+    _fit_y = scaler.inverse_transform(_ins.reshape(-1, 1))[:, 0]
+    return (scaler.inverse_transform(np.array(out).reshape(-1, 1))[:, 0],
+            (train["y"].values[LSTM_SEQ:], _fit_y))
 
 
 # Each weather-using model is paired with an identical weather-free control so the
@@ -418,8 +468,13 @@ import pickle
 
 CKPT = str(WORK / "cache" / "retrain_checkpoint.pkl")
 _data_sig = int(pd.util.hash_pandas_object(df["y"], index=False).sum() % (10 ** 12))
-FINGERPRINT = ("climatology-weather-v2", HORIZON, STEP, N_ORIGINS, len(df), _data_sig, sorted(MODELS))
+FINGERPRINT = ("climatology-weather-v3-insample", HORIZON, STEP, N_ORIGINS, len(df), _data_sig, sorted(MODELS))
 done_origins: set[int] = set()
+# Per-origin (actual, fitted) pairs on the TRAINING rows, for train R2. Kept out
+# of the checkpoint deliberately: the cached file predates this diagnostic, and
+# reusing it would report a train R2 built from fewer origins than the
+# validation score it is compared against.
+insample_fit: dict[str, list] = {k: [] for k in MODELS}
 
 if os.path.exists(CKPT):
     try:
@@ -470,7 +525,12 @@ for oi, cut in enumerate(origins, 1):
 
     for name, fn in MODELS.items():
         try:
-            yhat = np.asarray(fn(train, HORIZON, future_known), dtype=float)
+            _out = fn(train, HORIZON, future_known)
+            yhat, _fit = (_out if isinstance(_out, tuple) else (_out, None))
+            yhat = np.asarray(yhat, dtype=float)
+            if _fit is not None:
+                _a, _f = _fit
+                insample_fit[name].append((np.asarray(_a, float), np.asarray(_f, float)))
             if yhat.shape != (HORIZON,) or not np.isfinite(yhat).all():
                 raise ValueError(f"bad output shape/values: {yhat.shape}")
             for d, v in zip(future.ds.values, yhat):
@@ -496,6 +556,32 @@ for name in MODELS:
     n_bad = int(np.isnan(yhat).sum())
     m = compute_metrics(eval_df["y"].values, yhat, insample)
     m["model"] = name
+
+    # ── Train R2, and the gap against the held-out score ────────────────
+    #
+    # Pooled across origins rather than averaged per-origin: each origin has a
+    # different training length, so a plain mean would weight a 300-day fit the
+    # same as an 800-day one. Pooling the residuals weights by how much data
+    # each fit actually covered, which is what the ratio is meant to reflect.
+    #
+    # `gap` = train - validation. Near zero means the model performs on unseen
+    # days as it does on seen ones. Large and positive means it memorised.
+    # Negative is possible and not an error: an under-fit model can score worse
+    # in-sample than out, usually when the held-out window happens to be
+    # easier than the training period.
+    pairs = insample_fit.get(name) or []
+    if pairs:
+        _a = np.concatenate([a for a, _ in pairs])
+        _f = np.concatenate([f for _, f in pairs])
+        _ss_tot = float(np.sum((_a - _a.mean()) ** 2))
+        m["train_r2"] = float(1 - np.sum((_a - _f) ** 2) / _ss_tot) if _ss_tot > 0 else np.nan
+    else:
+        # Rule-based baselines have no parameters to overfit — see the note by
+        # the model definitions. NULL, not a manufactured number.
+        m["train_r2"] = np.nan
+    m["val_r2"] = m["r2"]
+    m["gap"] = (m["train_r2"] - m["val_r2"]
+                if np.isfinite(m["train_r2"]) and np.isfinite(m["val_r2"]) else np.nan)
     m["failed_origins"] = len(failures[name])
     m["missing_days"] = n_bad
     rows.append(m)
@@ -509,7 +595,7 @@ res = res.sort_values("wmape")
 
 print(f"\n  Evaluated on {len(eval_df)} days: "
       f"{eval_df.ds.min().date()} -> {eval_df.ds.max().date()}\n")
-print(res[["wmape", "mae", "rmse", "mase", "r2", "failed_origins"]].to_string(
+print(res[["wmape", "mae", "rmse", "mase", "r2", "train_r2", "gap", "failed_origins"]].to_string(
     float_format=lambda v: f"{v:,.4f}"))
 
 # A model earns "accepted" only by beating BOTH trivial baselines.
@@ -656,7 +742,10 @@ print(f"  Metrics were validated at h={HORIZON}d; error grows beyond that.\n")
 future_preds = {}
 for name, fn in MODELS.items():
     try:
-        yhat = np.asarray(fn(df, FUTURE_DAYS, future_df), dtype=float)
+        # Models return (forecast, fitted). Only the forecast is wanted here —
+        # the in-sample half exists for the train R2 diagnostic in step 3.
+        _out = fn(df, FUTURE_DAYS, future_df)
+        yhat = np.asarray(_out[0] if isinstance(_out, tuple) else _out, dtype=float)
         if yhat.shape != (FUTURE_DAYS,) or not np.isfinite(yhat).all():
             raise ValueError("bad output")
         future_preds[name] = yhat
@@ -716,6 +805,15 @@ for i, (_, d) in enumerate(future_df.iterrows()):
 conn.commit()
 print(f"  ml_predictive_volume: {len(ctx_df)} PAST + {len(eval_df)} PRESENT + {len(future_df)} FUTURE")
 
+def _nn(v):
+    """NaN -> None, so an unavailable diagnostic lands as SQL NULL rather than
+    the string 'NaN' or a silent zero."""
+    try:
+        return None if v is None or not np.isfinite(float(v)) else float(v)
+    except (TypeError, ValueError):
+        return None
+
+
 cur.execute("DELETE FROM gold.ml_model_metrics WHERE target = 'Total Traffic' AND split_label = %s", (SPLIT,))
 # The chart's metrics table shows the weather-driven models; the _nw controls are
 # stored alongside with uses_weather=false so the toggle can show their numbers too.
@@ -737,9 +835,11 @@ for name, r in learned.iterrows():
     cur.execute(
         """INSERT INTO gold.ml_model_metrics
            (model_name, target, rmse, mae, mse, wmape, r2, mase, mape, smape, rmsse,
+            train_r2, val_r2, gap,
             rank, accepted, rejected_reason, uses_weather, aic, bic, split_label, updated_at)
-           VALUES (%s,'Total Traffic',%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,NOW())""",
+           VALUES (%s,'Total Traffic',%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,NOW())""",
         (name, r.rmse, r.mae, r.mse, r.wmape, r.r2, r.mase, r.mape, r.smape, r.rmsse,
+         _nn(getattr(r, "train_r2", None)), _nn(getattr(r, "val_r2", None)), _nn(getattr(r, "gap", None)),
          int(r["rank"]), bool(r.accepted), _reason,
          name in USES_WEATHER, _aic, _bic, SPLIT),
     )

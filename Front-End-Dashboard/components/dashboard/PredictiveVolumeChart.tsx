@@ -515,7 +515,14 @@ export default function PredictiveVolumeChart({ months = "all", from, to, weathe
                   <th style={{ padding: "6px 8px", fontWeight: 700, textAlign: "right" }}>MAPE</th>
                   <th style={{ padding: "6px 8px", fontWeight: 700, textAlign: "right" }}>sMAPE</th>
                   <th style={{ padding: "6px 8px", fontWeight: 700, textAlign: "right" }}>RMSSE</th>
-                  <th style={{ padding: "6px 8px", fontWeight: 700, textAlign: "right" }}>Adj R²</th>
+                  {/* Adj R² removed: it was permanently blank, and it is not
+                      merely unimplemented — adjusted R² penalises by the number
+                      of predictors, which is undefined for Prophet, SARIMAX and
+                      an LSTM. Replaced with the train/validation pair, which is
+                      defined for every fitted model and answers the question a
+                      reader actually has: did it memorise? */}
+                  <th style={{ padding: "6px 8px", fontWeight: 700, textAlign: "right" }}>Train R²</th>
+                  <th style={{ padding: "6px 8px", fontWeight: 700, textAlign: "right" }}>Gap</th>
                 </>
               )}
             </tr>
@@ -543,7 +550,20 @@ export default function PredictiveVolumeChart({ months = "all", from, to, weathe
                     <td style={{ padding: "8px", textAlign: "right", color: "var(--text-secondary)", fontVariantNumeric: "tabular-nums" }}>{m.mape ?? "—"}</td>
                     <td style={{ padding: "8px", textAlign: "right", color: "var(--text-secondary)", fontVariantNumeric: "tabular-nums" }}>{m.smape ?? "—"}</td>
                     <td style={{ padding: "8px", textAlign: "right", color: "var(--text-secondary)", fontVariantNumeric: "tabular-nums" }}>{m.rmsse ?? "—"}</td>
-                    <td style={{ padding: "8px", textAlign: "right", color: "var(--text-secondary)", fontVariantNumeric: "tabular-nums" }}>{m.adjusted_r2 ?? "—"}</td>
+                    <td style={{ padding: "8px", textAlign: "right", color: "var(--text-secondary)", fontVariantNumeric: "tabular-nums" }}>{m.train_r2 ?? "—"}</td>
+                    {/* The gap is the diagnostic, so it is the one that gets
+                        coloured: a wide positive gap means the model fits its
+                        training days far better than unseen ones. Under 0.15 is
+                        unremarkable; the threshold is a reading aid, not a
+                        pass/fail the pipeline enforces. A dash means the model
+                        has no parameters to overfit (the two naive baselines). */}
+                    <td style={{
+                      padding: "8px", textAlign: "right", fontVariantNumeric: "tabular-nums",
+                      fontWeight: m.gap && m.gap !== "—" ? 700 : 400,
+                      color: m.gap && m.gap !== "—"
+                        ? (parseFloat(m.gap) > 0.15 ? "var(--color-danger)" : "var(--color-success)")
+                        : "var(--text-secondary)",
+                    }}>{m.gap ?? "—"}</td>
                   </>
                 )}
               </tr>

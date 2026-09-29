@@ -6,6 +6,11 @@ import {
   eventSurgeNarrative,
   insightStatus,
   explainFeature,
+  incidentModelsNarrative,
+  clearanceNarrative,
+  incidentPriorityNarrative,
+  corridorRiskNarrative,
+  highIncidentDayNarrative,
 } from "../controllers/ai-insight.controller.js";
 
 const router = Router();
@@ -22,5 +27,13 @@ router.post("/model-narrative", asyncHandler(modelNarrative));
 router.post("/congestion-narrative", asyncHandler(congestionNarrative));
 router.post("/event-surge-narrative", asyncHandler(eventSurgeNarrative));
 router.post("/explain", asyncHandler(explainFeature));
+
+/* The incident module's other panels. Separate endpoints because none of them
+ * is scored on the forecast scale -- see ai-insight.incident.service.ts. */
+router.post("/incident-models-narrative", asyncHandler(incidentModelsNarrative));
+router.post("/clearance-narrative", asyncHandler(clearanceNarrative));
+router.post("/incident-priority-narrative", asyncHandler(incidentPriorityNarrative));
+router.post("/corridor-risk-narrative", asyncHandler(corridorRiskNarrative));
+router.post("/high-incident-day-narrative", asyncHandler(highIncidentDayNarrative));
 
 export default router;

@@ -161,7 +161,10 @@ function buildUserMessage(req: InsightRequest): string {
 }
 
 /** Coerce the model's reply into the Insight shape, dropping anything unusable. */
-function validate(raw: unknown, req: InsightRequest): Insight {
+/* Shared by the incident module's own narrative service, which needs the same
+ * guarantees — drop a verdict naming a model that was not sent, and treat the
+ * word "None" as an absent caveat — without duplicating them. */
+export function validate(raw: unknown, req: InsightRequest): Insight {
   const o = (raw ?? {}) as Record<string, unknown>;
 
   const summary =
@@ -169,7 +172,20 @@ function validate(raw: unknown, req: InsightRequest): Insight {
       ? o.summary.trim()
       : "No summary was produced.";
 
-  const supplied = new Set(req.metrics.map((m) => m.model));
+  /* Match on a normalised form, then emit the SUPPLIED spelling.
+   *
+   * The rule that a verdict naming a model we did not send is a hallucination
+   * stays exactly as it was — this only stops a difference of case, spacing or
+   * a stray full stop counting as a different model. Asked for "Clearance time
+   * (Cox PH)" the model returns "Clearance Time (Cox PH)" often enough that on
+   * roughly half of calls every verdict was dropped and the panel rendered a
+   * summary with no per-model lines under it.
+   *
+   * Still an equality test on the normalised strings, so it can never attach a
+   * verdict to a DIFFERENT model in the roster; and the name rendered is the
+   * one we supplied, never the model's spelling of it. */
+  const norm = (v: string) => v.toLowerCase().replace(/\s+/g, " ").replace(/[.,;:]+$/, "").trim();
+  const supplied = new Map(req.metrics.map((m) => [norm(m.model), m.model]));
   const perModel: { model: string; verdict: string }[] = [];
 
   if (Array.isArray(o.perModel)) {
@@ -180,8 +196,9 @@ function validate(raw: unknown, req: InsightRequest): Insight {
       const verdict = typeof r.verdict === "string" ? r.verdict.trim() : "";
       // A verdict for a model that was not sent is a hallucination — drop it
       // rather than showing the reader a row that is not on their chart.
-      if (!model || !verdict || !supplied.has(model)) continue;
-      perModel.push({ model, verdict });
+      const canonical = supplied.get(norm(model));
+      if (!model || !verdict || !canonical) continue;
+      perModel.push({ model: canonical, verdict });
     }
   }
 

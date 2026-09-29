@@ -5,6 +5,7 @@ import { useThemeTokens } from "./useThemeTokens";
 import type { EChartsOption } from "echarts";
 import DashboardChart from "./DashboardChart";
 import InfoTooltip from "./InfoTooltip";
+import ClearanceNarrative, { type ClearanceNarrativeGroup } from "./ClearanceNarrative";
 
 const BACKEND = process.env.NEXT_PUBLIC_BACKEND_URL ?? "http://localhost:4000";
 
@@ -197,6 +198,24 @@ export default function IncidentSeverityModels() {
   const kmMedians = kmGroups
     .map((g) => ({ group: g, median: medianOf(g), n: nOf(g) }))
     .filter((x): x is { group: string; median: number; n: number } => x.median != null);
+
+  /* What the narrative is told about, for whichever view is on screen.
+     The km view is data-driven and has no VIEW_GROUPS entry, so its labels
+     come from kmGroups instead of the fixed lists. */
+  const stillOpenAt = (g: string, mark: number): number | null => {
+    const pts = data.survivalCurve
+      .filter((p) => p.group === g && p.timeMin <= mark)
+      .sort((a, b) => a.timeMin - b.timeMin);
+    return pts.length ? pts[pts.length - 1].survivalProbability : null;
+  };
+  const narrativeGroups: ClearanceNarrativeGroup[] = (view === "km" ? kmGroups : groups).map((g) => ({
+    group: g,
+    n: nOf(g),
+    medianMin: medianOf(g),
+    stillOpen60: stillOpenAt(g, 60),
+    stillOpen120: stillOpenAt(g, 120),
+    isBaseline: g.startsWith("Baseline"),
+  }));
   // A monotonic trend across ALL segments (not just first-vs-last) is a much
   // stronger claim than "the two ends differ" — checked properly rather than
   // assumed, so a real-but-noisy middle segment can't get described as part
@@ -484,6 +503,11 @@ export default function IncidentSeverityModels() {
       <div style={{ width: "100%" }}>
         <DashboardChart option={view === "km" ? kmBarOption : curveOption} height={view === "km" ? 340 : 368 + (legendRows - 1) * 30} />
       </div>
+      <ClearanceNarrative
+        dimension={view}
+        groups={narrativeGroups}
+        trainedAt={data.trainedAt}
+      />
     </article>
   );
 }

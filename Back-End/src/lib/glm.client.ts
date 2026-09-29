@@ -75,6 +75,19 @@ export type ChatOptions = {
  * One completion. Returns the assistant's message content, or throws GlmError
  * with a code the caller can turn into an HTTP status.
  */
+/* NO REASONING HEADROOM. Deliberate, and measured.
+ *
+ * Adding 1,600 tokens of headroom to every caller looked free — billing is on
+ * tokens actually spent — and it was not. GLM-5.x expands its reasoning to
+ * fill whatever allowance it is given: the same narrative call went from
+ * 14-30 s to 79-147 s, past the client's 100 s abort, so the fix for
+ * "did not return JSON" started producing "took too long" instead.
+ *
+ * The budget is therefore left exactly as the caller sized it, and truncation
+ * is handled by the one retry below rather than by pre-emptive headroom. A
+ * retry costs a second call only on the minority that need it, where headroom
+ * taxed every call. */
+
 export async function chat(opts: ChatOptions): Promise<string> {
   if (!isGlmConfigured()) {
     throw new GlmError("GLM_API_KEY is not set — add it to Back-End/.env.", "not_configured");
@@ -89,6 +102,7 @@ export async function chat(opts: ChatOptions): Promise<string> {
     temperature: opts.temperature ?? 0,
     max_tokens: opts.maxTokens ?? 1200,
   };
+
   if (opts.json) body.response_format = { type: "json_object" };
 
   const viaOpenRouter = isOpenRouter();
@@ -112,6 +126,31 @@ export async function chat(opts: ChatOptions): Promise<string> {
         allow_fallbacks: true,
       };
     }
+
+    /* Only route to providers that actually implement what we asked for.
+     *
+     * This is the fix for the narrative panels failing perhaps a third of the
+     * time, and the failure was never really about token budgets. Some
+     * providers in the pool silently IGNORE response_format: json_object. On
+     * those, GLM-5.x writes its chain of thought into `content` as plain prose
+     * — "Let me work through this carefully. Quantity: daily road incident
+     * counts..." — reports reasoning_tokens as 0 because none of it went
+     * through a reasoning field, exhausts max_tokens before reaching the JSON,
+     * and the caller gets truncated prose. That surfaced as "did not return
+     * JSON", and every attempt to fix it by widening the budget just bought
+     * more prose: at 3,000 tokens it produced 11,708 characters and still had
+     * not started the JSON.
+     *
+     * require_parameters drops those providers from the routing. Measured on
+     * the 7-model roster that was failing: 4/4 clean at 14-22 s, against
+     * 19-147 s and frequent truncation without it.
+     *
+     * It narrows the pool, so it trades some availability for correctness.
+     * That is the right trade here: a provider that ignores json_object cannot
+     * serve this feature at all. */
+    body.provider = { ...(body.provider as object), require_parameters: true };
+
+
   } else {
     // Z.ai-specific. The 4.x Flash models reason before answering, spending
     // hundreds of tokens deliberating over a fixed task, so it is switched off.
@@ -123,6 +162,12 @@ export async function chat(opts: ChatOptions): Promise<string> {
     // goes stale on the next release, the call below retries once without it.
     if (env.GLM_THINKING === "disabled") body.thinking = { type: "disabled" };
   }
+
+  /** Set once the budget has been widened, so a stubborn provider cannot put
+   *  this into an endless retry loop. */
+  let widenedForLength = false;
+  /** Set once a re-ask has been spent on unparseable JSON. */
+  let retriedForJson = false;
 
   /**
    * One attempt. Separated so the 1210 path can drop `thinking` and re-send
@@ -219,9 +264,81 @@ export async function chat(opts: ChatOptions): Promise<string> {
     throw new GlmError(`GLM API error: ${message}`, "upstream_error");
   }
 
-  const content = payload?.choices?.[0]?.message?.content;
+  const choice = payload?.choices?.[0];
+  const content = choice?.message?.content;
+
+  /* Out of budget, whichever way it shows.
+   *
+   * finish_reason "length" means reasoning spent the allowance before the
+   * answer was finished. That surfaces two different ways and they have the
+   * same cause: nothing at all ("Model returned an empty response"), or a JSON
+   * object cut off mid-string, which extractJson reports as "Model did not
+   * return JSON" because there is no closing brace to find. The retry used to
+   * cover only the first, so the truncated half still reached the operator as
+   * a hard error — which is what it did, on the Predictive tab.
+   *
+   * Retrying on the finish_reason rather than on the shape of the damage
+   * catches both. */
+  if (choice?.finish_reason === "length" && !widenedForLength) {
+    widenedForLength = true;
+    const had = typeof body.max_tokens === "number" ? body.max_tokens : 1200;
+    body.max_tokens = Math.min(had * 3, 8000);
+    return send();
+  }
+
+  /* Asked for JSON and given something that will not parse.
+   *
+   * Distinct from the truncation above: the braces are there and the budget
+   * was not exhausted, the model simply emitted broken JSON — an unescaped
+   * quote inside a verdict is the usual culprit. finish_reason is "stop", so
+   * widening the budget is not the answer and the retry above rightly does not
+   * fire. One clean re-ask is, and it is bounded to a single attempt so a model
+   * having a genuinely bad day still surfaces as an error rather than looping.
+   *
+   * Checked here rather than left to extractJson in the service because this is
+   * the only place that can re-send the request. */
+  if (opts.json && typeof content === "string" && content.trim() && !retriedForJson) {
+    const looksParseable = (() => {
+      const t = content.trim();
+      const fenced = t.match(/```(?:json)?\s*([\s\S]*?)```/);
+      const c = fenced ? fenced[1] : t;
+      const a = c.indexOf("{");
+      const b = c.lastIndexOf("}");
+      if (a === -1 || b <= a) return false;
+      try { JSON.parse(c.slice(a, b + 1)); return true; } catch { return false; }
+    })();
+    if (!looksParseable) {
+      retriedForJson = true;
+      return send();
+    }
+  }
+
   if (typeof content !== "string" || content.trim().length === 0) {
-    throw new GlmError("Model returned an empty response.", "bad_model_output");
+    /* Empty because reasoning spent the whole budget.
+     *
+     * GLM-5.x always reasons, and OpenRouter bills those tokens against
+     * max_tokens. Some providers in the fallback set keep reasoning to a
+     * handful of tokens; others run it to the cap and leave nothing for the
+     * answer. Measured on one prompt, same account, minutes apart: the same
+     * request returned finish=stop with 1 reasoning token and a full answer,
+     * and finish=length with 1,400 of 1,400 spent reasoning and empty content.
+     * Roughly one call in three failed, which surfaced to the operator as
+     * "Model returned an empty response" on a button that had just worked.
+     *
+     * finish_reason "length" with no content is exactly that case and nothing
+     * else, so it is the one condition worth retrying. The retry buys headroom
+     * rather than changing the request, and OpenRouter may also route it to a
+     * different provider, which is the other half of the cure.
+     *
+     * Capping reasoning with OpenRouter's own `reasoning: {effort}` was tried
+     * first and made it WORSE: the provider that already over-reasoned ignored
+     * the field and then hit the cap every time. Left out deliberately. */
+    throw new GlmError(
+      choice?.finish_reason === "length"
+        ? "The model spent its entire token budget reasoning and returned no answer. Try again."
+        : "Model returned an empty response.",
+      "bad_model_output",
+    );
   }
   return content;
   }

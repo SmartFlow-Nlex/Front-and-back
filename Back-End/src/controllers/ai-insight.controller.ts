@@ -12,6 +12,20 @@ import {
 } from "../services/ai-insight.service.js";
 import { explain } from "../services/ai-explain.service.js";
 import { isGlmConfigured, providerInfo, GlmError } from "../lib/glm.client.js";
+import {
+  generateIncidentModelsInsight,
+  generateClearanceInsight,
+  generateIncidentPriorityInsight,
+  generateCorridorRiskInsight,
+  generateHighIncidentDayInsight,
+} from "../services/ai-insight.incident.service.js";
+import {
+  IncidentModelsNarrativeSchema,
+  ClearanceNarrativeSchema,
+  IncidentPriorityNarrativeSchema,
+  CorridorRiskNarrativeSchema,
+  HighIncidentDayNarrativeSchema,
+} from "../validators/ai-insight.validator.js";
 
 /** GET /api/ai-insight/status — lets a panel hide its button when unconfigured. */
 export const insightStatus = async (_req: Request, res: Response) => {
@@ -140,3 +154,79 @@ export const explainFeature = async (req: Request, res: Response) => {
       .json({ success: false, code: "internal", message: "Explanation failed." });
   }
 };
+
+/* ── The incident module's three non-forecast panels ────────────────────────
+ *
+ * Same contract as the endpoints above: the client posts the rows it is
+ * already displaying and gets prose back. Nothing is read from the database
+ * and nothing is stored. The three share one handler factory because the only
+ * thing that differs between them is the schema and the generator -- writing
+ * the same parse/try/catch three times would just be three places to fix the
+ * next time the error shaping changes.
+ */
+function narrativeHandler<T>(
+  schema: { safeParse: (v: unknown) => { success: boolean; data?: T; error?: { issues: { path: (string | number)[]; message: string }[] } } },
+  generate: (input: T) => Promise<unknown>,
+  label: string,
+) {
+  return async (req: Request, res: Response) => {
+    const parsed = schema.safeParse(req.body);
+    if (!parsed.success) {
+      return res.status(400).json({
+        success: false,
+        code: "bad_request",
+        message: (parsed.error?.issues ?? [])
+          .map((i) => `${i.path.join(".")}: ${i.message}`)
+          .join("; "),
+      });
+    }
+    try {
+      const data = await generate(parsed.data as T);
+      return res.json({ success: true, data });
+    } catch (err) {
+      if (err instanceof GlmError) {
+        const status = err.code === "bad_model_output" ? 502 : 503;
+        return res.status(status).json({ success: false, code: err.code, message: err.message });
+      }
+      console.error(`${label} narrative failed:`, err);
+      return res
+        .status(500)
+        .json({ success: false, code: "internal", message: "Narrative generation failed." });
+    }
+  };
+}
+
+/** POST /api/ai-insight/incident-models-narrative */
+export const incidentModelsNarrative = narrativeHandler(
+  IncidentModelsNarrativeSchema,
+  generateIncidentModelsInsight,
+  "Incident models",
+);
+
+/** POST /api/ai-insight/clearance-narrative */
+export const clearanceNarrative = narrativeHandler(
+  ClearanceNarrativeSchema,
+  generateClearanceInsight,
+  "Clearance",
+);
+
+/** POST /api/ai-insight/incident-priority-narrative */
+export const incidentPriorityNarrative = narrativeHandler(
+  IncidentPriorityNarrativeSchema,
+  generateIncidentPriorityInsight,
+  "Incident priority",
+);
+
+/** POST /api/ai-insight/corridor-risk-narrative */
+export const corridorRiskNarrative = narrativeHandler(
+  CorridorRiskNarrativeSchema,
+  generateCorridorRiskInsight,
+  "Corridor risk models",
+);
+
+/** POST /api/ai-insight/high-incident-day-narrative */
+export const highIncidentDayNarrative = narrativeHandler(
+  HighIncidentDayNarrativeSchema,
+  generateHighIncidentDayInsight,
+  "High-incident-day risk",
+);

@@ -1231,6 +1231,9 @@ export type CanvasMark = {
   readonly lane: number | null;
   /** The phase label and time left in it, or when the event starts. */
   readonly text: string;
+  /** Seconds until it starts; null once it is running. Lets the canvas build
+   *  up to an event rather than have it appear from nothing. */
+  readonly secondsUntilStart: number | null;
 };
 
 /** One mark per event that has not finished and can run on this road, for the canvas to label. Pure; the canvas calls it each frame. */
@@ -1249,6 +1252,7 @@ export function canvasMarks(events: readonly ScenarioEvent[], road: Road, simTim
       name: e.name,
       kind: effect === "incident" ? "incident" : effect === "closure" ? "closure" : "speed_zone",
       state: state === "pending" ? "pending" : "active",
+      secondsUntilStart: state === "pending" ? Math.max(0, e.startS - t) : null,
       xM: road.metresAt(e.positionKm),
       lane,
       text:

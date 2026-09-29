@@ -1,4 +1,4 @@
-import { TrafficSim, replicateSync } from "../../../../../Front-End-Dashboard/app/dashboard/scenario-sandbox/simulation";
+import { TrafficSim, replicateSync } from "../../../../Front-End-Dashboard/app/dashboard/scenario-sandbox/simulation";
 const DT = 0.05;
 const NO_INT = { closedLanes: [false,false,false,false], closurePoint: 1e9, closureEnd: 1e9,
   incidents: [], speedLimitKmh: null, speedZone: [0,0] } as any;

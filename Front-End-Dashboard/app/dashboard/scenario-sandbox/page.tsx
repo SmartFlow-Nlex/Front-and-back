@@ -36,6 +36,7 @@ import { borrowedLanes, defaultStretch, planStretch, planZipper, REALLOCATION_NA
 import { PAINT_WHITE, isMotorcycle, motorcyclePaintFor, paintFor, trailerPaintFor, type Paint } from "./vehiclePaint";
 import { drawMotorcycle } from "./motorcycleArt";
 import { useDirectionSim, type DirectionApi, type SharedRoadInputs } from "./useDirectionSim";
+import { ReplayBuffer } from "./replay";
 
 const BACKEND = process.env.NEXT_PUBLIC_BACKEND_URL ?? "http://localhost:4000";
 
@@ -587,6 +588,23 @@ export default function AiSandboxPage() {
   const [incidentCovered, setIncidentCovered] = useState(true);
   const [simSpeed, setSimSpeed] = useState<(typeof SPEED_STEPS)[number]>(1);
   const [running, setRunning] = useState(true);
+  /* Replay. `replayIndex` null means live; a number is the frame on screen.
+     One buffer per carriageway, because the two record independently and an
+     operator reviewing NB should not have SB scrubbed out from under them. */
+  const replayRef = useRef<Record<Direction, ReplayBuffer>>({
+    NB: new ReplayBuffer(),
+    SB: new ReplayBuffer(),
+  });
+  const [replayIndex, setReplayIndex] = useState<number | null>(null);
+  const [replayLen, setReplayLen] = useState(0);
+  /* Whether the recording holds anything worth reviewing. The control is
+     hidden entirely when it does not: on an empty road there is nothing to
+     replay, and a button that is always present but does nothing teaches the
+     operator to ignore it. Recomputed on the metrics tick rather than per
+     frame — it walks the buffer. */
+  const [replayHasEvent, setReplayHasEvent] = useState(false);
+  const replayIndexRef = useRef<number | null>(null);
+  replayIndexRef.current = replayIndex;
 
   /* Full screen used to be the road and nothing else: the controls rail stayed
    * behind the overlay, so the one mode meant for watching the simulation was
@@ -1020,6 +1038,9 @@ export default function AiSandboxPage() {
             const stepMs = performance.now() - stepStart;
             const prevCost = stepCostRef.current[direction];
             stepCostRef.current[direction] = prevCost === null ? stepMs : prevCost + (stepMs - prevCost) * 0.02;
+            // Recorded for review. Throttled inside the buffer, so calling it
+            // every step costs a comparison on most of them.
+            replayRef.current[direction].record(sim);
             const sctx = d.scenarioCtxRef.current;
             if (sctx) {
               const r = applyAtBoundary(d.scenarioBinding, sim, sctx.controls, sctx.events, sctx.frame, d.scenarioDueRef.current);
@@ -1034,6 +1055,8 @@ export default function AiSandboxPage() {
         metricAccRef.current += dtReal;
         if (metricAccRef.current >= 0.25) {
           metricAccRef.current = 0;
+          setReplayLen(replayRef.current[focusDirection].length);
+          setReplayHasEvent(replayRef.current[focusDirection].lastEventIndex() !== null);
           for (const direction of activeDirections) {
             const sim = byDirection[direction].simRef.current;
             if (sim) byDirection[direction].setMetrics(sim.metrics());
@@ -1061,10 +1084,19 @@ export default function AiSandboxPage() {
           paintVehicleProbe();
         }
       } else {
-        const focusedSim = byDirection[focusDirection].simRef.current;
+        const liveSim = byDirection[focusDirection].simRef.current;
+        /* Under review, the canvas is handed a recorded frame dressed as a
+           sim rather than the live one. The engine keeps running underneath —
+           nothing here reaches back into it — so letting go returns to a
+           simulation that has carried on, not one frozen at the rewind point. */
+        const ri = replayIndexRef.current;
+        const focusedSim =
+          ri !== null && liveSim
+            ? replayRef.current[focusDirection].asSimLike(ri, liveSim.cfg) ?? liveSim
+            : liveSim;
         if (focusedSim) {
           const dayFraction = daylightFraction(clockStartMinRef.current + (focusedSim.time - WARMUP_S) / 60);
-          render(ctx, canvas, focusedSim, locationRef.current, marksRef.current, maxLaneRef.current, exitsRef.current, scenarioOverlayRef.current[focusDirection] ?? null, animClockRef.current, dayFraction, running ? simAccRef.current : 0);
+          render(ctx, canvas, focusedSim as NonNullable<typeof liveSim>, locationRef.current, marksRef.current, maxLaneRef.current, exitsRef.current, scenarioOverlayRef.current[focusDirection] ?? null, animClockRef.current, dayFraction, ri !== null ? 0 : running ? simAccRef.current : 0);
           paintVehicleProbe();
         }
       }
@@ -1695,12 +1727,77 @@ export default function AiSandboxPage() {
                   </button>
                 ))}
               </div>
-              <button className="btn-primary" onClick={() => setRunning((r) => !r)}>
-                {running ? "Pause" : "Play"}
+              <button
+                className="btn-primary"
+                onClick={() => {
+                  // Pressing Play while reviewing means "catch up", not
+                  // "resume from here" — the engine never stopped.
+                  if (replayIndex !== null) { setReplayIndex(null); setRunning(true); return; }
+                  setRunning((r) => !r);
+                }}
+              >
+                {replayIndex !== null ? "Back to live" : running ? "Pause" : "Play"}
               </button>
+              {/* Rewind. An incident here is over in seconds, and an operator
+                  reading the metrics or watching the other carriageway misses
+                  it with no way back — Reset throws the whole run away. This
+                  reviews the recording; it does not rewind the engine. */}
+              {(replayHasEvent || replayIndex !== null) && (
+                <button
+                  className="btn-muted"
+                  title="Replay the last incident or closure on this carriageway"
+                  onClick={() => {
+                    const buf = replayRef.current[focusDirection];
+                    const at = buf.lastEventIndex();
+                    setRunning(false);
+                    // A few frames before it, so the operator sees it happen
+                    // rather than arriving to the aftermath.
+                    setReplayIndex(at === null ? 0 : Math.max(0, at - 8));
+                    setReplayLen(buf.length);
+                  }}
+                >
+                  ⟲ Replay incident
+                </button>
+              )}
               <button className="btn-muted" onClick={resetEverything} title="Back to a clean start: scenarios, closures, speed limits, incidents, baselines and any lane reallocation are all cleared">
                 Reset
               </button>
+              {replayIndex !== null && (
+                <span className="sandbox-replay" style={{ display: "inline-flex", alignItems: "center", gap: 8, marginLeft: 10 }}>
+                  <button
+                    className="btn-muted"
+                    title="One frame back"
+                    onClick={() => setReplayIndex((i) => Math.max(0, (i ?? 0) - 1))}
+                  >
+                    ◀
+                  </button>
+                  <input
+                    type="range"
+                    min={0}
+                    max={Math.max(0, replayLen - 1)}
+                    value={replayIndex}
+                    onChange={(e) => setReplayIndex(Number(e.target.value))}
+                    style={{ width: 180 }}
+                    aria-label="Scrub through the recording"
+                  />
+                  <button
+                    className="btn-muted"
+                    title="One frame forward"
+                    onClick={() => setReplayIndex((i) => Math.min(replayLen - 1, (i ?? 0) + 1))}
+                  >
+                    ▶
+                  </button>
+                  <span style={{ fontSize: "0.72rem", color: "var(--text-muted)", fontVariantNumeric: "tabular-nums" }}>
+                    {(() => {
+                      const f = replayRef.current[focusDirection].frame(replayIndex);
+                      const last = replayRef.current[focusDirection].lastTime;
+                      if (!f || last === null) return "reviewing";
+                      const behind = last - f.time;
+                      return behind < 0.2 ? "at the latest frame" : `${behind.toFixed(1)}s behind live`;
+                    })()}
+                  </span>
+                </span>
+              )}
               {expanded && (
                 <button
                   className="btn-muted"
@@ -3760,10 +3857,51 @@ function drawCarriageway(
   const motoShare = ASSUMPTIONS.MOTORCYCLE_SHARE_OF_CLASS_1.value;
   let motorcycles = 0;
   let class1 = 0;
+  /* How much room each sprite actually has behind it.
+   *
+   * `k` inflates every vehicle so a 4.6 m car is still visible when a
+   * kilometre is on screen, and its anti-overlap cap is computed from AVERAGE
+   * spacing. A standing queue is nothing like average: the engine guarantees a
+   * real gap of MIN_CLEARANCE (0.5 m), which at this zoom is under a pixel, so
+   * an inflated sprite is drawn straight through the one behind it and the
+   * queue renders as a solid bar.
+   *
+   * The physics is correct — the overlap diagnostic reports zero — so this is
+   * purely the drawing. A vehicle's sprite is capped at the nose-to-nose
+   * distance to its follower: that is exactly the room it has, and using it
+   * means no sprite can reach into another however far k is pushed.
+   *
+   * Straddlers count in both lanes, the same rule the engine uses, so a car
+   * halfway through a change cannot be drawn over one it is leaving. */
+  const noseGapM = new Map<number, number>();
+  {
+    const bands = new Map<number, typeof sim.vehicles>();
+    const put = (b: number, v: (typeof sim.vehicles)[number]) => {
+      const arr = bands.get(b);
+      if (arr) arr.push(v);
+      else bands.set(b, [v]);
+    };
+    for (const v of sim.vehicles) {
+      put(v.lane, v);
+      if (v.laneShift < 1 && v.laneFrom !== v.lane) put(v.laneFrom, v);
+    }
+    for (const arr of bands.values()) {
+      arr.sort((a, b) => a.x - b.x);
+      for (let i = 1; i < arr.length; i++) {
+        const gap = arr[i].x - arr[i - 1].x;
+        const prev = noseGapM.get(arr[i].id);
+        // Tightest constraint wins when a vehicle appears in two bands.
+        if (prev === undefined || gap < prev) noseGapM.set(arr[i].id, gap);
+      }
+    }
+  }
+
   for (const v of sim.vehicles) {
     try {
       // One factor for every class, so a bus still reads as longer than a car.
-      const len = Math.max(2, v.length * mToPx * k);
+      // Capped at the room behind it — see noseGapM above.
+      const roomM = noseGapM.get(v.id) ?? Infinity;
+      const len = Math.max(2, Math.min(v.length * mToPx * k, roomM * mToPx));
       const wid = Math.max(
         2,
         Math.min(laneH * 0.85, widthM[v.vClass] * mToPx * k * widScale),

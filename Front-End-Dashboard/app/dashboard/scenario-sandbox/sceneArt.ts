@@ -256,6 +256,98 @@ function drawCone(g: SceneGeometry, x: number, y: number, r: number): void {
   c.fill();
 }
 
+/* ── people ──────────────────────────────────────────────────────────────────
+ *
+ * Seen from directly above, a standing person is a head and a pair of
+ * shoulders — not a stick figure, which is a side-on idea and reads as a
+ * smudge at this scale. Shoulders are an ellipse across the body's width, the
+ * head a smaller circle inside it, and that silhouette is legible down to
+ * about five pixels, which is where these end up on a laptop.
+ *
+ * `sway` gives each figure a small independent drift so a group does not look
+ * like a row of pins. It is driven by the caller's clock and the figure's own
+ * seed, so it stays smooth and does not depend on frame rate.
+ */
+type PersonRole = "responder" | "civilian" | "worker";
+
+const PERSON_KIT: Record<PersonRole, { readonly torso: string; readonly vest: string | null; readonly head: string }> = {
+  // Hi-vis over a dark uniform: the vest is what the eye picks up at this size.
+  responder: { torso: "#1f2937", vest: "#fde047", head: "#6b4f3a" },
+  worker: { torso: "#ea580c", vest: "#facc15", head: "#6b4f3a" },
+  // A driver who has got out of the car. No vest — that is the point of them:
+  // the operator should be able to see who is protected and who is not.
+  civilian: { torso: "#334155", vest: null, head: "#7a5a43" },
+};
+
+function drawPerson(
+  g: SceneGeometry,
+  x: number,
+  y: number,
+  role: PersonRole,
+  seed: number,
+  scale = 1,
+): void {
+  const c = g.ctx;
+  const kit = PERSON_KIT[role];
+  // Shoulder half-width. Tied to lane height so people stay in proportion when
+  // the canvas is short and the cars shrink with it.
+  const w = Math.max(1.6, g.laneH * 0.105 * scale);
+  const h = w * 1.18;
+  // Weight shifting, not walking: a few tenths of a pixel, phase per figure.
+  const sx = Math.sin(g.t * 1.7 + seed * 2.39) * w * 0.16;
+  const sy = Math.cos(g.t * 1.3 + seed * 1.71) * w * 0.12;
+  const px = x + sx;
+  const py = y + sy;
+
+  c.fillStyle = "rgba(0,0,0,0.30)";
+  c.beginPath();
+  c.ellipse(px + 0.8, py + 1.3, w, h * 0.92, 0, 0, Math.PI * 2);
+  c.fill();
+
+  c.fillStyle = kit.torso;
+  c.beginPath();
+  c.ellipse(px, py, w, h, 0, 0, Math.PI * 2);
+  c.fill();
+
+  if (kit.vest) {
+    // A band across the shoulders rather than a full fill, so the dark uniform
+    // still reads underneath and the figure does not become a yellow blob.
+    c.save();
+    c.beginPath();
+    c.ellipse(px, py, w, h, 0, 0, Math.PI * 2);
+    c.clip();
+    c.fillStyle = kit.vest;
+    c.fillRect(px - w, py - h * 0.34, w * 2, h * 0.68);
+    c.restore();
+  }
+
+  c.fillStyle = kit.head;
+  c.beginPath();
+  c.arc(px, py - h * 0.1, w * 0.52, 0, Math.PI * 2);
+  c.fill();
+}
+
+/** A small group around a point, spread so nobody stands inside anybody else. */
+function drawCrew(
+  g: SceneGeometry,
+  x: number,
+  y: number,
+  role: PersonRole,
+  count: number,
+  seed: number,
+  spreadX = 1,
+): void {
+  for (let i = 0; i < count; i++) {
+    // Deterministic scatter: the same scene draws the same crew every frame,
+    // so they do not jitter around between repaints.
+    const a = Math.sin((seed + i * 37.1) * 12.9898) * 43758.5453;
+    const b = Math.sin((seed + i * 91.7) * 78.233) * 12345.6789;
+    const jx = ((a - Math.floor(a)) - 0.5) * g.carLen * 1.5 * spreadX;
+    const jy = ((b - Math.floor(b)) - 0.5) * g.laneH * 0.62;
+    drawPerson(g, x + g.fwd * jx, y + jy, role, seed + i);
+  }
+}
+
 function drawBarrel(g: SceneGeometry, x: number, y: number, r: number): void {
   const c = g.ctx;
   c.fillStyle = "rgba(0,0,0,0.28)";
@@ -551,6 +643,112 @@ function drawFlood(g: SceneGeometry, m: SceneMark): void {
   for (let i = 0; i < 4; i += 2) c.fillRect(gx - 1.5, Math.min(gy, gy + g.outward * g.laneH * 0.5) + (i * g.laneH * 0.5) / 4, 3, (g.laneH * 0.5) / 4);
 }
 
+/* ── the run-up to an event ─────────────────────────────────────────
+ *
+ * Events used to appear from nothing: one frame of clear road, the next a
+ * four-car pile-up. An operator watching the panel rather than the canvas had
+ * no way to be looking at the right place at the right moment, and the thing
+ * the sandbox exists to show — how traffic behaves AS an incident happens —
+ * was over before they found it.
+ *
+ * So the last few seconds are telegraphed at the spot it will happen. The
+ * pulse accelerates as the clock runs down, which reads as tension without
+ * needing a number, and each family telegraphs its own kind of event: a crash
+ * closes in on a point, a breakdown starts flashing hazards, roadworks set out
+ * their cones. Purely presentational — nothing here touches the engine, and
+ * the event still starts at exactly the second it was scheduled for.
+ */
+
+/** How long before it starts the build-up begins. */
+const IMMINENT_LEAD_S = 12;
+
+/** 0 at the far edge of the lead-in, 1 at the instant it fires. */
+function imminence(m: SceneMark): number {
+  if (m.state !== "pending" || m.secondsUntilStart === null) return 0;
+  if (m.secondsUntilStart > IMMINENT_LEAD_S) return 0;
+  return 1 - m.secondsUntilStart / IMMINENT_LEAD_S;
+}
+
+export function isImminent(m: SceneMark): boolean {
+  return imminence(m) > 0;
+}
+
+function drawImminent(g: SceneGeometry, m: SceneMark): void {
+  const f = imminence(m);
+  if (f <= 0) return;
+  const c = g.ctx;
+  const x = g.xPx(m.xM);
+  const y = m.lane === null ? g.outerEdgeY + g.outward * g.carWid * 0.2 : g.laneCenterY(m.lane);
+
+  /* Pulse rate rises from roughly one a second to four, so the urgency is
+     legible without reading the countdown on the label. */
+  const rate = 1 + f * 3;
+  const phase = wrap(g.t * rate, 1);
+  const tint =
+    m.family === "scheduled_roadworks" ? "249,115,22" :
+    m.family === "rain" || m.family === "flood" ? "56,189,248" :
+    m.family === "breakdown_in_lane" || m.family === "breakdown_shoulder" ? "250,204,21" :
+    "239,68,68";
+
+  // A ring closing on the spot: starts wide and faint, arrives small and bright.
+  const r0 = g.laneH * (1.5 - 1.05 * phase);
+  c.strokeStyle = `rgba(${tint},${(0.12 + 0.5 * f) * (1 - phase)})`;
+  c.lineWidth = Math.max(1.2, g.laneH * 0.06);
+  c.beginPath();
+  c.arc(x, y, Math.max(2, r0), 0, Math.PI * 2);
+  c.stroke();
+
+  // A steady halo underneath, so the place is findable between pulses.
+  c.fillStyle = `rgba(${tint},${0.05 + 0.13 * f})`;
+  c.beginPath();
+  c.arc(x, y, g.laneH * 0.52, 0, Math.PI * 2);
+  c.fill();
+
+  switch (m.family) {
+    case "scheduled_roadworks": {
+      // Cones going out along the taper, one at a time.
+      const n = Math.floor(f * 4);
+      for (let i = 0; i < n; i++) {
+        drawCone(g, x - g.fwd * g.carLen * (0.8 + i * 0.9), y - g.outward * g.laneH * 0.34 * (1 - i / 4), Math.max(2, g.laneH * 0.055));
+      }
+      break;
+    }
+    case "breakdown_in_lane":
+    case "breakdown_shoulder": {
+      // Hazards start flashing before it coasts to a stop.
+      if (Math.floor(g.t * (2 + f * 3)) % 2 === 0) {
+        c.fillStyle = `rgba(250,204,21,${0.45 + 0.4 * f})`;
+        for (const sgn of [-1, 1]) {
+          c.beginPath();
+          c.arc(x - g.fwd * g.carLen * 0.4, y + sgn * g.carWid * 0.4, Math.max(1.4, g.carWid * 0.17), 0, Math.PI * 2);
+          c.fill();
+        }
+      }
+      break;
+    }
+    case "rain":
+    case "flood":
+      break; // the weather itself is the warning; the halo is enough
+    default: {
+      /* A collision: two chevrons closing on the point of impact from either
+         side, which is the shape of the thing about to happen. */
+      const close = 1 - phase;
+      const d = g.carLen * (0.5 + 2.4 * close);
+      c.strokeStyle = `rgba(${tint},${0.25 + 0.6 * f})`;
+      c.lineWidth = Math.max(1.4, g.laneH * 0.07);
+      for (const sgn of [-1, 1]) {
+        const cx = x + g.fwd * sgn * d;
+        c.beginPath();
+        c.moveTo(cx + g.fwd * sgn * g.carLen * 0.32, y - g.laneH * 0.2);
+        c.lineTo(cx, y);
+        c.lineTo(cx + g.fwd * sgn * g.carLen * 0.32, y + g.laneH * 0.2);
+        c.stroke();
+      }
+      break;
+    }
+  }
+}
+
 /* ── scenes by family ────────────────────────────────────────────────────────── */
 
 /** Where a responder slides in from over the early part of a phase (px upstream of its parked spot). */
@@ -562,14 +760,69 @@ function drawBreakdown(g: SceneGeometry, m: SceneMark, onShoulder: boolean): voi
   const laneY = m.lane === null ? g.outerEdgeY + g.outward * g.carWid * 0.15 : g.laneCenterY(m.lane);
   const y = onShoulder ? g.outerEdgeY + g.outward * g.carWid * 0.2 : laneY;
   const blink = Math.floor(g.t * 2.2) % 2 === 0;
-  const { len } = drawStalled(g, x, y, kind, onShoulder ? 0.05 : -0.03, blink);
-  drawWarningTriangle(g, x - g.fwd * (len + g.carLen * 3.2), y, Math.max(4, g.carWid * 0.42));
-  if (!onShoulder) drawTaper(g, x - g.fwd * (len + g.carLen * 2.4), y, g.outward, 3, g.carLen * 1.6);
-  if (m.phaseId === "service") {
-    const back = x - g.fwd * (len + g.carLen * 1.25) + arrival(g, m.phaseFraction, 0, 0.1, g.carLen * 6);
-    drawTow(g, back, y, kind === "truck");
+  const service = m.phaseId === "service";
+  const seed = Math.abs(Math.round(m.xM));
+
+  /* The recovery happens in the back half of `service`: the truck arrives,
+     couples up, then hauls the casualty away. Previously the tow slid in and
+     then the whole scene disappeared the instant the event ended, so the
+     vehicle was never actually seen to leave — it was simply deleted. */
+  const pull = service ? ramp(m.phaseFraction, 0.55, 0.98) : 0;
+  const haul = g.fwd * pull * g.carLen * 24;
+
+  const { len } = drawStalled(g, x + haul, y, kind, onShoulder ? 0.05 : -0.03, blink);
+  // The warning triangle and cones belong to the road, not the car: they stay
+  // where they were set until someone picks them up at the very end.
+  const kitUp = service ? 1 - ramp(m.phaseFraction, 0.75, 1) : 1;
+  if (kitUp > 0.02) {
+    drawWarningTriangle(g, x - g.fwd * (len + g.carLen * 3.2), y, Math.max(4, g.carWid * 0.42));
+    if (!onShoulder) drawTaper(g, x - g.fwd * (len + g.carLen * 2.4), y, g.outward, Math.max(1, Math.round(3 * kitUp)), g.carLen * 1.6);
+  }
+
+  /* The driver, standing clear of their own vehicle on the outward side —
+     which is what you are told to do and what an operator would expect to
+     see. They get picked up once the tow is moving. */
+  if (pull < 0.4) {
+    drawPerson(g, x - g.fwd * g.carLen * 1.1, y + g.outward * g.laneH * (onShoulder ? 0.3 : 0.44), "civilian", seed + 3);
+  }
+
+  if (service) {
+    /* Same rule as the collision scene: the truck's position comes from the
+       casualty's and both drawn lengths, so it cannot be rendered through the
+       vehicle it is recovering. It waits BEHIND while coupling up and leads
+       once the load is moving, which is why the offset flips with `pull`. */
+    const towLen = g.carLen * (kind === "truck" ? 2.3 : 1.7);
+    const hitch = g.carLen * 0.28;
+    const casualtyX = x + haul;
+    const behind = casualtyX - g.fwd * (len * 0.5 + hitch + towLen * 0.5);
+    const ahead = casualtyX + g.fwd * (len * 0.5 + hitch + towLen * 0.5);
+    const towX = behind + (ahead - behind) * pull + arrival(g, m.phaseFraction, 0, 0.1, g.carLen * 6);
+    drawTow(g, towX, y, kind === "truck");
+    // One operator working the hook, until the load is under way.
+    if (pull < 0.3 && m.phaseFraction > 0.12) {
+      // Beside the coupling, clear of both vehicles.
+      drawPerson(g, x - g.fwd * (len * 0.5 + g.carLen * 0.35), y + g.outward * g.laneH * 0.28, "worker", seed + 17);
+    }
   }
 }
+
+/* A wreck does not blink out of existence when the clock says "clearing".
+ *
+ * It used to: `wreckHere = blocked || tow` meant that at the instant the phase
+ * turned over, the crashed cars AND the tow truck both vanished from the
+ * canvas in one frame, and the lane was simply empty. An operator who looked
+ * away for two seconds missed the entire recovery and could not tell whether
+ * anything had been towed or the scene had just been deleted.
+ *
+ * So `clearing` is now the phase where the towing actually happens: the truck
+ * is coupled to the casualty, both pull away together, and they leave down the
+ * carriageway at a believable speed. Everything else winds down in the same
+ * order a real scene does — the crew get back in, the cones come up last.
+ */
+
+/** How far along `clearing` the tow starts to pull away, and when it is clear of the frame. */
+const TOW_PULL_FROM = 0.3;
+const TOW_PULL_TO = 0.96;
 
 function drawCollision(g: SceneGeometry, m: SceneMark): void {
   const x = g.xPx(m.xM);
@@ -578,8 +831,19 @@ function drawCollision(g: SceneGeometry, m: SceneMark): void {
   const tow = m.phaseId === "tow";
   const clearing = m.phaseId === "clearing";
   const multi = m.family === "multi_vehicle_collision";
-  const wreckHere = blocked || tow;
   const blink = Math.floor(g.t * 2.2) % 2 === 0;
+  const seed = Math.abs(Math.round(m.xM));
+
+  /* During clearing the casualty is on the hook and moving. `haul` is how far
+     down the road the pair has got, in pixels; 0 while they are still coupling
+     up. Eased, so they pull away rather than snapping into motion. */
+  const pull = clearing ? ramp(m.phaseFraction, TOW_PULL_FROM, TOW_PULL_TO) : 0;
+  const haul = g.fwd * pull * g.carLen * 26;
+  /* The other vehicles in a multi-car pile are recovered one at a time, so the
+     scene thins out instead of emptying at once. */
+  const remaining = clearing ? Math.max(1, Math.round((multi ? 4 : 2) * (1 - ramp(m.phaseFraction, 0.05, 0.8)))) : null;
+
+  const wreckHere = blocked || tow || clearing;
 
   if (wreckHere) {
     const styles: readonly CarStyle[] = [
@@ -588,20 +852,32 @@ function drawCollision(g: SceneGeometry, m: SceneMark): void {
       { body: "#ca8a04", roof: "#eab308", glass: GLASS },
       { body: "#475569", roof: "#64748b", glass: GLASS },
     ];
-    const count = m.family === "minor_collision" ? 2 : m.family === "self_accident" ? 1 : 4;
+    const full = m.family === "minor_collision" ? 2 : m.family === "self_accident" ? 1 : 4;
+    const count = remaining === null ? full : Math.min(full, remaining);
+    /* Offsets in car lengths (dx) and car widths (dy). A pile-up should look
+       tangled, but every pair has to clear in ONE axis or the sprites merge
+       into an unreadable blob — which is what index 2 did: 0.4 lengths behind
+       the lead car and only 0.62 widths across, so it was drawn through it.
+       Each pair below is separated by at least a full length OR a full width. */
     const cars: readonly { readonly dx: number; readonly dy: number; readonly a: number }[] = [
-      { dx: 0, dy: 0, a: 0.06 },
-      { dx: -0.95, dy: 0.12, a: -0.22 },
-      { dx: -0.4, dy: -0.62, a: 0.62 },
-      { dx: -1.55, dy: -0.35, a: -0.5 },
+      { dx: 0, dy: 0, a: 0.06 },          // the one that stopped
+      { dx: -1.15, dy: 0.1, a: -0.22 },   // ran into the back of it
+      { dx: -0.15, dy: -0.95, a: 0.62 },  // spun out alongside
+      { dx: -2.25, dy: -0.3, a: -0.5 },   // and one further back again
     ];
     const selfSpin = m.family === "self_accident" ? 0.7 : 0;
+    // Skid marks and debris stay put: the road keeps them after the cars go.
     drawSkid(g, x - g.fwd * g.carLen * 0.4, laneY, g.carLen * 3.4, 0.12);
     for (let i = 0; i < count; i++) {
       const car = cars[i];
       const len = g.carLen;
-      const cx = x + g.fwd * (car.dx * len - len / 2);
-      inFrame(g, cx, laneY + car.dy * g.carWid * (m.family === "minor_collision" ? 0.9 : 1.3), car.a + selfSpin, () => {
+      // Only the hooked casualty (index 0) travels; the rest wait their turn.
+      const towedBy = i === 0 ? haul : 0;
+      const cx = x + g.fwd * (car.dx * len - len / 2) + towedBy;
+      // Straightens out as it is dragged square behind the truck.
+      const angle = car.a + selfSpin - (i === 0 ? (car.a + selfSpin) * pull : 0);
+      const cy = laneY + car.dy * g.carWid * (m.family === "minor_collision" ? 0.9 : 1.3) * (i === 0 ? 1 - pull : 1);
+      inFrame(g, cx, cy, angle, () => {
         paintCar(g.ctx, len, g.carWid, styles[i % styles.length]);
         paintHazards(g.ctx, len, g.carWid, blink);
       });
@@ -617,22 +893,62 @@ function drawCollision(g: SceneGeometry, m: SceneMark): void {
     if (policeIn > 0 && policeOut < 1) {
       const px = x - g.fwd * (back + g.carLen) + arrival(g, blocked ? m.phaseFraction : 1, 0.25, 0.45, g.carLen * 8) + g.fwd * policeOut * g.carLen * 14;
       drawPolice(g, px, laneY + g.outward * g.laneH * 0.34, 0.1 * g.outward);
+      // Two officers working the scene, beside their car rather than in it.
+      if (policeOut < 0.5) drawCrew(g, px + g.fwd * g.carLen * 0.8, laneY + g.outward * g.laneH * 0.3, "responder", 2, seed + 11);
     }
   }
   if (blocked && m.family !== "minor_collision") {
     const ax = x - g.fwd * (back + g.carLen * 3.2) + arrival(g, m.phaseFraction, 0.1, 0.3, g.carLen * 9);
     drawAmbulance(g, ax, laneY - g.outward * g.laneH * 0.02);
+    // Crew only once the ambulance has actually arrived.
+    if (m.phaseFraction > 0.32) drawCrew(g, x - g.fwd * g.carLen * 0.9, laneY - g.outward * g.laneH * 0.22, "responder", 2, seed + 23);
   }
-  if (tow) {
+
+  /* The people who were IN the crash. They get out early, stand clear on the
+     outside of the lane, and are gone once the recovery is under way. */
+  if (blocked || tow) {
+    const outCount = m.family === "self_accident" ? 1 : multi ? 4 : 2;
+    const got = blocked ? ramp(m.phaseFraction, 0.04, 0.3) : 1;
+    const leaving = tow ? ramp(m.phaseFraction, 0.55, 0.95) : 0;
+    const standing = Math.round(outCount * got * (1 - leaving));
+    if (standing > 0) {
+      drawCrew(g, x - g.fwd * g.carLen * 1.5, laneY + g.outward * g.laneH * 0.42, "civilian", standing, seed + 5, 1.3);
+    }
+  }
+
+  if (tow || clearing) {
     const heavy = multi;
-    drawTow(g, x - g.fwd * (g.carLen * 2.2) + arrival(g, m.phaseFraction, 0, 0.12, g.carLen * 9), laneY, heavy);
-    if (multi) drawTow(g, x - g.fwd * (g.carLen * 4.9) + arrival(g, m.phaseFraction, 0.05, 0.2, g.carLen * 11), laneY + g.outward * g.laneH * 0.02, false);
+    /* Derived from the CASUALTY's position and both drawn lengths, not from
+       the scene origin. The previous version put the truck's centre 0.3 car
+       lengths from the car's centre while drawing it 2.3 car lengths long, so
+       the recovery vehicle was rendered straight through its own load.
+       Placing the truck's REAR a hitch-length ahead of the car's NOSE makes
+       the overlap impossible rather than merely unlikely. */
+    const towLen = g.carLen * (heavy ? 2.3 : 1.7);
+    const hitch = g.carLen * 0.28;
+    const casualtyX = x - g.fwd * g.carLen * 0.5 + haul;
+    const coupled = casualtyX + g.fwd * (g.carLen * 0.5 + hitch + towLen * 0.5);
+    /* While it is still reversing into place it approaches from upstream; once
+       coupled it leads. Same truck either way — never removed and re-added. */
+    const tx = clearing
+      ? coupled
+      : coupled + arrival(g, m.phaseFraction, 0, 0.12, g.carLen * 9);
+    drawTow(g, tx, laneY, heavy);
+    if (multi && tow) drawTow(g, x - g.fwd * (g.carLen * 4.9) + arrival(g, m.phaseFraction, 0.05, 0.2, g.carLen * 11), laneY + g.outward * g.laneH * 0.02, false);
+    // The operator hooking it up. They stop once the load is moving.
+    if (pull < 0.25) drawCrew(g, x - g.fwd * g.carLen * 1.2, laneY + g.outward * g.laneH * 0.16, "worker", 2, seed + 41, 0.8);
   }
-  // cones mark the scene from the moment it exists until it is cleared
+
+  /* Cones mark the scene from the moment it exists, and are the LAST thing to
+     go — lifted only as the tow clears, which is the real order of work. */
   const coneY = laneY;
-  drawTaper(g, x - g.fwd * (back + g.carLen * 1.2), coneY, g.outward, 4, g.carLen * 2.2);
-  if (clearing) {
-    for (let i = 0; i < 3; i++) drawCone(g, x + g.fwd * (i * g.carLen * 0.7 - g.carLen * 0.2), coneY - g.outward * g.laneH * 0.18, Math.max(2.2, g.laneH * 0.06));
+  const conesUp = clearing ? 1 - ramp(m.phaseFraction, 0.6, 1) : 1;
+  if (conesUp > 0.02) {
+    drawTaper(g, x - g.fwd * (back + g.carLen * 1.2), coneY, g.outward, Math.max(1, Math.round(4 * conesUp)), g.carLen * 2.2);
+    if (clearing) {
+      const n = Math.max(0, Math.round(3 * conesUp));
+      for (let i = 0; i < n; i++) drawCone(g, x + g.fwd * (i * g.carLen * 0.7 - g.carLen * 0.2), coneY - g.outward * g.laneH * 0.18, Math.max(2.2, g.laneH * 0.06));
+    }
   }
 }
 
@@ -643,12 +959,21 @@ function drawOverturned(g: SceneGeometry, m: SceneMark): void {
   const tow = m.phaseId === "tow";
   const clearing = m.phaseId === "clearing";
   const blink = Math.floor(g.t * 2.2) % 2 === 0;
-  if (blocked || tow) {
+  const seed = Math.abs(Math.round(m.xM));
+  /* Same correction as the collision scene: an overturned trailer used to
+     disappear the frame the phase turned to `clearing`. A forty-tonne unit on
+     its side does not leave in an instant, and a recovery is the one thing an
+     operator most wants to watch. It is righted and hauled out instead. */
+  const pull = clearing ? ramp(m.phaseFraction, 0.32, 0.96) : 0;
+  const haul = g.fwd * pull * g.carLen * 22;
+  if (blocked || tow || clearing) {
     const len = g.carLen * 3;
     const wid = Math.min(g.laneH * 0.9, g.carWid * 1.25);
     drawSkid(g, x - g.fwd * g.carLen * 0.6, laneY, g.carLen * 4.4, 0.2);
     // the trailer, on its side across the lane, with its cargo spilled
-    inFrame(g, x - g.fwd * len * 0.5, laneY, 1.32, () => {
+    // 1.32 rad is across the lane; it comes square as it is righted onto the
+    // recovery unit, so the angle eases out as the haul begins.
+    inFrame(g, x - g.fwd * len * 0.5 + haul, laneY, 1.32 * (1 - pull), () => {
       const c = g.ctx;
       c.fillStyle = "rgba(0,0,0,0.32)";
       rrect(c, -len / 2 + 2, -wid / 2 + 3, len, wid, 2.5);
@@ -679,7 +1004,7 @@ function drawOverturned(g: SceneGeometry, m: SceneMark): void {
       });
     }
     drawDebris(g, x - g.fwd * g.carLen, laneY, g.carLen * 2.4, g.carWid * 1.6, m.xM + 5, 12);
-    drawSmoke(g, x - g.fwd * g.carLen * 1.2, laneY, g.carLen * 1.5, blocked ? 0.8 : 0.3);
+    if (!clearing) drawSmoke(g, x - g.fwd * g.carLen * 1.2, laneY, g.carLen * 1.5, blocked ? 0.8 : 0.3);
   }
   const back = g.carLen * 3.2;
   const policeIn = ramp(m.phaseFraction, blocked ? 0.2 : 0, blocked ? 0.4 : 0.08);
@@ -687,8 +1012,26 @@ function drawOverturned(g: SceneGeometry, m: SceneMark): void {
     drawPolice(g, x - g.fwd * (back + g.carLen) + arrival(g, blocked ? m.phaseFraction : 1, 0.2, 0.4, g.carLen * 8), laneY + g.outward * g.laneH * 0.34, 0.1 * g.outward);
   }
   if (blocked) drawAmbulance(g, x - g.fwd * (back + g.carLen * 3.4) + arrival(g, m.phaseFraction, 0.1, 0.3, g.carLen * 9), laneY);
-  if (tow) {
-    drawTow(g, x - g.fwd * g.carLen * 2.6 + arrival(g, m.phaseFraction, 0, 0.15, g.carLen * 10), laneY, true);
+  if (tow || clearing) {
+    /* The trailer is drawn 3 car lengths long and the recovery unit 2.3, so
+       their centres have to be more than 2.6 apart before they stop
+       overlapping. Derived rather than guessed, as elsewhere. */
+    const trailerLen = g.carLen * 3;
+    const towLen = g.carLen * 2.3;
+    const hitch = g.carLen * 0.3;
+    const casualtyX = x - g.fwd * trailerLen * 0.5 + haul;
+    const coupled = casualtyX + g.fwd * (trailerLen * 0.5 + hitch + towLen * 0.5);
+    const tx = clearing ? coupled : coupled + arrival(g, m.phaseFraction, 0, 0.15, g.carLen * 10);
+    drawTow(g, tx, laneY, true);
+    // A heavy recovery is a crewed job, not one operator with a hook.
+    if (pull < 0.3) drawCrew(g, x - g.fwd * g.carLen * 1.4, laneY + g.outward * g.laneH * 0.2, "worker", 3, seed + 61, 1.1);
+  }
+  // The driver, out and clear, until the recovery is under way.
+  if ((blocked || tow) && m.phaseFraction > 0.06) {
+    drawPerson(g, x - g.fwd * g.carLen * 2.2, laneY + g.outward * g.laneH * 0.46, "civilian", seed + 7);
+  }
+  if (blocked && m.phaseFraction > 0.42) {
+    drawCrew(g, x - g.fwd * g.carLen * 1.1, laneY - g.outward * g.laneH * 0.26, "responder", 2, seed + 29);
   }
   drawTaper(g, x - g.fwd * (back + g.carLen * 1.4), laneY, g.outward, 4, g.carLen * 2.4);
   if (clearing) for (let i = 0; i < 3; i++) drawCone(g, x + g.fwd * (i * g.carLen * 0.8), laneY - g.outward * g.laneH * 0.18, Math.max(2.2, g.laneH * 0.06));
@@ -750,18 +1093,18 @@ function drawRoadworks(g: SceneGeometry, m: SceneMark): void {
     c.fill();
   });
   drawArrowBoard(g, truckX - g.fwd * g.carLen * 1.3, laneY, g.carLen * 1.4, Math.max(8, g.laneH * 0.4), g.outward);
-  for (let i = 0; i < 3; i++) {
-    const wx = left + span * (0.35 + i * 0.22);
-    const wy = laneY + (hash(m.xM + i) - 0.5) * g.laneH * 0.4;
-    c.fillStyle = "#f97316";
-    c.beginPath();
-    c.arc(wx, wy, Math.max(2, g.carWid * 0.17), 0, Math.PI * 2);
-    c.fill();
-    c.fillStyle = "#fef08a";
-    c.beginPath();
-    c.arc(wx, wy, Math.max(1, g.carWid * 0.08), 0, Math.PI * 2);
-    c.fill();
+  /* The gang on the job. These were two concentric circles — an orange dot
+     with a yellow pip — which at a glance read as another cone rather than a
+     person, and a work zone with nobody in it is the wrong picture: the whole
+     reason the lane is shut is that people are standing in it. */
+  const crew = 4;
+  for (let i = 0; i < crew; i++) {
+    const wx = left + span * (0.3 + i * 0.17);
+    const wy = laneY + (hash(m.xM + i) - 0.5) * g.laneH * 0.46;
+    drawPerson(g, wx, wy, "worker", m.xM + i * 7);
   }
+  // A banksman out by the taper, watching the traffic come past.
+  drawPerson(g, taperStart + g.fwd * g.carLen * 0.6, laneY + g.outward * g.laneH * 0.36, "worker", m.xM + 91);
   drawCautionSign(g, taperStart - g.fwd * (g.carLen * 1.4), "!");
 }
 
@@ -771,7 +1114,9 @@ function drawRoadworks(g: SceneGeometry, m: SceneMark): void {
  * closure to the operator's own), gets no scene — a wreck the engine is not honouring would be a lie.
  */
 export function hasSceneArt(m: SceneMark): boolean {
-  if (m.state !== "active") return false;
+  // A pending event earns a scene for the last few seconds before it fires,
+  // so it is not seen to appear out of nothing. See drawImminent.
+  if (m.state !== "active") return isImminent(m);
   switch (m.family) {
     case "rain":
     case "breakdown_in_lane":
@@ -797,6 +1142,10 @@ export function hasSceneArt(m: SceneMark): boolean {
 export function drawScenes(g: SceneGeometry, marks: readonly SceneMark[]): void {
   for (const m of marks) {
     if (!hasSceneArt(m)) continue;
+    if (m.state !== "active") {
+      drawImminent(g, m);
+      continue;
+    }
     switch (m.family) {
       case "flood":
         break; // the water goes UNDER the traffic: drawWater, called earlier by drawCarriageway

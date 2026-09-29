@@ -2002,7 +2002,8 @@ const roadMarks = (evs: readonly ScenarioEvent[], min: number, owners = NO_OWNER
     laneCenterY: (l) => 20 + l * 30 + 15, outerEdgeY: 140, outward: 1, carLen: 24, carWid: 13, t,
   });
   const base: SceneMark = {
-    eventId: "e1", name: "x", kind: "speed_zone", state: "active", xM: 300, lane: null, text: "", family: "rain", phaseId: "active", phaseFraction: 0.5,
+    eventId: "e1", name: "x", kind: "speed_zone", state: "active",
+      secondsUntilStart: null, xM: 300, lane: null, text: "", family: "rain", phaseId: "active", phaseFraction: 0.5,
     closedLanes: [], stretch: null, intensity: "heavy", capKmh: 60, vehicle: null,
   };
   const paintWeather = (marks: readonly SceneMark[], t: number): Recorder => { const r = new Recorder(); drawWeather(geom(r, t), marks); return r; };

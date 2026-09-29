@@ -379,6 +379,17 @@ export function useDirectionSim(direction: Direction, shared: SharedRoadInputs) 
         classProfile: effectiveClassProfile,
         ramps,
         warmupS: WARMUP_S,
+        /* A queue behind a blocked lane is where NLEX's own data says the next
+           crash happens: 11.5% of incidents are followed by another within
+           2 km (gold.ml_incident_severity_metadata, n = 4,361). Leaving it out
+           made every scenario optimistic in the same direction — the sandbox
+           could only ever show one incident at a time, so a long closure never
+           compounded the way a real one does.
+
+           It stays reproducible: the draw comes from the simulation's seeded
+           RNG, so the same seed gives the same run and a baseline capture is
+           still comparable. */
+        secondaryIncidents: true,
       },
       buildInterventions(laneCount, segLengthM),
     );

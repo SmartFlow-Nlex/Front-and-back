@@ -10649,7 +10649,6 @@ details[open] > .evidence-summary .evidence-close-label { display: inline; }
 .sandbox-main.is-expanded .sandbox-footbar,
 .sandbox-main.is-expanded .sandbox-fs-keys,
 .sandbox-main.is-expanded .sandbox-fs-notes-toggle {
-  position: absolute;
   z-index: 3;
   background: rgba(8, 13, 25, 0.72);
   -webkit-backdrop-filter: blur(12px);
@@ -10658,10 +10657,25 @@ details[open] > .evidence-summary .evidence-close-label { display: inline; }
   border-radius: 12px;
   color: #e8eefc;
 }
-.sandbox-main.is-expanded .sandbox-head {
+/* The head wraps onto a second line at a narrow width (the simulation-time
+   field and the speed/play controls run out of room) — that's what let the
+   Carriageway strip, the forecast picker, the key hints and the notes
+   toggle below it overlap the head: each was pinned at a fixed pixel offset
+   from the top that only cleared a one-line head. sandbox-hud-top holds all
+   of them in normal flow instead, so each sits below whatever height the
+   one above it actually took, however many lines that is. */
+.sandbox-hud-top { display: contents; }
+.sandbox-main.is-expanded .sandbox-hud-top {
+  position: absolute;
   top: 12px;
   left: 14px;
   right: 14px;
+  z-index: 3;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.sandbox-main.is-expanded .sandbox-head {
   padding: 8px 12px;
 }
 .sandbox-main.is-expanded .sandbox-head h2 {
@@ -10669,25 +10683,35 @@ details[open] > .evidence-summary .evidence-close-label { display: inline; }
   font-size: 1rem;
   letter-spacing: 0.01em;
 }
+/* Carriageway and the key hints/notes toggle share one row so they in turn
+   can never overlap each other — wrap lets them drop to a second line
+   rather than clip or overlap at a narrow width. */
+.sandbox-hud-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
 .sandbox-main.is-expanded .sandbox-view-seg {
-  top: 62px;
-  left: 14px;
   padding: 6px 10px;
   gap: 8px;
+  margin-top: 0;
 }
 .sandbox-main.is-expanded .sandbox-view-seg .k { color: #93a4c4; }
 .sandbox-main.is-expanded .sandbox-fs-keys {
-  top: 62px;
-  left: 50%;
-  transform: translateX(-50%);
+  /* Pushed to the end of the row, the notes toggle right after it, rather
+     than centred independently of them — centring against the full width
+     risked landing back on top of the Carriageway strip at exactly the
+     widths this is fixing. */
+  margin-left: auto;
   padding: 7px 12px;
-  margin: 0;
   color: #93a4c4;
   white-space: nowrap;
 }
 .sandbox-main.is-expanded .sandbox-fs-keys b { color: #dce6fb; }
 /* The readout sits along the bottom, out of the traffic's way. */
 .sandbox-main.is-expanded .sandbox-metric-row {
+  position: absolute;
   left: 14px;
   right: 14px;
   bottom: 12px;
@@ -10712,8 +10736,6 @@ details[open] > .evidence-summary .evidence-close-label { display: inline; }
 .sandbox-main.is-expanded .sandbox-metric-val { color: #f3f7ff; font-size: 1.15rem; }
 .sandbox-main.is-expanded .sandbox-metric-row * { color: inherit; }
 .sandbox-main.is-expanded .sandbox-fs-notes-toggle {
-  top: 62px;
-  right: 14px;
   padding: 7px 12px;
   text-decoration: none;
   color: #cddaf5;
@@ -10721,6 +10743,7 @@ details[open] > .evidence-summary .evidence-close-label { display: inline; }
 .sandbox-main.is-expanded .sandbox-fs-notes-toggle:hover { color: #fff; }
 /* Opened, the notes are a panel over the road rather than a slab under it. */
 .sandbox-main.is-expanded .sandbox-footbar {
+  position: absolute;
   left: 14px;
   right: 14px;
   bottom: 160px;

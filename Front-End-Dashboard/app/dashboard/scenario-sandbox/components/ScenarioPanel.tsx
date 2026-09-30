@@ -180,38 +180,52 @@ function clockLabel(totalMin: number): string {
 }
 
 /**
- * A time-of-day box (HH:MM, 24-hour value) that commits on blur or Enter, like NumberField, so a half-typed
- * time is never acted on. It speaks in minutes since midnight and clamps to [minMin, maxMin]: the run only
- * goes forward from the top of the selected hour, and one day has no times past 23:59.
+ * A time-of-day box (HH:MM, or HH:MM:SS when `step` asks for second precision) that commits on
+ * blur or Enter, like NumberField, so a half-typed time is never acted on. It speaks in SECONDS
+ * since midnight and clamps to [minS, maxS]: the run only goes forward from the top of the
+ * selected hour, and one day has no times past 23:59:59. `step` defaults to 60 (minute
+ * granularity, no seconds shown) for the scenario form's own use, where a start time has never
+ * needed finer than a minute.
+ *
+ * Plain text, not `<input type="time">`: a native time control's displayed format (12-hour AM/PM
+ * vs. 24-hour) follows the browser/OS locale, not the page. `lang="en-GB"` on the input was tried
+ * to force Chromium's own picker chrome into 24-hour and did not hold on every machine (still
+ * showed AM/PM on Windows). A plain text box has no native picker to disagree with it — what's
+ * rendered here, always HH:MM[:SS] in 24-hour, is exactly what shows, everywhere.
  */
 export function TimeField({
-  valueMin,
-  minMin,
-  maxMin,
+  valueS,
+  minS,
+  maxS,
+  step = 60,
   onCommit,
   scn,
 }: {
-  valueMin: number;
-  minMin: number;
-  maxMin: number;
-  onCommit: (totalMin: number) => void;
+  valueS: number;
+  minS: number;
+  maxS: number;
+  step?: number;
+  onCommit: (totalS: number) => void;
   scn: string;
 }) {
   const [draft, setDraft] = useState<string | null>(null);
-  const rounded = Math.round(valueMin);
-  const shown = `${String(Math.floor(rounded / 60) % 24).padStart(2, "0")}:${String(rounded % 60).padStart(2, "0")}`;
+  const rounded = Math.round(valueS);
+  const withSeconds = step < 60;
+  const shown =
+    `${String(Math.floor(rounded / 3600) % 24).padStart(2, "0")}:${String(Math.floor(rounded / 60) % 60).padStart(2, "0")}` +
+    (withSeconds ? `:${String(rounded % 60).padStart(2, "0")}` : "");
   const commit = () => {
     if (draft === null) return;
-    const m = /^(\d{1,2}):(\d{2})$/.exec(draft);
+    const m = /^(\d{1,2}):(\d{2})(?::(\d{2}))?$/.exec(draft);
     setDraft(null);
-    if (m) onCommit(Math.min(maxMin, Math.max(minMin, Number(m[1]) * 60 + Number(m[2]))));
+    if (m) onCommit(Math.min(maxS, Math.max(minS, Number(m[1]) * 3600 + Number(m[2]) * 60 + Number(m[3] ?? 0))));
   };
   return (
     <input
-      type="time"
+      type="text"
       className="sandbox-km-input"
-      step={60}
       data-scn={scn}
+      placeholder={withSeconds ? "HH:MM:SS" : "HH:MM"}
       value={draft ?? shown}
       onChange={(e) => setDraft(e.target.value)}
       onBlur={commit}
@@ -780,11 +794,11 @@ export default function ScenarioPanel(props: Props) {
         <label title={`The road is simulated at the flow of the hour chosen in Hour of day, so the clock starts at ${clockLabel(clockStartMin)}: an event can start then or later that day.`}>
           Start (time of day)
           <TimeField
-            valueMin={clockStartMin + startMin}
-            minMin={clockStartMin}
-            maxMin={1439}
+            valueS={(clockStartMin + startMin) * 60}
+            minS={clockStartMin * 60}
+            maxS={1439 * 60}
             scn="start"
-            onCommit={(t) => setStartMin(t - clockStartMin)}
+            onCommit={(t) => setStartMin(t / 60 - clockStartMin)}
           />
         </label>
       </div>

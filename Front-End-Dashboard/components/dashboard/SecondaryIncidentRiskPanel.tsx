@@ -2,7 +2,6 @@
 
 import { useEffect, useState } from "react";
 import { useThemeTokens } from "./useThemeTokens";
-import IncidentModelsNarrative from "./IncidentModelsNarrative";
 import InfoTooltip from "./InfoTooltip";
 import NarrativePanel from "./NarrativePanel";
 import { shadeFor } from "./PredictiveCorridorChart";
@@ -112,20 +111,13 @@ export default function SecondaryIncidentRiskPanel() {
   }
 
   const meta = data.metadata;
-  const severityModelRows = Object.entries(meta?.severity.metrics ?? {}).map(([model, m]) => ({
-    model,
-    accuracy: m?.accuracy ?? null,
-    maeOrdinal: m?.MAE_ordinal ?? null,
-    n: m?.n ?? null,
-  }));
   const champion = meta?.severity.champion ?? null;
-  const championMetrics = champion ? meta?.severity.metrics[champion] : undefined;
 
   // Grouped by fixed km segment only now (see PredictiveCorridorChart for
-  // the same call) — sortKey orders "along the corridor" (kmStart).
-  type Row = { key: string; label: string; sortKey: number; n: number; avgRisk: number; actualSecondaryCount: number };
+  // the same call).
+  type Row = { key: string; label: string; n: number; avgRisk: number; actualSecondaryCount: number };
   const allRows: Row[] = data.secondaryRiskByKmSegment.map((x) => ({
-    key: `seg-${x.kmStart}`, label: x.label, sortKey: x.kmStart,
+    key: `seg-${x.kmStart}`, label: x.label,
     n: x.n, avgRisk: x.avgRisk, actualSecondaryCount: x.actualSecondaryCount,
   }));
 
@@ -150,14 +142,14 @@ export default function SecondaryIncidentRiskPanel() {
     cumulative += x.n;
   }
 
-  // Within that top set, ranked by position (along the corridor), not by
-  // risk — a ranked-by-value chart would bury the "where" this exists to
-  // answer under whichever row happened to score highest. n is shown
+  // Within that top set, ranked by risk (highest first) — rank 1 is the
+  // segment with the highest avg. predicted secondary-incident risk, same
+  // leaderboard convention as PredictiveCorridorChart's ranking. n is shown
   // alongside every bar (label and tooltip) because even within the top
   // set, some rows are built from far more incidents than others, and a
   // lower-n row reading as "high risk" is closer to a small-sample
   // artifact than a finding.
-  const topRows = allRows.filter((x) => topKeys.has(x.key)).sort((a, b) => a.sortKey - b.sortKey);
+  const topRows = allRows.filter((x) => topKeys.has(x.key)).sort((a, b) => b.avgRisk - a.avgRisk);
   // Not charted, but not thrown away — a compact reference list under the
   // chart so the count for a below-threshold row is still one glance away
   // rather than gone entirely. Sorted by n descending: closest-to-qualifying
@@ -167,9 +159,8 @@ export default function SecondaryIncidentRiskPanel() {
   // number, rounded pill bar shaded by the shared amber ramp, rounded value
   // badge, a "Highest" marker on the peak row, hover-to-inspect tooltip) —
   // kept visually consistent since both cards are ranking the same corridor,
-  // just by a different metric. Position-ordered, not split into a "top
-  // tier" the way that card's exit ranking is — this list still answers
-  // "where," not "who's highest," so only the row COUNT is capped inline.
+  // just by a different metric. Not split into a "top tier" the way that
+  // card's exit ranking is, so only the row COUNT is capped inline.
   const inlineRows = topRows.slice(0, INLINE_LIMIT);
   const restTopRows = topRows.slice(INLINE_LIMIT);
   const maxAvgRisk = Math.max(...topRows.map((x) => x.avgRisk), 1e-9);
@@ -281,7 +272,7 @@ export default function SecondaryIncidentRiskPanel() {
             show. */}
         {champion && (
           <span
-            title="The severity-classification model below (Predicted severity level) — chosen as its own champion; the secondary-risk score above and the clearance model below are each a single fixed model, not one of several compared."
+            title="The severity-classification model — chosen as its own champion; the secondary-risk score above and the clearance model are each a single fixed model, not one of several compared."
             style={{
               display: "inline-flex", alignItems: "center", padding: "2px 9px",
               borderRadius: "999px", fontSize: "0.7rem", fontWeight: 600,
@@ -415,7 +406,7 @@ export default function SecondaryIncidentRiskPanel() {
               <div>
                 <h3 style={{ margin: 0, fontSize: "1.05rem", fontWeight: 700, color: "var(--text-primary)" }}>All segments</h3>
                 <p style={{ margin: "4px 0 0 0", fontSize: "0.8rem", color: "var(--text-muted)" }}>
-                  Avg. predicted secondary-incident risk, in corridor order
+                  Avg. predicted secondary-incident risk, ranked highest to lowest
                 </p>
               </div>
               <button
@@ -466,108 +457,6 @@ export default function SecondaryIncidentRiskPanel() {
         </div>
       )}
 
-      <div style={{ borderTop: "1px solid var(--border-default)", paddingTop: "12px" }}>
-        <h4 style={{ margin: "0 0 8px 0", fontSize: "0.85rem", color: "var(--text-primary)", fontWeight: 700 }}>
-          Predicted severity level{champion ? ` (${champion})` : ""}
-        </h4>
-        <table style={{ width: "100%", fontSize: "0.78rem", borderCollapse: "collapse" }}>
-          <thead>
-            <tr style={{ color: "var(--text-muted)", textAlign: "left" }}>
-              <th style={{ fontWeight: 600, paddingBottom: "4px" }}>Severity</th>
-              <th style={{ fontWeight: 600, paddingBottom: "4px", textAlign: "right" }}>Actual</th>
-              <th style={{ fontWeight: 600, paddingBottom: "4px", textAlign: "right" }}>Predicted</th>
-            </tr>
-          </thead>
-          <tbody>
-            {data.severityBreakdown.map((row) => (
-              <tr key={row.severityCode} style={{ borderTop: "1px solid var(--border-default)" }}>
-                <td style={{ padding: "4px 0", color: "var(--text-secondary)" }}>{row.label}</td>
-                <td style={{ padding: "4px 0", textAlign: "right", color: "var(--text-secondary)" }}>{fmtInt(row.actualCount)}</td>
-                <td style={{ padding: "4px 0", textAlign: "right", color: "var(--text-secondary)", fontWeight: 600 }}>{fmtInt(row.predictedCount)}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-        {championMetrics && (
-          <p style={{ color: "var(--text-muted)", fontSize: "0.72rem", margin: "8px 0 0 0" }}>
-            {(championMetrics.accuracy * 100).toFixed(1)}% accuracy on {fmtInt(championMetrics.n)} held-out
-            incidents. Fatal incidents are rare enough in this holdout (11 of {fmtInt(championMetrics.n)}) that
-            neither candidate model ever predicts that class.
-          </p>
-        )}
-      </div>
-
-      <div style={{ borderTop: "1px solid var(--border-default)", paddingTop: "12px" }}>
-        <h4 style={{ margin: "0 0 2px 0", fontSize: "0.85rem", color: "var(--text-primary)", fontWeight: 700 }}>
-          Predicted clearance time
-          <InfoTooltip text="Cox PH survival model, trained and scored on accidents only (silver.nlex_accident_events_clean) -- it never sees breakdown_data. Compare against the Descriptive tab's accident-only clearance figure, not its blended accident+breakdown MTTC." />
-        </h4>
-        <p style={{ color: "var(--text-muted)", fontSize: "0.7rem", margin: "0 0 8px 0" }}>Accident-only — excludes breakdowns</p>
-        <div style={{ display: "flex", gap: "20px", flexWrap: "wrap" }}>
-          <div>
-            <div style={{ fontSize: "1.3rem", fontWeight: 700, color: "var(--text-primary)" }}>
-              {data.avgPredictedClearanceMin != null ? `${fmtNum(data.avgPredictedClearanceMin, 1)} min` : "—"}
-            </div>
-            <div style={{ fontSize: "0.66rem", color: "var(--text-muted)", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.03em" }}>
-              Median-based
-            </div>
-          </div>
-          <div>
-            <div style={{ fontSize: "1.3rem", fontWeight: 700, color: "var(--text-primary)" }}>
-              {data.meanPredictedClearanceMin != null ? `${fmtNum(data.meanPredictedClearanceMin, 1)} min` : "—"}
-            </div>
-            <div style={{ fontSize: "0.66rem", color: "var(--text-muted)", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.03em" }}>
-              Mean-based
-            </div>
-          </div>
-        </div>
-        <p style={{ color: "var(--text-muted)", fontSize: "0.72rem", margin: "8px 0 0 0" }}>
-          Cox PH concordance {meta ? fmtNum(meta.cox_ph.concordance_index, 3) : "—"}
-          {meta?.cox_ph.mae_minutes != null ? ` · MAE ${fmtNum(meta.cox_ph.mae_minutes, 1)} min` : ""} on held-out incidents.
-          The two figures diverge because clearance time is heavily right-skewed — most accidents clear in minutes, a minority take hours,
-          which pulls the mean well above the median.
-        </p>
-      </div>
-      <IncidentModelsNarrative
-        champion={champion}
-        severityModels={severityModelRows}
-        severityBreakdown={data.severityBreakdown.map((b) => ({
-          label: b.label,
-          actualCount: b.actualCount,
-          predictedCount: b.predictedCount,
-        }))}
-        clearance={
-          meta
-            ? {
-                concordanceIndex: meta.cox_ph.concordance_index ?? null,
-                maeMinutes: meta.cox_ph.mae_minutes ?? null,
-                n: meta.cox_ph.n ?? null,
-                medianMin: data.avgPredictedClearanceMin ?? null,
-                meanMin: data.meanPredictedClearanceMin ?? null,
-              }
-            : null
-        }
-        secondaryRisk={
-          meta
-            ? {
-                auc: meta.secondary_risk.auc ?? null,
-                baseRate: meta.secondary_risk.base_rate ?? null,
-                n: meta.secondary_risk.n ?? null,
-                kmRadius: meta.secondary_km_radius ?? null,
-                avgRisk: data.avgSecondaryRisk ?? null,
-              }
-            : null
-        }
-        hotspots={[...data.secondaryRiskByExit]
-          .sort((a, b) => b.avgRisk - a.avgRisk)
-          .map((x) => ({
-            name: x.exitName,
-            km: x.km,
-            n: x.n,
-            avgRisk: x.avgRisk,
-            actualSecondaryCount: x.actualSecondaryCount,
-          }))}
-      />
     </article>
   );
 }

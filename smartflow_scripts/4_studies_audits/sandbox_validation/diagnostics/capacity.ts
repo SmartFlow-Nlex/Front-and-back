@@ -1,4 +1,4 @@
-import { TrafficSim } from "../../../../../Front-End-Dashboard/app/dashboard/ai-sandbox/simulation";
+import { TrafficSim } from "../../../../Front-End-Dashboard/app/dashboard/scenario-sandbox/simulation";
 const DT = 0.05;
 // Ramp demand up and find where the road stops delivering it.
 console.log("demand/lane   served/lane   speed   density/lane   note");

@@ -1,4 +1,4 @@
-import { TrafficSim } from "../../../../../Front-End-Dashboard/app/dashboard/ai-sandbox/simulation";
+import { TrafficSim } from "../../../../Front-End-Dashboard/app/dashboard/scenario-sandbox/simulation";
 const DT = 0.05, SECS = 600;
 function run(lockstep: boolean, seed: number) {
   const sim: any = new TrafficSim(

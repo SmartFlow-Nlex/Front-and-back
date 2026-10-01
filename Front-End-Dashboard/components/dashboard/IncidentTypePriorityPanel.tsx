@@ -5,6 +5,7 @@ import type { EChartsOption } from "echarts";
 import DashboardChart from "./DashboardChart";
 import InfoTooltip from "./InfoTooltip";
 import { fmtInt } from "./incidentPredictive.shared";
+import IncidentPriorityNarrative from "./IncidentPriorityNarrative";
 
 const BACKEND = process.env.NEXT_PUBLIC_BACKEND_URL ?? "http://localhost:4000";
 
@@ -336,6 +337,22 @@ export default function IncidentTypePriorityPanel() {
           </table>
         </div>
       )}
+      <IncidentPriorityNarrative
+        horizonDays={predictive?.corridorForecastDays ?? 7}
+        totalPredicted={predictive?.totalPredictedNext7Days ?? null}
+        forecastModel={predictive?.corridorForecastModel ?? null}
+        types={rows.map((r) => ({
+          label: r.label,
+          medianClearanceMin: r.medianClearanceMin,
+          predictedCount: r.predictedVolume,
+          // The historical share the per-type count was apportioned from. Sent
+          // so the prompt can say the count is apportioned rather than forecast
+          // in its own right, which is the one thing a reader could otherwise
+          // over-read here.
+          sharePct: totalN > 0 ? (r.n / totalN) * 100 : null,
+          dispatch: dispatchPackageFor(r.label),
+        }))}
+      />
     </article>
   );
 }

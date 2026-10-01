@@ -1,4 +1,4 @@
-import { TrafficSim } from "../../../../../Front-End-Dashboard/app/dashboard/ai-sandbox/simulation";
+import { TrafficSim } from "../../../../Front-End-Dashboard/app/dashboard/scenario-sandbox/simulation";
 const DT = 0.05;
 const ramps = [
   { x: 350, onVehPerHour: 600, offFraction: 0.18, name: "Paso de Blas" },

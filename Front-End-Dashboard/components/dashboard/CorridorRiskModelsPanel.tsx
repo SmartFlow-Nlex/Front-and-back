@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import InfoTooltip from "./InfoTooltip";
 import { shadeFor } from "./PredictiveCorridorChart";
 import { fmtInt, fmtNum } from "./incidentPredictive.shared";
+import CorridorRiskNarrative from "./CorridorRiskNarrative";
 
 const BACKEND = process.env.NEXT_PUBLIC_BACKEND_URL ?? "http://localhost:4000";
 
@@ -235,6 +236,53 @@ export default function CorridorRiskModelsPanel() {
           <p style={{ color: "#94a3b8", fontSize: "0.78rem", margin: 0 }}>No locally significant coefficients at |t| &gt; 1.96 in the current fit.</p>
         )}
       </div>
+      <CorridorRiskNarrative
+        gwr={
+          gwrMeta
+            ? {
+                bandwidth: gwrMeta.bandwidth ?? null,
+                mae: gwrMeta.metrics?.MAE ?? null,
+                loocvMae: gwrMeta.metrics?.loocv_mae ?? null,
+                loocvN: gwrMeta.metrics?.loocv_n ?? null,
+                poissonDeviance: gwrMeta.metrics?.Poisson_Deviance ?? null,
+                n: gwrMeta.metrics?.n ?? null,
+                // Sent as the panel's own human labels, so the narrative names
+                // the variables the same way the table above it does rather
+                // than echoing raw column names back at the reader.
+                variables: (gwrMeta.variables ?? []).map((v) => VARIABLE_LABEL[v] ?? v),
+                coefficients: data.coefficients.map((c) => ({
+                  exitName: c.exitName,
+                  km: c.km ?? null,
+                  variable: VARIABLE_LABEL[c.variable] ?? c.variable,
+                  coefficient: c.coefficient,
+                  tValue: c.tValue ?? null,
+                  significant: c.significant ?? null,
+                })),
+              }
+            : null
+        }
+        spatialLstm={
+          lstmMeta
+            ? {
+                mae: lstmMeta.metrics?.MAE ?? null,
+                poissonDeviance: lstmMeta.metrics?.Poisson_Deviance ?? null,
+                n: lstmMeta.metrics?.n ?? null,
+                epochs: lstmMeta.metrics?.epochs ?? null,
+                seqLen: lstmMeta.seq_len ?? null,
+                nNeighbors: lstmMeta.n_neighbors ?? null,
+                forecastDate: data.segmentRisk[0]?.forecastDate ?? null,
+                topExits: data.segmentRisk.map((s) => ({
+                  exitName: s.exitName,
+                  km: s.km ?? null,
+                  rank: s.rank,
+                  predictedIncidents: s.predictedIncidents,
+                  lastObservedCount: s.lastObservedCount ?? null,
+                })),
+              }
+            : null
+        }
+        trainedAt={data.trainedAt}
+      />
     </article>
   );
 }

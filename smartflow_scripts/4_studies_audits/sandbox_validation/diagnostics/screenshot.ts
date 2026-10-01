@@ -1,4 +1,4 @@
-import { TrafficSim } from "../../../../../Front-End-Dashboard/app/dashboard/ai-sandbox/simulation";
+import { TrafficSim } from "../../../../Front-End-Dashboard/app/dashboard/scenario-sandbox/simulation";
 const DT = 0.05;
 // The screenshot's scenario: Km 3.29-11.73 NB, 8.44 km, 4 lanes, 19:00.
 const ramps = [

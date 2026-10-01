@@ -13,6 +13,7 @@ import CustomSelect from "../../../components/dashboard/CustomSelect";
 import PageHeader from "../../../components/dashboard/PageHeader";
 import InfoTooltip from "../../../components/dashboard/InfoTooltip";
 import PredictiveEmissionChart from "../../../components/dashboard/PredictiveEmissionChart";
+import PrescriptiveEmissionsPanel from "../../../components/dashboard/PrescriptiveEmissionsPanel";
 import DateRangePicker from "../traffic/components/DateRangePicker";
 import { rangeDays, grainBlockedReason, bestGrainFor, axisLabelFor, bucketLabelFor } from "../../../lib/granularity";
 import styles from "../traffic/traffic.module.css";
@@ -72,22 +73,6 @@ function weekStart(dateStr: string): string {
   dt.setDate(dt.getDate() - ((dt.getDay() + 6) % 7));
   return dt.toISOString().slice(0, 10);
 }
-
-// ---------- Prescriptive: PLACEHOLDER, not a model output ----------
-// These three bars are literals. "Strategy X/Y/Z" are not interventions that
-// exist anywhere in the warehouse, and 8/14/22 are not computed from anything.
-// The card says so on its face (see the Illustrative chip and the tooltip
-// below) because the tooltip here used to claim the figures were "derived from
-// the fleet mix and volume in the Range", which was not true of a hardcoded
-// array -- and this tab sits one click away from real, validated forecasts.
-// Replace with a real series before this is presented as analysis.
-const prescriptiveEmissionReduction: EChartsOption = {
-  grid: { left: 46, right: 20, top: 20, bottom: 36 },
-  xAxis: { type: "category", data: ["Strategy X", "Strategy Y", "Strategy Z"] },
-  yAxis: { type: "value" },
-  tooltip: { trigger: "axis" },
-  series: [{ type: "bar", data: [8, 14, 22], itemStyle: { color: "#4bb782", borderRadius: [8, 8, 0, 0] } }],
-};
 
 export default function SustainabilityPage() {
   // Chart furniture follows the active theme; series hues stay fixed.
@@ -713,15 +698,18 @@ export default function SustainabilityPage() {
           <article className={`${styles.chartCard} ${styles.chart1}`}>
             <div className={styles.chartHead}>
               <div className={styles.headText}>
-                <h3>Projected % Emission Reduction by Strategy<InfoTooltip text="Illustrative only. The three bars are fixed example values held in the page source — they are not computed from the fleet mix, the volume in the Range, or any warehouse table." /></h3>
+                <h3>Projected % Emission Reduction by Strategy<InfoTooltip text="Computed from the warehouse over the selected Range. Faster clearance and peak deployment are bounded by response times this corridor has already achieved; the heavy-vehicle bar is a policy target and is drawn hollow to say so. Emissions here are linear in volume with no congestion term, so shifting trips between hours saves nothing and is deliberately not offered as a strategy." /></h3>
                 <p>
-                  <span className="ds-placeholder-chip">Illustrative</span>
-                  Fixed example values, not a model output — unlike every other card in Emissions, nothing here reads from the warehouse.
+                  CO₂ avoided per strategy, as a share of what the corridor actually emitted over the Range.
                 </p>
               </div>
             </div>
             <div className={styles.chartBody}>
-              <DashboardChart option={prescriptiveEmissionReduction} height={280} />
+              <PrescriptiveEmissionsPanel
+                months={rangeMode === "custom" ? "12" : rangeMode}
+                from={rangeMode === "custom" ? customFrom : undefined}
+                to={rangeMode === "custom" ? customTo : undefined}
+              />
             </div>
           </article>
         )}

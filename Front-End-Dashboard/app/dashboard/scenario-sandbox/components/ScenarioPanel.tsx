@@ -36,6 +36,7 @@ import { resolveDuration, type DurationMode, type ResolvedDuration } from "../sc
 import DirectionPill, { DIRECTION_NAME } from "./DirectionPill";
 import FamilyIcon from "./FamilyIcon";
 import ScenePreview from "./ScenePreview";
+import InfoTooltip from "../../../../components/dashboard/InfoTooltip";
 
 /**
  * The Add-event panel and the event list (phase 3).
@@ -156,6 +157,18 @@ function hasLane(family: FamilyKey): boolean {
   return family !== "breakdown_shoulder" && family !== "rain";
 }
 
+/**
+ * Families where blocking more than one lane is plausible enough to let the operator add
+ * extra lanes by hand, beyond the automatic outward-spill guess (see composeInterventions /
+ * ASSUMPTIONS.LANES_BLOCKED). Left out: minor_collision and self_accident (typically one
+ * car, one lane), breakdown_in_lane (a single stalled vehicle — the "incident" effect, not
+ * a closure, has no lane list to extend), and breakdown_shoulder/rain (no lane at all).
+ */
+const MULTI_LANE_FAMILIES = new Set<FamilyKey>(["multi_vehicle_collision", "overturned_vehicle", "flood", "scheduled_roadworks"]);
+function canAddExtraLanes(family: FamilyKey): boolean {
+  return MULTI_LANE_FAMILIES.has(family);
+}
+
 /** Minutes since midnight as HH:MM. Past midnight it wraps and says so ("00:20 next day"). */
 function clockLabel(totalMin: number): string {
   const m = Math.round(totalMin);
@@ -167,38 +180,52 @@ function clockLabel(totalMin: number): string {
 }
 
 /**
- * A time-of-day box (HH:MM, 24-hour value) that commits on blur or Enter, like NumberField, so a half-typed
- * time is never acted on. It speaks in minutes since midnight and clamps to [minMin, maxMin]: the run only
- * goes forward from the top of the selected hour, and one day has no times past 23:59.
+ * A time-of-day box (HH:MM, or HH:MM:SS when `step` asks for second precision) that commits on
+ * blur or Enter, like NumberField, so a half-typed time is never acted on. It speaks in SECONDS
+ * since midnight and clamps to [minS, maxS]: the run only goes forward from the top of the
+ * selected hour, and one day has no times past 23:59:59. `step` defaults to 60 (minute
+ * granularity, no seconds shown) for the scenario form's own use, where a start time has never
+ * needed finer than a minute.
+ *
+ * Plain text, not `<input type="time">`: a native time control's displayed format (12-hour AM/PM
+ * vs. 24-hour) follows the browser/OS locale, not the page. `lang="en-GB"` on the input was tried
+ * to force Chromium's own picker chrome into 24-hour and did not hold on every machine (still
+ * showed AM/PM on Windows). A plain text box has no native picker to disagree with it — what's
+ * rendered here, always HH:MM[:SS] in 24-hour, is exactly what shows, everywhere.
  */
-function TimeField({
-  valueMin,
-  minMin,
-  maxMin,
+export function TimeField({
+  valueS,
+  minS,
+  maxS,
+  step = 60,
   onCommit,
   scn,
 }: {
-  valueMin: number;
-  minMin: number;
-  maxMin: number;
-  onCommit: (totalMin: number) => void;
+  valueS: number;
+  minS: number;
+  maxS: number;
+  step?: number;
+  onCommit: (totalS: number) => void;
   scn: string;
 }) {
   const [draft, setDraft] = useState<string | null>(null);
-  const rounded = Math.round(valueMin);
-  const shown = `${String(Math.floor(rounded / 60) % 24).padStart(2, "0")}:${String(rounded % 60).padStart(2, "0")}`;
+  const rounded = Math.round(valueS);
+  const withSeconds = step < 60;
+  const shown =
+    `${String(Math.floor(rounded / 3600) % 24).padStart(2, "0")}:${String(Math.floor(rounded / 60) % 60).padStart(2, "0")}` +
+    (withSeconds ? `:${String(rounded % 60).padStart(2, "0")}` : "");
   const commit = () => {
     if (draft === null) return;
-    const m = /^(\d{1,2}):(\d{2})$/.exec(draft);
+    const m = /^(\d{1,2}):(\d{2})(?::(\d{2}))?$/.exec(draft);
     setDraft(null);
-    if (m) onCommit(Math.min(maxMin, Math.max(minMin, Number(m[1]) * 60 + Number(m[2]))));
+    if (m) onCommit(Math.min(maxS, Math.max(minS, Number(m[1]) * 3600 + Number(m[2]) * 60 + Number(m[3] ?? 0))));
   };
   return (
     <input
-      type="time"
+      type="text"
       className="sandbox-km-input"
-      step={60}
       data-scn={scn}
+      placeholder={withSeconds ? "HH:MM:SS" : "HH:MM"}
       value={draft ?? shown}
       onChange={(e) => setDraft(e.target.value)}
       onBlur={commit}
@@ -466,6 +493,8 @@ export default function ScenarioPanel(props: Props) {
   const [label, setLabel] = useState<CollisionLabel>("rear_end");
   const [intensity, setIntensity] = useState<RainIntensity>("moderate");
   const [lane, setLane] = useState<number | null>(null);
+  /** Extra lanes the operator added on top of `lane`, for a MULTI_LANE_FAMILIES family. 1-based, no duplicates. */
+  const [extraLanes, setExtraLanes] = useState<number[]>([]);
   const [posKm, setPosKm] = useState<number | null>(null);
   const [startMin, setStartMin] = useState(DEFAULT_START_MIN);
   const [choice, setChoice] = useState<DurationChoice>("sampled");
@@ -483,6 +512,7 @@ export default function ScenarioPanel(props: Props) {
     setInfoOpen(false);
     setWantBoth(t.carriageways === "one_or_both");
     setLane(null);
+    setExtraLanes([]);
     setPosKm(null);
     setRefusal(null);
     // A family with no calibration entry only accepts Manual (resolveDuration throws otherwise);
@@ -518,12 +548,18 @@ export default function ScenarioPanel(props: Props) {
   // lane list is the shorter road's and both events get the same lane.
   const laneCap = Math.min(...targets.map((d) => data[d].laneCount));
   const laneNow = lane === null ? defaultOperatorLane(template, laneCap) : Math.min(Math.max(1, lane), laneCap);
+  // Re-clamped every render against the current laneCap/laneNow, same spirit as laneNow above: a lane
+  // picked before switching to Both (a narrower road) or before changing the primary lane never lingers
+  // as an out-of-range or duplicate entry.
+  const extraLanesNow = canAddExtraLanes(family)
+    ? [...new Set(extraLanes.filter((l) => l >= 1 && l <= laneCap && l !== laneNow))]
+    : [];
   // One place for both carriageways: the first target's default, so Both does not put the two events at different km.
   const kmNow = Math.min(toKm, Math.max(fromKm, posKm === null ? data[targets[0]].kmAtPct(template.defaultPlacement.pct) : posKm));
   const variant = variantFor(family, vehicle, cause, label, intensity);
   const duration: DurationMode =
     choice === "sampled" ? { kind: "sampled", seed } : choice === "p50" ? { kind: "p50" } : choice === "p90" ? { kind: "p90" } : { kind: "manual", minutes: manualMin };
-  const specFor = (d: Direction): NewEventSpec => ({ variant, direction: d, lane: hasLane(family) ? laneNow : null, positionKm: kmNow, startMinutes: startMin, duration });
+  const specFor = (d: Direction): NewEventSpec => ({ variant, direction: d, lane: hasLane(family) ? laneNow : null, extraLanes: extraLanesNow, positionKm: kmNow, startMinutes: startMin, duration });
 
   // The same call "Add event" makes, once per target, so what is shown is what will be stored (and why not, if
   // it will not). With two targets the Add is all or nothing: one refusal blocks both, and names its carriageway.
@@ -702,14 +738,67 @@ export default function ScenarioPanel(props: Props) {
             </select>
           </label>
         )}
+      </div>
+      {canAddExtraLanes(family) && lane !== null && (
+        <div className="sandbox-scn-row" data-scn="extra-lanes">
+          <label style={{ flex: 1, minWidth: 0 }}>
+            <span className="sandbox-mini-label" style={{ margin: "0 0 3px" }}>
+              Extra lanes
+              <InfoTooltip text="This family can plausibly block more than one lane. Add the specific lanes it also closes, beyond the primary Lane above — replaces the automatic guess for this event." />
+            </span>
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 6, alignItems: "center" }}>
+              {extraLanes.map((l, i) => (
+                <span key={i} style={{ display: "inline-flex", alignItems: "center", gap: 2 }}>
+                  <select
+                    data-scn={`extra-lane-${i}`}
+                    value={l}
+                    onChange={(e) => setExtraLanes(extraLanes.map((x, xi) => (xi === i ? Number(e.target.value) : x)))}
+                  >
+                    {Array.from({ length: laneCap }, (_, li) => li + 1)
+                      .filter((n) => n === l || (n !== laneNow && !extraLanes.includes(n)))
+                      .map((n) => (
+                        <option key={n} value={n}>Lane {n}</option>
+                      ))}
+                  </select>
+                  <button
+                    type="button"
+                    className="btn-muted"
+                    data-scn={`remove-extra-lane-${i}`}
+                    onClick={() => setExtraLanes(extraLanes.filter((_, xi) => xi !== i))}
+                    aria-label={`Remove lane ${l}`}
+                    style={{ padding: "4px 8px" }}
+                  >
+                    &times;
+                  </button>
+                </span>
+              ))}
+              {extraLanesNow.length < laneCap - 1 && (
+                <button
+                  type="button"
+                  className="btn-muted"
+                  data-scn="add-extra-lane"
+                  onClick={() => {
+                    const used = new Set([laneNow, ...extraLanes]);
+                    const next = Array.from({ length: laneCap }, (_, i) => i + 1).find((n) => !used.has(n));
+                    if (next !== undefined) setExtraLanes([...extraLanes, next]);
+                  }}
+                >
+                  + Add lane
+                </button>
+              )}
+            </div>
+          </label>
+        </div>
+      )}
+      <div className="sandbox-scn-row">
         <label title={`The road is simulated at the flow of the hour chosen in Hour of day, so the clock starts at ${clockLabel(clockStartMin)}: an event can start then or later that day.`}>
           Start (time of day)
           <TimeField
-            valueMin={clockStartMin + startMin}
-            minMin={clockStartMin}
-            maxMin={1439}
+            valueS={(clockStartMin + startMin) * 60}
+            minS={clockStartMin * 60}
+            maxS={1439 * 60}
             scn="start"
-            onCommit={(t) => setStartMin(t - clockStartMin)}
+            onCommit={(t) => setStartMin(t / 60 - clockStartMin)}
           />
         </label>
       </div>

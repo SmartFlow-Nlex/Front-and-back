@@ -2,12 +2,33 @@ import type { Request, Response } from "express";
 import { z } from "zod";
 import { getEmissionsIndexFromDb, getPeakPenaltyFromDb, getClimateResilienceFromDb, getEmissionsAnalyticsFromDb } from "../services/emissions.service.js";
 import { getEmissionForecast, getHorizonAccuracy } from "../services/traffic.service.js";
+import { getPrescriptiveStrategies } from "../services/emissions-prescriptive.service.js";
 
 const EmissionsAnalyticsQuerySchema = z.object({
   months: z.enum(["3", "12", "all"]).optional().default("12"),
   from: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
   to: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
 });
+
+/* The Prescriptive tab takes the same Range as the Descriptive one, plus its
+   own policy input. heavyShiftPp is a TARGET the reader chooses, not an
+   observed change — capped at the corridor's entire Class-3 share, since
+   shifting more heavy traffic than exists is not a scenario. */
+const PrescriptiveQuerySchema = EmissionsAnalyticsQuerySchema.extend({
+  heavyShiftPp: z.coerce.number().min(0).max(4.2).optional(),
+});
+
+// GET /api/emissions/prescriptive — the three strategies, computed
+export const getEmissionsPrescriptive = async (req: Request, res: Response) => {
+  const query = PrescriptiveQuerySchema.parse(req.query);
+  const data = await getPrescriptiveStrategies(query);
+
+  if (!data) {
+    return res.status(503).json({ success: false, message: "Prescriptive strategies unavailable: database not reachable" });
+  }
+
+  res.json({ success: true, source: "database", data });
+};
 
 // GET /api/emissions/analytics — descriptive dashboard aggregates
 export const getEmissionsAnalytics = async (req: Request, res: Response) => {

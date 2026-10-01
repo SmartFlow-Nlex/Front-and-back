@@ -144,6 +144,15 @@ export type ScenarioEvent = {
   readonly variant: ScenarioVariant;
   /** Operator lane number (1-based); null for a shoulder breakdown, which has no lane. */
   readonly lane: number | null;
+  /**
+   * Extra operator lane numbers (1-based) the operator explicitly added, on top of `lane` — only ever
+   * non-empty for a "closure" family where blocking more than one lane is plausible (multi-vehicle
+   * collision, overturned vehicle, flood, scheduled roadworks; see ScenarioPanel's MULTI_LANE_FAMILIES).
+   * When non-empty, composeInterventions closes exactly `lane` plus these, replacing the automatic
+   * outward-spill guess (blockedLanes()) for this event. Empty for every other event, which keeps the
+   * automatic behaviour exactly as before this existed.
+   */
+  readonly extraLanes: readonly number[];
   /** App km-post. Converted to metres against the current stretch when used, so a route change moves nothing silently. */
   readonly positionKm: number;
   /** Seconds after the end of warm-up. */
@@ -168,6 +177,8 @@ export type NewEventSpec = {
   readonly direction: Direction;
   /** Operator lane number, 1-based. Ignored for a shoulder breakdown. */
   readonly lane: number | null;
+  /** Extra operator lane numbers (1-based), beyond `lane`. See ScenarioEvent.extraLanes. Optional — every caller that doesn't care about multi-lane events (which is most of them) can omit it and gets none, same as before this field existed. */
+  readonly extraLanes?: readonly number[];
   readonly positionKm: number;
   /** Minutes after the end of warm-up. */
   readonly startMinutes: number;
@@ -341,9 +352,23 @@ export function eventProblems(event: ScenarioEvent, road: Road): readonly string
     }
   }
   if (effect === "closure") {
+    for (const opLane of event.extraLanes) {
+      if (operatorLaneToEngineIndex(opLane, road.laneCount) === null) {
+        problems.push(`extra lane ${opLane} does not exist on a ${road.laneCount}-lane road`);
+      }
+    }
+    // With extra lanes added by hand, "every lane" is judged against what was actually
+    // requested (deduped, same resolution composeInterventions uses), not the assumption's
+    // phase count — an operator asking for 3 lanes on a 3-lane road is refused even though
+    // the family's own LANES_BLOCKED figure might be smaller.
+    const base = event.lane === null ? null : operatorLaneToEngineIndex(event.lane, road.laneCount);
+    const manualCount = event.extraLanes.length > 0 && base !== null
+      ? manualBlockedLanes(base, event.extraLanes, road.laneCount).length
+      : null;
     for (const p of event.phases) {
       if (p.skipped || p.lanesBlocked <= 0) continue;
-      if (p.lanesBlocked >= road.laneCount) problems.push(`"${p.label}" blocks ${p.lanesBlocked} lanes, which is every lane of a ${road.laneCount}-lane road`);
+      const count = manualCount ?? p.lanesBlocked;
+      if (count >= road.laneCount) problems.push(`"${p.label}" blocks ${count} lane${count === 1 ? "" : "s"}, which is every lane of a ${road.laneCount}-lane road`);
       else if (p.wreckLengthM !== null && Number.isFinite(positionM) && closureStretch(positionM, p.wreckLengthM, road.segmentLengthM) === null) {
         problems.push(`"${p.label}" leaves no closure stretch at Km ${event.positionKm.toFixed(2)}`);
       }
@@ -541,6 +566,7 @@ export function addEvent(events: readonly ScenarioEvent[], spec: NewEventSpec, r
     direction: spec.direction,
     variant: spec.variant,
     lane: effectOf(spec.variant.family) === "speed_zone" ? null : spec.lane,
+    extraLanes: effectOf(spec.variant.family) === "closure" ? (spec.extraLanes ?? []) : [],
     positionKm: spec.positionKm,
     startS,
     duration: spec.duration,
@@ -769,6 +795,22 @@ function blockedLanes(baseIndex: number, count: number, laneCount: number): read
   return lanes.sort((a, b) => a - b);
 }
 
+/**
+ * The lanes a phase blocks when the operator has explicitly added extra lanes (see
+ * ScenarioEvent.extraLanes): `baseIndex` plus each extra converted the same way through
+ * operatorLaneToEngineIndex, dropping any that don't exist on this road and any duplicates
+ * of `baseIndex` or each other. Replaces blockedLanes()'s automatic outward-spill guess for
+ * this event only — used exactly when `extraLanes` is non-empty, never otherwise.
+ */
+function manualBlockedLanes(baseIndex: number, extraLanes: readonly number[], laneCount: number): readonly number[] {
+  const lanes = new Set<number>([baseIndex]);
+  for (const opLane of extraLanes) {
+    const idx = operatorLaneToEngineIndex(opLane, laneCount);
+    if (idx !== null) lanes.add(idx);
+  }
+  return [...lanes].sort((a, b) => a - b);
+}
+
 function ownerOf(event: ScenarioEvent, phase: ScheduledPhase): Owner {
   return { eventId: event.id, eventName: event.name, phaseId: phase.id, phaseLabel: phase.label };
 }
@@ -844,7 +886,9 @@ export function composeInterventions(
         }
         closure = {
           ...ownerOf(event, phase),
-          lanes: blockedLanes(base, phase.lanesBlocked, road.laneCount),
+          lanes: event.extraLanes.length > 0
+            ? manualBlockedLanes(base, event.extraLanes, road.laneCount)
+            : blockedLanes(base, phase.lanesBlocked, road.laneCount),
           closurePointM: stretch.closurePointM,
           closureEndM: stretch.closureEndM,
         };
@@ -1187,6 +1231,9 @@ export type CanvasMark = {
   readonly lane: number | null;
   /** The phase label and time left in it, or when the event starts. */
   readonly text: string;
+  /** Seconds until it starts; null once it is running. Lets the canvas build
+   *  up to an event rather than have it appear from nothing. */
+  readonly secondsUntilStart: number | null;
 };
 
 /** One mark per event that has not finished and can run on this road, for the canvas to label. Pure; the canvas calls it each frame. */
@@ -1205,6 +1252,7 @@ export function canvasMarks(events: readonly ScenarioEvent[], road: Road, simTim
       name: e.name,
       kind: effect === "incident" ? "incident" : effect === "closure" ? "closure" : "speed_zone",
       state: state === "pending" ? "pending" : "active",
+      secondsUntilStart: state === "pending" ? Math.max(0, e.startS - t) : null,
       xM: road.metresAt(e.positionKm),
       lane,
       text:

@@ -50,7 +50,7 @@ import { Pool } from "../../../../Back-End/node_modules/pg/lib/index.js";
 import {
   replicateSync,
   type ReplicationResult,
-} from "../../../../Front-End-Dashboard/app/dashboard/ai-sandbox/simulation";
+} from "../../../../Front-End-Dashboard/app/dashboard/scenario-sandbox/simulation";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ENV_PATH = path.resolve(HERE, "../../../../Back-End/.env");

@@ -32,6 +32,12 @@ import InfoTooltip from "./InfoTooltip";
 const BACKEND = process.env.NEXT_PUBLIC_BACKEND_URL ?? "http://localhost:4000";
 
 /** Must match HORIZON in train_fleet_mix.py — the stretch that was validated. */
+/* Days averaged on each side of the heavy-share comparison. Matched to the
+ * projection length so like is compared with like, and long enough to span
+ * several weekly cycles — the series is strongly day-of-week seasonal, so a
+ * shorter window would just re-import the cherry-picking problem. */
+const HEAVY_WINDOW_DAYS = 30;
+
 const VALIDATED_HORIZON = 7;
 
 type Row = {
@@ -259,8 +265,32 @@ export default function FleetMixForecastChart() {
     ],
   };
 
-  const heavyNow = rows.filter((r) => !r.is_future && r.actual_c2 != null).slice(-1)[0];
-  const heavyEnd = rows.filter((r) => r.is_future && r.heavy_pred != null).slice(-1)[0];
+  /* Heavy share: MEANS, not two cherry-picked days.
+   *
+   * This used to read the last observed day against the last projected day.
+   * Both swing hard — observed heavy share ranges 5.45% to 29.43% across the
+   * series — so the comparison was two points off a wiggly line. It was worse
+   * than arbitrary: the last observed day is 2025-12-31, New Year's Eve, when
+   * freight barely runs. That single day reads 10.94% against a 21.85% mean,
+   * so the card announced heavy share "10.94% -> 22.57%", implying it doubles.
+   *
+   * Mean against mean, the model actually predicts 21.85% -> 21.90%: no
+   * material change. A reader acting on the old figure would have been
+   * resourcing for a surge the forecast never called. */
+  /* How far behind today the underlying data actually ends. */
+  const lastObservedRow = rows.filter((r) => !r.is_future && r.actual_c2 != null).slice(-1)[0];
+  const lastObservedDate = lastObservedRow?.d?.slice(0, 10) ?? null;
+  const staleDays = lastObservedDate
+    ? Math.floor((Date.now() - new Date(lastObservedDate).getTime()) / 86_400_000)
+    : null;
+
+  const recentObserved = rows.filter((r) => !r.is_future && r.actual_c2 != null).slice(-HEAVY_WINDOW_DAYS);
+  const futureRows = rows.filter((r) => r.is_future && r.heavy_pred != null);
+  const mean = (xs: number[]) => (xs.length ? xs.reduce((a, b) => a + b, 0) / xs.length : null);
+  const heavyNowMean = mean(recentObserved.map((r) => (r.actual_c2 ?? 0) + (r.actual_c3 ?? 0)));
+  const heavyEndMean = mean(futureRows.map((r) => r.heavy_pred as number));
+  const heavyDeltaPp =
+    heavyNowMean != null && heavyEndMean != null ? (heavyEndMean - heavyNowMean) * 100 : null;
 
   return (
     <article className="chart-card wide" style={{ padding: 20, display: "grid", gap: 14 }}>
@@ -274,14 +304,39 @@ export default function FleetMixForecastChart() {
             {champ ? <>Champion <b style={{ color: "#334155" }}>{champ.model_name}</b></> : "No model accepted"}
             {data.split?.future_days ? <> · {data.split.future_days}-day projection</> : null}
             {" "}· validated at {VALIDATED_HORIZON} days
-            {data.split?.updated_at ? <> · updated {data.split.updated_at.slice(0, 10)}</> : null}
+            {data.split?.updated_at ? <> · trained {data.split.updated_at.slice(0, 10)}</> : null}
           </p>
+          {/* Data vintage, not run date.
+              "updated <date>" meant "the script ran then", which on a card whose
+              forecast window has already passed reads as "this is current". The
+              observed series ends when the warehouse ends; if that is well
+              behind today, the projection covers days that have already
+              happened and the reader should be told plainly rather than left to
+              infer it from the axis. */}
+          {staleDays != null && staleDays > 45 && (
+            <p style={{ margin: "4px 0 0", fontSize: "0.78rem", fontWeight: 600, color: "#b45309" }}>
+              Data ends {lastObservedDate} — {staleDays} days ago. This projection covers a
+              period that has already passed; refresh the warehouse to forecast forward.
+            </p>
+          )}
         </div>
-        {heavyNow && heavyEnd && (
+        {heavyNowMean != null && heavyEndMean != null && (
           <div style={{ textAlign: "right", fontSize: "0.82rem", color: "#64748b" }}>
-            Heavy share (C2+C3)
+            Heavy share (C2+C3) · {HEAVY_WINDOW_DAYS}-day means
             <div style={{ fontSize: "1rem", fontWeight: 800, color: "#334155" }}>
-              {pct((heavyNow.actual_c2 ?? 0) + (heavyNow.actual_c3 ?? 0))} → {pct(heavyEnd.heavy_pred)}
+              {pct(heavyNowMean)} → {pct(heavyEndMean)}
+              {heavyDeltaPp != null && (
+                <span
+                  style={{
+                    marginLeft: 8, fontSize: "0.8rem", fontWeight: 700,
+                    color: Math.abs(heavyDeltaPp) < 1 ? "#64748b" : heavyDeltaPp > 0 ? "#b45309" : "#0c8231",
+                  }}
+                >
+                  {Math.abs(heavyDeltaPp) < 1
+                    ? "no material change"
+                    : `${heavyDeltaPp > 0 ? "+" : ""}${heavyDeltaPp.toFixed(1)} pp`}
+                </span>
+              )}
             </div>
           </div>
         )}

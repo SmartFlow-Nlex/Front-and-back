@@ -370,7 +370,7 @@ export function useDirectionSim(direction: Direction, shared: SharedRoadInputs) 
   }, [EXITS, plazaVol, volDays, activeHour, demand, inflow, direction, fromKm, toKm, hourOfDay, flowAt, mainlineAtKm]);
 
   const rebuild = useCallback(() => {
-    simRef.current = new TrafficSim(
+    const sim = new TrafficSim(
       {
         length: segLengthM,
         laneCount,
@@ -379,9 +379,21 @@ export function useDirectionSim(direction: Direction, shared: SharedRoadInputs) 
         classProfile: effectiveClassProfile,
         ramps,
         warmupS: WARMUP_S,
+        /* A queue behind a blocked lane is where NLEX's own data says the next
+           crash happens: 11.5% of incidents are followed by another within
+           2 km (gold.ml_incident_severity_metadata, n = 4,361). Leaving it out
+           made every scenario optimistic in the same direction — the sandbox
+           could only ever show one incident at a time, so a long closure never
+           compounded the way a real one does.
+
+           It stays reproducible: the draw comes from the simulation's seeded
+           RNG, so the same seed gives the same run and a baseline capture is
+           still comparable. */
+        secondaryIncidents: true,
       },
       buildInterventions(laneCount, segLengthM),
     );
+    simRef.current = sim;
     setClosedLanes(Array(laneCount).fill(false));
     setSpeedLimit(null);
     setIncidentCount(0);
@@ -389,6 +401,14 @@ export function useDirectionSim(direction: Direction, shared: SharedRoadInputs) 
     scenarioBinding.reset();
     scenarioDueRef.current = -Infinity;
     if (skipRef.current) skipRef.current.cancel = true;
+    /* The render loop only polls metrics while `running`, so a rebuild while paused (Reset, or any
+     * control that rebuilds mid-pause) would otherwise leave the OLD sim's last metrics on screen —
+     * stale elapsed time, stale warm-up countdown, and now a live clock (page.tsx) that reads
+     * elapsedS to show the time of day, which would keep showing wherever the old run left off
+     * instead of snapping back to the start of the picked forecast hour. Snapshotting the fresh
+     * sim's own (zeroed) metrics here makes a rebuild correct immediately, whether or not the loop
+     * is currently ticking. */
+    setMetrics(sim.metrics());
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [laneCount, segLengthM, effectiveClassProfile, ramps, scenarioBinding, direction]);
 

@@ -122,7 +122,12 @@ export type Interventions = {
    * start of the span, before the second click commits it.
    */
   closureDraft?: { from: number; to: number } | null;
-  incidents: { lane: number; x: number }[]; // stalled obstacles
+  /* Stalled obstacles. `secondary` marks one the engine generated behind
+   * another rather than one the operator or a scenario placed, so the canvas
+   * can label it and it cannot itself breed a third — the measured base rate
+   * counts secondaries following a PRIMARY, and letting them compound would
+   * drift above the rate it was calibrated to. */
+  incidents: { lane: number; x: number; secondary?: boolean; bornAt?: number }[];
   speedLimitKmh: number | null; // applies in the speed zone
   speedZone: [number, number]; // [from, to] metres
 };
@@ -178,6 +183,15 @@ export type SimConfig = {
   warmupS?: number;
   /** Ramps along the segment: where traffic joins and leaves. */
   ramps?: RampSpec[];
+  /* Secondary incidents: a crash in the queue behind an existing one.
+   *
+   * Off unless asked for, because it makes a run stochastic in a way the
+   * operator did not set up, and a baseline capture has to be reproducible.
+   * With a fixed seed it still replays exactly — the draw comes from the
+   * simulation's own RNG, not Math.random. */
+  secondaryIncidents?: boolean;
+  /** Override the calibrated hazard. Only for sensitivity work. */
+  secondaryPerIncidentMinute?: number;
 };
 
 /** An interchange on the simulated stretch: traffic joins, leaves, or both. */
@@ -379,6 +393,24 @@ const FORCE_TTC_SEC = 1.2;
 
 /** Hard floor on bumper-to-bumper spacing, enforced after integration purely
  *  so vehicles are never drawn through one another. Not a headway rule. */
+/* Secondary-incident hazard, per primary incident per minute.
+ *
+ * NOT invented. gold.ml_incident_severity_metadata holds this corridor's own
+ * measured figure: base_rate 0.11511 over n = 4,361 incidents — 11.5% of NLEX
+ * incidents are followed by another within 2 km (secondary_km_radius) — and
+ * silver.nlex_accident_events_clean gives a 22.8-minute mean clearance. A
+ * constant hazard that reproduces 11.5% over a 22.8-minute exposure is
+ *
+ *     lambda = -ln(1 - 0.11511) / 22.8 = 0.00536 per minute
+ *
+ * so a scenario of average length generates a secondary 11.5% of the time,
+ * which is what the corridor does. Longer incidents generate more, which is
+ * also what the corridor does, and is the reason clearance time is worth
+ * optimising twice over. */
+const SECONDARY_PER_INCIDENT_MINUTE = 0.00536;
+/** Observed radius the base rate was measured over (secondary_km_radius = 2 km). */
+const SECONDARY_RADIUS_M = 2000;
+
 const MIN_CLEARANCE = 0.5; // m
 
 /* Base perception-reaction time. The traffic-psychology range for an expected
@@ -439,6 +471,18 @@ function laneAllowsClass(vClass: VehicleClass, lane: number): boolean {
  *  Smoothstep rather than a straight ramp: a constant-rate slide starts and
  *  stops with a visible corner, which on a small sprite looks like a jerk at
  *  each end. Easing in and out matches how a car is actually steered across. */
+/** Does this vehicle occupy `lane` right now?
+ *
+ *  `v.lane` flips the instant MOBIL accepts a change, but the vehicle is
+ *  physically across both lanes until `laneShift` reaches 1 — and that is how
+ *  the renderer draws it. Anything reasoning about who is in the way has to
+ *  agree with the picture, so it asks this rather than comparing integers.
+ *  Comparing integers is what let a car spawn into a lane a 14 m truck was
+ *  still halfway out of, and be drawn entirely inside it. */
+export function occupiesLane(v: Vehicle, lane: number): boolean {
+  return v.lane === lane || (v.laneShift < 1 && v.laneFrom === lane);
+}
+
 export function visualLane(v: Vehicle): number {
   if (v.laneShift >= 1) return v.lane;
   const t = Math.max(0, Math.min(1, v.laneShift));
@@ -779,7 +823,7 @@ export class TrafficSim {
      * arrived, and all pile onto x = 0 on top of each other. */
     let lead: Vehicle | null = null;
     for (const other of this.vehicles) {
-      if (other.lane !== lane) continue;
+      if (!occupiesLane(other, lane)) continue;
       if (!lead || other.x < lead.x) lead = other;
     }
     const enterV = Math.min(d.v0, lead ? Math.max(lead.v, 4) : d.v0);
@@ -799,8 +843,17 @@ export class TrafficSim {
      * The requirement is the IDM equilibrium spacing at the entry speed —
      * exactly the gap the vehicle will settle at anyway — so a vehicle is
      * admitted only when the road in front of it can already support it. */
-    const nearest = lead ? lead.x : Infinity;
-    if (nearest < c.len + S0 + enterV * d.T) return false;
+    /* Measured from the LEADER'S REAR, not its nose.
+     *
+     * `lead.x` is where the leader's front bumper is; its body runs back to
+     * lead.x - lead.length. Comparing against the spawner's own length let a
+     * car in behind a 14 m truck whose tail was still at x = -4: the nose
+     * looked 10 m clear, the tail was across the entrance line, and the new
+     * car was then pinned at x = 0 by the floor below with 3.8 m of truck
+     * drawn through it. Every residual overlap in the diagnostic was this
+     * one case. The gap that matters is bumper to bumper. */
+    const gapAhead = lead ? lead.x - lead.length : Infinity;
+    if (gapAhead < S0 + enterV * d.T) return false;
 
     this.vehicles.push({
       id: this.nextId++,
@@ -1349,15 +1402,73 @@ export class TrafficSim {
     });
   }
 
+  /* A crash in the queue behind an existing incident.
+   *
+   * Placed where rear-end shunts actually happen: at the BACK of the standing
+   * queue, in the lane a driver is braking hardest in, not at a random point
+   * in the radius. The hazard is per primary incident per minute and is
+   * calibrated — see SECONDARY_PER_INCIDENT_MINUTE.
+   *
+   * Returns the incidents it created, so the caller can surface them. */
+  private maybeSecondary(dt: number): { lane: number; x: number }[] {
+    if (!this.cfg.secondaryIncidents) return [];
+    const perMin = this.cfg.secondaryPerIncidentMinute ?? SECONDARY_PER_INCIDENT_MINUTE;
+    if (perMin <= 0) return [];
+
+    const primaries = this.interventions.incidents.filter((i) => !i.secondary);
+    if (primaries.length === 0) return [];
+
+    // Constant hazard over the tick. Drawn once per primary so two incidents
+    // carry twice the risk, which is what a longer or wider closure means.
+    const pTick = 1 - Math.exp((-perMin / 60) * dt);
+    const made: { lane: number; x: number }[] = [];
+
+    for (const primary of primaries) {
+      if (this.rng() >= pTick) continue;
+
+      /* Find the tail of the queue behind this incident: the furthest-back
+         vehicle that is actually held up by it. A shunt at the front of a
+         stationary queue is not what the base rate is measuring — the
+         dangerous place is where free-flowing traffic meets the back of it. */
+      const from = Math.max(0, primary.x - SECONDARY_RADIUS_M);
+      let tail: Vehicle | null = null;
+      for (const v of this.vehicles) {
+        if (v.x > primary.x || v.x < from) continue;
+        if (v.v > 6) continue; // not queued
+        if (!tail || v.x < tail.x) tail = v;
+      }
+      if (!tail) continue;
+
+      /* Just upstream of the tail, so the new obstacle lands on traffic that
+         is still moving. Clamped inside the segment. */
+      const x = Math.max(5, Math.min(this.cfg.length - 5, tail.x - 8));
+      const lane = tail.lane;
+      if (this.interventions.incidents.some((i) => i.lane === lane && Math.abs(i.x - x) < 25)) continue;
+
+      this.addIncident(lane, x, true);
+      made.push({ lane, x });
+    }
+    return made;
+  }
+
+  /** Secondary incidents created since the last call, for the UI to announce. */
+  private freshSecondaries: { lane: number; x: number; t: number }[] = [];
+  takeSecondaryAlerts(): { lane: number; x: number; t: number }[] {
+    const out = this.freshSecondaries;
+    this.freshSecondaries = [];
+    return out;
+  }
+
   // Place a stalled-vehicle incident. Any car sitting on that spot is absorbed
   // into the accident (removed) so nothing appears to drive out of it.
-  addIncident(lane: number, x: number) {
+  addIncident(lane: number, x: number, secondary = false) {
     const front = x + 1;
     const rear = x - INCIDENT_LENGTH - 1;
     this.vehicles = this.vehicles.filter(
       (v) => v.lane !== lane || v.x - v.length >= front || v.x <= rear
     );
-    this.interventions.incidents.push({ lane, x });
+    this.interventions.incidents.push({ lane, x, secondary, bornAt: this.time });
+    if (secondary) this.freshSecondaries.push({ lane, x, t: this.time });
   }
 
   step(dt: number) {
@@ -1536,8 +1647,32 @@ export class TrafficSim {
      * smaller than S0 — this is an anti-overlap floor, not a headway rule,
      * and using S0 here would forcibly space out legitimate jams and change
      * the flow it is supposed to be rendering. */
+    /* Run to a fixed point rather than once.
+     *
+     * A straddling vehicle now appears in two rows, so a correction made in
+     * the lane it is entering can re-break the constraint in the lane it is
+     * leaving, which a single pass never revisits. Iterating cleared the
+     * residue the two-lane fix left behind (0.09% of ticks, worst 4.6 m).
+     * Four passes is a bound, not a target — the loop stops as soon as a
+     * pass changes nothing, which is almost always the first. */
+    for (let pass = 0; pass < 4; pass++) {
+      let moved = false;
     for (let l = 0; l < this.cfg.laneCount; l++) {
-      const row = this.vehicles.filter((v) => v.lane === l).sort((a, b) => b.x - a.x);
+      /* A vehicle part-way through a lane change is physically in BOTH lanes,
+       * and the renderer draws it between them. Filtering on the integer lane
+       * alone missed exactly that case: measured over 600 s at 5,200 veh/h
+       * with an incident, 1.76% of ticks drew two sprites through each other,
+       * worst case 9.0 m at 0.55 lane widths apart — an articulated lorry
+       * inside a car. Every one of those pairs was a straddle; the same-lane
+       * count was zero, so the net below was always correct, it simply never
+       * saw half the occupants.
+       *
+       * Including a straddling vehicle in the lane it is leaving also makes
+       * the follower there hold back until the gap is genuinely vacated,
+       * which is what happens on a real carriageway. */
+      const row = this.vehicles
+        .filter((v) => occupiesLane(v, l))
+        .sort((a, b) => b.x - a.x);
       for (let i = 1; i < row.length; i++) {
         const lead = row[i - 1];
         const me = row[i];
@@ -1548,12 +1683,18 @@ export class TrafficSim {
          * what made density read 301/km/lane — above the physical jam
          * maximum — while the visible road looked half empty. Traffic that
          * cannot fit is refused at the entrance instead; see spawn(). */
-        if (me.x > maxX) {
+        if (me.x > maxX + 1e-9) {
           me.x = Math.max(0, maxX);
           me.v = Math.min(me.v, lead.v); // stop pushing into it
+          moved = true;
         }
       }
     }
+      if (!moved) break;
+    }
+
+    // A shunt in the queue behind an existing incident, if one is due.
+    this.maybeSecondary(dt);
 
     // Vehicles peeling off at their interchange.
     this.takeExits();

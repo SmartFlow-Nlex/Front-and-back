@@ -48,7 +48,7 @@ const tabs = [
   { label: "Maintenance", href: "/dashboard/maintenance", icon: Wrench, group: "Operations" },
   { label: "Mobile App", href: "/dashboard/mobile", icon: Smartphone, group: "Operations" },
 
-  { label: "Scenario Sandbox", href: "/dashboard/ai-sandbox", icon: Car, group: "Planning" },
+  { label: "Scenario Sandbox", href: "/dashboard/scenario-sandbox", icon: Car, group: "Planning" },
 
   { label: "Data Management", href: "/dashboard/data-management", icon: Brain, group: "Admin" },
   { label: "Audit Log", href: "/dashboard/audit-log", icon: ClipboardList, group: "Admin" },

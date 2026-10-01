@@ -33,6 +33,10 @@ const DENIED: Partial<Record<Role, readonly string[]>> = {
   ],
   "incident-operator": [
     "/dashboard/sustainability",
+    // The sandbox moved from /ai-sandbox to /scenario-sandbox. Both are listed
+    // because both directories still exist in the app, and a denial that names
+    // only the retired path is a denial of nothing.
+    "/dashboard/scenario-sandbox",
     "/dashboard/ai-sandbox",
     "/dashboard/data-management",
     "/dashboard/audit-log",

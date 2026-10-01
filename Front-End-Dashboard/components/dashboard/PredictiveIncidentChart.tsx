@@ -525,27 +525,52 @@ export default function PredictiveIncidentChart({
         }
       : {};
 
-  const ACCIDENT_COLOR = "#dc2626";
-  const BREAKDOWN_COLOR = "#0f766e";
-  const splitLine = (name: string, data: (number | null)[], color: string, forecast: boolean) => ({
+  // Accidents run roughly an order of magnitude below Breakdowns (see
+  // split.daily above), so overlaying both on one shared axis used to
+  // compress Accidents into a flat line near zero. Drawn as two stacked
+  // panels instead, each on its own scale -- the same small-multiples fix
+  // the Descriptive tab's Incident Trend chart uses (app/dashboard/incident/
+  // page.tsx) -- and the same two series colours, so amber=Accidents /
+  // magenta=Breakdowns carries between tabs.
+  const ACCIDENT_COLOR = T.isDark ? "#bb8a12" : "#b8760a";
+  const BREAKDOWN_COLOR = T.isDark ? "#cf5a90" : "#c2185b";
+  // Forecast reused the actual line's own colour before (a lightened tint of
+  // it, before that reused it outright), distinguished only by the dashed
+  // stroke -- a muted, de-emphasized line for the one thing this whole chart
+  // ("Incident Walk-Forward Forecast") exists to show. One consistent green
+  // across both panels instead, reusing the exact "this is the forward-
+  // looking one" green this file already spends elsewhere -- the Future
+  // zone/preset buttons and the "Champion" model badge below (T.isDark ?
+  // "#4ade80" : "#15803d") -- so Forecast reads as its own headline category
+  // rather than a paler shade of whichever panel it's in.
+  const FORECAST_COLOR = T.isDark ? "#4ade80" : "#15803d";
+  const SPLIT_PANELS = [
+    { name: "Accidents", actual: effAccA, forecast: effAccP, color: ACCIDENT_COLOR, forecastColor: FORECAST_COLOR },
+    { name: "Breakdowns", actual: effBdA, forecast: effBdP, color: BREAKDOWN_COLOR, forecastColor: FORECAST_COLOR },
+  ];
+  const splitPanelLine = (name: string, data: (number | null)[], color: string, gridIdx: number, forecast: boolean) => ({
     name,
     type: "line" as const,
+    xAxisIndex: gridIdx,
+    yAxisIndex: gridIdx,
     data,
     smooth: true,
     connectNulls: true,
     symbol: "circle" as const,
-    symbolSize: 5,
+    symbolSize: 4,
     z: forecast ? 3 : 4,
-    lineStyle: { width: forecast ? 2.2 : 2.5, color, type: forecast ? ("dashed" as const) : ("solid" as const) },
+    lineStyle: { width: forecast ? 2 : 2.5, color, type: forecast ? ("dashed" as const) : ("solid" as const) },
     itemStyle: { color },
-    emphasis: { scale: 2.2 },
+    emphasis: { scale: 2 },
   });
-  const SPLIT_SERIES = [
-    { ...splitLine("Actual Accidents", effAccA, ACCIDENT_COLOR, false), ...bandProps },
-    splitLine("Accident forecast", effAccP, ACCIDENT_COLOR, true),
-    splitLine("Actual Breakdowns", effBdA, BREAKDOWN_COLOR, false),
-    splitLine("Breakdown forecast (derived)", effBdP, BREAKDOWN_COLOR, true),
-  ];
+  // Named "Actual"/"Forecast" (not "Actual Accidents" etc.) across both
+  // panels on purpose: the panel title already says which series is which,
+  // so one legend toggle hides/shows the actual (or forecast) line in both
+  // panels together instead of four entries repeating that split.
+  const SPLIT_PANEL_SERIES = SPLIT_PANELS.flatMap((p, i) => [
+    { ...splitPanelLine("Actual", p.actual, p.color, i, false), ...bandProps },
+    splitPanelLine("Forecast", p.forecast, p.forecastColor, i, true),
+  ]);
 
   // Legend swatches for the split view: three short bars read as a dashed line, one long
   // bar as a solid one. The path's own bounding box is scaled to itemWidth x itemHeight
@@ -555,10 +580,8 @@ export default function PredictiveIncidentChart({
   const legendData: (string | { name: string; icon: string })[] = [
     ...(splitOn
       ? [
-          { name: "Actual Accidents", icon: SOLID_SWATCH },
-          { name: "Accident forecast", icon: DASHED_SWATCH },
-          { name: "Actual Breakdowns", icon: SOLID_SWATCH },
-          { name: "Breakdown forecast (derived)", icon: DASHED_SWATCH },
+          { name: "Actual", icon: SOLID_SWATCH },
+          { name: "Forecast", icon: DASHED_SWATCH },
         ]
       : ["Actual Count", ...activeModels.map((k) => `${META[k].label} Prediction`)]),
     // The bar/overlay entries keep a block-like icon in split view (a 3px circle would vanish).
@@ -566,61 +589,246 @@ export default function PredictiveIncidentChart({
     ...(showVolume ? [splitOn ? { name: "Vehicle Volume", icon: SOLID_SWATCH } : "Vehicle Volume"] : []),
   ];
 
-  const option: EChartsOption = {
+  // Shared by both layouts below and kept as one function so their tooltips
+  // can't drift apart on formatting.
+  const tooltipFormatter = (params: unknown) => {
+    const items = params as { name: string; marker: string; seriesName: string; value: number | null }[];
+    let tip = `<b>${items[0].name}</b><br/>`;
+    items.forEach((p) => {
+      if (p.value == null) return;
+      const val =
+        p.seriesName === "Rainfall"
+          ? `${fmtNum(Number(p.value), 1)} mm`
+          : p.seriesName === "Vehicle Volume"
+            ? `${fmtInt(Number(p.value))} vehicles`
+            : fmtInt(Number(p.value));
+      tip += `${p.marker} ${p.seriesName}: <b>${val}</b><br/>`;
+    });
+    tip += `<span style="color:${T.textMuted};font-size:11px">${
+      isAggregated ? "Switch to Daily to open a day" : "Click to view hourly breakdown"
+    }</span>`;
+    return tip;
+  };
+
+  // Rainfall/Volume overlays, parameterized on which grid+axis pair they
+  // land on: the Total layout has one grid; the split layout has two, and
+  // draws Volume on both panels but Rainfall on Accidents only (see the
+  // comment on splitOption's yAxis below for why they're treated
+  // differently rather than both simply following showWeather/showVolume).
+  const rainfallSeries = (xAxisIndex: number, yAxisIndex: number) => ({
+    name: "Rainfall",
+    type: "bar" as const,
+    xAxisIndex,
+    yAxisIndex,
+    data: effRainfall.map((mm) => (mm == null ? null : { value: mm, itemStyle: { color: rainBand(mm).color } })),
+    barMaxWidth: 14,
+    itemStyle: { borderRadius: [2, 2, 0, 0] },
+    z: 1,
+  });
+  const volumeSeries = (xAxisIndex: number, yAxisIndex: number) => ({
+    name: "Vehicle Volume",
+    type: "line" as const,
+    xAxisIndex,
+    yAxisIndex,
+    data: effVolume,
+    smooth: true,
+    symbol: "none" as const,
+    connectNulls: false,
+    z: 2,
+    lineStyle: { width: 2, color: VOLUME_COLOR, type: "solid" as const },
+    itemStyle: { color: VOLUME_COLOR },
+    areaStyle: { color: VOLUME_COLOR, opacity: 0.08 },
+  });
+
+  // start/end pinned to 0/100 explicitly (not just omitted) on every build --
+  // ECharts treats a dataZoom component's zoomed window as runtime state that
+  // survives a setOption call even with notMerge:true, the same way legend
+  // "selected" state does. Without an explicit value here, switching Range
+  // from a wide window to a narrow one (or back) can leave the slider parked
+  // on whatever fraction it last computed, silently showing a stale slice of
+  // the new data instead of the full window the Range control just asked for.
+  const dataZoomOf = (xAxisIndex: number | number[]) => [
+    {
+      type: "slider" as const,
+      xAxisIndex,
+      start: 0,
+      end: 100,
+      bottom: 30,
+      height: 16,
+      borderColor: "transparent",
+      backgroundColor: T.isDark ? "rgba(255,255,255,0.04)" : "#fbf3e3",
+      fillerColor: T.isDark ? "rgba(240,169,43,0.28)" : "rgba(184,118,10,0.25)",
+      handleStyle: { color: T.isDark ? "#f0a92b" : "#b8760a", borderColor: T.isDark ? "#f0a92b" : "#b8760a" },
+      moveHandleStyle: { color: T.isDark ? "#f0a92b" : "#b8760a" },
+      textStyle: { color: T.textMuted, fontSize: 10 },
+      showDetail: false,
+    },
+    { type: "inside" as const, xAxisIndex, start: 0, end: 100 },
+  ];
+
+  // Split layout: two stacked panels (Accidents on top, Breakdowns below),
+  // each with its own y-axis -- see SPLIT_PANELS/SPLIT_PANEL_SERIES above.
+  // Rainfall and Volume overlay each panel the same way they overlay the
+  // Total view's single chart (own axis, same plot area) rather than getting
+  // a separate panel of their own, so the split view reads as the Total
+  // view's look applied twice.
+  const SPLIT_CHART_HEIGHT = 450;
+  const SPLIT_TOP = 30;
+  const SPLIT_BOTTOM = 96;
+  const SPLIT_GAP = 34;
+  const splitPanelH = Math.max(70, (SPLIT_CHART_HEIGHT - SPLIT_TOP - SPLIT_BOTTOM - SPLIT_GAP) / SPLIT_PANELS.length);
+  const splitTopOf = (i: number) => SPLIT_TOP + i * (splitPanelH + SPLIT_GAP);
+  const splitLastPanel = SPLIT_PANELS.length - 1;
+
+  const splitOption: EChartsOption = {
+    // One title per panel, in the series' own colour, same pattern as the
+    // Descriptive tab's Incident Trend chart.
+    title: SPLIT_PANELS.map((p, i) => ({
+      text: p.name,
+      left: 60,
+      top: splitTopOf(i) - 19,
+      textStyle: { fontSize: 12, fontWeight: 700 as const, color: p.color },
+    })),
+    // Both panels now carry the same possible right-side axes (Rainfall,
+    // Volume), so both reserve the same margin for them.
+    grid: SPLIT_PANELS.map((_, i) => ({
+      left: 60,
+      right: showVolume ? 90 : showWeather ? 48 : 24,
+      top: splitTopOf(i),
+      height: splitPanelH,
+    })),
+    dataZoom: dataZoomOf([0, 1]),
+    tooltip: {
+      trigger: "axis",
+      // Links the two panels' hover pointers so pointing at a month in
+      // Accidents marks the same month in Breakdowns.
+      axisPointer: { link: [{ xAxisIndex: "all" }] },
+      backgroundColor: T.tooltipBg,
+      borderColor: T.border,
+      textStyle: { color: T.tooltipText },
+      formatter: tooltipFormatter,
+    },
+    legend: {
+      data: legendData,
+      bottom: 0,
+      icon: "circle",
+      itemWidth: 28,
+      itemHeight: 3,
+      itemGap: 16,
+      textStyle: { fontSize: 12, color: T.chartText },
+    },
+    xAxis: SPLIT_PANELS.map((_, i) => ({
+      gridIndex: i,
+      type: "category" as const,
+      data: effDates,
+      triggerEvent: true,
+      axisLabel: i === splitLastPanel ? { color: T.chartText } : { show: false },
+      axisLine: { show: i === splitLastPanel, lineStyle: { color: T.chartAxis } },
+      axisTick: { show: false },
+    })),
+    yAxis: [
+      {
+        gridIndex: 0,
+        type: "value",
+        min: 0,
+        splitNumber: 3,
+        axisLabel: { color: T.chartText, fontSize: 10 },
+        splitLine: { lineStyle: { color: T.chartSplit, type: "dashed" } },
+      },
+      {
+        gridIndex: 1,
+        type: "value",
+        min: 0,
+        splitNumber: 3,
+        axisLabel: { color: T.chartText, fontSize: 10 },
+        splitLine: { lineStyle: { color: T.chartSplit, type: "dashed" } },
+      },
+      // Rainfall on both panels now -- it's a plausible factor for
+      // breakdowns too (water intrusion into electrical components, wet-road
+      // stress interacting with an existing mechanical fault), even though
+      // the correlation is less clean than accidents' (one NSW vehicle-
+      // breakdown study found MORE rain correlated with FEWER breakdowns,
+      // likely via reduced trip-taking) -- worth showing alongside the
+      // series it might affect rather than only the one it more clearly does.
+      {
+        gridIndex: 0,
+        type: "value",
+        name: "Rainfall (mm)",
+        nameLocation: "middle",
+        nameGap: 34,
+        min: 0,
+        position: "right",
+        show: showWeather,
+        axisLabel: { color: RAIN_COLOR, fontSize: 10 },
+        splitLine: { show: false },
+      },
+      {
+        gridIndex: 1,
+        type: "value",
+        name: "Rainfall (mm)",
+        nameLocation: "middle",
+        nameGap: 34,
+        min: 0,
+        position: "right",
+        show: showWeather,
+        axisLabel: { color: RAIN_COLOR, fontSize: 10 },
+        splitLine: { show: false },
+      },
+      {
+        gridIndex: 0,
+        type: "value",
+        name: "Volume",
+        nameLocation: "middle",
+        nameGap: 42,
+        position: "right",
+        offset: 54,
+        show: showVolume,
+        scale: true,
+        axisLabel: { color: VOLUME_COLOR, fontSize: 10, formatter: (v: number) => (v >= 1000 ? `${Math.round(v / 1000)}k` : `${v}`) },
+        axisLine: { show: true, lineStyle: { color: VOLUME_COLOR } },
+        splitLine: { show: false },
+      },
+      {
+        gridIndex: 1,
+        type: "value",
+        name: "Volume",
+        nameLocation: "middle",
+        nameGap: 42,
+        position: "right",
+        offset: 54,
+        show: showVolume,
+        scale: true,
+        axisLabel: { color: VOLUME_COLOR, fontSize: 10, formatter: (v: number) => (v >= 1000 ? `${Math.round(v / 1000)}k` : `${v}`) },
+        axisLine: { show: true, lineStyle: { color: VOLUME_COLOR } },
+        splitLine: { show: false },
+      },
+    ],
+    series: [
+      ...(showWeather ? [rainfallSeries(0, 2), rainfallSeries(1, 3)] : []),
+      ...(showVolume ? [volumeSeries(0, 4), volumeSeries(1, 5)] : []),
+      ...SPLIT_PANEL_SERIES,
+    ],
+  };
+
+  const totalOption: EChartsOption = {
     grid: { left: 60, right: 24, top: 28, bottom: 96 },
     // A scrub/zoom bar under the chart, same as PredictiveVolumeChart's —
     // useful specifically because Range can put hundreds of daily points on
     // screen at once; the slider lets a reader narrow in without switching
     // Range or Granularity. "inside" mirrors the slider for scroll/pinch.
-    dataZoom: [
-      {
-        type: "slider",
-        xAxisIndex: 0,
-        bottom: 30,
-        height: 16,
-        borderColor: "transparent",
-        backgroundColor: T.isDark ? "rgba(255,255,255,0.04)" : "#fbf3e3",
-        fillerColor: T.isDark ? "rgba(240,169,43,0.28)" : "rgba(184,118,10,0.25)",
-        handleStyle: { color: T.isDark ? "#f0a92b" : "#b8760a", borderColor: T.isDark ? "#f0a92b" : "#b8760a" },
-        moveHandleStyle: { color: T.isDark ? "#f0a92b" : "#b8760a" },
-        textStyle: { color: T.textMuted, fontSize: 10 },
-        showDetail: false,
-      },
-      { type: "inside", xAxisIndex: 0 },
-    ],
+    dataZoom: dataZoomOf(0),
     tooltip: {
       trigger: "axis",
       backgroundColor: T.tooltipBg,
       borderColor: T.border,
       textStyle: { color: T.tooltipText },
-      formatter: (params: unknown) => {
-        const items = params as { name: string; marker: string; seriesName: string; value: number | null }[];
-        let tip = `<b>${items[0].name}</b><br/>`;
-        items.forEach((p) => {
-          if (p.value == null) return;
-          const val =
-            p.seriesName === "Rainfall"
-              ? `${fmtNum(Number(p.value), 1)} mm`
-              : p.seriesName === "Vehicle Volume"
-                ? `${fmtInt(Number(p.value))} vehicles`
-                : fmtInt(Number(p.value));
-          tip += `${p.marker} ${p.seriesName}: <b>${val}</b><br/>`;
-        });
-        tip += `<span style="color:${T.textMuted};font-size:11px">${
-          isAggregated ? "Switch to Daily to open a day" : "Click to view hourly breakdown"
-        }</span>`;
-        return tip;
-      },
+      formatter: tooltipFormatter,
     },
     legend: {
       data: legendData,
       bottom: 0,
       icon: "circle",
       itemGap: 16,
-      // Split view draws each series as a thin line swatch (solid = actual, dashed =
-      // forecast) so the legend matches the line style; a coloured dot was the same for
-      // both members of a pair. Total view keeps the dots.
-      ...(splitOn ? { itemWidth: 28, itemHeight: 3 } : {}),
       textStyle: { fontSize: 12, color: T.chartText },
     },
     xAxis: {
@@ -683,45 +891,14 @@ export default function PredictiveIncidentChart({
       // Weather overlay, same pattern as Volume below: an empty array when
       // off rather than a hidden series, so ECharts drops the bars and their
       // axis space entirely instead of just visually hiding them.
-      ...(showWeather
-        ? [
-            {
-              name: "Rainfall",
-              type: "bar" as const,
-              yAxisIndex: 1,
-              data: effRainfall.map((mm) =>
-                mm == null ? null : { value: mm, itemStyle: { color: rainBand(mm).color } }
-              ),
-              barMaxWidth: 14,
-              itemStyle: { borderRadius: [2, 2, 0, 0] },
-              z: 1,
-            },
-          ]
-        : []),
+      ...(showWeather ? [rainfallSeries(0, 1)] : []),
       // Exposure. A line rather than a second bar set: rainfall already holds
       // the bars, and two bar series on one chart compete for the same visual
       // slot. Drawn under the incident lines (z:2) so it reads as context.
       // connectNulls stays FALSE deliberately — a gap in the warehouse should
       // look like a gap, not like a straight line drawn through missing days.
-      ...(showVolume
-        ? [
-            {
-              name: "Vehicle Volume",
-              type: "line" as const,
-              yAxisIndex: 2,
-              data: effVolume,
-              smooth: true,
-              symbol: "none" as const,
-              connectNulls: false,
-              z: 2,
-              lineStyle: { width: 2, color: VOLUME_COLOR, type: "solid" as const },
-              itemStyle: { color: VOLUME_COLOR },
-              areaStyle: { color: VOLUME_COLOR, opacity: 0.08 },
-            },
-          ]
-        : []),
-      ...(splitOn ? SPLIT_SERIES : []),
-      ...(splitOn ? [] : [{
+      ...(showVolume ? [volumeSeries(0, 2)] : []),
+      {
         name: "Actual Count",
         type: "line" as const,
         data: effActual,
@@ -740,8 +917,8 @@ export default function PredictiveIncidentChart({
         // though Past has nothing to show. Coordinates are plain indices, not
         // dates[i] label strings — see the comment above showPast/etc. for why.
         ...bandProps,
-      }]),
-      ...(splitOn ? [] : activeModels).map((key) => ({
+      },
+      ...activeModels.map((key) => ({
         name: `${META[key].label} Prediction`,
         type: "line" as const,
         // Model curves are drawn only across Present (validation) and Future —
@@ -763,6 +940,8 @@ export default function PredictiveIncidentChart({
       })),
     ],
   };
+
+  const option: EChartsOption = splitOn ? splitOption : totalOption;
 
   const modelToolbar = (
     <div style={{ display: "flex", alignItems: "center", gap: "8px", flex: "0 1 auto", minWidth: 0 }}>

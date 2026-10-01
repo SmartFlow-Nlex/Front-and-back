@@ -738,9 +738,12 @@ export default function PredictiveEmissionChart() {
           stores them. This run does not, and adding blank columns for them would
           imply they were computed. */}
       <p style={{ margin: "10px 0 0", fontSize: "0.72rem", color: "var(--text-muted)" }}>
-        Scored on {data.split.holdoutDays.toLocaleString()} held-out days at a {data.horizonDays}-day horizon, with the
-        forecast window&apos;s weather taken from day-of-year climatology rather than observations — a model is never shown
-        rain it could not have known. The volume module validates at 14 days, so its figures are not directly comparable.
+        {/* The climatology caveat is already carried by quantityNote below, which
+            is where the how-it-was-built detail belongs. Repeating it here cost
+            a paragraph under every metrics table. What stays is the scoring
+            basis and the one comparison a reader could otherwise get wrong. */}
+        Scored on {data.split.holdoutDays.toLocaleString()} held-out days at a {data.horizonDays}-day horizon · volume
+        validates at 14d, so the two are not directly comparable.
         {tied.length > 1 && (
           <>
             {" "}

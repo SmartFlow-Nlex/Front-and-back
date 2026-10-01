@@ -28,6 +28,32 @@ const store = new Map<string, Entry>();
 const inflight = new Map<string, Promise<void>>();
 const refreshing = new Set<string>();
 
+/* Endpoints behind authenticateToken, which must never be cached.
+ *
+ * This middleware is mounted on /api AHEAD of the router, so it answers before
+ * any route-level auth middleware runs. A protected GET that reached the store
+ * was therefore served from it to whoever asked next, with no token required --
+ * an authorization bypass through the cache rather than around the middleware.
+ * The 10-minute default TTL applied to most of these.
+ *
+ * Only the protected members of each group are listed. /emissions/analytics and
+ * /audit-log/list are public by design and keep their caching.
+ */
+const PROTECTED_PREFIXES = [
+  "/api/emissions/index",
+  "/api/emissions/peak-penalty",
+  "/api/emissions/resilience",
+  "/api/audit-log/export",
+  "/api/ai-sandbox/results",
+  "/api/data-management",
+  "/api/upload",
+];
+
+/** True when a URL must bypass the cache because authorization decides the answer. */
+function isProtected(url: string): boolean {
+  return PROTECTED_PREFIXES.some((p) => url.startsWith(p));
+}
+
 const LIVE_PREFIXES = ["/api/map-comparison/real-time", "/api/map-comparison/live-overview", "/api/traffic/realtime", "/api/dashboard/corridor-status"];
 const SHORT_PREFIXES = ["/api/maintenance", "/api/audit-log", "/api/health"];
 /* Rewritten by the congestion pipeline every hour, and each response carries
@@ -88,6 +114,21 @@ function refreshInBackground(url: string): void {
 
 export function routeCache(req: Request, res: Response, next: NextFunction): void {
   const url = req.originalUrl;
+
+  /*
+   * Two independent reasons to hold nothing, either of which is sufficient.
+   *
+   * The path list is the primary guard. The Authorization test is defence in
+   * depth: it means a protected endpoint added later, and forgotten here, still
+   * cannot have an authenticated response stored under a URL that an anonymous
+   * caller could then request. The cost is that a signed-in caller gets no
+   * caching on public analytics routes -- which today is nobody, because the
+   * dashboard sends tokens only through lib/api.ts and reads public data with
+   * plain fetch.
+   */
+  if (isProtected(url) || req.headers.authorization) {
+    return next();
+  }
 
   if (req.method !== "GET") {
     // A write under a prefix makes every cached read under it suspect.

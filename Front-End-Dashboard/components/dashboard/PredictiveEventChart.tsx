@@ -47,7 +47,14 @@ type UpcomingEvent = { date: string; title: string; isDerived: boolean; capacity
 // names the venue whenever it is not the Arena.
 const isArena = (venue: string | null) => !venue || /arena/i.test(venue);
 
-const SURGE_COLOR = "#e11d48";
+/* The surge series is the Traffic page's own accent, not red.
+   An arena event is planned, expected demand — a concert night, not a hazard —
+   and rose-600 read as an alarm to anyone scanning the tab. It also competed
+   with the Predictive Congestion State Map beside it, where red genuinely means
+   Severe. Keeping red for severity alone means a red mark on this tab now has
+   exactly one meaning. This component renders only on the Traffic page, so it
+   takes that page's accent hex directly. */
+const SURGE_COLOR = "#2a78d6";
 
 const fmtVeh = (n: number) => Math.round(n).toLocaleString("en-US");
 const fmtK = (n: number) => (n >= 1000 ? `${(n / 1000).toFixed(0)}k` : String(n));
@@ -334,7 +341,7 @@ export default function PredictiveEventChart() {
           },
           rich: {
             add: { color: SURGE_COLOR, fontWeight: 800, fontSize: 13, lineHeight: 17 },
-            pct: { color: "#fb7185", fontWeight: 700, fontSize: 11, lineHeight: 17 },
+            pct: { color: "#7aa8e0", fontWeight: 700, fontSize: 11, lineHeight: 17 },
             ctx: { color: "#94a3b8", fontSize: 10, lineHeight: 14 },
           },
         },
@@ -381,7 +388,7 @@ export default function PredictiveEventChart() {
         </h3>
         <div style={{ display: "flex", gap: 6, flexWrap: "wrap", justifyContent: "flex-end" }}>
           {chosen ? (
-            <span style={{ fontSize: "0.7rem", padding: "2px 8px", background: "#fff1f2", borderRadius: "999px", border: "1px solid #fecdd3", color: "#9f1239", fontWeight: 600, whiteSpace: "nowrap" }}>
+            <span style={{ fontSize: "0.7rem", padding: "2px 8px", background: "color-mix(in srgb, var(--page-accent, #2a78d6) 10%, transparent)", borderRadius: "999px", border: "1px solid color-mix(in srgb, var(--page-accent, #2a78d6) 28%, transparent)", color: "var(--text-secondary)", fontWeight: 600, whiteSpace: "nowrap" }}>
               Forecast · {chosenDate}
             </span>
           ) : (
@@ -444,7 +451,12 @@ export default function PredictiveEventChart() {
       </div>
 
       {/* Row 3: the finding, in one sentence, event first. */}
-      <div style={{ padding: "12px 14px", background: "#fff1f2", border: "1px solid #fecdd3", borderRadius: "10px", fontSize: "0.88rem", color: "#9f1239", lineHeight: 1.5 }}>
+      <div style={{
+        padding: "12px 14px", borderRadius: "10px", fontSize: "0.88rem", lineHeight: 1.5,
+        background: "color-mix(in srgb, var(--page-accent, #2a78d6) 9%, transparent)",
+        border: "1px solid color-mix(in srgb, var(--page-accent, #2a78d6) 28%, transparent)",
+        color: "var(--text-primary)",
+      }}>
         {chosen ? (
           <>
             During <b>{shortTitle(chosen.title)}</b>
@@ -519,18 +531,23 @@ export default function PredictiveEventChart() {
           className="evidence-summary"
           style={{ cursor: "pointer", listStyle: "none", display: "flex", gap: 12, flexWrap: "wrap", alignItems: "center" }}
         >
+          {/* Forces a flex line break: the chips always start a new row, so the
+              Show/Hide control stays on the title row and both cards' evidence
+              headers come out the same height. */}
+          <span aria-hidden style={{ order: 3, flexBasis: "100%", height: 0 }} />
           <span style={{
+            order: 1,
             display: "grid", placeItems: "center", width: 28, height: 28, borderRadius: 8,
             background: "color-mix(in srgb, var(--color-success) 14%, transparent)", color: "var(--color-success)", flex: "none",
           }}>
             <ShieldCheck size={16} strokeWidth={2.4} />
           </span>
-          <span style={{ fontSize: "0.98rem", fontWeight: 800, letterSpacing: "-0.01em", color: "var(--text-primary)" }}>
+          <span style={{ order: 1, fontSize: "0.98rem", fontWeight: 800, letterSpacing: "-0.01em", color: "var(--text-primary)" }}>
             Validation evidence
           </span>
           {champ?.wmape != null && (
             <span style={{
-              display: "inline-flex", alignItems: "center", gap: 6, padding: "3px 10px", borderRadius: 999,
+              order: 4, display: "inline-flex", alignItems: "center", gap: 6, padding: "3px 10px", borderRadius: 999,
               background: "var(--bg-surface-hover)", border: "1px solid var(--border-default)",
               fontSize: "0.74rem", fontWeight: 600, color: "var(--text-secondary)", fontVariantNumeric: "tabular-nums",
             }}>
@@ -539,11 +556,11 @@ export default function PredictiveEventChart() {
             </span>
           )}
           {(minorAffected.length > 0 || otherExits.length > 0) && (
-            <span style={{ color: "var(--text-muted)", fontSize: "0.74rem" }}>
+            <span style={{ order: 5, color: "var(--text-muted)", fontSize: "0.74rem" }}>
               the other {minorAffected.length + otherExits.length} exits
             </span>
           )}
-          <span className="evidence-chevron" style={{ marginLeft: "auto", display: "inline-flex", alignItems: "center", gap: 4, fontSize: "0.74rem", fontWeight: 600, color: "var(--text-secondary)" }}>
+          <span className="evidence-chevron" style={{ order: 2, marginLeft: "auto", display: "inline-flex", alignItems: "center", gap: 4, fontSize: "0.74rem", fontWeight: 600, color: "var(--text-secondary)" }}>
             <span className="evidence-open-label">Show</span>
             <span className="evidence-close-label">Hide</span>
             <ChevronRight size={15} strokeWidth={2.4} />
@@ -557,9 +574,7 @@ export default function PredictiveEventChart() {
                 Did past predictions match what really happened?
               </div>
               <p style={{ margin: "0 0 2px", fontSize: "0.76rem", lineHeight: 1.55, color: "#475569" }}>
-                Each pair below is one of the <b>{evalInfo.events_test} event days the model never saw</b>, in date order.
-                The hollow dot is what it predicted the whole corridor would carry; the filled dot is what actually arrived.
-                The gap between them is the error.
+                <b>{evalInfo.events_test} event days the model never saw</b>, in date order · the gap is the error
               </p>
               <EventReplayChart series={evalInfo.series} />
               <div style={{
@@ -587,9 +602,15 @@ export default function PredictiveEventChart() {
                 </div>
               )}
               <p style={{ margin: "7px 0 0", fontSize: "0.72rem", lineHeight: 1.5, color: "#94a3b8" }}>
-                Event days come from the Philippine Arena calendar ({evalInfo.events_total} of them inside the volume record), never inferred from how busy the road was.
-                {evalInfo.holiday_event_days ? <> {evalInfo.holiday_event_days} fall on a public holiday, which is measured separately — a holiday runs about {Math.round((evalInfo.holiday_factor ?? 1) * 100)}% of an ordinary day, so the event effect is read on top of that rather than being credited with it.</> : null}
-                {" "}Attendance is not in the calendar, so a sold-out concert and a small exhibition get the same prediction; that is the largest remaining source of error.
+                {evalInfo.events_total} Philippine Arena dates · attendance is not in the calendar, the largest
+                remaining source of error
+                <InfoTooltip
+                  text={`Event days are read from the Philippine Arena calendar, never inferred from how busy the road was, so the model cannot credit itself with a jam it did not predict.${
+                    evalInfo.holiday_event_days
+                      ? ` ${evalInfo.holiday_event_days} of them fall on a public holiday, which is measured separately — a holiday runs about ${Math.round((evalInfo.holiday_factor ?? 1) * 100)}% of an ordinary day, so the event effect is read on top of that rather than being credited with it.`
+                      : ""
+                  } Attendance is not recorded, so a sold-out concert and a small exhibition get the same prediction.`}
+                />
               </p>
             </div>
           )}
@@ -637,7 +658,7 @@ export default function PredictiveEventChart() {
               {minorAffected.map((r) => (
                 <span key={r.exit} title={`${r.exit}: +${fmtVeh(r.added)} vehicles, ${r.shareOfSurge.toFixed(1)}% of the surge — too small to chart`} style={{
                   display: "inline-flex", alignItems: "center", gap: 6, padding: "3px 9px", borderRadius: "999px",
-                  background: "#fff1f2", border: "1px solid #fecdd3", fontSize: "0.72rem", color: "#9f1239", whiteSpace: "nowrap",
+                  background: "color-mix(in srgb, var(--page-accent, #2a78d6) 10%, transparent)", border: "1px solid color-mix(in srgb, var(--page-accent, #2a78d6) 28%, transparent)", fontSize: "0.72rem", color: "var(--text-secondary)", whiteSpace: "nowrap",
                 }}>
                   {r.exit}<b>+{fmtVeh(r.added)}</b>
                 </span>

@@ -1263,7 +1263,7 @@ export default function PredictiveIncidentChart({
             </span>
           ))}
           <span style={{ color: "var(--text-secondary)", borderLeft: "1px solid var(--border-default)", paddingLeft: "14px" }}>
-            Taller bar = wetter day. Heavy rain typically coincides with higher incident rates and worse congestion, even as traffic volume drops.
+            Taller bar = wetter day
           </span>
         </div>
       )}

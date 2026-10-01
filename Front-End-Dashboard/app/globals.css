@@ -11144,3 +11144,50 @@ details[open] > .evidence-summary .evidence-close-label { display: inline; }
     font-size: 0.74rem;
   }
 }
+
+
+/* ---------------------------------------------------------------------------
+   Session gate
+   ---------------------------------------------------------------------------
+   Shown by app/dashboard/layout.tsx while the session is being read, while a
+   redirect to the login screen is in flight, and in the instant after a role is
+   refused a page. It deliberately carries no navigation: the shell it replaces
+   is the thing being withheld.
+
+   Tokens only, so it is correct in both themes without a second rule -- the
+   convention documented in Chapter4_UIUX_Design_System.md section 4.2.1.3.
+*/
+.ds-auth-gate {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-md, 16px);
+  background: var(--bg-body);
+  color: var(--text-secondary);
+  padding: var(--space-xl, 28px);
+  text-align: center;
+}
+
+.ds-auth-gate p {
+  margin: 0;
+  font-size: 0.9375rem;
+  max-width: 34ch;
+  line-height: 1.5;
+}
+
+.ds-auth-gate-spinner {
+  width: 26px;
+  height: 26px;
+  border-radius: var(--radius-full, 999px);
+  border: 2px solid var(--border-default);
+  border-top-color: var(--brand-primary);
+  animation: ds-spin 720ms linear infinite;
+}
+
+/* A gate that spins forever is no better than a blank page for anyone who has
+   motion disabled, and the text already says what is happening. */
+@media (prefers-reduced-motion: reduce) {
+  .ds-auth-gate-spinner { animation: none; opacity: 0.5; }
+}

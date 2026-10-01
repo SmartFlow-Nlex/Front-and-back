@@ -792,6 +792,16 @@
 .spanHalf {
   grid-column: span 6;
   min-width: 0;
+  /* The grid slot already stretches to the tallest card in the row, but the
+     card inside it sized to its own content and sat at the top of the slot, so
+     two panels side by side ended at different heights with a ragged gap under
+     the shorter one. Making the slot a flex container and letting its card grow
+     into it lands both cards on the same bottom edge. */
+  display: flex;
+}
+.spanHalf > * {
+  flex: 1 1 auto;
+  min-width: 0;
 }
 
 .chart1 { grid-column: 1 / -1; }

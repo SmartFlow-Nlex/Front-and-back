@@ -323,7 +323,7 @@ export default function PredictiveCorridorChart({
       {((unclassifiedPct != null && Number(unclassifiedPct) > 0) || useKmView) && (
         <p style={{ color: "var(--text-muted)", fontSize: "0.82rem", margin: 0 }}>
           {unclassifiedPct != null && Number(unclassifiedPct) > 0 && (
-            <>{unclassifiedPct}% of logged locations in this Range couldn&apos;t be matched to a specific exit and are excluded from the split.</>
+            <>{unclassifiedPct}% of locations unmatched to an exit · excluded from the split</>
           )}
           {useKmView && (
             <> Listed top-to-bottom in corridor order (Km 0 first, Km{" "}

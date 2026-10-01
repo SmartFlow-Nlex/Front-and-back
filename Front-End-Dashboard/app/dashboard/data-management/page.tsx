@@ -3,6 +3,7 @@
 import { ChangeEvent, useEffect, useState } from "react";
 import { Brain, CheckCircle2, Database, ScanSearch, UploadCloud } from "lucide-react";
 import PageHeader from "../../../components/dashboard/PageHeader";
+import { apiFetch, BACKEND } from "../../../lib/api";
 
 type PipelineGateLog = {
   gate: string;
@@ -78,12 +79,23 @@ export default function DataManagementPage() {
       const formData = new FormData();
       formData.append("file", file);
 
-      const response = await fetch(`${process.env.NEXT_PUBLIC_BACKEND_URL ?? "http://localhost:4000"}/api/upload/file`, {
+      // apiFetch attaches the session token and, if it has expired, renews it
+      // and replays the upload once. The endpoint now requires the data-analyst
+      // role (see Back-End/src/routes/upload.routes.ts), so an unauthenticated
+      // post would otherwise be refused here.
+      const response = await apiFetch(`${BACKEND}/api/upload/file`, {
         method: "POST",
         body: formData, // fetch will automatically set the correct multipart boundary headers
       });
 
       const payload = await response.json();
+
+      if (response.status === 401 || response.status === 403) {
+        throw new Error(
+          payload.message ||
+            "Your session is no longer valid for uploading. Sign in again as a Data Analyst.",
+        );
+      }
 
       if (!response.ok && !payload.data) {
         throw new Error(payload.error || "An error occurred during upload.");

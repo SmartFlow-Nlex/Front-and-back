@@ -310,6 +310,9 @@ export default function SecondaryIncidentRiskPanel() {
             <div>
               <div style={{ fontSize: "0.68rem", fontWeight: 800, color: "var(--page-accent, #4f46e5)", letterSpacing: "0.04em", textTransform: "uppercase" }}>
                 Top {view === "km" ? "segments" : "corridors"} by evidence
+                <InfoTooltip
+                  text={`Only the ${view === "km" ? "segments" : "exits"} that together cover ${Math.round(COVERAGE_TARGET * 100)}% of this panel's held-out incidents are charted, so a rank rests on enough cases to mean something. n still varies inside that set, so a thin bar is less certain than it looks. The rest are listed below, not dropped.`}
+                />
               </div>
               <div style={{ fontSize: "0.75rem", color: "var(--text-muted)" }}>Avg. predicted secondary-incident risk</div>
             </div>
@@ -322,15 +325,13 @@ export default function SecondaryIncidentRiskPanel() {
             </div>
           </div>
           <p style={{ color: "var(--text-muted)", fontSize: "0.72rem", margin: "0 0 10px 0" }}>
-            Charting the {topRows.length} of {allRows.length} {view === "km" ? "km segments" : "exits"} that
-            together account for at least {Math.round(COVERAGE_TARGET * 100)}% of this panel&apos;s {fmtInt(totalN)}{" "}
-            held-out incidents — enough evidence to rank with some confidence. Even within this set n still varies,
-            so thin bars are less certain than they look; the rest are listed, not dropped, below.
+            Top {topRows.length} of {allRows.length} · {Math.round(COVERAGE_TARGET * 100)}% of {fmtInt(totalN)}{" "}
+            held-out incidents · thinner bars carry less evidence
           </p>
           {view === "exit" && missingExits.length > 0 && (
             <p style={{ color: "var(--text-muted)", fontSize: "0.72rem", margin: "-4px 0 10px 0" }}>
-              Showing {allRows.length} of {allRows.length + missingExits.length} exits — {listPhrase(missingExits)}{" "}
-              {missingExits.length > 1 ? "have" : "has"} no incident data to score, so {missingExits.length > 1 ? "they are" : "it is"} not listed.
+              {allRows.length} of {allRows.length + missingExits.length} exits scored · no incidents logged at{" "}
+              {listPhrase(missingExits)}
             </p>
           )}
           <div style={{ display: "flex", flexDirection: "column", gap: "2px" }}>
@@ -357,7 +358,7 @@ export default function SecondaryIncidentRiskPanel() {
           {omittedRows.length > 0 && (
             <div style={{ marginTop: "12px" }}>
               <p style={{ color: "var(--text-muted)", fontSize: "0.72rem", margin: "0 0 6px 0" }}>
-                Below the coverage threshold — not charted above, but not dropped either:
+                Below the coverage threshold — listed, not dropped:
               </p>
               <table style={{ width: "100%", fontSize: "0.76rem", borderCollapse: "collapse" }}>
                 <thead>
@@ -407,8 +408,8 @@ export default function SecondaryIncidentRiskPanel() {
         {championMetrics && (
           <p style={{ color: "var(--text-muted)", fontSize: "0.72rem", margin: "8px 0 0 0" }}>
             {(championMetrics.accuracy * 100).toFixed(1)}% accuracy on {fmtInt(championMetrics.n)} held-out
-            incidents. Fatal incidents are rare enough in this holdout (11 of {fmtInt(championMetrics.n)}) that
-            neither candidate model ever predicts that class.
+            incidents · neither model ever predicts Fatal (11 cases){" "}
+            <InfoTooltip text={`Fatal incidents are ${11} of ${fmtInt(championMetrics.n)} in this holdout — too rare for either candidate model to learn the class, so the Fatal row reads 0 predicted.`} />
           </p>
         )}
       </div>
@@ -416,7 +417,7 @@ export default function SecondaryIncidentRiskPanel() {
       <div style={{ borderTop: "1px solid var(--border-default)", paddingTop: "12px" }}>
         <h4 style={{ margin: "0 0 2px 0", fontSize: "0.85rem", color: "var(--text-primary)", fontWeight: 700 }}>
           Predicted clearance time
-          <InfoTooltip text="Cox PH survival model, trained and scored on accidents only (silver.nlex_accident_events_clean) -- it never sees breakdown_data. Compare against the Descriptive tab's accident-only clearance figure, not its blended accident+breakdown MTTC." />
+          <InfoTooltip text="Cox PH survival model, trained and scored on accidents only (silver.nlex_accident_events_clean) -- it never sees breakdown_data. Compare against the Descriptive tab's accident-only clearance figure, not its blended accident+breakdown MTTC. Median and mean differ because clearance time is heavily right-skewed: most accidents clear in minutes and a minority take hours, which pulls the mean above the median." />
         </h4>
         <p style={{ color: "var(--text-muted)", fontSize: "0.7rem", margin: "0 0 8px 0" }}>Accident-only — excludes breakdowns</p>
         <div style={{ display: "flex", gap: "20px", flexWrap: "wrap" }}>
@@ -439,9 +440,7 @@ export default function SecondaryIncidentRiskPanel() {
         </div>
         <p style={{ color: "var(--text-muted)", fontSize: "0.72rem", margin: "8px 0 0 0" }}>
           Cox PH concordance {meta ? fmtNum(meta.cox_ph.concordance_index, 3) : "—"}
-          {meta?.cox_ph.mae_minutes != null ? ` · MAE ${fmtNum(meta.cox_ph.mae_minutes, 1)} min` : ""} on held-out incidents.
-          The two figures diverge because clearance time is heavily right-skewed — most accidents clear in minutes, a minority take hours,
-          which pulls the mean well above the median.
+          {meta?.cox_ph.mae_minutes != null ? ` · MAE ${fmtNum(meta.cox_ph.mae_minutes, 1)} min` : ""} on held-out incidents
         </p>
       </div>
     </article>

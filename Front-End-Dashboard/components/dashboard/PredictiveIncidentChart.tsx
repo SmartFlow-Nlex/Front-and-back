@@ -640,10 +640,19 @@ export default function PredictiveIncidentChart({
     areaStyle: { color: VOLUME_COLOR, opacity: 0.08 },
   });
 
+  // start/end pinned to 0/100 explicitly (not just omitted) on every build --
+  // ECharts treats a dataZoom component's zoomed window as runtime state that
+  // survives a setOption call even with notMerge:true, the same way legend
+  // "selected" state does. Without an explicit value here, switching Range
+  // from a wide window to a narrow one (or back) can leave the slider parked
+  // on whatever fraction it last computed, silently showing a stale slice of
+  // the new data instead of the full window the Range control just asked for.
   const dataZoomOf = (xAxisIndex: number | number[]) => [
     {
       type: "slider" as const,
       xAxisIndex,
+      start: 0,
+      end: 100,
       bottom: 30,
       height: 16,
       borderColor: "transparent",
@@ -654,7 +663,7 @@ export default function PredictiveIncidentChart({
       textStyle: { color: T.textMuted, fontSize: 10 },
       showDetail: false,
     },
-    { type: "inside" as const, xAxisIndex },
+    { type: "inside" as const, xAxisIndex, start: 0, end: 100 },
   ];
 
   // Split layout: two stacked panels (Accidents on top, Breakdowns below),
@@ -1433,7 +1442,7 @@ export default function PredictiveIncidentChart({
             </span>
           ))}
           <span style={{ color: "var(--text-secondary)", borderLeft: "1px solid var(--border-default)", paddingLeft: "14px" }}>
-            Taller bar = wetter day. Heavy rain typically coincides with higher incident rates and worse congestion, even as traffic volume drops.
+            Taller bar = wetter day
           </span>
         </div>
       )}

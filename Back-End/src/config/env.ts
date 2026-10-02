@@ -43,6 +43,18 @@ const envSchema = z.object({
   REDIS_REST_URL: z.string().optional(),
   REDIS_REST_TOKEN: z.string().optional(),
 
+  // Supabase — issues and verifies the operator session tokens. These were read
+  // straight from process.env in auth.middleware.ts, with the project URL and
+  // anon key hardcoded as fallbacks, so a deployment that set neither still
+  // started and silently verified tokens against the development project.
+  //
+  // Declared optional because the analytics endpoints are public and the API is
+  // useful without a session. What is NOT optional is the consequence: when
+  // these are absent the middleware refuses protected routes outright rather
+  // than guessing a project. See middleware/auth.middleware.ts.
+  SUPABASE_URL: z.string().optional(),
+  SUPABASE_ANON_KEY: z.string().optional(),
+
   // Either supply POSTGRES_URL whole, or supply the PG_* parts and let
   // buildPostgresUrl() assemble it (see below).
   POSTGRES_URL: z.string().optional(),

@@ -438,8 +438,8 @@ export default function IncidentSeverityModels() {
           </>
         ) : (
           <>
-            Hover the legend or a curve to trace it against the others.
-            {view === "both" && " Some crossed groups are thin (as few as 25 incidents) — hover a curve to see its n."}
+            Hover a curve to trace it
+            {view === "both" && " · some crossed groups are thin, as few as 25 incidents"}
           </>
         )}
       </p>

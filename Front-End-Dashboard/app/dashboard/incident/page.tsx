@@ -967,9 +967,9 @@ export default function IncidentPage() {
             {kpiValue(data?.kpis.avgTimeToFirstResponder.min != null ? `${data.kpis.avgTimeToFirstResponder.min} min` : null)}
           </div>
           <p className={styles.kpiHint}>
-            reported → first responder dispatched (breakdowns)
+            breakdowns only
             {data && data.kpis.avgTimeToFirstResponder.min != null
-              ? ` · ${fmtInt(data.kpis.avgTimeToFirstResponder.n)} of ${fmtInt(data.kpis.avgTimeToFirstResponder.totalBreakdowns)} breakdowns`
+              ? ` · ${fmtInt(data.kpis.avgTimeToFirstResponder.n)} of ${fmtInt(data.kpis.avgTimeToFirstResponder.totalBreakdowns)} logged`
               : ""}
           </p>
         </article>

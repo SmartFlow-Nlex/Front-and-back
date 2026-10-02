@@ -3,8 +3,8 @@
 import { ChangeEvent, useCallback, useEffect, useMemo, useState } from "react";
 import { Brain, CalendarClock, CheckCircle2, Database, ScanSearch, UploadCloud } from "lucide-react";
 import PageHeader from "../../../components/dashboard/PageHeader";
+import { apiFetch, BACKEND } from "../../../lib/api";
 
-const BACKEND = process.env.NEXT_PUBLIC_BACKEND_URL ?? "http://localhost:4000";
 
 type PipelineGateLog = {
   gate: string;
@@ -148,11 +148,14 @@ class BackendDown extends Error {}
 async function getData<T>(path: string): Promise<T> {
   let response: Response;
   try {
-    response = await fetch(`${BACKEND}${path}`);
+    response = await apiFetch(`${BACKEND}${path}`);
   } catch {
     throw new BackendDown();
   }
   const body = await response.json().catch(() => null);
+  if (response.status === 401 || response.status === 403) {
+    throw new Error(body?.message ? `${body.message}${response.status === 401 ? " — sign in again" : ""}` : `not authorized (${response.status})`);
+  }
   if (!body?.success) {
     // A 404 here means a backend started before this endpoint existed.
     throw new Error(body?.error ?? `${path} answered ${response.status}${response.status === 404 ? " (restart the backend to pick up this page's endpoints)" : ""}`);
@@ -304,7 +307,7 @@ export default function DataManagementPage() {
   async function postUndo(id: string, check: boolean): Promise<UndoResult> {
     let response: Response;
     try {
-      response = await fetch(`${BACKEND}/api/upload/${id}/undo${check ? "?mode=check" : ""}`, { method: "POST" });
+      response = await apiFetch(`${BACKEND}/api/upload/${id}/undo${check ? "?mode=check" : ""}`, { method: "POST" });
     } catch {
       setBackendDown(true);
       throw new Error(`The backend at ${BACKEND} is not answering.`);
@@ -390,12 +393,23 @@ export default function DataManagementPage() {
       const formData = new FormData();
       formData.append("file", file);
 
-      const response = await fetch(`${BACKEND}/api/upload/file${mode === "check" ? "?mode=check" : ""}`, {
+      // apiFetch attaches the session token and, if it has expired, renews it
+      // and replays the upload once. The endpoint now requires the data-analyst
+      // role (see Back-End/src/routes/upload.routes.ts), so an unauthenticated
+      // post would otherwise be refused here.
+      const response = await apiFetch(`${BACKEND}/api/upload/file${mode === "check" ? "?mode=check" : ""}`, {
         method: "POST",
         body: formData, // fetch will automatically set the correct multipart boundary headers
       });
 
       const payload = await response.json();
+
+      if (response.status === 401 || response.status === 403) {
+        throw new Error(
+          payload.message ||
+            "Your session is no longer valid for uploading. Sign in again as a Data Analyst.",
+        );
+      }
 
       if (!response.ok && !payload.data) {
         throw new Error(payload.error || "An error occurred during upload.");

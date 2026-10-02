@@ -2142,9 +2142,9 @@ const roadMarks = (evs: readonly ScenarioEvent[], min: number, owners = NO_OWNER
   check("lane reallocation: the shared km axis gets a dark chip behind its numbers while the striped barrier is drawn", /backdrop: zipper !== null/.test(pageSource));
   const resetHookSource = readFileSync(new URL("../useDirectionSim.ts", import.meta.url), "utf8");
   check(
-    "reset: the button resets EVERYTHING, scenarios included — both carriageways (resetAll), a lane reallocation undone, a command proposal and old confidence result dropped, and the Add-event form remounted on its defaults",
+    "reset: the button resets EVERYTHING, scenarios included — both carriageways (resetAll), a lane reallocation undone, a command proposal and old confidence result dropped, the Add-event form remounted on its defaults, and the replay recording cleared (its frames belong to the run that was just replaced)",
     /onClick=\{resetEverything\}/.test(pageSource) && !/onClick=\{\(\) => \{ nb\.rebuild\(\); sb\.rebuild\(\); \}\}/.test(pageSource) &&
-      /const resetEverything = \(\) => \{\s*endReallocation\(\);\s*setReallocFrom\(null\);\s*setReallocTo\(null\);\s*nb\.resetAll\(\);\s*sb\.resetAll\(\);\s*disarmPlacing\(\);\s*setPlan\(null\);\s*setCommandError\(null\);\s*setRepResult\(null\);\s*setScenarioFormKey\(\(k\) => k \+ 1\);\s*\};/.test(pageSource) &&
+      /const resetEverything = \(\) => \{\s*endReallocation\(\);\s*setReallocFrom\(null\);\s*setReallocTo\(null\);\s*nb\.resetAll\(\);\s*sb\.resetAll\(\);\s*disarmPlacing\(\);\s*setPlan\(null\);\s*setCommandError\(null\);\s*setRepResult\(null\);\s*setScenarioFormKey\(\(k\) => k \+ 1\);(?:\s*\/\/[^\n]*)*\s*replayRef\.current\.NB\.clear\(\);\s*replayRef\.current\.SB\.clear\(\);\s*setReplayIndex\(null\);\s*setReplayLen\(0\);\s*setReplayHasEvent\(false\);\s*\};/.test(pageSource) &&
       /<ScenarioPanel\s+key=\{scenarioFormKey\}/.test(pageSource),
   );
   check(

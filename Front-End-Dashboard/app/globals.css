@@ -5596,7 +5596,7 @@ body {
    --------------------------------------------------------------------------- */
 .viz-traffic   { --page-accent: #2a78d6; --kpi-1: #3f7ad9; --kpi-2: #1d3f8f; --kpi-3: #8ab6f5; --kpi-4: var(--color-info);    --kpi-5: var(--color-success); }
 .viz-incident  { --page-accent: #b8760a; --kpi-1: #b8760a; --kpi-2: #7d4606; --kpi-3: #e0b01f; --kpi-4: var(--color-danger);  --kpi-5: var(--color-warning); }
-.viz-emissions { --page-accent: #0f8a4a; --kpi-1: #118f46; --kpi-2: #08582b; --kpi-3: #4cbd79; --kpi-4: var(--color-success); --kpi-5: var(--color-info); }
+.viz-emissions { --page-accent: #0f8a4a; --kpi-1: #118f46; --kpi-2: #08582b; --kpi-3: #4cbd79; --kpi-4: var(--color-success); --kpi-5: var(--color-info); --kpi-6: var(--color-warning); }
 
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) .viz-traffic   { --kpi-1: #5b8fe6; --kpi-2: #a8c8f8; --kpi-3: #2f5fba; }
@@ -10649,7 +10649,6 @@ details[open] > .evidence-summary .evidence-close-label { display: inline; }
 .sandbox-main.is-expanded .sandbox-footbar,
 .sandbox-main.is-expanded .sandbox-fs-keys,
 .sandbox-main.is-expanded .sandbox-fs-notes-toggle {
-  position: absolute;
   z-index: 3;
   background: rgba(8, 13, 25, 0.72);
   -webkit-backdrop-filter: blur(12px);
@@ -10658,10 +10657,25 @@ details[open] > .evidence-summary .evidence-close-label { display: inline; }
   border-radius: 12px;
   color: #e8eefc;
 }
-.sandbox-main.is-expanded .sandbox-head {
+/* The head wraps onto a second line at a narrow width (the simulation-time
+   field and the speed/play controls run out of room) — that's what let the
+   Carriageway strip, the forecast picker, the key hints and the notes
+   toggle below it overlap the head: each was pinned at a fixed pixel offset
+   from the top that only cleared a one-line head. sandbox-hud-top holds all
+   of them in normal flow instead, so each sits below whatever height the
+   one above it actually took, however many lines that is. */
+.sandbox-hud-top { display: contents; }
+.sandbox-main.is-expanded .sandbox-hud-top {
+  position: absolute;
   top: 12px;
   left: 14px;
   right: 14px;
+  z-index: 3;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.sandbox-main.is-expanded .sandbox-head {
   padding: 8px 12px;
 }
 .sandbox-main.is-expanded .sandbox-head h2 {
@@ -10669,38 +10683,35 @@ details[open] > .evidence-summary .evidence-close-label { display: inline; }
   font-size: 1rem;
   letter-spacing: 0.01em;
 }
-.sandbox-main.is-expanded .sandbox-view-seg {
-  top: 62px;
-  left: 14px;
-  padding: 6px 10px;
+/* Carriageway and the key hints/notes toggle share one row so they in turn
+   can never overlap each other — wrap lets them drop to a second line
+   rather than clip or overlap at a narrow width. */
+.sandbox-hud-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
   gap: 8px;
 }
+.sandbox-main.is-expanded .sandbox-view-seg {
+  padding: 6px 10px;
+  gap: 8px;
+  margin-top: 0;
+}
 .sandbox-main.is-expanded .sandbox-view-seg .k { color: #93a4c4; }
-/* Pinned to the BOTTOM, not 62px from the top.
- *
- * The head above it is absolutely positioned and its height depends on what
- * is in it — the carriageway tabs, the speed buttons, Pause, Reset, Controls,
- * Full screen, and now a replay row that appears only while reviewing. A
- * hint strip at a fixed 62px was fine for the head it was measured against
- * and lands on top of the buttons the moment that head grows or wraps.
- *
- * The bottom of the screen has no such problem: the metric row is the only
- * thing there and its height is known, so clearing it is a fixed offset that
- * cannot drift. */
 .sandbox-main.is-expanded .sandbox-fs-keys {
-  top: auto;
-  bottom: 74px;
-  left: 50%;
-  transform: translateX(-50%);
+  /* Pushed to the end of the row, the notes toggle right after it, rather
+     than centred independently of them — centring against the full width
+     risked landing back on top of the Carriageway strip at exactly the
+     widths this is fixing. */
+  margin-left: auto;
   padding: 7px 12px;
-  margin: 0;
   color: #93a4c4;
   white-space: nowrap;
-  pointer-events: none;
 }
 .sandbox-main.is-expanded .sandbox-fs-keys b { color: #dce6fb; }
 /* The readout sits along the bottom, out of the traffic's way. */
 .sandbox-main.is-expanded .sandbox-metric-row {
+  position: absolute;
   left: 14px;
   right: 14px;
   bottom: 12px;
@@ -10725,8 +10736,6 @@ details[open] > .evidence-summary .evidence-close-label { display: inline; }
 .sandbox-main.is-expanded .sandbox-metric-val { color: #f3f7ff; font-size: 1.15rem; }
 .sandbox-main.is-expanded .sandbox-metric-row * { color: inherit; }
 .sandbox-main.is-expanded .sandbox-fs-notes-toggle {
-  top: 62px;
-  right: 14px;
   padding: 7px 12px;
   text-decoration: none;
   color: #cddaf5;
@@ -10734,6 +10743,7 @@ details[open] > .evidence-summary .evidence-close-label { display: inline; }
 .sandbox-main.is-expanded .sandbox-fs-notes-toggle:hover { color: #fff; }
 /* Opened, the notes are a panel over the road rather than a slab under it. */
 .sandbox-main.is-expanded .sandbox-footbar {
+  position: absolute;
   left: 14px;
   right: 14px;
   bottom: 160px;
@@ -11705,4 +11715,50 @@ details[open] > .evidence-summary .evidence-close-label { display: inline; }
 .audit-warn,
 .audit-note b.audit-warn {
   color: var(--color-warning);
+}
+
+/* ---------------------------------------------------------------------------
+   Session gate
+   ---------------------------------------------------------------------------
+   Shown by app/dashboard/layout.tsx while the session is being read, while a
+   redirect to the login screen is in flight, and in the instant after a role is
+   refused a page. It deliberately carries no navigation: the shell it replaces
+   is the thing being withheld.
+
+   Tokens only, so it is correct in both themes without a second rule -- the
+   convention documented in Chapter4_UIUX_Design_System.md section 4.2.1.3.
+*/
+.ds-auth-gate {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-md, 16px);
+  background: var(--bg-body);
+  color: var(--text-secondary);
+  padding: var(--space-xl, 28px);
+  text-align: center;
+}
+
+.ds-auth-gate p {
+  margin: 0;
+  font-size: 0.9375rem;
+  max-width: 34ch;
+  line-height: 1.5;
+}
+
+.ds-auth-gate-spinner {
+  width: 26px;
+  height: 26px;
+  border-radius: var(--radius-full, 999px);
+  border: 2px solid var(--border-default);
+  border-top-color: var(--brand-primary);
+  animation: ds-spin 720ms linear infinite;
+}
+
+/* A gate that spins forever is no better than a blank page for anyone who has
+   motion disabled, and the text already says what is happening. */
+@media (prefers-reduced-motion: reduce) {
+  .ds-auth-gate-spinner { animation: none; opacity: 0.5; }
 }

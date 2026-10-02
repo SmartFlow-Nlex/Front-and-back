@@ -109,8 +109,9 @@ const viewTitle = (v: "Both" | "NB" | "SB") =>
  * scenario time, as a 24h clock that ticks forward exactly when the simulation does (paused when it's
  * paused, faster under a speed multiplier) — in minutes since the same zero point `clockStartMin` in
  * ScenarioPanel event labels is written against, so "now" and "starts at" read off one shared clock.
- * Formatting the HH:MM itself is TimeField's job (it's editable, not just displayed); this only works
- * out how many midnights that live value has rolled past, for the date label beside it.
+ * Formatting the HH:MM:SS itself is TimeField's job (it's editable, not just displayed, and shown
+ * to the second so the "live" clock actually reads as live); this only works out how many midnights
+ * that live value has rolled past, for the date label beside it.
  */
 function liveDayOffset(totalMin: number): number {
   return Math.floor(Math.round(totalMin * 60) / 86400);
@@ -823,11 +824,12 @@ export default function AiSandboxPage() {
    * (fetched per direction, see useDirectionSim) still supplies its own vehPerHour/mix AT that
    * shared hour, which is what actually varies between NB and SB. */
   const [hourOfDay, setHourOfDay] = useState<number | null>(null);
-  /* Minute within that hour — purely a starting-clock refinement, never fed to the demand/incident
-   * forecast (which is hourly-resolution data; there is no such thing as "the 07:23 profile").
+  /* Minutes (and, since the clock reads to the second, a fractional part of a minute for the
+   * seconds) within that hour — purely a starting-clock refinement, never fed to the demand/incident
+   * forecast (which is hourly-resolution data; there is no such thing as "the 07:23:41 profile").
    * Changing it does NOT rebuild the run the way hourOfDay does: only hourOfDay is a rebuild
-   * dependency (see useDirectionSim's `ramps`/`rebuild`), so nudging the minute just moves where
-   * the live Simulation time clock (next to Play/Pause) starts counting from. */
+   * dependency (see useDirectionSim's `ramps`/`rebuild`), so nudging it just moves where the live
+   * Simulation time clock (next to Play/Pause) starts counting from. */
   const [clockMinuteOffset, setClockMinuteOffset] = useState(0);
   // Open at the busiest hour: the interesting question is what a closure costs when it costs the
   // most. Whichever direction's demand-profile fetch resolves first proposes it; once set, neither
@@ -1042,6 +1044,14 @@ export default function AiSandboxPage() {
     setCommandError(null);
     setRepResult(null);
     setScenarioFormKey((k) => k + 1);
+    // Recorded frames belong to the sim instance that just got replaced —
+    // scrubbing into them after a reset would show vehicles from a run that
+    // no longer exists.
+    replayRef.current.NB.clear();
+    replayRef.current.SB.clear();
+    setReplayIndex(null);
+    setReplayLen(0);
+    setReplayHasEvent(false);
   };
 
   const runReplications = useCallback(() => {
@@ -1181,14 +1191,16 @@ export default function AiSandboxPage() {
         const simNB = nb.simRef.current;
         const simSB = sb.simRef.current;
         if (simNB && simSB) {
-          const dayFraction = daylightFraction(clockStartMinRef.current + (simNB.time - WARMUP_S) / 60);
+          const minutesNow = clockStartMinRef.current + (simNB.time - WARMUP_S) / 60;
+          const dayFraction = daylightFraction(minutesNow);
+          const asphaltColor = daylightAsphalt(minutesNow);
           const alpha = running ? simAccRef.current : 0;
           renderBoth(
             ctx, canvas, simNB, simSB,
             { fromKm: marksRef.current.fromKm, toKm: marksRef.current.toKm },
             maxLaneRef.current, exitsRef.current,
             scenarioOverlayRef.current.NB ?? null, scenarioOverlayRef.current.SB ?? null,
-            animClockRef.current, zipperRef.current, dayFraction,
+            animClockRef.current, zipperRef.current, dayFraction, asphaltColor,
             // Whatever is left in the accumulator is a fraction of a step the
             // engine has not applied yet; drawing it keeps the traffic moving
             // on frames where no step ran.
@@ -1211,7 +1223,9 @@ export default function AiSandboxPage() {
             ? replayRef.current[focusDirection].asSimLike(ri, liveSim.cfg) ?? liveSim
             : liveSim;
         if (focusedSim) {
-          const dayFraction = daylightFraction(clockStartMinRef.current + (focusedSim.time - WARMUP_S) / 60);
+          const minutesNow = clockStartMinRef.current + (focusedSim.time - WARMUP_S) / 60;
+          const dayFraction = daylightFraction(minutesNow);
+          const asphaltColor = daylightAsphalt(minutesNow);
           const alpha = ri !== null ? 0 : running ? simAccRef.current : 0;
           // Under review the plazas come from the recording too, drawn on the live geometry.
           const facView =
@@ -1220,7 +1234,7 @@ export default function AiSandboxPage() {
                 ? replayRef.current[focusDirection].facilityViewAt(ri, liveSim.fac.list)
                 : facilityView(liveSim.fac, liveSim.facilityStats(), alpha)
               : null;
-          render(ctx, canvas, focusedSim as NonNullable<typeof liveSim>, locationRef.current, marksRef.current, maxLaneRef.current, exitsRef.current, scenarioOverlayRef.current[focusDirection] ?? null, animClockRef.current, dayFraction, alpha, facView, facilityHighlightRef.current);
+          render(ctx, canvas, focusedSim as NonNullable<typeof liveSim>, locationRef.current, marksRef.current, maxLaneRef.current, exitsRef.current, scenarioOverlayRef.current[focusDirection] ?? null, animClockRef.current, dayFraction, asphaltColor, alpha, facView, facilityHighlightRef.current);
           paintVehicleProbe();
         }
       }
@@ -1924,22 +1938,32 @@ export default function AiSandboxPage() {
             `${expanded && both ? " is-both" : ""}`
           }
         >
+          {/* sandbox-hud-top holds the head and, once expanded, everything docked above the road
+              (Carriageway, the key hints, the notes toggle, Forecast day) as one flow stack — see
+              the CSS comment on sandbox-hud-top for why that matters: pinning them at independent
+              fixed pixel offsets from the top let them overlap the head as soon as it wrapped onto
+              a second line, since none of them actually knew how tall the head had rendered.
+              `display: contents` while docked means this wrapper changes nothing there — the head
+              is still just .sandbox-main's first child. */}
+          <div className="sandbox-hud-top">
           <div className="sandbox-head">
             <h2>Traffic Simulation</h2>
             {live && (
               <div
                 className="sandbox-live-clock"
-                title="The simulated date and time of day. Ticks forward with the simulation (paused when it's paused, faster at higher speeds) — edit it to jump the clock to a different hour and minute; the hour reseeds the road's demand for that hour, the minute just moves the starting point."
+                title="The simulated date and time of day. Ticks forward with the simulation (paused when it's paused, faster at higher speeds) — edit it to jump the clock to a different hour, minute or second; the hour reseeds the road's demand for that hour, the minute and second just move the starting point."
               >
                 <span className="sandbox-live-clock-label">Simulation time</span>
                 {liveDateText && <span className="sandbox-live-clock-date">{liveDateText}</span>}
-                <span style={{ display: "inline-block", width: 92 }}>
+                <span style={{ display: "inline-block", width: 118 }}>
                   <TimeField
-                    valueMin={liveMin}
-                    minMin={0}
-                    maxMin={1439}
+                    valueS={liveMin * 60}
+                    minS={0}
+                    maxS={1439 * 60 + 59}
+                    step={1}
                     scn="sim-time"
-                    onCommit={(totalMin) => {
+                    onCommit={(totalS) => {
+                      const totalMin = totalS / 60;
                       setHourOfDay(Math.floor(totalMin / 60));
                       setClockMinuteOffset(totalMin % 60);
                     }}
@@ -2065,32 +2089,56 @@ export default function AiSandboxPage() {
             </div>
           )}
 
-          {/* Docked, the Carriageway choice is the strip under the page header. Full screen covers
-              that strip, so the same choice is drawn here, on the card, while it is open. */}
+          {/* Docked, the Carriageway choice is the strip under the page header, and Forecast day
+              lives in .sandbox-toprow — full screen covers both, so the card carries its own copy
+              of each here while it is open, plus the key hints and the notes toggle (moved in here
+              from where it used to render, down by the canvas). These stay inside sandbox-hud-top,
+              right after the head above, so they stack below whatever height the head actually
+              rendered at instead of a fixed pixel offset from the top. */}
           {expanded && (
-            <div className="sandbox-view-seg" role="tablist" aria-label="Carriageway view, full screen">
-              <span className="k">Carriageway</span>
-              <div className="sandbox-view-buttons">
-                {(["Both", "NB", "SB"] as const).map((v) => (
-                  <button
-                    key={v}
-                    role="tab"
-                    aria-selected={view === v}
-                    className={view === v ? "active" : ""}
-                    onClick={() => setView(v)}
-                    title={viewTitle(v)}
-                  >
-                    {viewLabel(v)}
-                  </button>
-                ))}
+            <>
+              <div className="sandbox-hud-row">
+                <div className="sandbox-view-seg" role="tablist" aria-label="Carriageway view, full screen">
+                  <span className="k">Carriageway</span>
+                  <div className="sandbox-view-buttons">
+                    {(["Both", "NB", "SB"] as const).map((v) => (
+                      <button
+                        key={v}
+                        role="tab"
+                        aria-selected={view === v}
+                        className={view === v ? "active" : ""}
+                        onClick={() => setView(v)}
+                        title={viewTitle(v)}
+                      >
+                        {viewLabel(v)}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+                <p className="sandbox-fs-keys" aria-hidden>
+                  <b>Space</b> play/pause · <b>1–4</b> speed · <b>B/N/S</b> carriageway · <b>C</b> controls · <b>Esc</b> exit
+                </p>
+                <button
+                  className="sandbox-fs-notes-toggle"
+                  onClick={() => setNotesOpen((o) => !o)}
+                  aria-expanded={notesOpen}
+                >
+                  {notesOpen ? "Hide notes" : "Notes, legend & recommendation"}
+                </button>
               </div>
-            </div>
+              <div className="sandbox-view-seg sandbox-forecast-seg">
+                <span className="k">Forecast day</span>
+                <ForecastDayPicker
+                  value={forecast.date}
+                  dates={forecast.data?.availableDates ?? []}
+                  coverageEnd={forecast.data?.incidents.coverageEnd ?? null}
+                  onChange={forecast.selectDay}
+                  disabled={!forecast.data}
+                />
+              </div>
+            </>
           )}
-          {expanded && (
-            <p className="sandbox-fs-keys" aria-hidden>
-              <b>Space</b> play/pause · <b>1–4</b> speed · <b>B/N/S</b> carriageway · <b>C</b> controls · <b>Esc</b> exit
-            </p>
-          )}
+          </div>
           {both && placeNote !== null && !expanded && (
             <p className="sandbox-place-hint" data-place-note>
               {placeNote}
@@ -2155,16 +2203,10 @@ export default function AiSandboxPage() {
 
           {/* Wrapper so the legend and the recommendation can sit side by side
               when expanded. `display: contents` while docked means it changes
-              nothing there. */}
-          {expanded && (
-            <button
-              className="sandbox-fs-notes-toggle"
-              onClick={() => setNotesOpen((o) => !o)}
-              aria-expanded={notesOpen}
-            >
-              {notesOpen ? "Hide notes" : "Notes, legend & recommendation"}
-            </button>
-          )}
+              nothing there. The notes toggle button itself now renders up in
+              sandbox-hud-top, alongside the Carriageway strip, so it stacks
+              in flow with everything else in full screen's top HUD instead
+              of floating independently. */}
           <div
             className={`sandbox-footbar${expanded && !notesOpen ? " is-folded" : ""}`}
             data-both={both || undefined}
@@ -3810,7 +3852,23 @@ const ASPHALT_NIGHT = "#20293a";
 /** A lit, overcast-daylight asphalt grey — light enough to read as "day" without going pale
  *  concrete-white, which would fight the vehicle sprites (several of which are themselves white). */
 const ASPHALT_DAY = "#8b94a3";
+/** Low sun raking across wet-look tarmac reads warm, not grey — dawn leans a
+ *  cool violet (the sky hasn't warmed up yet), dusk leans amber (it's had all
+ *  day to). Using dayFraction alone for colour made both indistinguishable
+ *  from a muddy halfway point between night and day; these are their own
+ *  named stops instead of an interpolated midpoint. */
+const ASPHALT_DAWN = "#6a5f74";
+const ASPHALT_DUSK = "#8a6754";
 
+/**
+ * The asphalt colour for a given time of day, as four named keyframes
+ * (night / dawn / day / dusk) rather than daylightFraction's single 0..1
+ * axis — that axis alone cannot tell a genuine dawn from a genuine dusk
+ * apart, since both sit at the same "halfway between night and day" value.
+ * Keyframes sit at the same clock hours daylightFraction already uses
+ * (dawn 05:00-07:00 peaking at 06:00, dusk 17:00-19:00 peaking at 18:00) so
+ * the two stay in lockstep rather than drifting against each other.
+ */
 /** A small tile of grey speckle, generated once (lazily, on first draw) and
  *  reused every frame as a repeating fillStyle pattern. Real asphalt is
  *  never a flat colour; regenerating per-pixel noise every frame would cost
@@ -3839,6 +3897,16 @@ function getAsphaltGrain(ctx: CanvasRenderingContext2D): CanvasPattern | null {
     asphaltGrainTile = tile;
   }
   return ctx.createPattern(asphaltGrainTile, "repeat");
+}
+
+function daylightAsphalt(minutesSinceMidnight: number): string {
+  const h = (((minutesSinceMidnight % 1440) + 1440) % 1440) / 60;
+  if (h < 5 || h >= 19) return ASPHALT_NIGHT;
+  if (h < 6) return mixHex(ASPHALT_NIGHT, ASPHALT_DAWN, h - 5);
+  if (h < 7) return mixHex(ASPHALT_DAWN, ASPHALT_DAY, h - 6);
+  if (h < 17) return ASPHALT_DAY;
+  if (h < 18) return mixHex(ASPHALT_DAY, ASPHALT_DUSK, h - 17);
+  return mixHex(ASPHALT_DUSK, ASPHALT_NIGHT, h - 18);
 }
 
 /* An agent that has crashed. Drawn from the vehicle list like everything
@@ -3952,7 +4020,7 @@ function drawCarriageway(
     borrowed: number;
     /** What to call those lanes on the canvas. */
     borrowedLabel: string;
-    /** 0 (night) to 1 (day) — see daylightFraction(). Tints the asphalt and lane markings. */
+    /** 0 (night) to 1 (day) — see daylightFraction(). Tints the lane markings; the asphalt itself uses asphaltColor, which can tell a real dawn from a real dusk apart. */
     dayFraction: number;
     /** The toll plazas and service areas on this carriageway, and who is in them. */
     facView: FacilityView | null;
@@ -3960,14 +4028,16 @@ function drawCarriageway(
     highlightFacility: string | null;
     /** Pixels per lane unit past the road edge (roadLayout's gutterPx). */
     gutterPx: number;
+    /** Pre-mixed asphalt colour for this moment — see daylightAsphalt(). Computed once per frame at the call site (not per carriageway) so Both mode's two roads never fall a step out of sync with each other. */
+    asphaltColor: string;
   },
 ) {
   const {
     cssW, cssH, roadTop, laneH, roadH, rampGutter, rampsAbove, reverseLanes,
-    mToPx, sb, xPx, wPx, fromKm, toKm, exits, overlay, drawAxis, alphaS, flowLabel, location, animT, borrowed, borrowedLabel, dayFraction,
+    mToPx, sb, xPx, wPx, fromKm, toKm, exits, overlay, drawAxis, alphaS, flowLabel, location, animT, borrowed, borrowedLabel, dayFraction, asphaltColor,
     facView, highlightFacility, gutterPx,
   } = opts;
-  const asphalt = mixHex(ASPHALT_NIGHT, ASPHALT_DAY, dayFraction);
+  const asphalt = asphaltColor;
   const lanes = sim.cfg.laneCount;
 
   // asphalt — flat fill first, then a crown shade and a grain overlay so it
@@ -4029,6 +4099,18 @@ function drawCarriageway(
     ctx.stroke();
   }
   ctx.setLineDash([]);
+
+  // Shoulder edge lines — solid, unlike the dashed dividers between lanes,
+  // matching the real marking convention. Without these the outermost lanes
+  // had no boundary at all, which is what made the road read as an abstract
+  // striped rectangle rather than a carriageway with an edge.
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.moveTo(0, roadTop);
+  ctx.lineTo(cssW, roadTop);
+  ctx.moveTo(0, roadTop + lanes * laneH);
+  ctx.lineTo(cssW, roadTop + lanes * laneH);
+  ctx.stroke();
 
   /* Toll plazas and service areas, as places: ramps, booth lanes, islands,
    * pumps. Under the traffic and over the lane markings, so where a barrier
@@ -4744,6 +4826,7 @@ function render(
   overlay: ScenarioOverlay | null,
   animT: number,
   dayFraction: number,
+  asphaltColor: string,
   /** See drawCarriageway's `alphaS`. */
   alphaS = 0,
   /** The plazas and service areas on this carriageway, live or recorded. */
@@ -4833,6 +4916,7 @@ function render(
     borrowed: 0,
     borrowedLabel: "",
     dayFraction,
+    asphaltColor,
     facView,
     highlightFacility,
     gutterPx,
@@ -4861,6 +4945,7 @@ function renderBoth(
   animT: number,
   zipper: ZipperState | null,
   dayFraction: number,
+  asphaltColor: string,
   /** See drawCarriageway's `alphaS`. */
   alphaS = 0,
   facViewNB: FacilityView | null = null,
@@ -4936,6 +5021,7 @@ function renderBoth(
     borrowed: borrowedLanes(zipper, "NB"),
     borrowedLabel: zipper === null ? "" : "REALLOCATED",
     dayFraction,
+    asphaltColor,
     facView: facViewNB,
     highlightFacility,
     gutterPx: gutterPxNB,
@@ -4965,6 +5051,7 @@ function renderBoth(
     borrowed: borrowedLanes(zipper, "SB"),
     borrowedLabel: zipper === null ? "" : "REALLOCATED",
     dayFraction,
+    asphaltColor,
     facView: facViewSB,
     highlightFacility,
     gutterPx: gutterPxSB,

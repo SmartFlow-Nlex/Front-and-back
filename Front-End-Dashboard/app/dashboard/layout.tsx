@@ -22,12 +22,22 @@ import {
   Wrench,
   X,
 } from "lucide-react";
+import type { Session } from "@supabase/supabase-js";
 import { supabase } from "../../lib/supabase";
+import {
+  canAccess,
+  FALLBACK_ROLE,
+  FALLBACK_ROUTE,
+  isRole,
+  LOGIN_ROUTE,
+  type Role,
+} from "../../lib/auth-access";
+import { SESSION_LOST_EVENT } from "../../lib/api";
 import { installBackendAuth, logActivity, logPageView } from "../../lib/backend-auth";
+import ThemeToggle from "../../components/dashboard/ThemeToggle";
 
 // Before any page fetches: every request to the backend carries the signed-in user, for the audit log.
 if (typeof window !== "undefined") installBackendAuth();
-import ThemeToggle from "../../components/dashboard/ThemeToggle";
 
 // The sidebar is the product's spine, so it is grouped by what the user is
 // trying to do rather than listed flat. Admin utilities sit in their own group
@@ -61,11 +71,6 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
   const [showLogoutConfirm, setShowLogoutConfirm] = useState(false);
   const [loggingOut, setLoggingOut] = useState(false);
 
-  // Which pages are actually used: the audit log's page views.
-  useEffect(() => {
-    if (pathname) logPageView(pathname);
-  }, [pathname]);
-
   // Log out for real: the audit entry first (it needs the session to name the user), then end the
   // Supabase session. Going back to the sign-in page alone left the session signed in.
   async function logOut() {
@@ -75,41 +80,48 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
     router.push("/");
   }
 
-  // User States
-  const [userRole, setUserRole] = useState<string>("data-analyst");
-  const [userEmail, setUserEmail] = useState<string>("admin@campus.edu");
-  const [userFullName, setUserFullName] = useState<string>("Administrator");
+  /*
+   * Whether a session exists. "checking" is a distinct state rather than an
+   * assumption, because the whole shell depends on not guessing.
+   *
+   * Before this, userRole initialised to "data-analyst" -- the most privileged
+   * role -- and nothing tested for a session at all. Two consequences followed.
+   * Anyone who opened /dashboard without signing in was served the full
+   * administrator sidebar, Data Management and Audit Log included. And a signed-in
+   * operator who deep-linked to a page their role forbids rendered that page on
+   * first paint, because the guard below could not run until getSession()
+   * resolved a tick later. The redirect worked; it just arrived after the content.
+   */
+  const [authState, setAuthState] = useState<"checking" | "authed" | "anon">("checking");
+
+  // User States. Null until a session is read -- no placeholder identity.
+  const [userRole, setUserRole] = useState<Role | null>(null);
+  const [userEmail, setUserEmail] = useState<string>("");
+  const [userFullName, setUserFullName] = useState<string>("");
 
   // Fetch logged-in user details from Supabase
   useEffect(() => {
-    async function getUserData() {
-      const { data: { session } } = await supabase.auth.getSession();
+    function adopt(session: Session | null) {
       if (session?.user) {
-        setUserEmail(session.user.email || "admin@campus.edu");
+        setUserEmail(session.user.email || "");
         const metadata = session.user.user_metadata;
-        if (metadata) {
-          if (metadata.role) setUserRole(metadata.role);
-          if (metadata.full_name) setUserFullName(metadata.full_name);
-        }
+        setUserRole(isRole(metadata?.role) ? metadata.role : FALLBACK_ROLE);
+        setUserFullName(metadata?.full_name || session.user.email || "");
+        setAuthState("authed");
+      } else {
+        setUserRole(null);
+        setUserEmail("");
+        setUserFullName("");
+        setAuthState("anon");
       }
     }
-    getUserData();
 
-    // Listen to changes in auth session state
+    supabase.auth.getSession().then(({ data: { session } }) => adopt(session));
+
+    // Covers sign-out in this tab, sign-out in another tab, and the token
+    // refresh that the client performs on its own before a session lapses.
     const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
-      if (session?.user) {
-        setUserEmail(session.user.email || "admin@campus.edu");
-        const metadata = session.user.user_metadata;
-        if (metadata) {
-          if (metadata.role) setUserRole(metadata.role);
-          if (metadata.full_name) setUserFullName(metadata.full_name);
-        }
-      } else {
-        // Reset to default on sign-out
-        setUserRole("data-analyst");
-        setUserEmail("admin@campus.edu");
-        setUserFullName("Administrator");
-      }
+      adopt(session);
     });
 
     return () => {
@@ -117,54 +129,42 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
     };
   }, []);
 
-  // Filter tabs dynamically based on user role
+  /*
+   * A refresh that failed on an API call means the session is unrecoverable.
+   * Without this the panels simply stop filling and the user is left on a
+   * dashboard that looks signed in.
+   */
+  useEffect(() => {
+    function onSessionLost() {
+      setAuthState("anon");
+    }
+    window.addEventListener(SESSION_LOST_EVENT, onSessionLost);
+    return () => window.removeEventListener(SESSION_LOST_EVENT, onSessionLost);
+  }, []);
+
+  // No session: leave for the login screen.
+  useEffect(() => {
+    if (authState === "anon") router.replace(LOGIN_ROUTE);
+  }, [authState, router]);
+
+  // Filter tabs by role. Both this and the guard below read one rule set in
+  // lib/auth-access.ts, so a hidden link and an allowed route cannot disagree.
   const visibleTabs = useMemo(() => {
-    return tabs.filter((tab) => {
-      if (userRole === "tcc-operator") {
-        // TCC Operator cannot see: Emissions, Data Management, Audit Log
-        if (
-          tab.href === "/dashboard/sustainability" ||
-          tab.href === "/dashboard/data-management" ||
-          tab.href === "/dashboard/audit-log"
-        ) {
-          return false;
-        }
-      } else if (userRole === "incident-operator") {
-        // Incident Operator cannot see: Emissions, Scenario Sandbox, Data Management, Audit Log
-        if (
-          tab.href === "/dashboard/sustainability" ||
-          tab.href === "/dashboard/scenario-sandbox" ||
-          tab.href === "/dashboard/data-management" ||
-          tab.href === "/dashboard/audit-log"
-        ) {
-          return false;
-        }
-      }
-      return true;
-    });
+    if (!userRole) return [];
+    return tabs.filter((tab) => canAccess(userRole, tab.href));
   }, [userRole]);
 
-  // Secure client-side routing check
+  // Route guard. Replaces push() with replace() so that the page the user was
+  // refused does not sit in history for the back button to return them to.
   useEffect(() => {
-    if (userRole === "tcc-operator") {
-      if (
-        pathname === "/dashboard/sustainability" ||
-        pathname === "/dashboard/data-management" ||
-        pathname === "/dashboard/audit-log"
-      ) {
-        router.push("/dashboard");
-      }
-    } else if (userRole === "incident-operator") {
-      if (
-        pathname === "/dashboard/sustainability" ||
-        pathname === "/dashboard/scenario-sandbox" ||
-        pathname === "/dashboard/data-management" ||
-        pathname === "/dashboard/audit-log"
-      ) {
-        router.push("/dashboard");
-      }
-    }
-  }, [pathname, userRole, router]);
+    if (authState !== "authed" || !userRole) return;
+    if (!canAccess(userRole, pathname)) router.replace(FALLBACK_ROUTE);
+  }, [authState, pathname, userRole, router]);
+
+  // Which pages are actually used: the audit log's page views, once signed in and allowed there.
+  useEffect(() => {
+    if (authState === "authed" && userRole && pathname && canAccess(userRole, pathname)) logPageView(pathname);
+  }, [authState, userRole, pathname]);
 
   // Detect mobile breakpoint
   useEffect(() => {
@@ -245,6 +245,31 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
     if (userRole === "data-analyst") return "Data Analyst";
     return "Administrator";
   }, [userRole]);
+
+  /*
+   * Nothing of the shell renders until the session and role are known, and a
+   * page the role may not see is never rendered even once.
+   *
+   * This is the part that actually prevents the flash. A redirect fired from an
+   * effect runs after the children have painted, so guarding by redirect alone
+   * still shows the forbidden page for a frame -- long enough to read, and long
+   * enough to screenshot. Returning early means the component tree that would
+   * render it is never constructed.
+   */
+  if (authState !== "authed" || !userRole || !canAccess(userRole, pathname)) {
+    const message =
+      authState === "checking"
+        ? "Checking your session…"
+        : authState === "anon"
+          ? "Redirecting to sign in…"
+          : "You do not have access to that page. Returning to the overview…";
+    return (
+      <div className="ds-auth-gate" role="status" aria-live="polite">
+        <span className="ds-auth-gate-spinner" aria-hidden="true" />
+        <p>{message}</p>
+      </div>
+    );
+  }
 
   return (
     <div className={shellClass}>

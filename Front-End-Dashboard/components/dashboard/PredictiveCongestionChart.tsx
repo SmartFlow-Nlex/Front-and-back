@@ -1308,6 +1308,34 @@ export default function PredictiveCongestionChart() {
         </p>
       </div>
 
+      {/* How far ahead this whole card describes. It governs the finding and
+          the four numbers below it, so it sits above them rather than under
+          the grid -- and it lands where the event card beside this one puts
+          its own SHOWING control, so the two read in the same order. The exit
+          picker stays with the grid, which is the only thing it changes. */}
+      <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+          <div role="group" aria-label="Forecast range" style={{ display: "inline-flex", background: "#f1f5f9", border: "1px solid #dce2ef", borderRadius: 999, padding: 2, gap: 2 }}>
+            {RANGES.map((r) => (
+              <button
+                key={r.key}
+                onClick={() => setRange(r.key)}
+                title={r.help}
+                aria-pressed={range === r.key}
+                style={{
+                  font: "inherit", fontSize: "0.72rem", fontWeight: 700, cursor: "pointer",
+                  padding: "3px 11px", borderRadius: 999, border: "1px solid transparent", whiteSpace: "nowrap",
+                  background: range === r.key ? "#fff" : "transparent",
+                  borderColor: range === r.key ? "color-mix(in srgb, var(--page-accent, #4f46e5) 34%, transparent)" : "transparent",
+                  color: range === r.key ? "#1d4ed8" : "#64748b",
+                  boxShadow: range === r.key ? "0 1px 2px rgba(15,23,42,0.08)" : "none",
+                }}
+              >
+                {r.label}
+              </button>
+            ))}
+          </div>
+      </div>
+
       {/* Row 2: the finding. */}
       <div style={{
         padding: "12px 14px", borderRadius: "10px", fontSize: "0.88rem", lineHeight: 1.5,
@@ -1318,8 +1346,12 @@ export default function PredictiveCongestionChart() {
         {headline}
       </div>
 
-      {/* Row 3: how many, where, how long, how sure — once each, one line. */}
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(4, minmax(0, 1fr))", gap: "12px 18px", padding: "12px 16px", background: "var(--bg-surface-hover)", borderRadius: "10px" }}>
+      {/* Row 3: how many, where, how long, how sure — once each.
+          Two by two, matching the event card beside it. Four across fitted in a
+          half-width card but gave the two panels stat blocks of different
+          heights, so everything below them — the charts, the Generate report
+          button, the evidence header — sat at a different level on each. */}
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", gap: "12px 18px", padding: "12px 16px", background: "var(--bg-surface-hover)", borderRadius: "10px" }}>
         {stat(`${nCongested} of ${segments.length}`, nCongested > 0 ? "exits with a jam" : "all moving",
               nCongested > 0 ? (nSevere > 0 ? "#b91c1c" : "#b45309") : "#15803d",
               nCongested > 0 ? `${nCongested} of ${segments.length} exits are expected to carry a jam somewhere in this window` : undefined)}
@@ -1357,32 +1389,6 @@ export default function PredictiveCongestionChart() {
       {/* Row 4: the grid, with its legend and its exit picker attached to it. */}
       <div>
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, flexWrap: "wrap", marginBottom: 2 }}>
-          {/* How far ahead. The model forecasts a week either way; this picks
-              how much of it the grid draws, and at what granularity. The help
-              text lives on the buttons rather than in the layout: at this card
-              width a sentence here pushed the exit picker onto its own row. */}
-          <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-            <div role="group" aria-label="Forecast range" style={{ display: "inline-flex", background: "#f1f5f9", border: "1px solid #dce2ef", borderRadius: 999, padding: 2, gap: 2 }}>
-              {RANGES.map((r) => (
-                <button
-                  key={r.key}
-                  onClick={() => setRange(r.key)}
-                  title={r.help}
-                  aria-pressed={range === r.key}
-                  style={{
-                    font: "inherit", fontSize: "0.72rem", fontWeight: 700, cursor: "pointer",
-                    padding: "3px 11px", borderRadius: 999, border: "1px solid transparent", whiteSpace: "nowrap",
-                    background: range === r.key ? "#fff" : "transparent",
-                    borderColor: range === r.key ? "color-mix(in srgb, var(--page-accent, #4f46e5) 34%, transparent)" : "transparent",
-                    color: range === r.key ? "#1d4ed8" : "#64748b",
-                    boxShadow: range === r.key ? "0 1px 2px rgba(15,23,42,0.08)" : "none",
-                  }}
-                >
-                  {r.label}
-                </button>
-              ))}
-            </div>
-          </div>
 
 
           {/* Which exits are drawn. A select instead of fifteen chips: the
@@ -1533,17 +1539,22 @@ export default function PredictiveCongestionChart() {
             className="evidence-summary"
             style={{ cursor: "pointer", listStyle: "none", display: "flex", gap: 12, flexWrap: "wrap", alignItems: "center" }}
           >
+            {/* Forces a flex line break: the chips always start a new row, so the
+                Show/Hide control stays on the title row and both cards' evidence
+                headers come out the same height. */}
+            <span aria-hidden style={{ order: 3, flexBasis: "100%", height: 0 }} />
             <span style={{
+              order: 1,
               display: "grid", placeItems: "center", width: 28, height: 28, borderRadius: 8,
               background: "color-mix(in srgb, var(--color-success) 14%, transparent)", color: "var(--color-success)", flex: "none",
             }}>
               <ShieldCheck size={16} strokeWidth={2.4} />
             </span>
-            <span style={{ fontSize: "0.98rem", fontWeight: 800, letterSpacing: "-0.01em", color: "var(--text-primary)" }}>
+            <span style={{ order: 1, fontSize: "0.98rem", fontWeight: 800, letterSpacing: "-0.01em", color: "var(--text-primary)" }}>
               Validation evidence
             </span>
             <span style={{
-              display: "inline-flex", alignItems: "center", gap: 6, padding: "3px 10px", borderRadius: 999,
+              order: 4, display: "inline-flex", alignItems: "center", gap: 6, padding: "3px 10px", borderRadius: 999,
               background: "var(--bg-surface-hover)", border: "1px solid var(--border-default)",
               fontSize: "0.74rem", fontWeight: 600, color: "var(--text-secondary)", fontVariantNumeric: "tabular-nums",
             }}>
@@ -1553,7 +1564,7 @@ export default function PredictiveCongestionChart() {
               })()} · {pct(hzFirst.accuracy)} at +1h → {pct(hzLast.accuracy)} at +{hzLast.horizon}h
               {" · "}{beatsFrom ? "beats no-change" : "no better than no-change"}
             </span>
-            <span className="evidence-chevron" style={{ marginLeft: "auto", display: "inline-flex", alignItems: "center", gap: 4, fontSize: "0.74rem", fontWeight: 600, color: "var(--text-secondary)" }}>
+            <span className="evidence-chevron" style={{ order: 2, marginLeft: "auto", display: "inline-flex", alignItems: "center", gap: 4, fontSize: "0.74rem", fontWeight: 600, color: "var(--text-secondary)" }}>
               <span className="evidence-open-label">Show</span>
               <span className="evidence-close-label">Hide</span>
               <ChevronRight size={15} strokeWidth={2.4} />
@@ -1566,10 +1577,10 @@ export default function PredictiveCongestionChart() {
                    the model never saw. */}
             <EvBlock n={1} title="How it was tested">
               {evalInfo ? (
-                <>The model learned from the earlier weeks of Waze data, then had to forecast the <b>last {evalInfo.test_days} days it had never seen</b> —
-                {" "}{evalInfo.test_rows.toLocaleString()} exit-hours. Every number here is scored on those unseen hours only.</>
+                <>Trained on the earlier Waze weeks, scored only on the <b>last {evalInfo.test_days} days it never saw</b> —
+                {" "}{evalInfo.test_rows.toLocaleString()} exit-hours.</>
               ) : (
-                <>The model learned from the earlier weeks of Waze data and is scored only on the final days it never saw.</>
+                <>Trained on the earlier Waze weeks, scored only on the final days it never saw.</>
               )}
             </EvBlock>
 
@@ -1577,9 +1588,9 @@ export default function PredictiveCongestionChart() {
             {evalInfo?.replay && evalInfo.replay.series.length > 1 && (
               <EvBlock n={2} title="Did past predictions match what really happened?">
                 <p style={{ margin: "0 0 4px" }}>
-                  Below is that unseen week, hour by hour, as the model would have forecast it
-                  {" "}<b>{evalInfo.replay.horizon} hours in advance</b>. The dashed line is how many of the {evalInfo.replay.exits} exits it
-                  expected to be congested (adding up each exit&apos;s chance); the solid line is how many actually were.
+                  That unseen week, hour by hour, forecast{" "}
+                  <b>{evalInfo.replay.horizon} hours in advance</b> — how many of the {evalInfo.replay.exits} exits were congested
+                  <InfoTooltip text="The expected line adds up each exit's individual chance of being congested in that hour, so it is a sum of probabilities rather than a count of exits the model labelled congested." />
                 </p>
                 <ReplayChart series={evalInfo.replay.series} exits={evalInfo.replay.exits} />
                 <div style={{
@@ -1613,8 +1624,8 @@ export default function PredictiveCongestionChart() {
                    person could make without a model. */}
             <EvBlock n={evalInfo?.replay ? 3 : 2} title={`What ${modelInfo?.accuracy != null ? (modelInfo.accuracy * 100).toFixed(1) + "%" : "the accuracy"} means`}>
               <p style={{ margin: "0 0 8px" }}>
-                Out of every 100 exit-hours in that unseen window, the model named the right state (Moving, Heavy or Severe) for about
-                {" "}<b>{modelInfo?.accuracy != null ? Math.round(modelInfo.accuracy * 100) : "—"}</b>. That only means something next to what you would score without a model:
+                <b>{modelInfo?.accuracy != null ? Math.round(modelInfo.accuracy * 100) : "—"}</b> of every 100 exit-hours
+                got the right state — against what you would score with no model at all:
               </p>
               <div style={{ display: "grid", gap: 5 }}>
                 {[
@@ -1684,7 +1695,8 @@ export default function PredictiveCongestionChart() {
             {evalInfo && evalInfo.calibration.length > 0 && (
               <EvBlock n={evalInfo.replay ? 5 : 4} title="Is a 60% chance really 60%?">
                 <p style={{ margin: "0 0 8px" }}>
-                  Yes — the probabilities are calibrated on held-back hours, like a rain forecast. Each chip below is a group of unseen hours where the card would have shown roughly that chance of congestion, next to how often congestion actually happened:
+                  Yes — calibrated on held-back hours, like a rain forecast. Each chip is what the card said,
+                  next to what actually happened:
                 </p>
                 <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
                   {evalInfo.calibration.filter((c) => c.n >= 200).map((c) => {
@@ -1704,7 +1716,8 @@ export default function PredictiveCongestionChart() {
                   })}
                 </div>
                 <p style={{ margin: "8px 0 0", fontSize: "0.72rem", color: "#64748b" }}>
-                  Green: within 5 points. Brier score {evalInfo.brier.toFixed(3)} — the average squared error of the probabilities, where 0 is perfect and 0.667 is a coin toss between the three states.
+                  Green: within 5 points · Brier {evalInfo.brier.toFixed(3)}
+                  <InfoTooltip text="Brier score is the average squared error of the probabilities themselves, not of the state the card names: 0 is perfect and 0.667 is a coin toss between the three states." />
                 </p>
               </EvBlock>
             )}
@@ -1727,8 +1740,10 @@ export default function PredictiveCongestionChart() {
             </EvBlock>
 
             <p style={{ margin: 0, fontSize: "0.72rem", color: "#94a3b8" }}>
-              States are cut from Waze jam speeds at this corridor&apos;s own distribution — Severe under {evalInfo?.thresholds_kmh.severe_below ?? 10} km/h, Heavy {evalInfo?.thresholds_kmh.severe_below ?? 10}–{evalInfo?.thresholds_kmh.heavy_below ?? 20} km/h, Moving above that or no jam reported.
-              {!model.everHeavy && <> The current forecast has no Heavy hour.</>}
+              States from Waze jam speeds · Severe under {evalInfo?.thresholds_kmh.severe_below ?? 10}, Heavy{" "}
+              {evalInfo?.thresholds_kmh.severe_below ?? 10}–{evalInfo?.thresholds_kmh.heavy_below ?? 20}, Moving above that or no jam
+              <InfoTooltip text="The cuts are this corridor's own speed distribution, not a national standard, so they describe what counts as a jam on NLEX rather than anywhere else." />
+              {!model.everHeavy && <> · no Heavy hour in the current forecast</>}
             </p>
           </div>
         </details>

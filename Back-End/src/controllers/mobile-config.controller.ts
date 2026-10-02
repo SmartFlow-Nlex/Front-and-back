@@ -1,17 +1,11 @@
 import type { Request, Response } from "express";
 import { getMobileConfigFromDb, saveMobileConfigInDb } from "../services/mobile-config.service.js";
 import { MobileConfigSchema } from "../validators/mobile-config.validator.js";
-import { saveAuditEventInDb } from "../services/audit-log.service.js";
+import { audit as record } from "../services/audit.js";
 
-// Fire-and-forget audit entry; never blocks or fails the actual operation.
-const audit = (req: Request, action: string, details: Record<string, unknown>) => {
-  void saveAuditEventInDb({
-    user_id: req.header("x-user") ?? "dashboard",
-    action,
-    target_resource: "mobile-config",
-    details,
-  });
-};
+// Fire-and-forget audit entry (services/audit.ts); never blocks or fails the actual operation.
+const audit = (req: Request, action: string, details: Record<string, unknown>) =>
+  record(req, { action, module: "mobile_app", entityType: "mobile_config", target: "mobile-config", outcome: "success", details });
 
 /**
  * GET /api/mobile-config

@@ -1,11 +1,11 @@
 {
-  "generated": "2026-09-05",
+  "generated": "2026-10-02",
   "source": "gold.fact_emissions_hourly (rebuilt from gold.fact_traffic_hourly)",
   "series": {
-    "days": 1461,
+    "days": 1642,
     "from": "2022-01-01",
-    "to": "2025-12-31",
-    "mean_tonnes_per_day": 425.20604514049285
+    "to": "2026-06-30",
+    "mean_tonnes_per_day": 428.89234741443363
   },
   "protocol": {
     "origins": 42,
@@ -16,60 +16,60 @@
   },
   "baseline": {
     "name": "SeasonalNaive",
-    "wmape": 10.441545526720226
+    "wmape": 12.387795744469276
   },
   "results": [
     {
-      "model": "Polynomial",
+      "model": "GBR",
       "n": 294,
-      "mape": 8.579012653393615,
-      "wmape": 6.789944776520689,
-      "rmse": 47.71144354372946,
-      "mae": 29.780135574161168,
-      "mase": 0.8184764817698074,
-      "r2": 0.655991524374552,
+      "mape": 8.141044369811361,
+      "wmape": 6.933298123680559,
+      "rmse": 47.33776679506422,
+      "mae": 31.377301561733958,
+      "mase": 0.8404908460138697,
+      "r2": 0.6851652459295658,
       "accepted": true,
       "rank": 1,
       "tied_with_best": true,
-      "diagnosis": "tied with GBR - within 0.15pp WMAPE, the measured run-to-run jitter, so the ordering between them is not meaningful"
+      "diagnosis": NaN
     },
     {
-      "model": "GBR",
+      "model": "Polynomial",
       "n": 294,
-      "mape": 8.20622369202642,
-      "wmape": 6.79161216300274,
-      "rmse": 48.72788198105246,
-      "mae": 29.78744859320983,
-      "mase": 0.8186774725976416,
-      "r2": 0.6411779700772791,
+      "mape": 9.416684163334132,
+      "wmape": 7.810408208965561,
+      "rmse": 50.71807485827542,
+      "mae": 35.346746861486324,
+      "mase": 0.9468187414076339,
+      "r2": 0.6385962484333958,
       "accepted": true,
       "rank": 2,
-      "tied_with_best": true,
-      "diagnosis": "tied with Polynomial - within 0.15pp WMAPE, the measured run-to-run jitter, so the ordering between them is not meaningful"
+      "tied_with_best": false,
+      "diagnosis": NaN
     },
     {
       "model": "LSTM",
       "n": 294,
-      "mape": 10.46120870113061,
-      "wmape": 8.188650551768712,
-      "rmse": 58.290759635281,
-      "mae": 35.914743289865235,
-      "mase": 0.9870798827745998,
-      "r2": 0.48652008634297106,
-      "accepted": true,
+      "mape": 10.993029691999187,
+      "wmape": 8.793072970259812,
+      "rmse": 60.37353291339167,
+      "mae": 39.79388990931059,
+      "mase": 1.0659425295146685,
+      "r2": 0.487893466479527,
+      "accepted": false,
       "rank": 3,
       "tied_with_best": false,
-      "diagnosis": null
+      "diagnosis": NaN
     },
     {
       "model": "SeasonalNaive",
       "n": 294,
-      "mape": 20.83494510860679,
-      "wmape": 15.997542608509102,
-      "rmse": 103.16668183687854,
-      "mae": 70.163897265,
-      "mase": 1.9283827515729166,
-      "r2": -0.6084329244463518,
+      "mape": 19.297188095043367,
+      "wmape": 15.035192161145524,
+      "rmse": 102.37010356797187,
+      "mae": 68.04319532540808,
+      "mase": 1.8226450318559142,
+      "r2": -0.4723580021955507,
       "accepted": false,
       "rank": null,
       "tied_with_best": false,
@@ -78,17 +78,17 @@
     {
       "model": "Climatology",
       "n": 294,
-      "mape": 22.116937772612946,
-      "wmape": 19.231230792767843,
-      "rmse": 100.51217037604437,
-      "mae": 84.34658588785716,
-      "mase": 2.318179401664217,
-      "r2": -0.5267268071469076,
+      "mape": 20.601669676390213,
+      "wmape": 18.103649496309384,
+      "rmse": 97.72331062655817,
+      "mae": 81.92979149035715,
+      "mase": 2.194619560512164,
+      "r2": -0.3417248966814055,
       "accepted": false,
       "rank": null,
       "tied_with_best": false,
       "diagnosis": "baseline, not a candidate"
     }
   ],
-  "champion": "Polynomial"
+  "champion": "GBR"
 }

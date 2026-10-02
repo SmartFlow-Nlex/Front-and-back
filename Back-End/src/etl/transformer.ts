@@ -6,11 +6,15 @@
  * (nlex_traffic_volume, nlex_road_crashes, ...) are views and materialized
  * views built on top of bronze, so they cannot receive inserts:
  *
- *   nlex_traffic_volume      MATERIALIZED VIEW -> write bronze.nlex_traffic_volume
  *   nlex_road_crashes        view (computed cols) -> write bronze.nlex_incidents
  *   nlex_motorcycle_crashes  view (computed cols) -> write bronze.nlex_incidents
  *   nlex_theoretical_emissions / nlex_emissions   -> bronze equivalents
  *   nlex_stalled_vehicles    real table in public (6 columns only)
+ *
+ * The dashboards read silver, not bronze; the loader publishes each load
+ * onward (publish.ts). Traffic is not here: the record is built from hourly
+ * toll files (toll-hourly.ts), and the old wide traffic layout, which landed
+ * in bronze.nlex_traffic_volume where no dashboard reads, is refused.
  */
 import type { RawRow } from "./parser.js";
 import type { DatasetType } from "./classifier.js";
@@ -22,15 +26,13 @@ export interface TransformResult {
   columns: string[];
   rows: any[][];
   skipped: number;
-  /** Set when a materialized view must be refreshed for the load to become visible. */
-  refreshMaterializedView?: string;
   /** Set when the target table has a natural-key UNIQUE constraint the load should upsert against. */
   conflict?: LoadConflict;
+  /** The columns that identify one record, for tables without a unique key: a row
+   *  whose key is already there is not written again, so a file uploaded twice
+   *  does not double what it holds. */
+  keyColumns?: string[];
 }
-
-const DAY_NAMES = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
-const MONTH_NAMES = ["January", "February", "March", "April", "May", "June",
-                     "July", "August", "September", "October", "November", "December"];
 
 function toInt(v: unknown): number {
   if (typeof v === "number") return Math.round(v);
@@ -63,89 +65,20 @@ function combineDateTime(date: string, time: unknown): string | null {
   return `${date} ${t.length === 5 ? t + ":00" : t}`;
 }
 
+/** A UTC timestamp ("2026-01-15 08:00:00", ISO, or with a zone) as Unix seconds. */
+function epochSeconds(v: unknown): number | null {
+  if (v === null || v === undefined || v === "") return null;
+  const s = String(v).trim().replace(" ", "T");
+  const ms = Date.parse(/[zZ]|[+-]\d{2}:?\d{2}$/.test(s) ? s : `${s}Z`);
+  return Number.isNaN(ms) ? null : Math.floor(ms / 1000);
+}
+
 function minutesBetween(a: string | null, b: string | null): number | null {
   if (!a || !b) return null;
   const ms = Date.parse(b.replace(" ", "T")) - Date.parse(a.replace(" ", "T"));
   if (Number.isNaN(ms)) return null;
   // Crossing midnight shows up as a negative gap; wrap into the next day.
   return Math.round((ms < 0 ? ms + 86_400_000 : ms) / 60_000);
-}
-
-/**
- * Traffic volume: the upload format is WIDE (one row per date/plaza/direction/
- * vehicle_class with columns h00..h23), while bronze.nlex_traffic_volume is
- * LONG (one row per date/hour/plaza/direction, with the three classes as
- * separate columns). So each input row is unpivoted across 24 hours, and the
- * per-class rows are folded together on the shared date/hour/plaza/direction key.
- */
-function transformTrafficVolume(rows: RawRow[]): TransformResult {
-  const columns = [
-    "date_day", "hour_of_day", "toll_plaza", "direction",
-    "volume_class1", "volume_class2", "volume_class3", "total_volume",
-    "day_of_week", "is_weekend", "month_name", "quarter", "is_rush_hour",
-  ];
-
-  type Bucket = {
-    date: string; hour: number; plaza: string; direction: string;
-    c1: number; c2: number; c3: number; total: number; sawTotal: boolean;
-  };
-  const buckets = new Map<string, Bucket>();
-  let skipped = 0;
-
-  for (const row of rows) {
-    const date = row.date as string;
-    const direction = row.direction as string;
-    const plaza = (row.toll_plaza ?? row.plaza) as string;
-
-    if (!date || !direction || !plaza) {
-      skipped++;
-      continue;
-    }
-
-    const vc = parseVehicleClass(row.vehicle_class);
-
-    for (let h = 0; h < 24; h++) {
-      const hh = String(h).padStart(2, "0");
-      const raw = row[`h${hh}`] ?? row[`${hh}_00`];
-      const value = toInt(raw);
-
-      const key = `${date}|${hh}|${plaza}|${direction}`;
-      let b = buckets.get(key);
-      if (!b) {
-        b = { date, hour: h, plaza, direction, c1: 0, c2: 0, c3: 0, total: 0, sawTotal: false };
-        buckets.set(key, b);
-      }
-
-      if (vc === 1) b.c1 += value;
-      else if (vc === 2) b.c2 += value;
-      else if (vc === 3) b.c3 += value;
-      else { b.total += value; b.sawTotal = true; }  // a "Total" row
-    }
-  }
-
-  const transformed: any[][] = [];
-  for (const b of buckets.values()) {
-    // Prefer an explicit Total row; otherwise sum the classes.
-    const total = b.sawTotal ? b.total : b.c1 + b.c2 + b.c3;
-    const d = new Date(`${b.date}T00:00:00Z`);
-    const dow = d.getUTCDay();
-    const isRush = (b.hour >= 6 && b.hour <= 8) || (b.hour >= 16 && b.hour <= 18);
-
-    transformed.push([
-      b.date, b.hour, b.plaza, b.direction,
-      b.c1, b.c2, b.c3, total,
-      DAY_NAMES[dow], dow === 0 || dow === 6,
-      MONTH_NAMES[d.getUTCMonth()], `Q${Math.floor(d.getUTCMonth() / 3) + 1}`, isRush,
-    ]);
-  }
-
-  return {
-    tableName: "bronze.nlex_traffic_volume",
-    columns,
-    rows: transformed,
-    skipped,
-    refreshMaterializedView: "nlex_traffic_volume",
-  };
 }
 
 /**
@@ -160,7 +93,7 @@ function transformCrash(rows: RawRow[], incidentType: "road_crash" | "motorcycle
     "no_of_vehicles", "cause_of_accident", "type_of_accident", "weather_condition",
     "injuries_male", "injuries_female", "fatalities_male", "fatalities_female",
     "total_injuries", "total_fatalities",
-    "hour_of_day", "km_value", "clearance_minutes", "severity",
+    "hour_of_day", "km_value", "clearance_minutes", "severity", "nearest_exit",
   ];
 
   let skipped = 0;
@@ -179,12 +112,18 @@ function transformCrash(rows: RawRow[], incidentType: "road_crash" | "motorcycle
     const fm = toInt(row.fatalities_male);
     const ff = toInt(row.fatalities_female);
 
-    const hour = reported ? Number(reported.slice(11, 13)) : null;
-    const clearance = minutesBetween(reported, cleared);
+    /* The crash logs already in the warehouse carry hour_of_day,
+       clearance_minutes and severity as columns and no clock times, so take a
+       file's own values where it has them and derive them only where it does
+       not. Deriving the hour alone gave every such crash a null hour: it then
+       missed its own record on a re-upload and was loaded twice. */
+    const fileHour = toNumOrNull(row.hour_of_day ?? row.hour);
+    const hour = reported ? Number(reported.slice(11, 13)) : fileHour !== null && fileHour >= 0 && fileHour <= 23 ? Math.trunc(fileHour) : null;
+    const clearance = minutesBetween(reported, cleared) ?? toNumOrNull(row.clearance_minutes);
 
-    // Severity is not supplied by the upload format; derive it the same way the
-    // dashboard reads it — fatalities outrank injuries.
-    const severity = fm + ff > 0 ? "Fatal" : im + iff > 0 ? "Injury" : "Property Damage";
+    // Severity: the file's when it gives one, else derived the way the dashboard
+    // reads it — fatalities outrank injuries.
+    const severity = (row.severity as string | null) ?? (fm + ff > 0 ? "Fatal" : im + iff > 0 ? "Injury" : "Property Damage");
 
     transformed.push([
       date, reported, cleared, location, incidentType,
@@ -192,10 +131,16 @@ function transformCrash(rows: RawRow[], incidentType: "road_crash" | "motorcycle
       row.cause_of_accident ?? null, row.type_of_accident ?? null, row.weather_condition ?? null,
       im, iff, fm, ff, im + iff, fm + ff,
       hour, extractKmPost(location), clearance, severity,
+      // Every crash already in the warehouse carries its nearest exit; keep the file's when it has one.
+      row.nearest_exit ?? null,
     ]);
   }
 
-  return { tableName: "bronze.nlex_incidents", columns, rows: transformed, skipped };
+  return {
+    tableName: "bronze.nlex_incidents", columns, rows: transformed, skipped,
+    // silver.nlex_incidents_clean keeps one row per (date, hour, location, type).
+    keyColumns: ["incident_date", "hour_of_day", "location", "incident_type"],
+  };
 }
 
 /** public.nlex_stalled_vehicles is a real table, but only has these 5 writable columns. */
@@ -219,7 +164,7 @@ function transformStalledVehicle(rows: RawRow[]): TransformResult {
     ]);
   }
 
-  return { tableName: "nlex_stalled_vehicles", columns, rows: transformed, skipped };
+  return { tableName: "public.nlex_stalled_vehicles", columns, rows: transformed, skipped, keyColumns: columns };
 }
 
 /**
@@ -416,13 +361,20 @@ function transformEmissions(rows: RawRow[]): TransformResult {
       ]);
     }
 
-    return { tableName: "bronze.nlex_theoretical_emissions", columns, rows: transformed, skipped };
+    return {
+      tableName: "bronze.nlex_theoretical_emissions", columns, rows: transformed, skipped,
+      keyColumns: ["exit_id", "timestamp_utc", "direction", "vehicle_class"],
+    };
   }
 
   // Measured air quality
+  /* bronze.recorded_at is the INGESTION time and api_dt the OBSERVATION time
+     (epoch seconds), and silver keeps only rows with an api_dt
+     (02-silver-emissions.sql). Writing the reading's time into recorded_at, as
+     this used to, left api_dt empty and the row unpublishable. */
   const columns = [
     "exit_id", "exit_name", "direction", "latitude", "longitude",
-    "aqi", "co", "no", "no2", "o3", "so2", "nh3", "pm2_5", "pm10", "recorded_at",
+    "aqi", "co", "no", "no2", "o3", "so2", "nh3", "pm2_5", "pm10", "api_dt",
   ];
 
   let skipped = 0;
@@ -445,11 +397,11 @@ function transformEmissions(rows: RawRow[]): TransformResult {
       toNumOrNull(row.nh3),
       toNumOrNull(row.pm2_5 ?? row.pm25) ?? 0,
       toNumOrNull(row.pm10) ?? 0,
-      row.timestamp_utc,
+      epochSeconds(row.timestamp_utc),
     ]);
   }
 
-  return { tableName: "bronze.nlex_emissions", columns, rows: transformed, skipped };
+  return { tableName: "bronze.nlex_emissions", columns, rows: transformed, skipped, keyColumns: ["exit_id", "api_dt"] };
 }
 
 /**
@@ -457,8 +409,6 @@ function transformEmissions(rows: RawRow[]): TransformResult {
  */
 export function transformData(rows: RawRow[], datasetType: DatasetType): TransformResult {
   switch (datasetType) {
-    case "traffic_volume":
-      return transformTrafficVolume(rows);
     case "road_crash":
       return transformCrash(rows, "road_crash");
     case "motorcycle_crash":

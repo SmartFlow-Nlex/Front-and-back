@@ -12,7 +12,13 @@
 // can be compared on the identical inflow sequence.
 // ---------------------------------------------------------------------------
 
+import { FacilityEngine, type Facility, type FacilityHost, type FacilitySpec, type FacilityStats, type FacState } from "./facilities";
+
 export type VehicleClass = 1 | 2 | 3;
+/** Vehicles a scenario sends to a scene. `works` is a roadworks convoy —
+ *  not an emergency, so it travels at ordinary speed and sets up rather than
+ *  responding to anything. */
+export type ResponderKind = "ambulance" | "police" | "tow" | "works";
 export type DriverProfile = "cautious" | "normal" | "aggressive";
 
 export type Vehicle = {
@@ -95,6 +101,51 @@ export type Vehicle = {
   laneFrom: number;
   laneShift: number;
   color: string; // the agent's own paint — class hue with per-vehicle variation
+
+  /* What this agent IS, as opposed to what it looks like.
+   *
+   * The scene art used to draw crashed cars, an ambulance and a police car as
+   * pictures laid over the road, with nothing behind them. So the wreck was
+   * not made of the cars that crashed — addIncident DELETED those and a
+   * drawing took their place — and the responders did not arrive, they faded
+   * in at a fixed offset. Traffic drove through all of it, because as far as
+   * the engine was concerned none of it was there.
+   *
+   * They are agents now. A wreck is the vehicle that crashed, stopped where it
+   * stopped; a responder drives in from upstream under the same car-following
+   * rules as everyone else. Both are therefore obstacles the rest of the
+   * traffic can see, and both are covered by the overlap correction, which is
+   * why they can no longer be driven through. */
+  role: "traffic" | "wreck" | "responder";
+  /** Responders only: which vehicle to draw, and what it is here for. */
+  responderKind?: ResponderKind;
+  /** Responders only: where they are heading. They hold station on arrival. */
+  holdAtX?: number;
+  /** Responders only: sim time at which they pack up and drive on. */
+  leaveAtT?: number;
+  /** Wrecks only: the angle they came to rest at, for the canvas. */
+  restAngle?: number;
+  /** Which scenario event put this agent on the road, so the scene can be
+   *  taken away again when the event ends. Absent for ordinary traffic. */
+  sceneKey?: string;
+  /* Packing up and leaving.
+   *
+   * Without this the scene had no end: a wreck sat blocking the lane for the
+   * rest of the run because the scenario binding only tracks the INCIDENTS it owns and
+   * these are vehicles, and the responders held station forever. A departing
+   * agent goes back to ordinary car-following and drives off the end of the
+   * segment, which is how everything else leaves. */
+  departing?: boolean;
+  /** Inside a toll plaza or service area: which one, where, and what it is
+   *  doing there. Absent on the carriageway. See facilities.ts. */
+  fac?: FacState;
+  /** Waiting at a gore or a barrier because the facility is full back to the
+   *  carriageway. Stands still in its lane until there is room. */
+  heldAtGore?: boolean;
+  /** Responders sent to a scene in a plaza or service area: which, and which booth. */
+  facTarget?: { fid: string; station: number | null };
+  /** Until when (sim time) this driver accepts a shortened headway behind a car that just merged in front of it. */
+  relaxUntil?: number;
 };
 
 export type Interventions = {
@@ -192,6 +243,10 @@ export type SimConfig = {
   secondaryIncidents?: boolean;
   /** Override the calibrated hazard. Only for sensitivity work. */
   secondaryPerIncidentMinute?: number;
+  /* Toll plazas and service areas with real geometry. Where one is given, its
+   * movement is NOT also listed in `ramps`: a facility's diverge is added to
+   * the exit list here, and its arrivals come off its own approach road. */
+  facilities?: FacilitySpec[];
 };
 
 /** An interchange on the simulated stretch: traffic joins, leaves, or both. */
@@ -439,6 +494,27 @@ const EXIT_APPROACH_M = 650;
  *  how close the exit is, so it grows from a preference into a necessity. */
 const LC_BIAS_EXIT = 3.4;
 
+/** How far ahead of a barrier plaza drivers start lining up for the shorter queue. */
+const PLAZA_LOOK_M = 450;
+/** Pull towards a lane whose booths are less busy, m/s², at a two-vehicle difference. */
+const PLAZA_QUEUE_BIAS = 1.2;
+
+/** Hardest braking a merge may ask of the driver behind once the merging
+ *  driver has waited at the line long enough to nose in. */
+const MERGE_FORCED_DECEL = 6;
+/* HEADWAY RELAXATION after a merge.
+ *
+ * Someone merges in front of you and you do not stand on the brakes to restore
+ * your full following distance at once: you accept a short one and let it open
+ * up over the next several seconds. Car-following models without this demand
+ * the whole headway the instant the car arrives, so a merge looks safe only
+ * into a gap of 80-odd metres; drivers on an acceleration lane found none in
+ * busy traffic, ran to its end, stopped, and waited up to five minutes to get
+ * in from a standstill. With it the merge is judged against the headway the
+ * follower actually accepts, and the follower then drops back gently. */
+const RELAX_S = 10;
+const RELAX_MIN = 0.35;
+
 /** Final run-in to a ramp, where a driver stops being polite about gaps. */
 const EXIT_COMMIT_M = 250;
 
@@ -471,6 +547,14 @@ function laneAllowsClass(vClass: VehicleClass, lane: number): boolean {
  *  Smoothstep rather than a straight ramp: a constant-rate slide starts and
  *  stops with a visible corner, which on a small sprite looks like a jerk at
  *  each end. Easing in and out matches how a car is actually steered across. */
+/** Deterministic 0..1 from an integer id. Used where a value must be stable
+ *  across frames but need not be random — a wreck's resting angle must not
+ *  twitch every repaint. */
+function hash01(n: number): number {
+  const x = Math.sin(n * 12.9898) * 43758.5453;
+  return x - Math.floor(x);
+}
+
 /** Does this vehicle occupy `lane` right now?
  *
  *  `v.lane` flips the instant MOBIL accepts a change, but the vehicle is
@@ -614,6 +698,17 @@ export class TrafficSim {
     for (const v of this.vehicles) {
       if (v.lane >= 0 && v.lane < lanes) this.laneIndex[v.lane].push(v);
     }
+    /* A vehicle on a taper is half off the carriageway, but the half that is
+     * still on it is in the outer lane, and the car behind has to see it. Putting
+     * it in the index is all that takes: every leader, follower and gap lookup
+     * reads from here, so the traffic slows for an exiting car and leaves room
+     * for a merging one without any of those decisions knowing facilities exist. */
+    if (this.fac.list.length > 0) {
+      for (const s of this.fac.shadows()) {
+        const l = s.fac!.shadowLane;
+        if (l >= 0 && l < lanes) this.laneIndex[l].push(s);
+      }
+    }
     for (const row of this.laneIndex) row.sort((a, b) => a.x - b.x);
   }
 
@@ -652,6 +747,8 @@ export class TrafficSim {
   private readonly warmupS: number;
   /** Ramps, sorted by position so a vehicle's exit can be picked in one pass. */
   private readonly ramps: RampSpec[];
+  /** Toll plazas and service areas, with their own vehicles. */
+  readonly fac: FacilityEngine;
   private rampAccumulator: number[] = [];
   /** Vehicles asked for, and vehicles actually let on, since the warm-up. */
   private demanded = 0;
@@ -683,9 +780,19 @@ export class TrafficSim {
       this.cls = base;
     }
     this.warmupS = cfg.warmupS ?? DEFAULT_WARMUP_S;
+    this.fac = new FacilityEngine(cfg.facilities ?? [], this.facilityHost());
+    /* A facility's diverge is an exit like any other as far as choosing one
+     * goes, so it joins the same list: drivers are assigned it at entry with
+     * its turning share, and work across to the outer lane for it with the same
+     * bias. Only what happens AT it differs — see takeExits. Its on-ramp is not
+     * listed, because its arrivals come down its own approach road instead of
+     * appearing at a point. */
+    const facilityExits: RampSpec[] = this.fac.list
+      .filter((f) => f.divergeX != null)
+      .map((f) => ({ x: f.divergeX!, onVehPerHour: 0, offFraction: f.spec.turnFraction ?? 0, name: f.spec.name }));
     // Sorted so pickExit can walk them in order and stop at the first one past
     // the vehicle; unsorted, a vehicle could be assigned an exit behind it.
-    this.ramps = [...(cfg.ramps ?? [])].sort((a, b) => a.x - b.x);
+    this.ramps = [...(cfg.ramps ?? []), ...facilityExits].sort((a, b) => a.x - b.x);
     this.rampAccumulator = this.ramps.map(() => 0);
     this.rng = mulberry32(cfg.seed);
     this.interventions = {
@@ -698,6 +805,257 @@ export class TrafficSim {
       ...interventions,
     };
     this.prefill();
+    // Nothing is seeded inside a barrier plaza: everything there is driving
+    // through booths, which the seeding knows nothing about.
+    if (this.fac.list.some((f) => f.laneEntries)) {
+      this.vehicles = this.vehicles.filter((v) => !this.fac.barrierAt(v.x) && !this.fac.barrierAt(v.x - v.length));
+    }
+  }
+
+  /* What the facility layer is allowed to do to this simulation.
+   *
+   * One IDM, one RNG, one fleet: a vehicle at a booth follows the car in front
+   * by exactly the rule it used on the expressway a minute earlier, and an
+   * arrival off a local road is drawn from the same class mix as everyone
+   * else, so a plaza cannot quietly run on different physics or a different
+   * fleet from the road it serves. */
+  private facilityHost(): FacilityHost {
+    return {
+      laneCount: this.cfg.laneCount,
+      s0: S0,
+      minClear: MIN_CLEARANCE,
+      now: () => this.time,
+      rng: () => this.rng(),
+      idm: (v, gap, leadV, v0, T) => {
+        const free = v.aMax * (1 - Math.pow(v.v / Math.max(1, v0), DELTA));
+        if (gap == null) return free;
+        const sStar = S0 + Math.max(0, v.v * (T ?? v.T) + (v.v * (v.v - leadV)) / (2 * Math.sqrt(v.aMax * B_COMF)));
+        return free - v.aMax * Math.pow(sStar / Math.max(0.1, gap), 2);
+      },
+      neighbours: (lane, x) => {
+        let ahead: Vehicle | null = null;
+        let behind: Vehicle | null = null;
+        for (const o of this.vehicles) {
+          if (!occupiesLane(o, lane)) continue;
+          if (o.x >= x) { if (!ahead || o.x < ahead.x) ahead = o; }
+          else if (!behind || o.x > behind.x) behind = o;
+        }
+        return { ahead, behind };
+      },
+      joinSafe: (v, lane, x, urgency) => this.facilityJoinSafe(v, lane, x, urgency),
+      newVehicle: (u) => this.facilityArrival(u),
+      admit: (v, lane, x, from, slide) => this.admitFromFacility(v, lane, x, from, slide),
+      leave: () => {},
+      length: this.cfg.length,
+      pastEnd: (v, from) => {
+        // Back on the expressway beyond the stretch after a stop for fuel: that
+        // trip went through it. An arrival off a local road never drove it.
+        if (from.spec.kind === "service_area" && v.role === "traffic") {
+          this.completedTimes.push(this.time - v.spawnTime);
+          this.completedInWindow.push(this.time);
+        }
+      },
+      emit: (v, dist, dt) => this.emit(v, dist, dt),
+    };
+  }
+
+  /* Gap acceptance from an acceleration lane.
+   *
+   * The lane-change test, applied to a driver alongside the outer lane: room
+   * in front and behind, and MOBIL's safety criterion — the driver it would
+   * cut in front of must not have to brake harder than B_SAFE. Asked every
+   * step along the lane, so a driver who has got up to speed takes the first
+   * gap that is there, as on a real on-ramp. As the lane runs out they take
+   * tighter gaps, exactly as a driver closing on their exit does (see
+   * exitPressure), up to nosing in on the zipper allowance at the very end. */
+  private facilityJoinSafe(v: Vehicle, lane: number, x: number, urgency: number): boolean {
+    let ahead: Vehicle | null = null;
+    let behind: Vehicle | null = null;
+    for (const o of this.vehicles) {
+      if (!occupiesLane(o, lane)) continue;
+      if (o.x >= x) { if (!ahead || o.x < ahead.x) ahead = o; }
+      else if (!behind || o.x > behind.x) behind = o;
+    }
+    const bSafe = B_SAFE + (MERGE_FORCED_DECEL - B_SAFE) * urgency;
+    const room = S0 * (1 - 0.4 * urgency);
+    if (ahead) {
+      const g = ahead.x - ahead.length - x;
+      if (g < room) return false;
+      if (this.idmAccelAgainst(v, ahead.x, ahead.v, ahead.length) < -bSafe) return false;
+    }
+    if (behind) {
+      const g = x - v.length - behind.x;
+      if (g < room) return false;
+      if (this.idmAccelAgainst(behind, x, v.v, v.length, behind.T * RELAX_MIN) < -bSafe) return false;
+    }
+    return true;
+  }
+
+  /** Someone arriving off a local road at an entry plaza: the same draw as any other arrival. */
+  private facilityArrival(u: number): Vehicle {
+    const { vClass, profile, d } = this.newArrival(null);
+    const c = this.cls[vClass];
+    return {
+      id: this.nextId++, lane: -1, x: u, v: 0, vClass, profile,
+      v0: d.v0, T: d.T, aMax: d.aMax, politeness: d.politeness, lcSec: d.lcSec,
+      scanSec: d.scanSec, scanTimer: d.scanTimer, patience: d.patience, stuckFor: 0,
+      reactionS: d.reactionS, reactTimer: d.reactTimer, accel: 0,
+      exitAtX: null, length: c.len, spawnTime: this.time, co2: 0,
+      laneCooldown: 0, laneFrom: -1, laneShift: 1,
+      color: varyColor(c.color, this.rng()),
+      role: "traffic",
+    };
+  }
+
+  /* Back onto the carriageway at the end of a merge taper or a barrier's fan.
+   *
+   * Only into physical room — the facility's own car-following has already
+   * kept it behind whoever is in the lane, so this is the last check, not the
+   * gap decision. What the trip means afterwards depends on where it came
+   * from: off an entry plaza it is a new trip, from a service area it is the
+   * same trip resumed (the stop is not time on the expressway), and through a
+   * barrier it never stopped being the same trip. */
+  private admitFromFacility(v: Vehicle, lane: number, x: number, from: Facility, slide = false): boolean {
+    for (const o of this.vehicles) {
+      if (!occupiesLane(o, lane)) continue;
+      if (o.x >= x) { if (o.x - o.length - x < MIN_CLEARANCE) return false; }
+      else if (x - v.length - o.x < MIN_CLEARANCE) return false;
+    }
+    const inside = this.time - (v.fac?.enteredAt ?? this.time);
+    v.fac = undefined;
+    v.heldAtGore = false;
+    v.lane = lane;
+    if (slide) {
+      // Whoever it pulls in front of accepts the shorter gap and drops back gently (RELAX_S).
+      let behind: Vehicle | null = null;
+      for (const o of this.vehicles) if (occupiesLane(o, lane) && o.x < x && (!behind || o.x > behind.x)) behind = o;
+      if (behind) behind.relaxUntil = this.time + RELAX_S;
+    }
+    // Merging from the acceleration lane: it is the lane beyond this one, so
+    // the move across is drawn as a lane change from there.
+    v.laneFrom = slide ? lane + 1 : lane;
+    v.laneShift = slide ? 0 : 1;
+    v.x = x;
+    v.stuckFor = 0;
+    // Settle into the lane before the first look for another one.
+    v.laneCooldown = v.lcSec + LC_SETTLE_SEC;
+    v.reactTimer = 0;
+    if (from.spec.kind === "entry_ramp") {
+      v.spawnTime = this.time;
+      v.exitAtX = this.pickExit(x);
+    } else if (from.spec.kind === "service_area") {
+      v.spawnTime += inside;
+      v.exitAtX = this.pickExit(x);
+    } else if (v.exitAtX != null && v.exitAtX <= x) {
+      v.exitAtX = this.pickExit(x);
+    }
+    this.vehicles.push(v);
+    return true;
+  }
+
+  /** Per-facility queue and throughput, for the canvas and the panel. */
+  facilityStats(): FacilityStats[] {
+    return this.fac.stats();
+  }
+
+  /* A scenario event at a plaza or service area.
+   *
+   * Made of what is there, as on the carriageway: the vehicle at the booth
+   * (and, for a collision, the one behind it) becomes the scene; only if the
+   * booth lane is empty is a vehicle brought in, at the booth line. The booth
+   * shuts, so the queue behind it squeezes into the next lanes and the plaza
+   * loses that booth's share of its capacity — and if that is more than the
+   * plaza can spare, the queue backs up the ramp and onto the expressway on
+   * its own. Then the response is sent: a tow drives in the way any vehicle
+   * would — off the expressway at the gore, or down the local road into an
+   * entry plaza — and stops behind the scene. Roadworks are a crew shutting
+   * booths, with a works truck parked in the lane instead. */
+  facilityEventStart(sceneKey: string, site: { facilityId: string; kind: "booth" | "pump" | "approach"; stations: readonly number[] }, family: string): boolean {
+    const f = this.fac.get(site.facilityId);
+    if (!f) return false;
+    const works = family === "scheduled_roadworks";
+    const breakdown = family === "breakdown_in_lane" || family === "breakdown_shoulder";
+    const want = works ? 0 : family === "multi_vehicle_collision" ? 3 : family === "minor_collision" ? 2 : 1;
+    const synth = (u: number) => this.facilityArrival(u);
+    if (site.kind === "approach") {
+      this.fac.strandOnApproach(f.spec.id, Math.max(1, want), sceneKey, synth, !breakdown);
+    } else {
+      site.stations.forEach((st, i) => {
+        if (i === 0 && want > 0) this.fac.strandAt(f.spec.id, st, want, sceneKey, synth, !breakdown);
+        else this.fac.closeStation(f.spec.id, st, sceneKey);
+      });
+    }
+    const station = site.kind === "approach" ? null : site.stations[0] ?? null;
+    const call = (kind: ResponderKind, delayS: number) =>
+      this.pendingFacilityResponders.push({ kind, fid: f.spec.id, station, at: this.time + delayS, sceneKey });
+    if (works) call("works", 0);
+    else {
+      if (!breakdown) call("police", 6);
+      call("tow", breakdown ? 25 : 45);
+    }
+    return true;
+  }
+
+  /** The scene at a plaza is over: booths reopen, the wreck is towed off, responders leave. */
+  facilityEventEnd(sceneKey: string): void {
+    this.fac.releaseScene(sceneKey);
+    this.releaseScene(sceneKey);
+    this.pendingFacilityResponders = this.pendingFacilityResponders.filter((r) => r.sceneKey !== sceneKey);
+  }
+
+  /** Responders on their way to a scene in a plaza or service area. */
+  private pendingFacilityResponders: { kind: ResponderKind; fid: string; station: number | null; at: number; sceneKey: string }[] = [];
+
+  /* Send them in the way traffic gets there. Into an entry plaza they come
+   * down its local road; to an exit plaza or a service area they enter the
+   * segment like anything else and leave the expressway at its gore; to a
+   * barrier they come up the lane that feeds the booth. */
+  private releaseFacilityResponders() {
+    if (this.pendingFacilityResponders.length === 0) return;
+    const still: typeof this.pendingFacilityResponders = [];
+    for (const r of this.pendingFacilityResponders) {
+      const f = this.fac.get(r.fid);
+      if (!f) continue;
+      if (this.time < r.at) { still.push(r); continue; }
+      const v = this.makeResponder(r.kind, r.sceneKey);
+      v.facTarget = { fid: r.fid, station: r.station };
+      if (f.spawnPath != null) {
+        if (!this.fac.enterFromLocalRoad(f, v)) still.push(r);
+        continue;
+      }
+      const lane = f.laneEntries
+        ? (r.station != null ? this.fac.laneOfStation(f, r.station) : null) ?? this.exitLane
+        : this.exitLane;
+      let lead: Vehicle | null = null;
+      for (const o of this.vehicles) {
+        if (!occupiesLane(o, lane)) continue;
+        if (!lead || o.x < lead.x) lead = o;
+      }
+      const gapAhead = lead ? lead.x - lead.length : Infinity;
+      if (gapAhead < S0 + 6) { still.push(r); continue; }
+      v.lane = lane;
+      v.laneFrom = lane;
+      v.x = 0;
+      v.v = Math.min(v.v0, gapAhead > 60 ? 20 : 10);
+      v.exitAtX = f.divergeX;
+      this.vehicles.push(v);
+    }
+    this.pendingFacilityResponders = still;
+  }
+
+  private makeResponder(kind: ResponderKind, sceneKey: string): Vehicle {
+    const urgent = kind !== "works";
+    const len = kind === "tow" ? 9 : kind === "works" ? 8 : 6.5;
+    return {
+      id: this.nextId++, lane: -1, x: 0, v: 0, vClass: 2, profile: "normal",
+      v0: urgent ? 24 : 16, T: urgent ? 0.8 : 1.6, aMax: urgent ? 2.0 : 1.1, politeness: urgent ? 0 : 0.4, lcSec: 1.3,
+      scanSec: 0.5, scanTimer: 0, reactionS: 0.5, reactTimer: 0, accel: 0,
+      patience: 2, exitAtX: null, stuckFor: 0,
+      length: len, spawnTime: this.time, co2: 0, laneCooldown: 0,
+      laneFrom: -1, laneShift: 1,
+      color: kind === "police" ? "#1d4ed8" : kind === "ambulance" ? "#e2e8f0" : "#f59e0b",
+      role: "responder", responderKind: kind, sceneKey,
+    };
   }
 
   /**
@@ -777,6 +1135,7 @@ export class TrafficSim {
           laneFrom: lane,
           laneShift: 1,
           color: varyColor(c.color, this.rng()),
+          role: "traffic",
         });
         // Spacing from the headway, never closer than the car-following model
         // would tolerate.
@@ -882,6 +1241,7 @@ export class TrafficSim {
       laneFrom: lane,
       laneShift: 1,
       color: varyColor(c.color, this.rng()),
+      role: "traffic",
     });
     return true;
   }
@@ -990,6 +1350,13 @@ export class TrafficSim {
     return { gap: Math.max(0.1, gap), dv: v.v - leadV };
   }
 
+  /** This driver's time headway now: shortened just after someone merged in front of them, easing back. */
+  private headwayOf(v: Vehicle): number {
+    if (v.relaxUntil == null || this.time >= v.relaxUntil) return v.T;
+    const done = 1 - (v.relaxUntil - this.time) / RELAX_S;
+    return v.T * (RELAX_MIN + (1 - RELAX_MIN) * Math.max(0, done));
+  }
+
   private idmAccel(v: Vehicle, lane: number): number {
     // v.aMax / v.T, not the profile's. Reading the shared table here was what
     // collapsed nine hundred drivers into nine behaviours no matter what was
@@ -998,7 +1365,7 @@ export class TrafficSim {
     const free = v.aMax * (1 - Math.pow(v.v / Math.max(1, v0), DELTA));
     const lead = this.leaderAhead(v, lane);
     if (!lead) return free;
-    const sStar = S0 + Math.max(0, v.v * v.T + (v.v * lead.dv) / (2 * Math.sqrt(v.aMax * B_COMF)));
+    const sStar = S0 + Math.max(0, v.v * this.headwayOf(v) + (v.v * lead.dv) / (2 * Math.sqrt(v.aMax * B_COMF)));
     const interaction = -v.aMax * Math.pow(sStar / lead.gap, 2);
     return free + interaction;
   }
@@ -1014,13 +1381,44 @@ export class TrafficSim {
       // the vehicle would occupy [x - length, x]; require an S0 buffer each side
       if (incFront > x - length - S0 && incRear < x + S0) return true;
     }
+    /* An immovable AGENT blocks a lane change for the same reason an incident
+     * does. Without this a car would happily change into the cell a wreck or
+     * a parked ambulance occupies: MOBIL's gap test assumes both parties can
+     * still adjust, and neither of these can. That was the whole of the 0.24%
+     * that came back when responders became real vehicles. */
+    for (const o of this.vehicles) {
+      if (!this.isImmovable(o)) continue;
+      if (!occupiesLane(o, lane)) continue;
+      if (o.x > x - length - S0 && o.x - o.length < x + S0) return true;
+    }
     return false;
+  }
+
+  /** Cannot be pushed, and will not get out of the way. */
+  private isImmovable(v: Vehicle): boolean {
+    if (v.departing) return false; // under tow, and moving like anything else
+    return v.role === "wreck" || (v.role === "responder" && v.holdAtX != null && v.x >= v.holdAtX);
   }
 
   // MOBIL-ish lane change: pick the neighbouring lane that is safe and offers a
   // meaningfully better acceleration, with a strong pull out of a blocked lane.
   private considerLaneChange(v: Vehicle) {
     if (v.laneCooldown > 0) return;
+    if (v.heldAtGore) return;
+    // Committed to the booths in front of them: nobody weaves across a plaza's fan.
+    if (this.fac.list.length > 0 && this.fac.barrierAt(v.x + 25)) return;
+    /* Not until it is fully on the carriageway.
+     *
+     * A vehicle whose tail is still behind the entrance line cannot be kept
+     * clear of anything: the follower it would need to yield to is pinned at
+     * x = 0 by the floor in the correction pass and has nowhere to go. Two
+     * such vehicles SWAPPING lanes crossed straight through each other —
+     * measured at 0.24% of ticks with an incident present, worst 4.98 m, and
+     * every pair had one car with a negative rear.
+     *
+     * Waiting until it is on the road is also simply what happens: nobody
+     * changes lane while still on the slip. */
+    if (v.x - v.length < 0) return;
     // Belt and braces: the cooldown already outlasts the slide, but a vehicle
     // still visibly straddling a line must not be re-aimed at a third lane,
     // whatever the cooldown says.
@@ -1091,6 +1489,7 @@ export class TrafficSim {
         ? Math.max(0, Math.min(1, 1 - (v.exitAtX - v.x) / EXIT_COMMIT_M))
         : 0;
     const bSafeEff = B_SAFE + Math.max(urgency, exitPressure) * (B_SAFE_FORCED - B_SAFE);
+    const plazaAhead = this.fac.list.length > 0 ? this.fac.barrierAhead(v.x, PLAZA_LOOK_M) : null;
     let best: { lane: number; gain: number } | null = null;
     for (const lane of candidates) {
       // never change lanes onto (or right up against) an accident
@@ -1214,6 +1613,18 @@ export class TrafficSim {
         const pull = LC_BIAS_EXIT * (0.3 + 0.7 * exitUrgency);
         gain += lane > v.lane ? pull : -pull;
       }
+      /* Lining up for a barrier plaza: towards the booths with the shorter
+       * queues. Each lane feeds only the booths in front of it, and without
+       * this the outer lanes — which carry the most traffic — saturated their
+       * booths while the inner ones stood idle: twelve booths cleared 3,100
+       * veh/h where the operator's rate says 4,200. Choosing the shortest
+       * queue on the approach is what drivers at a plaza do. */
+      if (plazaAhead && lane !== v.lane) {
+        const here = this.fac.laneQueue(plazaAhead, v.lane);
+        const there = this.fac.laneQueue(plazaAhead, lane);
+        if (isFinite(here) && isFinite(there)) gain += PLAZA_QUEUE_BIAS * Math.max(-1, Math.min(1, (here - there) / 2));
+        else if (!isFinite(there)) gain -= PLAZA_QUEUE_BIAS;
+      }
       /* At crawling pace the acceleration comparison is noise: every lane
        * scores terribly because every gap is small, so `gain` cannot separate
        * a lane with room from one without. Score by room instead — which is
@@ -1260,12 +1671,12 @@ export class TrafficSim {
   }
 
   // IDM accel of `f` if a vehicle were at position `leadX` moving `leadV`.
-  private idmAccelAgainst(f: Vehicle, leadX: number, leadV: number, leadLen: number): number {
+  private idmAccelAgainst(f: Vehicle, leadX: number, leadV: number, leadLen: number, T = this.headwayOf(f)): number {
     const v0 = this.desiredSpeed(f);
     const free = f.aMax * (1 - Math.pow(f.v / Math.max(1, v0), DELTA));
     const gap = Math.max(0.1, leadX - f.x - leadLen);
     const dv = f.v - leadV;
-    const sStar = S0 + Math.max(0, f.v * f.T + (f.v * dv) / (2 * Math.sqrt(f.aMax * B_COMF)));
+    const sStar = S0 + Math.max(0, f.v * T + (f.v * dv) / (2 * Math.sqrt(f.aMax * B_COMF)));
     return free - f.aMax * Math.pow(sStar / gap, 2);
   }
 
@@ -1376,6 +1787,7 @@ export class TrafficSim {
           length: c.len, spawnTime: this.time, co2: 0,
           laneCooldown: 0, laneFrom: lane, laneShift: 1,
           color: varyColor(c.color, this.rng()),
+          role: "traffic",
         });
       }
     }
@@ -1396,8 +1808,57 @@ export class TrafficSim {
         v.exitAtX = this.pickExit(v.x);
         return true;
       }
+      /* A ramp with somewhere to go. The vehicle drives onto it rather than
+       * vanishing — and if the ramp is full right back to the gore, it WAITS
+       * here in the outer lane, which is how a plaza queue reaches the
+       * expressway and starts holding up traffic that was never going there. */
+      const f = this.fac.list.length > 0 ? this.fac.atGore(v.exitAtX) : null;
+      if (f && f.divergePath != null) {
+        const ahead = v.x - v.exitAtX;
+        if (!this.fac.roomToDiverge(f, ahead, v.length)) {
+          v.heldAtGore = true;
+          v.v = 0;
+          v.accel = 0;
+          return true;
+        }
+        v.heldAtGore = false;
+        // A trip on the expressway ends here — unless it is a stop for fuel,
+        // after which the same trip carries on.
+        if (f.spec.kind !== "service_area" && v.role === "traffic") {
+          this.completedTimes.push(this.time - v.spawnTime);
+          this.completedInWindow.push(this.time);
+        }
+        this.fac.take(f, v, f.divergePath, ahead, { w: visualLane(v) - (this.cfg.laneCount - 1), shift: v.laneShift });
+        return false;
+      }
       this.completedTimes.push(this.time - v.spawnTime);
       this.completedInWindow.push(this.time);
+      return false;
+    });
+  }
+
+  /* A barrier plaza takes EVERY lane. Whoever reaches its fan-in goes into the
+   * booth lanes in front of their own lane, choosing the shortest queue; when
+   * all of those are full to the entrance they stop in their lane and wait,
+   * which is the tailback a barrier is known for. */
+  private enterBarriers() {
+    if (!this.fac.list.some((f) => f.laneEntries)) return;
+    this.vehicles = this.vehicles.filter((v) => {
+      const f = this.fac.barrierAt(v.x);
+      if (!f) return true;
+      // A wreck is where it stopped; the scene, not the plaza, decides when it moves.
+      if (v.role === "wreck" && !v.departing) return true;
+      const ahead = v.x - f.u0;
+      const target = v.facTarget && v.facTarget.fid === f.spec.id ? v.facTarget.station : null;
+      const id = this.fac.barrierEntry(f, v.lane, ahead, v.length, target);
+      if (id == null) {
+        v.heldAtGore = true;
+        v.v = 0;
+        v.accel = 0;
+        return true;
+      }
+      v.heldAtGore = false;
+      this.fac.take(f, v, id, ahead, { w: visualLane(v) - (this.cfg.laneCount - 1), shift: v.laneShift });
       return false;
     });
   }
@@ -1459,16 +1920,168 @@ export class TrafficSim {
     return out;
   }
 
-  // Place a stalled-vehicle incident. Any car sitting on that spot is absorbed
-  // into the accident (removed) so nothing appears to drive out of it.
+  /* Place an incident — by CRASHING THE CARS THAT ARE THERE.
+   *
+   * This used to delete them: `vehicles.filter(...)` removed anything on the
+   * spot so that "nothing appears to drive out of it", and the canvas drew a
+   * wreck over the gap. The result was that the crashed cars were not the
+   * cars that crashed. They blinked out and a picture replaced them, which is
+   * exactly what an operator sees as vehicles appearing from nowhere.
+   *
+   * The vehicles are kept and marked `wreck` instead. A wreck is stationary,
+   * so every car-following calculation already treats it as an obstacle, and
+   * the overlap correction already keeps others out of it — no separate
+   * blocking rule, and nothing to drive through.
+   *
+   * If the spot happens to be empty (an operator dropping a pin on clear
+   * road), one is synthesised, because an incident with no vehicle in it
+   * would be stranger still. */
   addIncident(lane: number, x: number, secondary = false) {
-    const front = x + 1;
-    const rear = x - INCIDENT_LENGTH - 1;
-    this.vehicles = this.vehicles.filter(
-      (v) => v.lane !== lane || v.x - v.length >= front || v.x <= rear
-    );
+    this.crashAt(lane, x, 1);
     this.interventions.incidents.push({ lane, x, secondary, bornAt: this.time });
     if (secondary) this.freshSecondaries.push({ lane, x, t: this.time });
+  }
+
+  /* Crash whatever is there, and call it in.
+   *
+   * Split out of addIncident because a COLLISION never went through
+   * addIncident at all: to the scenario layer a collision is a `closure` effect, not
+   * an `incident` one, so it closed lanes and placed no obstacle. The canvas
+   * used to paper over that by drawing a wreck; once the drawn wreck was
+   * removed in favour of real agents, collisions had no vehicles in them at
+   * all. This is the entry point a closure-family event uses.
+   *
+   * `want` vehicles are taken from the traffic that is actually there. Only
+   * if the road happens to be empty is one synthesised, because an accident
+   * with nothing in it would be stranger than a fabricated car. */
+  crashAt(lane: number, x: number, want: number, sceneKey?: string): void {
+    /* Take the nearest traffic in this lane, not only whatever happens to be
+     * standing on the exact metre.
+     *
+     * A 5 m window around the point almost never contains a car — at 4,200
+     * veh/h there is a vehicle every few seconds, not every few metres — so
+     * the first version synthesised a wreck on every single crash and none of
+     * them were the cars that had been driving. Searching upstream finds the
+     * vehicles that were ABOUT to be there, which are the ones that would
+     * have been involved, and they are then brought to the point of impact.
+     * That is also what makes the impact animation truthful: those cars were
+     * really on the road a moment ago. */
+    /* The cars nearest the point, stopped WHERE THEY ARE.
+     *
+     * An earlier version moved them onto the crash point to make a tidy pile.
+     * That teleported vehicles into cells other cars already occupied, and
+     * since a wreck refuses to be shifted by the overlap pass, the overlap
+     * simply stayed: 9 same-lane pairs appeared the moment repositioning was
+     * introduced. Stopping them in place has no such failure mode, and the
+     * traffic behind brakes and bunches against them on its own — which is
+     * how a pile-up forms anyway, and it is the engine doing it rather than
+     * the scenario asserting it.
+     *
+     * 80 m, because these are the vehicles that were about to be at the point
+     * of impact. Wider and the "pile-up" is strung out across the segment. */
+    const CATCH_RADIUS_M = 80;
+    const caught = this.vehicles
+      .filter((v) => v.role === "traffic" && occupiesLane(v, lane) && Math.abs(v.x - x) <= CATCH_RADIUS_M)
+      .sort((a, b) => Math.abs(a.x - x) - Math.abs(b.x - x))
+      .slice(0, Math.max(1, want));
+
+    for (const v of caught) {
+      v.role = "wreck";
+      v.v = 0;
+      v.accel = 0;
+      v.laneShift = 1;
+      v.laneFrom = v.lane;
+      // How it came to rest. Deterministic per vehicle so it does not twitch
+      // between frames.
+      v.restAngle = (hash01(v.id) - 0.5) * 1.1;
+      v.sceneKey = sceneKey;
+    }
+
+    if (caught.length === 0) {
+      const c = this.cls[1];
+      this.vehicles.push({
+        id: this.nextId++, lane, x, v: 0, vClass: 1, profile: "normal",
+        v0: c.v0, T: 1.4, aMax: 1.4, politeness: 0.3, lcSec: 1.1,
+        scanSec: 1, scanTimer: 0, reactionS: 0.8, reactTimer: 0, accel: 0,
+        patience: PATIENCE_BASE_SEC, exitAtX: null, stuckFor: 0,
+        length: c.len, spawnTime: this.time, co2: 0, laneCooldown: 0,
+        laneFrom: lane, laneShift: 1, color: c.color,
+        role: "wreck", restAngle: 0.2, sceneKey,
+      });
+    }
+
+    /* Send the response. They enter at the start of the segment and drive to
+     * the scene like anything else on the road, so an operator sees them
+     * come. Staggered the way a real callout is: police first to protect the
+     * scene, then the ambulance, then recovery once the casualties are out. */
+    this.dispatchResponder("police", lane, x - INCIDENT_LENGTH - 14, 4, sceneKey);
+    this.dispatchResponder("ambulance", lane, x - INCIDENT_LENGTH - 30, 12, sceneKey);
+    this.dispatchResponder("tow", lane, x - INCIDENT_LENGTH - 46, 40, sceneKey);
+  }
+
+  /* Pack up and go.
+   *
+   * Everything this scene put on the road starts moving again: the wreck is
+   * under tow, the responders fall in behind, and all of them leave by
+   * driving off the end like any other vehicle. Nothing is deleted in place,
+   * which is the whole complaint about how these scenes used to end. */
+  releaseScene(sceneKey: string): void {
+    for (const v of this.vehicles) {
+      if (v.sceneKey !== sceneKey) continue;
+      if (v.role !== "wreck" && v.role !== "responder") continue;
+      v.departing = true;
+      v.holdAtX = undefined;
+      // A tow pulling a casualty does not accelerate away; nor does a crew
+      // that has just loaded up.
+      v.v0 = Math.min(v.v0, 18);
+      v.aMax = Math.min(v.aMax, 1.0);
+    }
+    this.pendingResponders = this.pendingResponders.filter((r) => r.sceneKey !== sceneKey);
+  }
+
+  /** Responders waiting to be released onto the road. */
+  private pendingResponders: { kind: ResponderKind; lane: number; holdAtX: number; at: number; sceneKey?: string }[] = [];
+
+  /** Queue a responder to enter the segment and drive to the scene. */
+  dispatchResponder(kind: ResponderKind, lane: number, holdAtX: number, delayS: number, sceneKey?: string) {
+    this.pendingResponders.push({ kind, lane, holdAtX: Math.max(10, holdAtX), at: this.time + delayS, sceneKey });
+  }
+
+  /** Release any responder whose time has come, if there is room to enter. */
+  private releaseResponders() {
+    if (this.pendingResponders.length === 0) return;
+    const still: typeof this.pendingResponders = [];
+    for (const r of this.pendingResponders) {
+      if (this.time < r.at) { still.push(r); continue; }
+
+      // Same admission rule as ordinary traffic: they cannot materialise on
+      // top of a queue just because they are an emergency.
+      let lead: Vehicle | null = null;
+      for (const other of this.vehicles) {
+        if (!occupiesLane(other, r.lane)) continue;
+        if (!lead || other.x < lead.x) lead = other;
+      }
+      const gapAhead = lead ? lead.x - lead.length : Infinity;
+      if (gapAhead < S0 + 6) { still.push(r); continue; }  // wait for room
+
+      const len = r.kind === "tow" ? 9 : r.kind === "works" ? 8 : 6.5;
+      const urgent = r.kind !== "works";
+      this.vehicles.push({
+        id: this.nextId++, lane: r.lane, x: 0, v: Math.min(22, gapAhead > 60 ? 22 : 10),
+        vClass: 2, profile: "normal",
+        // They make progress through queued traffic rather than joining the
+        // back of it: a shorter headway and a higher desired speed, which is
+        // what a blue-light run looks like without needing its own physics.
+        v0: urgent ? 26 : 16, T: urgent ? 0.8 : 1.6, aMax: urgent ? 2.2 : 1.1, politeness: urgent ? 0 : 0.4, lcSec: 1.3,
+        scanSec: 0.5, scanTimer: 0, reactionS: 0.5, reactTimer: 0, accel: 0,
+        patience: 2, exitAtX: null, stuckFor: 0,
+        length: len, spawnTime: this.time, co2: 0, laneCooldown: 0,
+        laneFrom: r.lane, laneShift: 1,
+        color: r.kind === "police" ? "#1d4ed8" : r.kind === "ambulance" ? "#e2e8f0" : "#f59e0b",
+        role: "responder", responderKind: r.kind, holdAtX: r.holdAtX, sceneKey: r.sceneKey,
+      });
+    }
+    this.pendingResponders = still;
   }
 
   step(dt: number) {
@@ -1616,6 +2229,37 @@ export class TrafficSim {
       // obstacle the IDM couldn't brake for in time. Never let a car drive
       // out the far side of an accident (or closed-lane taper) — it stops
       // against it instead.
+      /* A wreck is where it stopped. Skipping it here is what makes it an
+         obstacle for free: it stays in the vehicle list, so every follower's
+         car-following term and the overlap correction both see it. */
+      if (v.role === "wreck" && !v.departing) { v.v = 0; v.accel = 0; continue; }
+      // Waiting at a full ramp or plaza: stands in its lane until there is room.
+      if (v.heldAtGore) { v.v = 0; v.accel = 0; continue; }
+
+      /* A responder holds station once it reaches the scene. Braking into it
+         rather than stopping dead, so it arrives rather than snapping to a
+         halt — and it is still a normal vehicle to everyone behind. */
+      if (v.role === "responder" && !v.departing && v.holdAtX != null && v.x >= v.holdAtX) {
+        /* Park AT the station, or short of it if someone is in the way.
+         *
+         * Pinning straight to holdAtX let a responder stop with its nose
+         * inside a car that had already committed to a lane change into that
+         * cell. Once parked it is immovable, and the car is ahead of it, so
+         * the correction pass has nobody it can push — the overlap simply
+         * stayed. Stopping short is what a driver does, and it is the only
+         * place this can be resolved. */
+        let limit = v.holdAtX;
+        for (const o of this.vehicles) {
+          if (o === v || !occupiesLane(o, v.lane)) continue;
+          if (o.x - o.length < v.x) continue;              // behind us
+          limit = Math.min(limit, o.x - o.length - MIN_CLEARANCE);
+        }
+        v.x = Math.max(0, Math.min(v.x, limit));
+        v.v = 0;
+        v.accel = 0;
+        continue;
+      }
+
       const wall = this.blockPointAhead(v.lane, oldX);
       if (v.x > wall) {
         /* Stop against the obstacle — but behind anything already stopped
@@ -1631,6 +2275,11 @@ export class TrafficSim {
       }
       this.emit(v, Math.max(0, v.x - oldX), dt);
     }
+
+    /* Everything inside the plazas and service areas moves on the same tick,
+     * after the carriageway: a vehicle merging back has to judge the lane as it
+     * now is, and the overlap net below has to see both. */
+    if (this.fac.list.length > 0) this.fac.step(dt);
 
     /* Overlap safety net.
      *
@@ -1655,6 +2304,7 @@ export class TrafficSim {
      * residue the two-lane fix left behind (0.09% of ticks, worst 4.6 m).
      * Four passes is a bound, not a target — the loop stops as soon as a
      * pass changes nothing, which is almost always the first. */
+    const shadows = this.fac.list.length > 0 ? this.fac.shadows() : [];
     for (let pass = 0; pass < 4; pass++) {
       let moved = false;
     for (let l = 0; l < this.cfg.laneCount; l++) {
@@ -1670,9 +2320,10 @@ export class TrafficSim {
        * Including a straddling vehicle in the lane it is leaving also makes
        * the follower there hold back until the gap is genuinely vacated,
        * which is what happens on a real carriageway. */
-      const row = this.vehicles
-        .filter((v) => occupiesLane(v, l))
-        .sort((a, b) => b.x - a.x);
+      const row = this.vehicles.filter((v) => occupiesLane(v, l));
+      // A vehicle half off the road on a taper is still in this lane's way.
+      for (const sh of shadows) if (sh.fac!.shadowLane === l) row.push(sh);
+      row.sort((a, b) => b.x - a.x);
       for (let i = 1; i < row.length; i++) {
         const lead = row[i - 1];
         const me = row[i];
@@ -1684,6 +2335,19 @@ export class TrafficSim {
          * maximum — while the visible road looked half empty. Traffic that
          * cannot fit is refused at the entrance instead; see spawn(). */
         if (me.x > maxX + 1e-9) {
+          /* A WRECK is where it stopped: that position is the scenario, and
+             shoving it back would be the correction rewriting the event.
+             A parked responder is different — where exactly it stopped
+             carries no meaning, so it yields a metre rather than being drawn
+             through. That distinction is the last 0.04%: a car already
+             committed to a lane change arrives after the responder has
+             parked, and since the responder is BEHIND it, there is no
+             follower for the pass to push. Letting the responder give way is
+             the only resolution, and it is stable because the hold below
+             never moves it forward again. */
+          if (me.role === "wreck" && !me.departing) continue;
+          // Its own engine moves a facility vehicle; this net only keeps others out of it.
+          if (me.fac) continue;
           me.x = Math.max(0, maxX);
           me.v = Math.min(me.v, lead.v); // stop pushing into it
           moved = true;
@@ -1693,18 +2357,31 @@ export class TrafficSim {
       if (!moved) break;
     }
 
+    // Responders entering the road, if any are due and there is room.
+    this.releaseResponders();
+    if (this.fac.list.length > 0) this.releaseFacilityResponders();
+
     // A shunt in the queue behind an existing incident, if one is due.
     this.maybeSecondary(dt);
 
     // Vehicles peeling off at their interchange.
     this.takeExits();
 
+    // Into the booths at a barrier plaza.
+    this.enterBarriers();
+
     // Retire vehicles that cleared the segment; record travel time.
     const remaining: Vehicle[] = [];
     for (const v of this.vehicles) {
       if (v.x >= this.cfg.length) {
-        this.completedTimes.push(this.time - v.spawnTime);
-        this.completedInWindow.push(this.time);
+        /* Only through-traffic counts as a completed trip. A responder that
+           drives off the end is not a road user the corridor served, and a
+           wreck never gets there at all — counting either would inflate
+           throughput with vehicles the scenario itself put on the road. */
+        if (v.role === "traffic") {
+          this.completedTimes.push(this.time - v.spawnTime);
+          this.completedInWindow.push(this.time);
+        }
       } else remaining.push(v);
     }
     this.vehicles = remaining;

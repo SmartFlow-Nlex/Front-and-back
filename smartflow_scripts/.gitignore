@@ -5,9 +5,12 @@ config/.env
 # Run artifacts (logs, results, the migration manifest) are kept as the record
 # of what produced the numbers. Only the binary caches are ignored.
 _work/cache/
+_work/logs/weekly_retrain/
 # compiled scratch from test_resolver.mjs / build_fact.mjs
 _work/*.mjs
 
 node_modules/
 __pycache__/
 *.pyc
+# the fleet-mix trainer's prediction cache (binary, rebuilt on every run)
+3_training_testing/fleet_mix/fleet_mix_preds.pkl

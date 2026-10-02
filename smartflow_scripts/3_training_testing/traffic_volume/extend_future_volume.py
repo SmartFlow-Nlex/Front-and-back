@@ -41,6 +41,14 @@ ns = {"__name__": "prep", "__file__": SRC}
 exec(compile(head, "prep", "exec"), ns)
 
 df, MODELS = ns["df"], ns["MODELS"]
+
+
+def forecast_of(out):
+    """The forecast from a model call. retrain_honest.py's models return
+    (forecast, fitted) since in-sample fits were added for train R2
+    (2026-09-25); this script still read the pair as one array, so every
+    model "failed" and the horizon study crashed."""
+    return out[0] if isinstance(out, tuple) else out
 WEATHER_COLS, HIST_BY_DOY = ns["WEATHER_COLS"], ns["HIST_BY_DOY"]
 PG = ns["POSTGRES_URL"]
 
@@ -59,7 +67,7 @@ for name, fn in MODELS.items():
     if name in ("SeasonalNaive", "Climatology"):
         continue                       # baselines are not served to the chart
     try:
-        y = np.asarray(fn(df, FUTURE_DAYS, future_df), dtype=float)
+        y = np.asarray(forecast_of(fn(df, FUTURE_DAYS, future_df)), dtype=float)
         if y.shape != (FUTURE_DAYS,) or not np.isfinite(y).all():
             raise ValueError(f"bad output shape/values {y.shape}")
         preds[name] = y
@@ -149,7 +157,7 @@ for oi, cut in enumerate(hz_origins, 1):
         fdf_o[c] = [float(clim_o[c].loc[k]) if k in clim_o.index else fb
                     for k in fut_o.ds.dt.dayofyear]
 
-    yh = np.asarray(MODELS[CHAMP](tr_o, HZ_H, fdf_o), dtype=float)
+    yh = np.asarray(forecast_of(MODELS[CHAMP](tr_o, HZ_H, fdf_o)), dtype=float)
     lw = tr_o.y.values[-SEASON:]
     doy_o = tr_o.assign(k=tr_o.ds.dt.dayofyear).groupby("k").y.mean()
     for i in range(HZ_H):

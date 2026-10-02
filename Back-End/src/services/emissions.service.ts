@@ -1,99 +1,13 @@
-import { env } from "../config/env.js";
-
-type CarbonEmissionInput = {
-  time_reported: string;
-  time_cleared: string;
-  daily_volume: number;
-};
-
-type CarbonEmissionResult = {
-  row_index: number;
-  time_reported: string;
-  time_cleared: string;
-  daily_volume: number;
-  delay_minutes: number;
-  trapped_vehicles: number;
-  idling_penalty_co2_kg: number;
-};
-
-type ClimatiqEstimateResponse = {
-  co2e?: number;
-};
-
-function parseTimeToSeconds(value: string) {
-  const [hours, minutes, seconds] = value.split(":").map(Number);
-
-  if ([hours, minutes, seconds].some((part) => Number.isNaN(part))) {
-    throw new Error("time_reported and time_cleared must use HH:MM:SS format");
-  }
-
-  return hours * 3600 + minutes * 60 + seconds;
-}
-
-async function getIdlingFactor() {
-  if (!env.CLIMATIQ_API_KEY) {
-    throw new Error("Missing CLIMATIQ_API_KEY");
-  }
-
-  const response = await fetch("https://beta4.api.climatiq.io/estimate", {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${env.CLIMATIQ_API_KEY}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      emission_factor: {
-        activity_id: "passenger_vehicle-vehicle_type_car-fuel_source_petrol",
-        region: "GLOBAL",
-      },
-      parameters: {
-        distance: 1,
-        distance_unit: "km",
-      },
-    }),
-  });
-
-  if (!response.ok) {
-    throw new Error(`Climatiq request failed with status ${response.status}`);
-  }
-
-  const data = (await response.json()) as ClimatiqEstimateResponse;
-  return Number(data.co2e ?? 0) * 0.10;
-}
-
-function calculateRow(input: CarbonEmissionInput, rowIndex: number, idlingFactor: number): CarbonEmissionResult {
-  const reportedSeconds = parseTimeToSeconds(input.time_reported);
-  const clearedSeconds = parseTimeToSeconds(input.time_cleared);
-
-  let delayMinutes = (clearedSeconds - reportedSeconds) / 60;
-  if (delayMinutes < 0) {
-    delayMinutes += 24 * 60;
-  }
-
-  const delayMinutesRounded = Number(delayMinutes.toFixed(2));
-  const trappedVehicles = Math.round((input.daily_volume / 1440) * delayMinutesRounded);
-  const idlingPenaltyCo2Kg = Number((trappedVehicles * delayMinutesRounded * idlingFactor).toFixed(2));
-
-  return {
-    row_index: rowIndex,
-    time_reported: input.time_reported,
-    time_cleared: input.time_cleared,
-    daily_volume: input.daily_volume,
-    delay_minutes: delayMinutesRounded,
-    trapped_vehicles: trappedVehicles,
-    idling_penalty_co2_kg: idlingPenaltyCo2Kg,
-  };
-}
-
 import { db } from "../config/db.js";
+import { delayCarbon, EMISSIONS_TABLE, recordBounds } from "./emissions-source.js";
 
 // ---------------------------------------------------------------------------
 // Emissions analytics for the descriptive dashboard.
-// Sources: nlex_theoretical_emissions (hourly modeled CO2/pollutants per exit,
-// direction, and vehicle class, from traffic volume x IPCC Tier 2 factors),
-// nlex_emissions (measured air quality from OpenWeatherMap, AQI 1-5),
-// nlex_emission_factors (per-class g/km factors), nlex_exits (segment names).
-// All timestamps are UTC; local time = UTC+8.
+// Sources: gold.fact_emissions_hourly (hourly CO2 per exit and direction, from
+// the toll counts x segment km x the DENR/DOTC per-class factors; see
+// emissions-source.ts for why this and not nlex_theoretical_emissions),
+// nlex_emissions (measured air quality from OpenWeatherMap, AQI 1-5) and
+// nlex_emission_factors (per-class g/km factors). Dates and hours are local.
 // ---------------------------------------------------------------------------
 
 export type EmissionsAnalyticsFilters = {
@@ -106,21 +20,18 @@ type EmissionsCacheEntry = { at: number; data: unknown };
 const emissionsCache = new Map<string, EmissionsCacheEntry>();
 const EMISSIONS_CACHE_TTL_MS = 10 * 60 * 1000;
 
-// nlex_theoretical_emissions.timestamp_utc is a naive `timestamp without time
-// zone` that, despite the column name, already holds Philippine local time.
-// Verified against the toll matview, whose h00..h23 columns are local hours:
-// the unshifted emissions volume peaks at 07:00 and 17:00, matching the toll
-// peaks exactly, while adding 8 hours moves them to 01:00 and 15:00.
-//
-// So no offset is applied here. (The measured-AQI queries further down do add
-// 8 hours, correctly — those read nlex_emissions.api_dt, a real Unix epoch.)
 // Measured AQI carries a real timestamptz observation time (silver derives it
-// from the source's api_dt epoch), so local time is a timezone conversion rather
-// than a manual +8h on a naive value.
+// from the source's api_dt epoch), so local time is a timezone conversion.
 const AQI_LOCAL = `recorded_at AT TIME ZONE 'Asia/Manila'`;
 
-const LOCAL_DATE = `timestamp_utc::date`;
-const LOCAL_HOUR = `EXTRACT(hour FROM timestamp_utc)::int`;
+/* Per-class CO2, PM2.5 and NO2 from the record's per-class vehicle counts: count
+   x segment km x the class's factor. Summed this way they add up to the
+   record's own co2_tonnes exactly (checked on 2025-06-01: 318.395 t both ways). */
+const FACTORS = `CROSS JOIN (SELECT
+    max(co2_g_per_km) FILTER (WHERE vehicle_class = 1) AS f1,
+    max(co2_g_per_km) FILTER (WHERE vehicle_class = 2) AS f2,
+    max(co2_g_per_km) FILTER (WHERE vehicle_class = 3) AS f3
+  FROM nlex_emission_factors) f`;
 
 export async function getEmissionsAnalyticsFromDb(filters: EmissionsAnalyticsFilters) {
   if (!db) return null;
@@ -130,11 +41,7 @@ export async function getEmissionsAnalyticsFromDb(filters: EmissionsAnalyticsFil
   if (cached && Date.now() - cached.at < EMISSIONS_CACHE_TTL_MS) return cached.data;
 
   try {
-    const bounds = await db.query(
-      `SELECT min(${LOCAL_DATE})::text AS lo, max(${LOCAL_DATE})::text AS hi FROM nlex_theoretical_emissions`
-    );
-    const minDate: string = bounds.rows[0].lo;
-    const maxDate: string = bounds.rows[0].hi;
+    const { minDate, maxDate } = await recordBounds();
 
     let lo: string;
     let hi: string;
@@ -151,55 +58,61 @@ export async function getEmissionsAnalyticsFromDb(filters: EmissionsAnalyticsFil
         filters.months === "all"
           ? maxDate
           : (
-              await db.query(`SELECT LEAST(($1::date + ($2 || ' months')::interval)::date, $3::date)::text AS hi`, [lo, filters.months, maxDate]))
+              await db.query(`SELECT LEAST(($1::date + ($2 || ' months')::interval - interval '1 day')::date, $3::date)::text AS hi`, [lo, filters.months, maxDate]))
               .rows[0].hi;
     }
 
     const params = [lo, hi];
-    const WHERE = `${LOCAL_DATE} BETWEEN $1 AND $2`;
+    const WHERE = `e.date BETWEEN $1 AND $2`;
 
-    const [trend, heatmap, classes, kpi, aqiMonthly, aqiKpi] = await Promise.all([
-      // Daily CO2 (tonnes) by vehicle class and direction (client rolls up)
+    const [trend, heatmap, classes, kpi, aqiMonthly, aqiKpi, exits, delay] = await Promise.all([
+      // Daily CO2 (tonnes) by vehicle class, and by direction: northbound, southbound, and the
+      // plazas the record does not split by direction (bothdir), so the three add up to the day.
       db.query(
-        `SELECT ${LOCAL_DATE}::text AS d,
-                ROUND((SUM(co2_grams) FILTER (WHERE vehicle_class = 1) / 1e6)::numeric, 2)::float AS c1,
-                ROUND((SUM(co2_grams) FILTER (WHERE vehicle_class = 2) / 1e6)::numeric, 2)::float AS c2,
-                ROUND((SUM(co2_grams) FILTER (WHERE vehicle_class = 3) / 1e6)::numeric, 2)::float AS c3,
-                ROUND((COALESCE(SUM(co2_grams) FILTER (WHERE direction = 'NB'), 0) / 1e6)::numeric, 2)::float AS nb,
-                ROUND((COALESCE(SUM(co2_grams) FILTER (WHERE direction = 'SB'), 0) / 1e6)::numeric, 2)::float AS sb
-         FROM nlex_theoretical_emissions WHERE ${WHERE}
+        `SELECT e.date::text AS d,
+                ROUND((SUM(e.class_1 * e.segment_km) * MAX(f.f1) / 1e6)::numeric, 2)::float AS c1,
+                ROUND((SUM(e.class_2 * e.segment_km) * MAX(f.f2) / 1e6)::numeric, 2)::float AS c2,
+                ROUND((SUM(e.class_3 * e.segment_km) * MAX(f.f3) / 1e6)::numeric, 2)::float AS c3,
+                ROUND(COALESCE(SUM(e.co2_tonnes) FILTER (WHERE e.direction = 'NB'), 0)::numeric, 2)::float AS nb,
+                ROUND(COALESCE(SUM(e.co2_tonnes) FILTER (WHERE e.direction = 'SB'), 0)::numeric, 2)::float AS sb,
+                ROUND(COALESCE(SUM(e.co2_tonnes) FILTER (WHERE e.direction IS NULL OR e.direction NOT IN ('NB', 'SB')), 0)::numeric, 2)::float AS bothdir
+         FROM ${EMISSIONS_TABLE} e ${FACTORS}
+         WHERE ${WHERE}
          GROUP BY 1 ORDER BY 1`,
         params
       ),
       // CO2 tonnes per hour-of-day x day-of-week (client derives weekday/weekend profile)
       db.query(
-        `SELECT EXTRACT(dow FROM ${LOCAL_DATE})::int AS dow, ${LOCAL_HOUR} AS hour,
-                ROUND((SUM(co2_grams) / 1e6)::numeric, 2)::float AS v
-         FROM nlex_theoretical_emissions WHERE ${WHERE}
+        `SELECT EXTRACT(dow FROM e.date)::int AS dow, e.hour::int AS hour,
+                ROUND(SUM(e.co2_tonnes)::numeric, 2)::float AS v
+         FROM ${EMISSIONS_TABLE} e WHERE ${WHERE}
          GROUP BY 1, 2 ORDER BY 1, 2`,
         params
       ),
       // Volume and emissions by vehicle class, with the per-km factors
       db.query(
-        `SELECT t.vehicle_class AS class, MAX(f.class_label) AS label,
-                MAX(f.co2_g_per_km)::float AS co2_g_per_km,
-                SUM(t.volume)::bigint AS volume,
-                ROUND((SUM(t.co2_grams) / 1e6)::numeric, 1)::float AS co2_t,
-                ROUND((SUM(t.pm25_grams) / 1e3)::numeric, 1)::float AS pm25_kg,
-                ROUND((SUM(t.no2_grams) / 1e3)::numeric, 1)::float AS no2_kg
-         FROM nlex_theoretical_emissions t
-         LEFT JOIN nlex_emission_factors f ON f.vehicle_class = t.vehicle_class
-         WHERE ${WHERE}
-         GROUP BY 1 ORDER BY 1`,
+        `WITH s AS (
+           SELECT SUM(class_1) AS v1, SUM(class_1 * segment_km) AS k1,
+                  SUM(class_2) AS v2, SUM(class_2 * segment_km) AS k2,
+                  SUM(class_3) AS v3, SUM(class_3 * segment_km) AS k3
+             FROM ${EMISSIONS_TABLE} e WHERE ${WHERE})
+         SELECT f.vehicle_class AS class, f.class_label AS label, f.co2_g_per_km::float AS co2_g_per_km,
+                ROUND(CASE f.vehicle_class WHEN 1 THEN s.v1 WHEN 2 THEN s.v2 ELSE s.v3 END)::bigint AS volume,
+                ROUND((CASE f.vehicle_class WHEN 1 THEN s.k1 WHEN 2 THEN s.k2 ELSE s.k3 END * f.co2_g_per_km / 1e6)::numeric, 1)::float AS co2_t,
+                ROUND((CASE f.vehicle_class WHEN 1 THEN s.k1 WHEN 2 THEN s.k2 ELSE s.k3 END * f.pm25_g_per_km / 1e3)::numeric, 1)::float AS pm25_kg,
+                ROUND((CASE f.vehicle_class WHEN 1 THEN s.k1 WHEN 2 THEN s.k2 ELSE s.k3 END * f.no2_g_per_km / 1e3)::numeric, 1)::float AS no2_kg
+         FROM nlex_emission_factors f CROSS JOIN s
+         WHERE f.vehicle_class IN (1, 2, 3)
+         ORDER BY 1`,
         params
       ),
       // KPI: current vs previous period CO2 (tonnes)
       db.query(
         `SELECT
-           ROUND((SUM(co2_grams) FILTER (WHERE ${WHERE}) / 1e6)::numeric, 1)::float AS cur_t,
-           ROUND((SUM(co2_grams) FILTER (WHERE ${LOCAL_DATE} >= $1::date - ($2::date - $1::date + 1) AND ${LOCAL_DATE} < $1::date) / 1e6)::numeric, 1)::float AS prev_t
-         FROM nlex_theoretical_emissions
-         WHERE ${LOCAL_DATE} >= $1::date - ($2::date - $1::date + 1) AND ${LOCAL_DATE} <= $2`,
+           ROUND((SUM(co2_tonnes) FILTER (WHERE date BETWEEN $1 AND $2))::numeric, 1)::float AS cur_t,
+           ROUND((SUM(co2_tonnes) FILTER (WHERE date >= $1::date - ($2::date - $1::date + 1) AND date < $1::date))::numeric, 1)::float AS prev_t
+         FROM ${EMISSIONS_TABLE}
+         WHERE date >= $1::date - ($2::date - $1::date + 1) AND date <= $2`,
         params
       ),
       // Measured air quality: monthly hours per AQI level + avg PM2.5
@@ -222,17 +135,26 @@ export async function getEmissionsAnalyticsFromDb(filters: EmissionsAnalyticsFil
          WHERE (${AQI_LOCAL})::date BETWEEN $1 AND $2`,
         params
       ),
+      db.query(`SELECT COUNT(DISTINCT exit_canonical)::int AS n FROM ${EMISSIONS_TABLE} e WHERE ${WHERE}`, params),
+      // Delay-induced carbon: the idling of the queues behind cleared accidents in the Range.
+      delayCarbon(lo, hi),
     ]);
 
+    const totalCo2T = kpi.rows[0].cur_t ?? 0;
     const data = {
       range: { from: lo, to: hi },
-      meta: { minDate, maxDate },
+      meta: { minDate, maxDate, source: EMISSIONS_TABLE, exits: exits.rows[0]?.n ?? 0 },
       kpis: {
-        totalCo2T: kpi.rows[0].cur_t ?? 0,
+        totalCo2T,
         prevCo2T: kpi.rows[0].prev_t ?? 0,
         avgAqi: aqiKpi.rows[0].avg_aqi,
         aqiSamples: aqiKpi.rows[0].samples,
         avgPm25: aqiKpi.rows[0].avg_pm25,
+        delayCarbonT: Math.round(delay.tonnes * 10) / 10,
+        delayCarbonPct: totalCo2T > 0 ? Math.round((delay.tonnes / totalCo2T) * 10000) / 100 : 0,
+        delayIncidents: delay.incidents,
+        delayLongIncidents: delay.longIncidents,
+        delayLongSharePct: Math.round(delay.longSharePct * 10) / 10,
       },
       dailyTrend: trend.rows,
       heatmap: heatmap.rows,
@@ -249,7 +171,7 @@ export async function getEmissionsAnalyticsFromDb(filters: EmissionsAnalyticsFil
 }
 
 // Measured air quality lives in nlex_emissions (OpenWeather per-exit readings)
-// and modelled output in nlex_theoretical_emissions. The flat emissions_log /
+// and the CO2 record in gold.fact_emissions_hourly. The flat emissions_log /
 // incidents_table from the original schema were never loaded, so the three
 // endpoints below read the populated tables and keep the original result keys.
 
@@ -290,10 +212,8 @@ export async function getPeakPenaltyFromDb() {
     // warehouse, so it is derived from the modelled hourly emissions instead.
     const { rows } = await db.query(`
       WITH hourly AS (
-        SELECT ${LOCAL_HOUR} AS h,
-               SUM(co2_grams) / 1e6 AS co2_tons
-        FROM nlex_theoretical_emissions
-        WHERE co2_grams IS NOT NULL AND co2_grams::text <> 'NaN'
+        SELECT hour::int AS h, SUM(co2_tonnes) AS co2_tons
+        FROM ${EMISSIONS_TABLE}
         GROUP BY 1
       ), split AS (
         SELECT
@@ -342,20 +262,110 @@ export async function getClimateResilienceFromDb() {
   }
 }
 
-export async function getEmissionsData() {
-  return {
-    module: "emissions",
-    message: "emissions API ready",
-    updatedAt: new Date().toISOString(),
-  };
+/* Fleet-mix forecast and the observed fleet profile.
+ *
+ * Ported from the hans4 tree, where FleetMixForecastChart was already
+ * mounted and working. The chart component came across in the earlier port
+ * but these did not, so the panel called /api/emissions/fleet-mix, found no
+ * such route, fell through to the authenticateToken guard below it, and
+ * reported "Access token is required" — a misleading error for a missing
+ * endpoint. */
+export async function getFleetMixForecast(days?: number) {
+  if (!db) return null;
+
+  try {
+    const params: unknown[] = [];
+    let where = "";
+    if (days != null) {
+      // Anchored to the last OBSERVED day, never to now(): the projection block
+      // extends past the data, and a window measured from today would crop it.
+      where = `WHERE forecast_date >= (
+                 SELECT MAX(forecast_date) - ($1::int * INTERVAL '1 day')
+                 FROM gold.ml_predictive_fleet_mix WHERE actual_c1 IS NOT NULL)`;
+      params.push(days);
+    }
+
+    const [seriesQ, splitQ, metricsQ] = await Promise.all([
+      db.query(
+        `SELECT forecast_date::text AS d,
+                actual_c1::float, actual_c2::float, actual_c3::float,
+                pred_c1::float, pred_c2::float, pred_c3::float,
+                heavy_pred::float, heavy_surge, champion_model,
+                is_holdout, is_future
+         FROM gold.ml_predictive_fleet_mix ${where}
+         ORDER BY forecast_date ASC`, params),
+      db.query(
+        `SELECT COUNT(*) FILTER (WHERE NOT is_holdout AND NOT is_future)::int AS context_days,
+                COUNT(*) FILTER (WHERE is_holdout)::int AS holdout_days,
+                COUNT(*) FILTER (WHERE is_future)::int  AS future_days,
+                COUNT(*) FILTER (WHERE heavy_surge)::int AS surge_days,
+                MIN(forecast_date) FILTER (WHERE is_future)::text AS future_start,
+                MAX(forecast_date) FILTER (WHERE is_future)::text AS future_end,
+                MAX(updated_at)::text AS updated_at
+         FROM gold.ml_predictive_fleet_mix`),
+      db.query(
+        `SELECT model_name, rank, accepted, mae, rmse, wmape, r2, mase, mape,
+                rejected_reason, diagnosis, split_label, updated_at
+         FROM gold.ml_model_metrics
+         WHERE target = 'Fleet Mix'
+         ORDER BY accepted DESC, rank NULLS LAST, mase ASC`),
+    ]);
+
+    const champion = seriesQ.rows.find((r) => r.champion_model)?.champion_model ?? null;
+
+    return {
+      champion,
+      series: seriesQ.rows,
+      split: splitQ.rows[0] ?? null,
+      // `mase` here holds the skill ratio against persistence and `mae` the
+      // mean per-class error in percentage points — the metrics table is shared
+      // with the other targets, so the columns are reused rather than added to.
+      models: metricsQ.rows,
+    };
+  } catch (error) {
+    console.error("Database query failed for fleet-mix forecast:", error);
+    return null;
+  }
 }
 
-export async function calculateCarbonEmissionData(input: CarbonEmissionInput) {
-  const idlingFactor = await getIdlingFactor();
-  return calculateRow(input, 1, idlingFactor);
-}
-
-export async function calculateCarbonEmissionBatch(inputs: CarbonEmissionInput[]) {
-  const idlingFactor = await getIdlingFactor();
-  return inputs.map((input, index) => calculateRow(input, index + 1, idlingFactor));
+/* ── Fleet profile for the simulation sandbox ────────────────────────────────
+ *
+ * The sandbox modelled CO2 from constants compiled into the browser bundle —
+ * 160/550/950 g/km against the 192/354/1492 in nlex_emission_factors, and a
+ * fleet of 78/16/6 against an observed 78.1/13.0/8.9. So the sandbox's CO2
+ * rate and the Emissions dashboard computed the same quantity from different
+ * numbers, and the sandbox understated heavy-vehicle output by a third —
+ * precisely the traffic its heavy-vehicle restriction strategy exists to
+ * target.
+ *
+ * This serves both from the warehouse so there is one source for them.
+ */
+export async function getFleetProfile() {
+  if (!db) return null;
+  try {
+    const [factors, mix] = await Promise.all([
+      db.query(
+        `SELECT vehicle_class, class_label, co2_g_per_km::float
+         FROM nlex_emission_factors ORDER BY vehicle_class`,
+      ),
+      db.query(
+        `SELECT SUM(class_1)::float AS c1, SUM(class_2)::float AS c2, SUM(class_3)::float AS c3
+         FROM gold.fact_traffic_hourly`,
+      ),
+    ]);
+    const m = mix.rows[0] ?? { c1: 0, c2: 0, c3: 0 };
+    const total = (m.c1 ?? 0) + (m.c2 ?? 0) + (m.c3 ?? 0);
+    return {
+      factors: factors.rows,
+      // Shares as fractions summing to 1, the same convention the fleet-mix
+      // forecast uses, so nothing downstream has to guess the scale.
+      mix: total > 0
+        ? { 1: m.c1 / total, 2: m.c2 / total, 3: m.c3 / total }
+        : null,
+      source: "nlex_emission_factors + gold.fact_traffic_hourly",
+    };
+  } catch (error) {
+    console.error("Database query failed for fleet profile:", error);
+    return null;
+  }
 }

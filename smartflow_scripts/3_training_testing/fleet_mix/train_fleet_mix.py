@@ -58,16 +58,12 @@ warnings.filterwarnings("ignore")
 import sys as _sys
 from pathlib import Path as _Path
 
-# Connection comes from Back-End/.env (PG_* keys), never from this file —
-# the same convention train_congestion_horizon.py uses, so both scripts read
-# one set of credentials and there is nothing to keep in sync.
-_env = {}
-for _line in (_Path(__file__).resolve().parents[2] / "Back-End" / ".env").read_text().splitlines():
-    if "=" in _line and not _line.startswith("#"):
-        _k, _v = _line.split("=", 1)
-        _env[_k.strip()] = _v.strip().strip('"')
-PG = (f"host={_env['PG_HOST']} port={_env.get('PG_PORT', 5432)} dbname={_env['PG_DATABASE']} "
-      f"user={_env['PG_USER']} password={_env['PG_PASSWORD']} sslmode=require")
+# Connection settings live in smartflow_scripts/config/.env, read by
+# config/db.py, as for every other trainer here. This used to read
+# Back-End/.env two folders up — a path from before the script moved into
+# 3_training_testing/, which now points inside smartflow_scripts and fails.
+_sys.path.insert(0, str(_Path(__file__).resolve().parents[2] / "config"))
+from db import PG  # noqa: E402
 
 HORIZON, STEP, N_ORIGINS, SEASON = 7, 7, 42, 7
 FUTURE_DAYS = 30

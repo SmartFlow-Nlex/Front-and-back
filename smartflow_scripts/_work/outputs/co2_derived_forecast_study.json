@@ -1,0 +1,68 @@
+{
+  "protocol": {
+    "origins": 9,
+    "horizon": 90,
+    "step": 30,
+    "volume_model": "Prophet",
+    "mase_denominator_t": 37.50315655454119
+  },
+  "horizon": [
+    {
+      "h_lo": 1,
+      "h_hi": 7,
+      "n": 63,
+      "derived_wmape": 5.1148750123112405,
+      "derived_mase": 0.6127858511932683,
+      "gbr_wmape": 10.0156,
+      "gbr_mase": 1.2044,
+      "baseline_wmape": 7.7715
+    },
+    {
+      "h_lo": 8,
+      "h_hi": 14,
+      "n": 63,
+      "derived_wmape": 6.525324783619337,
+      "derived_mase": 0.7944519802083305,
+      "gbr_wmape": 12.1655,
+      "gbr_mase": 1.4867,
+      "baseline_wmape": 10.1772
+    },
+    {
+      "h_lo": 15,
+      "h_hi": 30,
+      "n": 144,
+      "derived_wmape": 10.04287621611787,
+      "derived_mase": 1.165682634250853,
+      "gbr_wmape": 16.9883,
+      "gbr_mase": 1.9792,
+      "baseline_wmape": 13.7375
+    },
+    {
+      "h_lo": 31,
+      "h_hi": 60,
+      "n": 270,
+      "derived_wmape": 8.379897650791609,
+      "derived_mase": 1.0019677809996546,
+      "gbr_wmape": 14.1473,
+      "gbr_mase": 1.6979,
+      "baseline_wmape": 12.4196
+    },
+    {
+      "h_lo": 61,
+      "h_hi": 90,
+      "n": 270,
+      "derived_wmape": 8.516159280278043,
+      "derived_mase": 1.0242008511114151,
+      "gbr_wmape": 15.6761,
+      "gbr_mase": 1.8924,
+      "baseline_wmape": 12.3878
+    }
+  ],
+  "holdout": {
+    "days": 294,
+    "from": "2025-09-10",
+    "to": "2026-06-30",
+    "derived_wmape": 7.858372015198962,
+    "gbr_wmape": 6.93329330101496
+  }
+}

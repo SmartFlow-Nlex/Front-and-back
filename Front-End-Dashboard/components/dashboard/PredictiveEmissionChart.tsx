@@ -39,12 +39,13 @@ const BACKEND = process.env.NEXT_PUBLIC_BACKEND_URL ?? "http://localhost:4000";
 const VALIDATED_HORIZON = 7; // must match train_emissions.py HORIZON
 
 type Zone = "past" | "present" | "future";
-type ModelKey = "gbr" | "polynomial" | "lstm";
+type ModelKey = "derived" | "gbr" | "polynomial" | "lstm";
 
 type Point = {
   date: string;
   actual: number | null;
   predicted: number | null;
+  derived?: number | null;
   gbr: number | null;
   polynomial: number | null;
   lstm: number | null;
@@ -97,21 +98,25 @@ type Payload = {
   };
 };
 
-const ORDER: ModelKey[] = ["polynomial", "gbr", "lstm"];
+const ORDER: ModelKey[] = ["derived", "polynomial", "gbr", "lstm"];
 const LABEL: Record<ModelKey, string> = {
+  derived: "Volume-derived",
   polynomial: "Polynomial",
   gbr: "Gradient Boosting",
   lstm: "LSTM",
 };
 /** UI key -> model_name in gold.ml_model_metrics */
-const DB_NAME: Record<ModelKey, string> = { polynomial: "Polynomial", gbr: "GBR", lstm: "LSTM" };
-const FROM_DB: Record<string, ModelKey> = { Polynomial: "polynomial", GBR: "gbr", LSTM: "lstm" };
+const DB_NAME: Record<ModelKey, string> = { derived: "Derived", polynomial: "Polynomial", gbr: "GBR", lstm: "LSTM" };
+const FROM_DB: Record<string, ModelKey> = { Derived: "derived", Polynomial: "polynomial", GBR: "gbr", LSTM: "lstm" };
 const COLOR: Record<ModelKey, string> = {
+  derived: "#10b981",
   polynomial: "#7c3aed",
   gbr: "#f59e0b",
   lstm: "#0ea5e9",
 };
 const HOW_IT_WORKS: Record<ModelKey, string> = {
+  derived:
+    "The volume panel's forecast (Prophet) × the corridor's CO₂ per vehicle on that weekday over the previous 8 weeks. CO₂ here is vehicles × km × a fixed factor per class, so forecasting it through the volume forecast keeps the two panels in agreement.",
   polynomial:
     "Ridge regression on degree-2 terms over trend, the 7- and 28-day rolling means, lag-1, lag-7, day-of-week and rainfall.",
   gbr: "Gradient-boosted trees over the same lag, calendar and weather features. Captures interactions a linear fit cannot.",
@@ -249,6 +254,7 @@ export default function PredictiveEmissionChart() {
 
     const daily = {
       actual: win.map((p) => p.actual),
+      derived: win.map((p) => p.derived ?? null),
       gbr: win.map((p) => p.gbr),
       polynomial: win.map((p) => p.polynomial),
       lstm: win.map((p) => p.lstm),

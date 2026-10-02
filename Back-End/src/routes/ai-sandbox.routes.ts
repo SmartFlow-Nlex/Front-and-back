@@ -1,7 +1,7 @@
 import { Router } from "express";
 import { asyncHandler } from "../middleware/error.middleware.js";
 import { triggerSimulation, configLanes, getResults } from "../controllers/ai-sandbox.controller.js";
-import { parseSandboxCommand, commandStatus, scenarioContext, demandExits, demandProfile, plazaFlows } from "../controllers/sandbox-command.controller.js";
+import { parseSandboxCommand, commandStatus, scenarioContext, demandExits, demandProfile, plazaFlows, hotspots } from "../controllers/sandbox-command.controller.js";
 import { authenticateToken, authorizeRoles } from "../middleware/auth.middleware.js";
 
 const router = Router();
@@ -28,6 +28,8 @@ router.get("/scenario", asyncHandler(scenarioContext));
 router.get("/demand-exits", asyncHandler(demandExits));
 router.get("/demand-profile", asyncHandler(demandProfile));
 router.get("/plaza-flows", asyncHandler(plazaFlows));
+// Where incidents of a kind are recorded — the published logs, aggregated; no per-user content.
+router.get("/hotspots", asyncHandler(hotspots));
 
 // Apply auth middleware to the remaining ai-sandbox endpoints
 router.use(authenticateToken);

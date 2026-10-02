@@ -842,11 +842,10 @@ export default function TrafficPage() {
              hour-of-day views about where and when the peak is. */
           <>
             <div className={styles.spanFull}>
-              <BoothStaffingPanel
-                byPlaza={data?.byPlaza ?? []}
-                plazaHour={data?.plazaHourProfile ?? []}
-                typicalDaily={derived && derived.curAdt > 0 ? derived.curAdt : null}
-              />
+              {/* No props: the staffing model reads the warehouse directly now,
+                  so the recommendation no longer moves when the operator
+                  changes a date range on the descriptive tab. */}
+              <BoothStaffingPanel />
             </div>
             <div className={styles.spanFull}>
               <CongestionResponsePanel />

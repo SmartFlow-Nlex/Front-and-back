@@ -52,7 +52,7 @@ export async function getTrafficAnalyticsFromDb(filters: AnalyticsFilters) {
         filters.months === "all"
           ? maxDate
           : (
-              await db.query(`SELECT LEAST(($1::date + ($2 || ' months')::interval)::date, $3::date)::text AS hi`, [
+              await db.query(`SELECT LEAST(($1::date + ($2 || ' months')::interval - interval '1 day')::date, $3::date)::text AS hi`, [
                 lo,
                 filters.months,
                 maxDate,
@@ -1360,6 +1360,7 @@ export type EmissionForecastPoint = {
   date: string;
   actual: number | null;
   predicted: number | null;      // the champion's forecast
+  derived: number | null;        // volume forecast x CO2 per vehicle (train_emissions.py)
   gbr: number | null;
   polynomial: number | null;
   lstm: number | null;
@@ -1409,9 +1410,11 @@ export async function getEmissionForecast(months?: number): Promise<EmissionFore
     }
     const [seriesQ, splitQ, metricsQ] = await Promise.all([
       db.query(
+        // pred_derived read through to_jsonb: present once train_emissions.py has run with the
+        // derived candidate, and simply null before, rather than an error.
         `SELECT forecast_date::text AS d, actual_co2, pred_gbr, pred_polynomial,
-                pred_lstm, champion_model, is_holdout, is_future
-         FROM gold.ml_predictive_emissions ${where} ORDER BY forecast_date ASC`, params),
+                pred_lstm, to_jsonb(e) ->> 'pred_derived' AS pred_derived, champion_model, is_holdout, is_future
+         FROM gold.ml_predictive_emissions e ${where} ORDER BY forecast_date ASC`, params),
       db.query(
         `SELECT COUNT(*) FILTER (WHERE NOT is_holdout AND NOT is_future)::int AS train_days,
                 COUNT(*) FILTER (WHERE is_holdout)::int AS holdout_days,
@@ -1436,8 +1439,8 @@ export async function getEmissionForecast(months?: number): Promise<EmissionFore
 
     const num = (v: unknown) => (v === null || v === undefined ? null : Number(v));
     const champion: string | null = seriesQ.rows.find((r) => r.champion_model)?.champion_model ?? null;
-    const colOf: Record<string, "pred_gbr" | "pred_polynomial" | "pred_lstm"> = {
-      GBR: "pred_gbr", Polynomial: "pred_polynomial", LSTM: "pred_lstm",
+    const colOf: Record<string, "pred_gbr" | "pred_polynomial" | "pred_lstm" | "pred_derived"> = {
+      GBR: "pred_gbr", Polynomial: "pred_polynomial", LSTM: "pred_lstm", Derived: "pred_derived",
     };
     const champCol = champion ? colOf[champion] : undefined;
 
@@ -1445,6 +1448,7 @@ export async function getEmissionForecast(months?: number): Promise<EmissionFore
       date: r.d,
       actual: num(r.actual_co2),
       predicted: champCol ? num(r[champCol]) : null,
+      derived: num(r.pred_derived),
       gbr: num(r.pred_gbr),
       polynomial: num(r.pred_polynomial),
       lstm: num(r.pred_lstm),

@@ -6,13 +6,14 @@ import { attachCategoryClick } from "../../../lib/chart-click";
 import { useChartTheme, applyChartTheme, seriesRamp, seriesPair } from "../../../lib/chart-theme";
 import ReactECharts from "echarts-for-react";
 import type { EChartsOption } from "echarts";
-import { CalendarClock, Clock, Leaf, Truck, Wind } from "lucide-react";
+import { CalendarClock, Clock, Leaf, Timer, Truck, Wind } from "lucide-react";
 import DashboardChart from "../../../components/dashboard/DashboardChart";
 import ChartSkeleton, { KpiSkeleton } from "../../../components/dashboard/ChartSkeleton";
 import CustomSelect from "../../../components/dashboard/CustomSelect";
 import PageHeader from "../../../components/dashboard/PageHeader";
 import InfoTooltip from "../../../components/dashboard/InfoTooltip";
 import PredictiveEmissionChart from "../../../components/dashboard/PredictiveEmissionChart";
+import FleetMixForecastChart from "../../../components/dashboard/FleetMixForecastChart";
 import PrescriptiveEmissionsPanel from "../../../components/dashboard/PrescriptiveEmissionsPanel";
 import DateRangePicker from "../traffic/components/DateRangePicker";
 import { rangeDays, grainBlockedReason, bestGrainFor, axisLabelFor, bucketLabelFor } from "../../../lib/granularity";
@@ -30,15 +31,22 @@ const DOW_ORDER = [1, 2, 3, 4, 5, 6, 0];
 // ---------- Data contract ----------
 type Analytics = {
   range: { from: string; to: string };
-  meta: { minDate: string; maxDate: string };
+  meta: { minDate: string; maxDate: string; source?: string; exits?: number };
   kpis: {
     totalCo2T: number;
     prevCo2T: number;
+    /** Idling CO2 behind cleared accidents in the Range (Back-End emissions-source.ts). */
+    delayCarbonT?: number;
+    delayCarbonPct?: number;
+    delayIncidents?: number;
+    delayLongIncidents?: number;
+    delayLongSharePct?: number;
     avgAqi: number | null;
     aqiSamples: number;
     avgPm25: number | null;
   };
-  dailyTrend: { d: string; c1: number; c2: number; c3: number; nb: number; sb: number }[];
+  /** nb + sb + bothdir = the day: bothdir is the plazas the record does not split by direction. */
+  dailyTrend: { d: string; c1: number; c2: number; c3: number; nb: number; sb: number; bothdir?: number }[];
   /** Present only for ranges of 14 days or less; null otherwise. */
   hourlyTrend: { d: string; hour: number; c1: number; c2: number; c3: number; nb: number; sb: number }[] | null;
   heatmap: { dow: number; hour: number; v: number }[];
@@ -169,7 +177,7 @@ export default function SustainabilityPage() {
   }, [data]);
 
     // ---------- Hero: CO2 trend by class ----------
-  type TrendRow = { label: string; c1: number; c2: number; c3: number; nb: number; sb: number; total: number };
+  type TrendRow = { label: string; c1: number; c2: number; c3: number; nb: number; sb: number; bothdir?: number; total: number };
   const trendRows = useMemo<TrendRow[]>(() => {
     if (!data) return [];
     // Hourly reads a different series entirely — the API only sends it for short
@@ -188,11 +196,11 @@ export default function SustainabilityPage() {
         : grain === "weekly"
           ? weekStart
           : (d: string) => d.slice(0, 7);
-    const acc = new Map<string, { c1: number; c2: number; c3: number; nb: number; sb: number; days: number }>();
+    const acc = new Map<string, { c1: number; c2: number; c3: number; nb: number; sb: number; bothdir: number; days: number }>();
     for (const r of src) {
       const k = keyOf(r.d);
-      const cur = acc.get(k) ?? { c1: 0, c2: 0, c3: 0, nb: 0, sb: 0, days: 0 };
-      acc.set(k, { c1: cur.c1 + r.c1, c2: cur.c2 + r.c2, c3: cur.c3 + r.c3, nb: cur.nb + r.nb, sb: cur.sb + r.sb, days: cur.days + 1 });
+      const cur = acc.get(k) ?? { c1: 0, c2: 0, c3: 0, nb: 0, sb: 0, bothdir: 0, days: 0 };
+      acc.set(k, { c1: cur.c1 + r.c1, c2: cur.c2 + r.c2, c3: cur.c3 + r.c3, nb: cur.nb + r.nb, sb: cur.sb + r.sb, bothdir: cur.bothdir + ("bothdir" in r ? (r.bothdir ?? 0) : 0), days: cur.days + 1 });
     }
     let rows = [...acc.entries()]
       .sort(([a], [b]) => (a < b ? -1 : 1))
@@ -552,6 +560,7 @@ export default function SustainabilityPage() {
         [CLASS_SHORT[1], `${fmtInt(r.c2)} t`],
         [CLASS_SHORT[2], `${fmtInt(r.c3)} t`],
         ["Northbound / Southbound", `${fmtInt(r.nb)} t / ${fmtInt(r.sb)} t`],
+        ...(r.bothdir ? [["Plazas not split by direction", `${fmtInt(r.bothdir)} t`] as [string, string]] : []),
         ["vs range average", avg > 0 ? fmtPct(((r.total - avg) / avg) * 100) : "—"],
         ["Rank in range", `#${rank} of ${totals.length} ${periodWord}s`],
       ],
@@ -675,13 +684,44 @@ export default function SustainabilityPage() {
     loading && !data ? <KpiSkeleton /> : <CountUpValue text={v ?? "—"} />;
   const aqiWord = (a: number) => (a < 1.5 ? "Good" : a < 2.5 ? "Fair" : a < 3.5 ? "Moderate" : a < 4.5 ? "Poor" : "Very poor");
 
+  /* The Range control. Shown on the Prescriptive tab as well: its strategies
+     are computed over this Range, and with the control only on the
+     Descriptive tab the reader could neither see which Range the bars
+     described nor change it without leaving the tab. */
+  const rangeControl = (
+    <div className={styles.filterGroup}>
+      <svg width="15" height="15" viewBox="0 0 16 16" fill="none" style={{ color: "var(--text-muted)" }}><rect x="2" y="2" width="12" height="12" rx="3" stroke="currentColor" strokeWidth="1.4" /><path d="M2 6h12" stroke="currentColor" strokeWidth="1.4" /><path d="M5.5 2V4M10.5 2V4" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" /></svg>
+      <span className={styles.filterLabel}>Range</span>
+      <div className={styles.segmented}>
+        {(["3", "12", "all", "custom"] as const).map((m) => (
+          <button key={m} className={rangeMode === m ? "active" : ""} onClick={() => setRangeMode(m)}>
+            {rangeMode === m && <svg width="12" height="12" viewBox="0 0 16 16" fill="none" style={{ marginRight: 4, marginBottom: -1 }}><path d="M3.5 8.5l3 3 6-7" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" /></svg>}
+            {m === "3" ? "3 mo" : m === "12" ? "12 mo" : m === "all" ? "All" : "Custom"}
+          </button>
+        ))}
+      </div>
+      {rangeMode === "custom" && (
+        <DateRangePicker
+          startDate={customFrom}
+          minDate={data?.meta.minDate}
+          maxDate={data?.meta.maxDate}
+          endDate={customTo}
+          onChange={(start, end) => {
+            setCustomFrom(start);
+            setCustomTo(end);
+          }}
+        />
+      )}
+    </div>
+  );
+
   // ---------- Predictive / Prescriptive share the same shell ----------
   if (activeTab !== "Descriptive") {
     return (
       <section className={`${styles.page} viz-emissions`}>
         <PageHeader accent="emissions" icon={Leaf} title="Emissions Overview" subtitle="Vehicle emissions and air quality trends across NLEX" />
         <div className={styles.filterRow}>
-          {activeTab === "Prescriptive" && <span className={styles.filterLabel}>Projected emission reduction by strategy</span>}
+          {activeTab === "Prescriptive" && rangeControl}
           <span className={styles.spacer} />
           <div className={styles.modeTabs}>
             {(["Descriptive", "Predictive", "Prescriptive"] as const).map((t) => (
@@ -693,7 +733,14 @@ export default function SustainabilityPage() {
           </div>
         </div>
         {activeTab === "Predictive" ? (
-          <div className={styles.spanFull}><PredictiveEmissionChart /></div>
+          <>
+            <div className={styles.spanFull}><PredictiveEmissionChart /></div>
+            {/* The diagram's second Emission Forecasting box. Below the CO2
+                panel rather than beside it: the fleet mix is what DRIVES the
+                emission forecast, so it reads as the explanation of the chart
+                above rather than a competing headline. */}
+            <div className={styles.spanFull}><FleetMixForecastChart /></div>
+          </>
         ) : (
           <article className={`${styles.chartCard} ${styles.chart1}`}>
             <div className={styles.chartHead}>
@@ -704,7 +751,12 @@ export default function SustainabilityPage() {
                 </p>
               </div>
             </div>
-            <div className={styles.chartBody}>
+            {/* height:auto, unlike every other card here.
+                .chartBody is a fixed 326px, which is right for a card that is
+                only a plot. This one leads with a written recommendation above
+                the chart, so a fixed body cropped the bars and pushed the
+                basis note outside the card entirely. The card grows instead. */}
+            <div className={styles.chartBody} style={{ height: "auto" }}>
               <PrescriptiveEmissionsPanel
                 months={rangeMode === "custom" ? "12" : rangeMode}
                 from={rangeMode === "custom" ? customFrom : undefined}
@@ -723,30 +775,7 @@ export default function SustainabilityPage() {
 
       {/* Row A — global filters */}
       <div className={styles.filterRow}>
-        <div className={styles.filterGroup}>
-          <svg width="15" height="15" viewBox="0 0 16 16" fill="none" style={{ color: "var(--text-muted)" }}><rect x="2" y="2" width="12" height="12" rx="3" stroke="currentColor" strokeWidth="1.4" /><path d="M2 6h12" stroke="currentColor" strokeWidth="1.4" /><path d="M5.5 2V4M10.5 2V4" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" /></svg>
-          <span className={styles.filterLabel}>Range</span>
-          <div className={styles.segmented}>
-            {(["3", "12", "all", "custom"] as const).map((m) => (
-              <button key={m} className={rangeMode === m ? "active" : ""} onClick={() => setRangeMode(m)}>
-                {rangeMode === m && <svg width="12" height="12" viewBox="0 0 16 16" fill="none" style={{ marginRight: 4, marginBottom: -1 }}><path d="M3.5 8.5l3 3 6-7" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" /></svg>}
-                {m === "3" ? "3 mo" : m === "12" ? "12 mo" : m === "all" ? "All" : "Custom"}
-              </button>
-            ))}
-          </div>
-          {rangeMode === "custom" && (
-            <DateRangePicker
-              startDate={customFrom}
-              minDate={data?.meta.minDate}
-              maxDate={data?.meta.maxDate}
-              endDate={customTo}
-              onChange={(start, end) => {
-                setCustomFrom(start);
-                setCustomTo(end);
-              }}
-            />
-          )}
-        </div>
+        {rangeControl}
 
         <div className={styles.filterGroup}>
           {/* Narrows the query, so every panel on the tab reports this class.
@@ -786,7 +815,7 @@ export default function SustainabilityPage() {
       <div className={`${styles.kpiRow} ds-rise`}>
         <article className={styles.kpiTile}>
           <span className={styles.kpiIcon} aria-hidden="true"><Leaf size={15} /></span>
-          <h3>Total CO₂ (Modeled)<InfoTooltip text="Tonnes of CO₂ modeled from vehicle volume and class mix over the Range using per-class emission factors — not a sensor reading." /></h3>
+          <h3>Total CO₂ (Modeled)<InfoTooltip text="Tonnes of CO₂ over the Range: the hourly toll counts at every exit × that exit's segment length × the DENR/DOTC factor for each vehicle class. Modeled, not a sensor reading — and the same record the CO₂ forecast is trained on, so the two agree." /></h3>
           <div className={styles.kpiValue} title={data ? `${fmtInt(data.kpis.totalCo2T)} tonnes` : undefined}>
             {kpiValue(data ? `${fmtCompact(data.kpis.totalCo2T)} t` : null)}
           </div>
@@ -819,6 +848,16 @@ export default function SustainabilityPage() {
           <div className={styles.kpiValue}>{kpiValue(timeProfile ? fmtHour(timeProfile.peakHour) : null)}</div>
           <p className={styles.kpiHint}>
             {timeProfile ? `${fmt1(timeProfile.allHour[timeProfile.peakHour])} t/day in that hour` : "—"}
+          </p>
+        </article>
+        <article className={styles.kpiTile}>
+          <span className={styles.kpiIcon} aria-hidden="true"><Timer size={15} /></span>
+          <h3>Delay-Induced CO₂<InfoTooltip text="Idling CO₂ from the queues behind accidents in the Range. Each queue builds while the incident is live and drains as it clears (area λ×T²/2 at that segment's vehicles per hour), so long incidents carry most of it. Moving vehicles' CO₂ does not change with speed in this model: this is the part a delay adds." /></h3>
+          <div className={styles.kpiValue}>{kpiValue(data?.kpis.delayCarbonT != null ? `${fmtInt(data.kpis.delayCarbonT)} t` : null)}</div>
+          <p className={styles.kpiHint}>
+            {data?.kpis.delayCarbonT != null
+              ? `${(data.kpis.delayCarbonPct ?? 0).toFixed(2)}% of CO₂ · ${(data.kpis.delayLongSharePct ?? 0).toFixed(0)}% from ${fmtInt(data.kpis.delayLongIncidents ?? 0)} incidents over 3 h`
+              : "—"}
           </p>
         </article>
         <article className={styles.kpiTile}>

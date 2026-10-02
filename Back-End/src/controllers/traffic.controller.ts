@@ -7,6 +7,8 @@ import { getTrafficVolumesFromDb, getDirectionalFlowFromDb, getVehicleClassDistr
   getEventSurgeMetrics,
   getEventSurgeEval,
 } from "../services/traffic.service.js";
+import { z } from "zod";
+import { getTrafficPrescriptive } from "../services/traffic-prescriptive.service.js";
 import { cached } from "../utils/ttl-cache.js";
 
 // GET /api/traffic/analytics — descriptive dashboard aggregates
@@ -219,3 +221,36 @@ export const getWeatherEvidence = async (_req: Request, res: Response) => {
   }
   res.json({ success: true, source: "database", data });
 };
+
+/* GET /api/traffic/prescriptive — booth staffing and congestion response.
+ *
+ * Public for the same reason as /forecast: it is the prescriptive third of a
+ * panel whose descriptive and predictive thirds are already open, and it
+ * exposes no figure they do not.
+ *
+ * `throughput` and `pool` are the operator's two dials, validated rather than
+ * trusted: a zero throughput divides by zero, and a negative pool would spin
+ * the allocator forever.
+ */
+const PrescriptiveTrafficQuerySchema = z.object({
+  throughput: z.coerce.number().int().min(50).max(5000).optional(),
+  pool: z.coerce.number().int().min(0).max(100000).optional(),
+  split: z.enum(["80_20", "90_10"]).optional(),
+});
+
+export const getTrafficPrescriptiveHandler = async (req: Request, res: Response) => {
+  const q = PrescriptiveTrafficQuerySchema.parse(req.query);
+  const data = await getTrafficPrescriptive({
+    throughput: q.throughput,
+    pool: q.pool ?? null,
+    split: q.split,
+  });
+  if (!data) {
+    return res.status(503).json({
+      success: false,
+      message: "Prescriptive traffic unavailable: database not reachable, or no champion volume model.",
+    });
+  }
+  res.json({ success: true, source: "database", data });
+};
+

@@ -1,0 +1,109 @@
+{
+  "champion": "Dirichlet",
+  "baseline": {
+    "name": "Climatology",
+    "aitchison": 0.1236154638749579
+  },
+  "tied": [
+    "Dirichlet"
+  ],
+  "models": [
+    {
+      "model": "Dirichlet",
+      "n": 294,
+      "aitchison": 0.1211344452139446,
+      "tvd_pct": 1.4344357064856594,
+      "mae_pp": 0.9562904709904394,
+      "rmse_pp": 2.0122411895823036,
+      "mape": 11.803593214096944,
+      "heavy_wmape": 5.849718234657509,
+      "heavy_r2": 0.5455053702685589,
+      "is_candidate": true,
+      "skill": 0.6021067676412623,
+      "accepted": true,
+      "rank": 1,
+      "diagnosis": NaN
+    },
+    {
+      "model": "Climatology",
+      "n": 294,
+      "aitchison": 0.1236154638749579,
+      "tvd_pct": 1.4994427483972532,
+      "mae_pp": 0.9996284989315017,
+      "rmse_pp": 1.9865965322315646,
+      "mape": 12.187917852723842,
+      "heavy_wmape": 6.05986237085769,
+      "heavy_r2": 0.5664458994378355,
+      "is_candidate": false,
+      "skill": 0.6144388349058788,
+      "accepted": false,
+      "rank": null,
+      "diagnosis": "baseline, not a candidate"
+    },
+    {
+      "model": "Prophet",
+      "n": 294,
+      "aitchison": 0.1289833338536097,
+      "tvd_pct": 1.6207558906219377,
+      "mae_pp": 1.0805039270812922,
+      "rmse_pp": 1.7867722459421904,
+      "mape": 10.247191730832396,
+      "heavy_wmape": 7.240726705853351,
+      "heavy_r2": 0.6414041961982726,
+      "is_candidate": true,
+      "skill": 0.6411201874828132,
+      "accepted": false,
+      "rank": 2,
+      "diagnosis": NaN
+    },
+    {
+      "model": "XGBoost",
+      "n": 294,
+      "aitchison": 0.13545097011608606,
+      "tvd_pct": 1.745150643953508,
+      "mae_pp": 1.163433762635672,
+      "rmse_pp": 2.337033124735019,
+      "mape": 10.030735396266167,
+      "heavy_wmape": 7.850865738333093,
+      "heavy_r2": 0.3728065789036765,
+      "is_candidate": true,
+      "skill": 0.6732680010745724,
+      "accepted": false,
+      "rank": 3,
+      "diagnosis": NaN
+    },
+    {
+      "model": "LSTM",
+      "n": 294,
+      "aitchison": 0.15966110467520514,
+      "tvd_pct": 1.9710390801091362,
+      "mae_pp": 1.3140260534060908,
+      "rmse_pp": 2.1190009218033627,
+      "mape": 9.810606847712505,
+      "heavy_wmape": 8.79135304046916,
+      "heavy_r2": 0.4928522312614121,
+      "is_candidate": true,
+      "skill": 0.7936060753341732,
+      "accepted": false,
+      "rank": 4,
+      "diagnosis": NaN
+    },
+    {
+      "model": "Persistence",
+      "n": 294,
+      "aitchison": 0.20118432763758107,
+      "tvd_pct": 3.2346143975255766,
+      "mae_pp": 2.1564095983503844,
+      "rmse_pp": 3.425945368366397,
+      "mape": 18.27213318595161,
+      "heavy_wmape": 14.650226051327131,
+      "heavy_r2": -0.3483516253264549,
+      "is_candidate": false,
+      "skill": 1.0,
+      "accepted": false,
+      "rank": null,
+      "diagnosis": "baseline, not a candidate"
+    }
+  ],
+  "surge_threshold": 0.279559058643039
+}

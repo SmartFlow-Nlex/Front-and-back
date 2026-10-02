@@ -28,6 +28,7 @@ import type { EChartsOption } from "echarts";
 import { useEffect, useMemo, useState } from "react";
 import DashboardChart from "./DashboardChart";
 import InfoTooltip from "./InfoTooltip";
+import { useChartTheme, seriesRamp } from "../../lib/chart-theme";
 
 const BACKEND = process.env.NEXT_PUBLIC_BACKEND_URL ?? "http://localhost:4000";
 
@@ -71,15 +72,34 @@ type Payload = {
  * card, so a reader moving between tabs does not have to relearn which colour
  * is a truck. Red is avoided throughout — it marks a hazard elsewhere. */
 const CLASS_META = [
-  { key: "c1", label: "Class 1 · light", color: "#3e67ef" },
-  { key: "c2", label: "Class 2 · medium", color: "#1f9d57" },
-  { key: "c3", label: "Class 3 · heavy", color: "#9b5de5" },
+  /* Heaviest FIRST, because the series drawn against the baseline is the only
+   * one whose shape can be read accurately — everything stacked above it
+   * inherits the wobble of everything below. The heavy share is this card's
+   * headline ("19.54% → 21.90%"), and it was floating on top of an 80% block
+   * of Class 1, which is the one place its movement is invisible.
+   *
+   * Colour is the emissions tab's ORDINAL ramp, not three categorical hues.
+   * Vehicle classes are an ordered scale (light → medium → heavy), and a ramp
+   * is what an ordered scale takes; three unrelated hues implied three
+   * unrelated things. Validated light and dark: monotone lightness, ΔL ≥ 0.06
+   * between steps, single hue, light end clear of the surface.
+   *
+   * `tone` indexes seriesRamp(): 2 = darkest = heaviest. */
+  { key: "c3", label: "Class 3 · heavy", tone: 2 },
+  { key: "c2", label: "Class 2 · medium", tone: 1 },
+  { key: "c1", label: "Class 1 · light", tone: 0 },
 ] as const;
 
 const pct = (v: number | null | undefined) =>
   v == null ? "—" : `${(v * 100).toFixed(2)}%`;
 
 export default function FleetMixForecastChart() {
+  /* The card was written with light-mode greys baked in (#334155, #94a3b8,
+     #e2e8f0), so in dark mode its axes and tooltip were invisible against the
+     surface. Everything chrome-coloured now comes from the theme. */
+  const T = useChartTheme();
+  const RAMP = seriesRamp("emissions", T);
+  const colorOf = (tone: number) => RAMP[tone];
   const [data, setData] = useState<Payload | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [attempt, setAttempt] = useState(0);
@@ -179,10 +199,12 @@ export default function FleetMixForecastChart() {
     tooltip: {
       trigger: "axis",
       confine: true,
-      backgroundColor: "rgba(255,255,255,0.97)",
-      borderColor: "#e2e8f0",
+      backgroundColor: T.tooltipBg,
+      borderColor: T.axis,
       borderWidth: 1,
-      textStyle: { color: "#334155" },
+      textStyle: { color: T.tooltipText },
+      // A crosshair, because reading a stacked area means reading a DATE first.
+      axisPointer: { type: "line" as const, lineStyle: { color: T.axis, width: 1 } },
       extraCssText: "box-shadow: 0 6px 16px rgba(15,23,42,0.12); border-radius: 8px; max-width: 320px;",
       formatter: (params: unknown) => {
         const ps = params as { dataIndex: number }[];
@@ -192,46 +214,61 @@ export default function FleetMixForecastChart() {
         const src = r.is_future ? "projected" : "observed";
         const vals = CLASS_META.map((c, k) => {
           const v = r.is_future ? r[`pred_${c.key}` as "pred_c1"] : r[`actual_${c.key}` as "actual_c1"];
-          return `<span style="display:inline-block;width:8px;height:8px;border-radius:2px;background:${c.color};margin-right:6px;"></span>${c.label}<span style="float:right;font-weight:700;margin-left:16px;">${pct(v)}</span>`;
+          return `<span style="display:inline-block;width:8px;height:8px;border-radius:2px;background:${colorOf(c.tone)};margin-right:6px;"></span>${c.label}<span style="float:right;font-weight:700;margin-left:16px;">${pct(v)}</span>`;
         }).join("<br/>");
         const heavy = r.is_future && r.heavy_pred != null
-          ? `<div style="margin-top:6px;padding-top:6px;border-top:1px solid #e2e8f0;">Heavy (C2+C3) <b>${pct(r.heavy_pred)}</b>${r.heavy_surge ? ' <span style="color:#b45309;font-weight:700;">· surge</span>' : ""}</div>`
+          ? `<div style="margin-top:6px;padding-top:6px;border-top:1px solid ${T.axis};">Heavy (C2+C3) <b>${pct(r.heavy_pred)}</b>${r.heavy_surge ? ' <span style="color:#b45309;font-weight:700;">· surge</span>' : ""}</div>`
           : "";
         return `<div style="padding:2px 4px;min-width:220px;">
-                  <b style="color:#0f172a;">${r.d}</b>
-                  <span style="color:#94a3b8;font-size:0.85em;"> · ${src}</span>
+                  <b style="color:${T.tooltipText};">${r.d}</b>
+                  <span style="opacity:.65;font-size:0.85em;"> · ${src}</span>
                   <div style="margin-top:8px;font-size:0.9em;">${vals}</div>${heavy}
                 </div>`;
       },
     },
     legend: {
       bottom: 0,
-      itemWidth: 11,
-      itemHeight: 11,
-      textStyle: { fontSize: 11, color: "#64748b" },
-      data: CLASS_META.map((c) => c.label),
+      // Filled swatches, not the default hollow ring: the legend's whole job is
+      // to carry the fill colour, and an outline shows almost none of it.
+      icon: "roundRect",
+      itemWidth: 12,
+      itemHeight: 12,
+      itemGap: 18,
+      textStyle: { fontSize: 11, color: T.text },
+      // Listed lightest-first so the legend reads in the natural order of the
+      // classes, even though they are STACKED heaviest-first.
+      data: [...CLASS_META].reverse().map((c) => c.label),
     },
     xAxis: {
       type: "category",
       data: dates,
       boundaryGap: false,
-      axisLabel: { fontSize: 10, color: "#94a3b8", hideOverlap: true },
-      axisLine: { lineStyle: { color: "#e2e8f0" } },
+      axisLabel: { fontSize: 10, color: T.text, hideOverlap: true },
+      axisLine: { lineStyle: { color: T.axis } },
+      axisTick: { show: false },
     },
     yAxis: {
       type: "value",
+      // 0–100 stays. Truncating a composition axis is the classic way to make a
+      // share look like it moved more than it did, and this card already has a
+      // headline number for the magnitude.
       max: 100,
       min: 0,
-      axisLabel: { formatter: "{value}%", fontSize: 10, color: "#94a3b8" },
-      splitLine: { lineStyle: { color: "#eef2f7" } },
+      axisLabel: { formatter: "{value}%", fontSize: 10, color: T.text },
+      axisLine: { show: false },
+      axisTick: { show: false },
+      // Hairline, solid, one step off the surface.
+      splitLine: { lineStyle: { color: T.split, width: 1 } },
     },
     series: [
       ...CLASS_META.map((c, k) => ({
         name: c.label,
         type: "line" as const,
         stack: "observed",
-        areaStyle: { color: c.color, opacity: 0.85 },
-        lineStyle: { width: 0 },
+        areaStyle: { color: colorOf(c.tone), opacity: 1 },
+        /* The 2px spacer, in the surface colour. A stacked fill is separated
+           from its neighbour by a gap, never by a stroke drawn around it. */
+        lineStyle: { width: 2, color: T.tooltipBg },
         showSymbol: false,
         data: observed[k],
         // The boundary between measured and projected, drawn once on the first
@@ -241,8 +278,11 @@ export default function FleetMixForecastChart() {
               markLine: {
                 silent: true,
                 symbol: "none" as const,
-                label: { formatter: "forecast →", fontSize: 10, color: "#64748b", position: "insideEndTop" as const },
-                lineStyle: { color: "#94a3b8", type: "dashed" as const, width: 1 },
+                /* Dashed is right HERE and wrong on a gridline: it marks the
+                   boundary between what was measured and what is projected,
+                   which is exactly what a dash conventionally means. */
+                label: { formatter: "forecast →", fontSize: 10, color: T.text, position: "insideEndTop" as const },
+                lineStyle: { color: T.text, type: "dashed" as const, width: 1 },
                 data: [{ xAxis: firstFuture }],
               },
             }
@@ -252,8 +292,10 @@ export default function FleetMixForecastChart() {
         name: c.label,
         type: "line" as const,
         stack: "projected",
-        areaStyle: { color: c.color, opacity: 0.38 },
-        lineStyle: { width: 0 },
+        // Paler, and the only thing separating projection from record besides
+        // the divider — so it stays a clear step down, not a subtle one.
+        areaStyle: { color: colorOf(c.tone), opacity: 0.42 },
+        lineStyle: { width: 2, color: T.tooltipBg },
         showSymbol: false,
         // Suppressed from the legend: these carry the same three names as the
         // observed series, and a six-entry legend listing each class twice

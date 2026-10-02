@@ -1,4 +1,6 @@
-import type { Interventions, Vehicle, VehicleClass } from "./simulation";
+import type { Interventions, ResponderKind, Vehicle, VehicleClass } from "./simulation";
+import type { Facility, FacilityEngine } from "./facilities";
+import { facilityView, type FacAgentView, type FacilityView } from "./facilityArt";
 
 /* ══════════════════════════════════════════════════════════════════════════════
    REPLAY — scrub back over what just happened
@@ -34,11 +36,18 @@ export type ReplayVehicle = {
   accel: number;
   spawnTime: number;
   color: string;
+  /* What it is, so a replayed crash shows the wreck and the responders as
+     they were, not as ordinary traffic stopped in a lane. */
+  role: Vehicle["role"];
+  responderKind?: ResponderKind;
+  restAngle?: number;
 };
 
 export type ReplayFrame = {
   time: number;
   vehicles: ReplayVehicle[];
+  /** Who was in the plazas and service areas, and which booths were shut. */
+  fac?: { agents: FacAgentView[]; closed: [string, number[]][]; busy: [string, number[]][] };
   incidents: { lane: number; x: number; secondary?: boolean }[];
   closedLanes: boolean[];
   closurePoint: number;
@@ -60,6 +69,7 @@ type Source = {
   vehicles: Vehicle[];
   interventions: Interventions;
   cfg: { laneCount: number; length: number };
+  fac?: FacilityEngine;
 };
 
 /* 8 Hz. The engine steps at 20 Hz, but a frame every 125 ms is smooth enough
@@ -104,7 +114,11 @@ export class ReplayBuffer {
         accel: v.accel,
         spawnTime: v.spawnTime,
         color: v.color,
+        role: v.role,
+        responderKind: v.responderKind,
+        restAngle: v.restAngle,
       })),
+      fac: sim.fac && sim.fac.list.length > 0 ? snapshotFacilities(sim.fac) : undefined,
       incidents: iv.incidents.map((i) => ({ lane: i.lane, x: i.x, secondary: i.secondary })),
       closedLanes: [...iv.closedLanes],
       closurePoint: iv.closurePoint,
@@ -152,6 +166,19 @@ export class ReplayBuffer {
     // Pick whichever neighbour is actually closer.
     if (lo > 0 && Math.abs(this.frames[lo - 1].time - time) < Math.abs(this.frames[lo].time - time)) return lo - 1;
     return lo;
+  }
+
+  /** The plazas as they were at a frame, on the (unchanging) geometry of the live ones. */
+  facilityViewAt(index: number, list: readonly Facility[]): FacilityView | null {
+    const f = this.frame(index)?.fac;
+    if (!f || list.length === 0) return null;
+    return {
+      list,
+      agents: f.agents,
+      closed: new Map(f.closed.map(([id, xs]) => [id, new Set(xs)])),
+      busy: new Map(f.busy.map(([id, xs]) => [id, new Set(xs)])),
+      stats: null,
+    };
   }
 
   /** Dress a frame as something the renderer will accept. */
@@ -202,4 +229,14 @@ export class ReplayBuffer {
     this.frames = [];
     this.lastAt = -Infinity;
   }
+}
+
+/** Copies, not references: the engine moves these objects every step. */
+function snapshotFacilities(engine: FacilityEngine): NonNullable<ReplayFrame["fac"]> {
+  const v = facilityView(engine, null, 0);
+  return {
+    agents: v.agents.map((a) => ({ ...a })),
+    closed: [...v.closed.entries()].map(([id, xs]) => [id, [...xs]]),
+    busy: [...v.busy.entries()].map(([id, xs]) => [id, [...xs]]),
+  };
 }

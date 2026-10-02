@@ -88,9 +88,19 @@ export async function updateMaintenanceScheduleInDb(id: string, data: Maintenanc
 export async function updateMaintenanceStatusInDb(id: string, status: MaintenanceStatus, reason?: string) {
   if (!db) return null;
   try {
-    const cur = await db.query(`SELECT status FROM nlex_maintenance_schedules WHERE id = $1`, [id]);
+    // Also when the schedule entered its current status, for the audit log's time-in-status: its
+    // last status change or its creation as the audit log recorded them, else when the row was made.
+    const cur = await db.query(
+      `SELECT s.status,
+              COALESCE((SELECT max(a."timestamp") FROM audit_logs a
+                         WHERE a.target_resource = 'maintenance:' || s.id::text
+                           AND a.action IN ('maintenance.status_changed', 'maintenance.schedule_created')),
+                       s.created_at) AS since
+         FROM nlex_maintenance_schedules s WHERE s.id = $1`,
+      [id]);
     if (cur.rows.length === 0) return { error: "not_found" as const };
     const from: MaintenanceStatus = cur.rows[0].status;
+    const since: Date | null = cur.rows[0].since ? new Date(cur.rows[0].since) : null;
     if (!TRANSITIONS[from].includes(status)) {
       return { error: "invalid_transition" as const, from };
     }
@@ -101,7 +111,7 @@ export async function updateMaintenanceStatusInDb(id: string, status: Maintenanc
        RETURNING ${ROW_COLUMNS}`,
       [id, status, reason ?? null]
     );
-    return { row: rows[0] };
+    return { row: rows[0], from, since };
   } catch (error) {
     console.error("Database query failed for maintenance status update:", error);
     return null;
@@ -111,8 +121,8 @@ export async function updateMaintenanceStatusInDb(id: string, status: Maintenanc
 export async function deleteMaintenanceScheduleInDb(id: string) {
   if (!db) return null;
   try {
-    await db.query(`DELETE FROM nlex_maintenance_schedules WHERE id = $1`, [id]);
-    return true;
+    const { rows } = await db.query(`DELETE FROM nlex_maintenance_schedules WHERE id = $1 RETURNING status, title`, [id]);
+    return { deleted: rows[0] as { status: string; title: string } | undefined };
   } catch (error) {
     console.error("Database query failed for delete maintenance:", error);
     return null;

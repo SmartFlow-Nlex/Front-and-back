@@ -56,6 +56,8 @@ export type Direction = "NB" | "SB";
 export type Road = {
   readonly laneCount: number;
   readonly segmentLengthM: number;
+  /** Toll plazas and service areas on this stretch, by id — what a site event may name. Absent: not checked. */
+  readonly facilityIds?: ReadonlySet<string>;
   /** Seconds of warm-up. An event's times are counted from the end of it. */
   readonly warmupS: number;
   /** Metres along the simulated stretch, in the direction of travel, for an app km-post. May fall outside [0, segmentLengthM]. */
@@ -131,6 +133,24 @@ export type ScheduledPhase = {
 };
 
 /**
+ * Where an event happens when it is not on the carriageway itself: at a toll
+ * plaza's booths, a service area's pumps, or on the road into either.
+ *
+ * A breakdown at a booth or a vehicle hitting the toll equipment does not close
+ * a lane of the expressway; it shuts a booth, and the plaza loses that share of
+ * its capacity. Whether that reaches the expressway is then the plaza's doing —
+ * its queue grows until it spills back — which is exactly the effect an operator
+ * placing an event "at the toll gate" wants to see.
+ */
+export type EventSite = {
+  readonly facilityId: string;
+  readonly facilityName: string;
+  readonly kind: "booth" | "pump" | "approach";
+  /** Booths or pumps it shuts, 0-based across the plaza from the road outward; empty on the approach. */
+  readonly stations: readonly number[];
+};
+
+/**
  * A scenario event, stored with everything resolved: the duration is drawn ONCE,
  * when the event is added, and kept here. Nothing downstream re-samples, so a
  * rebuild or a re-render replays the same event.
@@ -170,6 +190,8 @@ export type ScenarioEvent = {
   readonly phases: readonly ScheduledPhase[];
   /** startS plus the whole duration, in seconds after the end of warm-up. */
   readonly endS: number;
+  /** At a plaza or service area instead of on a lane; null on the carriageway. */
+  readonly site: EventSite | null;
 };
 
 export type NewEventSpec = {
@@ -183,6 +205,8 @@ export type NewEventSpec = {
   /** Minutes after the end of warm-up. */
   readonly startMinutes: number;
   readonly duration: DurationMode;
+  /** At a plaza or service area. Omit for the carriageway. */
+  readonly site?: EventSite | null;
 };
 
 export type AddResult =
@@ -340,6 +364,12 @@ function speedZoneWindow(variant: ScenarioVariant, positionM: number, road: Road
  */
 export function eventProblems(event: ScenarioEvent, road: Road): readonly string[] {
   const problems: string[] = [];
+  if (event.site) {
+    if (road.facilityIds && !road.facilityIds.has(event.site.facilityId)) {
+      problems.push(`${event.site.facilityName} is not on the simulated stretch`);
+    }
+    return problems;
+  }
   const effect = effectOf(event.variant.family);
   const positionM = road.metresAt(event.positionKm);
   if (!Number.isFinite(positionM) || positionM < 0 || positionM > road.segmentLengthM) {
@@ -462,6 +492,8 @@ type Window = { readonly resource: ExclusiveResource; readonly fromS: number; re
  * which the engine shares, so it holds nothing exclusive.
  */
 export function resourceWindows(event: ScenarioEvent): readonly Window[] {
+  // At a plaza or service area it holds a booth, not the closure stretch or the speed zone.
+  if (event.site) return [];
   const effect = effectOf(event.variant.family);
   switch (effect) {
     case "incident":
@@ -496,6 +528,22 @@ function minutesAfterWarmup(s: number): string {
  * is always within one carriageway, never across the median.
  */
 function conflictMessage(existing: readonly ScenarioEvent[], candidate: ScenarioEvent): string | null {
+  const site = candidate.site;
+  if (site) {
+    // Two scenes in one booth lane at once cannot both be shown honestly; a booth can only break down once.
+    for (const other of existing) {
+      const o = other.site;
+      if (!o || o.facilityId !== site.facilityId) continue;
+      const clash = site.kind === "approach" || o.kind === "approach" || site.stations.some((x) => o.stations.includes(x));
+      if (clash && candidate.startS < other.endS && other.startS < candidate.endS) {
+        return (
+          `${candidate.direction}: Cannot add "${candidate.name}" at ${site.facilityName}: "${other.name}" is already there from ` +
+          `${minutesAfterWarmup(other.startS)} to ${minutesAfterWarmup(other.endS)}. Pick another booth or move one of them in time. Nothing was changed.`
+        );
+      }
+    }
+    return null;
+  }
   const mine = resourceWindows(candidate);
   for (const other of existing) {
     for (const theirs of resourceWindows(other)) {
@@ -565,14 +613,15 @@ export function addEvent(events: readonly ScenarioEvent[], spec: NewEventSpec, r
     name,
     direction: spec.direction,
     variant: spec.variant,
-    lane: effectOf(spec.variant.family) === "speed_zone" ? null : spec.lane,
-    extraLanes: effectOf(spec.variant.family) === "closure" ? (spec.extraLanes ?? []) : [],
+    lane: spec.site ? null : effectOf(spec.variant.family) === "speed_zone" ? null : spec.lane,
+    extraLanes: !spec.site && effectOf(spec.variant.family) === "closure" ? (spec.extraLanes ?? []) : [],
     positionKm: spec.positionKm,
     startS,
     duration: spec.duration,
     resolved,
     phases: schedulePhases(spec.variant, resolved),
     endS: startS + resolved.minutes * 60,
+    site: spec.site ?? null,
   };
   if (events.some((e) => e.id === event.id)) throw new RangeError(`an event with id ${event.id} already exists`);
   if (event.phases.every((p) => p.skipped)) {
@@ -867,6 +916,8 @@ export function composeInterventions(
     }
     const phase = phaseAt(event, t);
     if (phase === null) continue;
+    // At a plaza or service area: the facility layer shuts the booth; nothing on the carriageway changes.
+    if (event.site) continue;
     const positionM = road.metresAt(event.positionKm);
     const effect = effectOf(event.variant.family);
     switch (effect) {
@@ -950,6 +1001,19 @@ export type EngineLike = {
   readonly cfg: { readonly length: number; readonly laneCount: number };
   interventions: Interventions;
   addIncident(lane: number, x: number): void;
+  /** Crash the traffic that is there, and dispatch the response to it.
+   *  Used by closure-family events, which place no incident of their own. */
+  crashAt?(lane: number, x: number, want: number, sceneKey?: string): void;
+  /** Send a scenario vehicle to drive in and hold station. */
+  dispatchResponder?(kind: "ambulance" | "police" | "tow" | "works", lane: number, holdAtX: number, delayS: number, sceneKey?: string): void;
+  /** Everything this scene put on the road packs up and drives away. */
+  releaseScene?(sceneKey: string): void;
+  /** Start a scene at a plaza or service area: strand the vehicles there, shut the booths, send a tow. */
+  facilityEventStart?(sceneKey: string, site: EventSite, family: string): boolean;
+  /** End it: the booths reopen and the scene is recovered. */
+  facilityEventEnd?(sceneKey: string): void;
+  /** Which facilities exist, for checking a site event can run. */
+  readonly fac?: { readonly list: readonly { readonly spec: { readonly id: string } }[] };
 };
 
 /** What a caller supplies besides the engine: where warm-up ends and how km-posts map to metres on the current stretch. */
@@ -977,8 +1041,9 @@ export type EngineBinding = {
 };
 
 /** The road as the engine itself sees it: lane count and length are the engine's, not the page's, so they cannot be stale. */
-export function roadOf(sim: Pick<EngineLike, "cfg">, frame: RoadFrame): Road {
-  return { laneCount: sim.cfg.laneCount, segmentLengthM: sim.cfg.length, warmupS: frame.warmupS, metresAt: frame.metresAt };
+export function roadOf(sim: Pick<EngineLike, "cfg"> & Partial<Pick<EngineLike, "fac">>, frame: RoadFrame): Road {
+  const facilityIds = sim.fac ? new Set(sim.fac.list.map((f) => f.spec.id)) : undefined;
+  return { laneCount: sim.cfg.laneCount, segmentLengthM: sim.cfg.length, warmupS: frame.warmupS, metresAt: frame.metresAt, facilityIds };
 }
 
 /* ─────────────────────────────────────────────────────────────────────────────
@@ -1048,6 +1113,14 @@ export function stepToScenarioTime(
 export function createEngineBinding(): EngineBinding {
   const owned = new Map<string, Incident>();
   let previous: Ownership = NO_OWNERS;
+  /* Events whose collision has already happened. A crash is a one-off: apply()
+     runs on every phase boundary and on every operator edit, and without this
+     a four-car pile-up would acquire four more cars each time. */
+  const crashed = new Set<string>();
+
+  /** How many vehicles a family puts into the wreck. */
+  const crashSize = (family: string): number =>
+    family === "multi_vehicle_collision" ? 4 : family === "self_accident" ? 1 : 2;
 
   const isOwned = (i: Incident): boolean => {
     for (const o of owned.values()) if (o === i) return true;
@@ -1088,6 +1161,64 @@ export function createEngineBinding(): EngineBinding {
         const added = list[list.length - 1];
         if (added !== undefined && added.lane === w.lane && added.x === w.x) owned.set(w.key, added);
       }
+      /* Closure-family events crash real traffic.
+       *
+       * They do not appear in owners.incidents — a collision closes lanes
+       * rather than placing an obstacle — so nothing above touches the
+       * vehicle list for them, and after the drawn wreck was removed they had
+       * no cars in them at all. Done once per event, the first time it is
+       * seen active, and only where the engine supports it. */
+      const now = scenarioTimeS(sim.time, road);
+      for (const e of events) {
+        const state = eventState(e, now);
+
+        /* At a plaza or service area: the scene is the facility's. It starts
+           once, with the vehicles that are actually in the booth lane, and it
+           ends by being recovered — the booth reopens and the queue drains. */
+        if (e.site) {
+          if (state === "active" && !crashed.has(e.id) && typeof sim.facilityEventStart === "function") {
+            if (sim.facilityEventStart(e.id, e.site, e.variant.family)) crashed.add(e.id);
+          }
+          if (state === "done" && crashed.has(e.id) && typeof sim.facilityEventEnd === "function") {
+            sim.facilityEventEnd(e.id);
+            crashed.delete(e.id);
+          }
+          continue;
+        }
+
+        const lane = e.lane === null ? null : operatorLaneToEngineIndex(e.lane, road.laneCount);
+
+        /* Starting: put something real on the road for it.
+         *
+         * A collision crashes the traffic that is there. Roadworks are not a
+         * crash — nothing collides — so they get a works convoy that drives
+         * in and parks in the lane it is closing, which is what makes the
+         * closure appear to be set up rather than to switch on. */
+        if (state === "active" && !crashed.has(e.id) && lane !== null) {
+          const family = e.variant.family;
+          if (family === "scheduled_roadworks") {
+            if (typeof sim.dispatchResponder === "function") {
+              const at = road.metresAt(e.positionKm);
+              sim.dispatchResponder("works", lane, at, 0, e.id);
+              sim.dispatchResponder("works", lane, at - 26, 14, e.id);
+              crashed.add(e.id);
+            }
+          } else if (effectOf(family) === "closure" && typeof sim.crashAt === "function") {
+            sim.crashAt(lane, road.metresAt(e.positionKm), crashSize(family), e.id);
+            crashed.add(e.id);
+          }
+        }
+
+        /* Finished: the scene packs up and drives away rather than being
+           deleted where it stands. Without this a wreck blocked its lane for
+           the rest of the run — the owned-incident bookkeeping above tracks
+           incidents, and these are vehicles. */
+        if (state === "done" && crashed.has(e.id) && typeof sim.releaseScene === "function") {
+          sim.releaseScene(e.id);
+          crashed.delete(e.id);
+        }
+      }
+
       return composition;
     },
     operatorIncidents,
@@ -1098,6 +1229,7 @@ export function createEngineBinding(): EngineBinding {
     previousOwners: () => previous,
     reset() {
       owned.clear();
+      crashed.clear();
       previous = NO_OWNERS;
     },
   };
@@ -1234,6 +1366,12 @@ export type CanvasMark = {
   /** Seconds until it starts; null once it is running. Lets the canvas build
    *  up to an event rather than have it appear from nothing. */
   readonly secondsUntilStart: number | null;
+  /** Seconds since it started; null before. The impact animation needs ABSOLUTE
+   *  time: phaseFraction is a share of a phase that may run for minutes, and a
+   *  collision does not take minutes. */
+  readonly secondsSinceStart: number | null;
+  /** At a plaza or service area: labelled there by the facility layer, never drawn on a lane. */
+  readonly site?: EventSite | null;
 };
 
 /** One mark per event that has not finished and can run on this road, for the canvas to label. Pure; the canvas calls it each frame. */
@@ -1253,6 +1391,7 @@ export function canvasMarks(events: readonly ScenarioEvent[], road: Road, simTim
       kind: effect === "incident" ? "incident" : effect === "closure" ? "closure" : "speed_zone",
       state: state === "pending" ? "pending" : "active",
       secondsUntilStart: state === "pending" ? Math.max(0, e.startS - t) : null,
+      secondsSinceStart: state === "pending" ? null : Math.max(0, t - e.startS),
       xM: road.metresAt(e.positionKm),
       lane,
       text:
@@ -1261,6 +1400,7 @@ export function canvasMarks(events: readonly ScenarioEvent[], road: Road, simTim
           : phase === null
             ? "Running"
             : `${phase.label} · ${formatClock(e.startS + phase.offsetS + phase.durationS - t)} left`,
+      site: e.site,
     });
   }
   return marks;
@@ -1303,6 +1443,8 @@ export function sceneMarks(events: readonly ScenarioEvent[], road: Road, simTime
   for (const mark of canvasMarks(events, road, simTimeS)) {
     const e = byId.get(mark.eventId);
     if (e === undefined) continue;
+    // Its scene is drawn in the plaza (facilityArt), from the vehicles actually stranded there.
+    if (e.site) continue;
     const phase = mark.state === "pending" ? null : phaseAt(e, t);
     const start = phase === null ? 0 : e.startS + phase.offsetS;
     const fraction = phase === null || !(phase.durationS > 0) ? 0 : Math.max(0, Math.min(1, (t - start) / phase.durationS));

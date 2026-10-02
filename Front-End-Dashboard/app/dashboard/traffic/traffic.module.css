@@ -621,6 +621,22 @@
   :global(.viz-incident) .kpiRow { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 
+/* Emissions carries six tiles too since Delay-Induced CO2 joined the row
+   (the modelling diagram's Delay-Induced Carbon Excess KPI): same 6, 3+3,
+   2+2+2 shapes as Incidents. */
+:global(.viz-emissions) .kpiRow:has(> :nth-child(6)) { grid-template-columns: repeat(6, minmax(0, 1fr)); }
+:global(.viz-emissions) .kpiRow > .kpiTile:nth-child(6) { --kpi-accent: var(--kpi-6); }
+
+/* Wider breakpoint than Incidents': these tiles carry "161.2K t"-length values,
+   which wrap their unit below ~190px a tile. */
+@media (max-width: 1600px) {
+  :global(.viz-emissions) .kpiRow:has(> :nth-child(6)) { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+}
+
+@media (max-width: 980px) {
+  :global(.viz-emissions) .kpiRow:has(> :nth-child(6)) { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+
 /* The change figure, as a badge rather than two coloured words in a sentence.
    The trend is the second thing a reader wants off a KPI tile after the number
    itself, and as plain inline text it had the same weight as the "vs previous

@@ -4,6 +4,7 @@
 import type { RawRow } from "./parser.js";
 
 export type DatasetType =
+  | "toll_hourly"
   | "traffic_volume"
   | "road_crash"
   | "stalled_vehicle"
@@ -20,18 +21,26 @@ export interface ClassifyResult {
 }
 
 // Column signature patterns for each dataset type
-const TRAFFIC_SIGNALS = ["toll_plaza", "plaza", "vehicle_class", "direction", "h00", "h01", "h02", "h03"];
-const ROAD_CRASH_SIGNALS = ["cause_of_accident", "type_of_accident", "no_of_vehicles_involved", "injuries_male", "fatalities_male"];
-const STALLED_SIGNALS = ["vehicle_cause", "assistance_rendered", "entry_point", "driver_gender"];
-const MOTORCYCLE_SIGNALS = ["cause_of_accident", "type_of_accident", "rider"];
-const EMISSION_SIGNALS = ["co2_grams", "co_grams", "no2_grams", "pm25_grams", "pm10_grams", "methodology_tier"];
-const EMISSION_AQI_SIGNALS = ["aqi", "co", "no2", "o3", "so2", "pm2_5", "pm10"];
+export const TRAFFIC_SIGNALS = ["toll_plaza", "plaza", "vehicle_class", "direction", "h00", "h01", "h02", "h03"];
+export const ROAD_CRASH_SIGNALS = ["cause_of_accident", "type_of_accident", "no_of_vehicles_involved", "injuries_male", "fatalities_male"];
+export const STALLED_SIGNALS = ["vehicle_cause", "assistance_rendered", "entry_point", "driver_gender"];
+export const MOTORCYCLE_SIGNALS = ["cause_of_accident", "type_of_accident", "rider"];
+export const EMISSION_SIGNALS = ["co2_grams", "co_grams", "no2_grams", "pm25_grams", "pm10_grams", "methodology_tier"];
+export const EMISSION_AQI_SIGNALS = ["aqi", "co", "no2", "o3", "so2", "pm2_5", "pm10"];
 // Header normalization lowercases and strips separators but does NOT split
 // camelCase, so "EventNumber"/"StartKM"/"TypeOfEvent" arrive as a single
 // run-together token ("eventnumber"/"startkm"/"typeofevent") — these signals
 // are written against that exact normalized form, not a guessed snake_case.
-const ACCIDENT_DATA_SIGNALS = ["typeofevent", "numberofinjured", "numberoffatality", "blockagecleared", "sitecleared", "damagetoproperty"];
-const BREAKDOWN_DATA_SIGNALS = ["sloop", "platenumber", "vehicleclass", "troubledescription", "deployments", "typeofvehicle"];
+export const ACCIDENT_DATA_SIGNALS = ["typeofevent", "numberofinjured", "numberoffatality", "blockagecleared", "sitecleared", "damagetoproperty"];
+export const BREAKDOWN_DATA_SIGNALS = ["sloop", "platenumber", "vehicleclass", "troubledescription", "deployments", "typeofvehicle"];
+
+/* Hourly toll transactions, one row per entry plaza x exit plaza x hour: the
+ * layout of nlex_traffic_hourly_<year>.csv, which the traffic record is built
+ * from (toll-hourly.ts). Matched on every column the loader reads, not on a
+ * score: a file with half of them would aggregate into nonsense. The numeric
+ * plaza codes (exit_plaza, entry_plaza) are not needed, so not required. */
+export const TOLL_HOURLY_REQUIRED = ["date", "hour", "exit_plaza_name", "entry_plaza_name", "class_1", "class_2", "class_3", "total"];
+const TOLL_HOURLY_ALL = [...TOLL_HOURLY_REQUIRED, "exit_plaza", "entry_plaza"];
 
 function countMatches(headers: string[], signals: string[]): number {
   const headerSet = new Set(headers);
@@ -43,6 +52,15 @@ function countMatches(headers: string[], signals: string[]): number {
  */
 export function classifyDataset(headers: string[], sampleRows: RawRow[]): ClassifyResult {
   const h = headers.map((s) => s.toLowerCase().trim());
+
+  if (TOLL_HOURLY_REQUIRED.every((col) => h.includes(col))) {
+    const matched = countMatches(h, TOLL_HOURLY_ALL);
+    return {
+      type: "toll_hourly",
+      confidence: matched / TOLL_HOURLY_ALL.length,
+      reason: `Detected 'toll_hourly': hourly toll transactions by entry and exit plaza (the nlex_traffic_hourly layout), ${matched}/${TOLL_HOURLY_ALL.length} columns.`,
+    };
+  }
 
   // Score each type
   const scores: { type: DatasetType; score: number; total: number }[] = [

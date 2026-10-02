@@ -4,6 +4,7 @@ import Image from 'next/image';
 import { useState } from 'react';
 import { User, Lock, Eye, EyeOff, Activity, TrendingUp, TriangleAlert } from "lucide-react";
 import { supabase } from '../lib/supabase';
+import { logActivity } from "../lib/backend-auth";
 
 export default function Home() {
   const [showPassword, setShowPassword] = useState(false);
@@ -42,6 +43,9 @@ export default function Home() {
         return;
       }
 
+      // The audit log's sign-in entry, under the token just issued. Not awaited past a moment:
+      // the dashboard opens either way.
+      await Promise.race([logActivity({ type: "session.login" }, data.session?.access_token), new Promise((r) => setTimeout(r, 1500))]);
       goToDashboard();
     } catch (_err: unknown) {
       setErrorMessage("An unexpected error occurred. Please try again.");

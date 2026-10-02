@@ -70,7 +70,53 @@ function createPool(): Pool | null {
   return pool;
 }
 
-export const db = createPool();
+/* SELF-HEALING after a network blip.
+ *
+ * Twice on 2026-10-01 the link to RDS dropped for a while and, once it came
+ * back, this pool never did: every request waited the full 45 s for a
+ * connection and failed with "timeout exceeded when trying to connect", while a
+ * fresh client from the same machine connected in under half a second. Every
+ * dashboard read "Live data unavailable" until the server was restarted.
+ *
+ * So the pool is watched: three connect timeouts inside two minutes and it is
+ * replaced with a fresh one — what a restart did, without one. Callers keep
+ * importing `db` as before; it forwards to whichever pool is current. During a
+ * real outage this just retries with a new pool at most every couple of
+ * minutes, which costs nothing. */
+let current = createPool();
+let connectTimeouts: number[] = [];
+let replacing = false;
+
+function noteFailure(err: unknown): void {
+  if (!(err instanceof Error) || !/timeout exceeded when trying to connect/i.test(err.message)) return;
+  const now = Date.now();
+  connectTimeouts = connectTimeouts.filter((t) => now - t < 120_000).concat(now);
+  if (connectTimeouts.length < 3 || replacing || !current) return;
+  replacing = true;
+  connectTimeouts = [];
+  const stale = current;
+  console.warn("[db] connections keep timing out — replacing the connection pool");
+  current = createPool();
+  stale.end().catch(() => {}).finally(() => { replacing = false; });
+}
+
+export const db: Pool | null = current
+  ? new Proxy(current, {
+      get(_target, prop) {
+        const pool = current as any;
+        if (prop === "query") {
+          return (...args: any[]) => {
+            const result = pool.query(...args);
+            // Watch the outcome without taking it over: the caller still gets the rejection.
+            if (result && typeof result.catch === "function") result.catch(noteFailure);
+            return result;
+          };
+        }
+        const value = pool[prop];
+        return typeof value === "function" ? value.bind(pool) : value;
+      },
+    })
+  : null;
 
 /** Log connectivity once at boot so a bad credential is obvious immediately. */
 export async function verifyDbConnection(): Promise<boolean> {

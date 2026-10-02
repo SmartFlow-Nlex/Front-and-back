@@ -67,16 +67,19 @@ contains a password, key or machine path any more.** Never commit or upload
 
 | dashboard data | table(s) | script |
 |---|---|---|
-| hourly traffic (source of truth) | `gold.fact_traffic_hourly`, `gold.fact_traffic_hourly_origin` | `1_data_loading/traffic/build_fact.mjs` → `load_fact.js`, `build_origin.mjs` → `load_origin.js` |
+| hourly traffic (source of truth) | `gold.fact_traffic_hourly`, `gold.fact_traffic_hourly_origin` | 2022–2025: `1_data_loading/traffic/build_fact.mjs` → `load_fact.js`, `build_origin.mjs` → `load_origin.js`. 2026: uploaded on the dashboard's Data Management page (`toll_hourly`, `Back-End/src/etl/toll-hourly.ts`), which replaces only the days in the file and also extends the daily series and `gold.fact_emissions_hourly`. The record ends on `RECORD_END` (2026-06-30, the end of the incident and emissions records); rows after it are held back, so move that date when the record is meant to grow. **Re-running `load_fact.js` or `load_origin.js` drops every year they do not read, 2026 included: upload the 2026 file again afterwards.** |
 | Descriptive traffic tab | `public.nlex_traffic_volume` (materialized view) | `1_data_loading/traffic/rebuild_descriptive.js` |
 | exit km-posts, segments | `gold.exit_km_post`, `gold.exit_segment_km` | `2_reference_tables/build_km_table.js`, `build_emissions.js` |
 | hourly emissions | `gold.fact_emissions_hourly` | `2_reference_tables/build_emissions.js` |
 | volume forecast + metrics | `gold.ml_predictive_volume`, `gold.ml_model_metrics` (`Total Traffic`) | `3_training_testing/traffic_volume/retrain_honest.py` |
 | volume 90-day future + horizon accuracy | `gold.ml_predictive_volume`, `gold.ml_horizon_accuracy` | `3_training_testing/traffic_volume/extend_future_volume.py` |
 | congestion map | `gold.ml_predictive_congestion`, `gold.ml_congestion_horizon_accuracy`, metrics `Congestion` | `3_training_testing/congestion/train_congestion_horizon.py` (see note below) |
-| CO₂ forecast | `gold.ml_predictive_emissions`, metrics `Corridor CO2` | `3_training_testing/emissions/train_emissions.py` |
+| CO₂ forecast | `gold.ml_predictive_emissions`, metrics `Corridor CO2` | `3_training_testing/emissions/train_emissions.py`. Candidates: GBR, Polynomial, LSTM and **Derived** (volume Prophet × CO₂ per vehicle by weekday), all scored by the served day-by-day procedure since 2026-10-02 (before, GBR/Polynomial saw each window's actual lags, so their holdout was a next-day score). `4_studies_audits/co2_derived_forecast_study.py` is the read-only comparison that prompted it. |
 | event surge | `gold.ml_event_surge_forecast`; metrics `Event Surge` | `3_training_testing/event_surge/build_event_surge.py`; `eval_event_surge.py` |
 | incident forecast, severity, spatial risk, weather-speed | `public.ml_predictive_incidents`, `public.ml_daily_actuals`, `public.ml_training_metadata`, `gold.ml_incident_*`, `gold.ml_weather_speed_*` | `Back-End/incident_model_scripts/` (stays there: the incident services and the clearance panel refer to that path) |
+| uploads on the Data Management page | every layout's bronze table, then its silver table (or the gold traffic record) | `Back-End/src/etl/`: one transaction per upload; rows already loaded are skipped by their natural key; dated record rows after `RECORD_END` (2026-06-30) are held back; "Check only" runs it all and rolls back. **No need to re-run the medallion SQL after an upload any more** — `publish.ts` applies the same silver rules to the rows it wrote. |
+| every model's holdout metrics, in one place | `gold.model_evaluation` (a read-only view over the rows above: metric, strongest baseline, holdout window) | `Back-End/scripts/medallion/11-gold-model-evaluation.sql`; re-run it only if a trainer changes what it writes |
+| weekly retrain record (Data Management page) | `gold.ml_batch_runs`, `gold.ml_batch_watermarks`, last backups in schema `ml_backup` | `3_training_testing/weekly_retrain/weekly_retrain.py`, every Sunday 22:00 (see Open item 1) |
 
 **The congestion trainer is Kiarra's Sep 11 version.**
 - It is the Sep 8 script plus short-lag features (`lag1`–`lag6`, 6h and 24h
@@ -129,20 +132,46 @@ Each step depends on the ones above it.
 
 ## Open items — read before re-running
 
-1. **The volume forecast still has the weather leak in the database.**
-   - The bug: `retrain_honest.py` scored Prophet, SARIMAX and LSTM using the
-     *observed* weather of the days being forecast.
-   - The code is fixed. The forecast window now uses day-of-year climatology
-     from the training data only, the same fix as emissions.
-   - **It has not been re-run.** The volume metrics shown today come from the
-     old code and are slightly optimistic.
-   - To refresh:
-     1. `python retrain_honest.py`
-     2. `SPLIT=90_10 python retrain_honest.py`
-     3. `python extend_future_volume.py`
-2. **The congestion forecast goes stale.** It covers the 12 hours after the
-   latest Waze data, and nothing schedules `train_congestion_horizon.py`. The
-   card marks it expired once `base_ts` is more than a day old.
+1. **Retraining is a weekly batch, every Sunday at 22:00.** This is the
+   schedule agreed with the adviser. Uploads never retrain anything; the next
+   Sunday batch picks them up. `3_training_testing/weekly_retrain/weekly_retrain.py`
+   handles each model group in turn:
+   - It checks whether the group's input tables changed since it was last
+     trained, by row count, latest date and a column total. Groups with no new
+     data are skipped.
+   - It backs the group's outputs up to `ml_backup`.
+   - It clears the prediction caches: they are keyed on row count and last
+     date only, so a corrected upload would otherwise reuse old results.
+   - It runs the trainers **one at a time**, retrying a failed trainer once.
+     Two at once ran this machine out of memory.
+   - It tests the result (Gate 5): every trainer finished and wrote results;
+     no negative or implausible forecasts; and per target, the champion still
+     beats its baseline, MASE stays < 1 where it was, and the main metric is
+     not more than 25% worse (or 0.05 lower for scores).
+   - If the group fails, it restores last week's outputs.
+
+   Commands, from `3_training_testing/weekly_retrain/`:
+   - Register the Sunday task once: `powershell -ExecutionPolicy Bypass -File register_weekly_task.ps1`
+   - Read-only preview: `python weekly_retrain.py --plan`
+   - Run now: `python weekly_retrain.py`, adding `--force` to retrain unchanged groups and `--only volume,emissions` to limit it.
+   - Undo the latest retrain of a group: `python weekly_retrain.py --restore <group>`.
+
+   What it cannot do on this PC:
+   - Windows Application Control blocks `torch`'s DLLs, so the incident
+     hotspot (`train_incident_spatial_models.py`) and weather-speed models are
+     reported as "cannot run here" and keep their current results.
+   - The breakdown-response model (`gold.ml_breakdown_response_*`, written
+     2026-09-30) has no trainer in this repo, so it is not in the batch.
+
+   Fixed on 2026-10-02 while retraining: `extend_future_volume.py` read the
+   models' `(forecast, fitted)` pair as one array; `train_fleet_mix.py` read
+   credentials from a path that no longer exists.
+2. **The congestion forecast runs hourly, from outside this repo.** The
+   Scheduled Task "SmartFlow congestion refresh" (since 2026-09-17) runs
+   `Front-and-back-ForDSU-Push-Kia/All_Scripts/Predictive_Modeling/train_congestion_horizon.py --fast`.
+   That copy has 660 lines; `3_training_testing/congestion/` has a 460-line
+   one, so the two differ. It only runs while this PC is on. The card marks the
+   forecast expired once `base_ts` is more than a day old.
 3. **The source files are named `synthetic`.** This applies to
    `synthetic-nlex-data/`, `synthetic_data_varying/` and `*_synthetic.csv`.
    Confirm whether they are real client exports before describing them as real

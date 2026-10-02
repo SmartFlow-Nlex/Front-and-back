@@ -1,5 +1,5 @@
 import { Router } from "express";
-import { getRealtimeTraffic, getIncidents, getForecast, getForecastHourly, getVolumeAdt, getTrafficAnalytics , getWeatherEvidence} from "../controllers/traffic.controller.js";
+import { getRealtimeTraffic, getIncidents, getForecast, getForecastHourly, getVolumeAdt, getTrafficAnalytics , getWeatherEvidence, getTrafficPrescriptiveHandler} from "../controllers/traffic.controller.js";
 import { asyncHandler } from "../middleware/error.middleware.js";
 
 const router = Router();
@@ -11,5 +11,6 @@ router.get("/forecast", asyncHandler(getForecast));
 router.get("/weather-evidence", asyncHandler(getWeatherEvidence));
 router.get("/forecast/hourly", asyncHandler(getForecastHourly));
 router.get("/volume-adt", asyncHandler(getVolumeAdt));
+router.get("/prescriptive", asyncHandler(getTrafficPrescriptiveHandler));
 
 export default router;

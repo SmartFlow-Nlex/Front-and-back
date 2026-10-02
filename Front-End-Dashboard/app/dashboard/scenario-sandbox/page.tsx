@@ -15,6 +15,7 @@ import {
 } from "./simulation";
 import {
   applyAtBoundary,
+  canvasMarks,
   describeBoundary,
   describeOwner,
   nextBoundaryAfter,
@@ -28,6 +29,8 @@ import {
   type ScenarioEvent,
 } from "./scenarios/adapter";
 import ScenarioPanel, { TimeField, type DirectionScenarioData, type SkipPlan } from "./components/ScenarioPanel";
+import type { PickResult, SiteOption } from "./components/placement";
+import { engineIndexToOperatorLane } from "./scenarios/assumptions";
 import DirectionPill, { DIRECTION_NAME } from "./components/DirectionPill";
 import { combineBaselines, combineMetrics } from "./bothMetrics";
 import { drawBorrowedLanes, drawMovableBarrier, drawScenes, drawWater, drawWeather, hasSceneArt, type SceneGeometry } from "./sceneArt";
@@ -36,7 +39,27 @@ import { borrowedLanes, defaultStretch, planStretch, planZipper, REALLOCATION_NA
 import { PAINT_WHITE, isMotorcycle, motorcyclePaintFor, paintFor, trailerPaintFor, type Paint } from "./vehiclePaint";
 import { drawMotorcycle } from "./motorcycleArt";
 import { useDirectionSim, type DirectionApi, type SharedRoadInputs } from "./useDirectionSim";
+import { getRecommendation } from "./recommendation";
 import { ReplayBuffer } from "./replay";
+import {
+  FACILITY_LABEL_PX,
+  GUTTER_LANE_PX_MAX,
+  gutterLanePx,
+  hasBarrier,
+  drawFacilityGround,
+  drawFacilityOverlay,
+  drawFacilityVehicles,
+  baseLengthPx,
+  drawnLengthPx,
+  drawnWidthPx,
+  spriteWidthScale,
+  facilityDepth,
+  facilityView,
+  type FacGeom,
+  type FacilityView,
+} from "./facilityArt";
+import { DRAW_W_FRAC, FAC_LANE, specDepth } from "./facilities";
+import type { CorridorPlace } from "./facilityLayout";
 
 const BACKEND = process.env.NEXT_PUBLIC_BACKEND_URL ?? "http://localhost:4000";
 
@@ -108,6 +131,11 @@ const CAR_M = 4.5;
 const RAMP_GUTTER_PX = 46; // room above/below the road for ramps and their tags
 const AXIS_H = 22; // the km scale, printed beside the carriageway
 
+/** Least height a carriageway's gutter needs at the natural lane size: its plazas, or its point ramps. */
+function gutterFloorPx(facDepth: number, anyExits: boolean, barrier = false): number {
+  return facDepth > 0 ? facDepth * (barrier ? LANE_PX : Math.min(LANE_PX, GUTTER_LANE_PX_MAX)) + FACILITY_LABEL_PX : anyExits ? RAMP_GUTTER_PX : 0;
+}
+
 /**
  * Both mode's median: the shared km axis (AXIS_H) plus a visible barrier
  * stripe (18px — thick enough to read as a physical divider, not a stray
@@ -148,19 +176,28 @@ function roadLayout(opts: {
   segLenM: number;
   exitCount: number;
   maxLaneH: number;
-  /** Northbound draws its ramps above the road, southbound below. */
+  /** Which side the ramps hang off: the side of the OUTER lane, since that is the lane they leave from. */
   rampsAbove: boolean;
+  /** How far the toll plazas and service areas reach past the road edge, in lane units (facilityDepth). */
+  facDepth?: number;
+  /** A barrier plaza in view keeps the road's scale in the gutter — see gutterLanePx. */
+  facBarrier?: boolean;
 }) {
   const { cssW, cssH, lanes, segLenM, exitCount, maxLaneH, rampsAbove } = opts;
-  const rampGutter = exitCount > 0 ? RAMP_GUTTER_PX : 0;
+  const depth = Math.max(0, opts.facDepth ?? 0);
+  const barrier = !!opts.facBarrier;
+  /* The gutter holds the plazas themselves now, so it is measured in lanes at
+   * the gutter's own scale, plus a band for their labels — solved together
+   * with the lane height, so the road and the plazas beside it share the
+   * canvas instead of the plazas eating the road. */
+  const fixed = depth > 0 ? FACILITY_LABEL_PX : exitCount > 0 ? RAMP_GUTTER_PX : 0;
   const mToPx = segLenM > 0 ? cssW / segLenM : 1;
   /* Lanes fill whatever is left once the ramp gutter and the km scale have
    * taken theirs. Subtracting AXIS_H here is the part worth noticing: the
    * scale used to be printed inside the bottom lane, over the traffic. */
-  const laneH = Math.max(
-    6,
-    Math.min((cssH - CANVAS_PAD * 2 - rampGutter - AXIS_H) / lanes, maxLaneH),
-  );
+  const laneH = solveLaneH(cssH - CANVAS_PAD * 2 - fixed - AXIS_H, maxLaneH, (lh) => lh * lanes + depth * gutterLanePx(lh, barrier));
+  const gutterPx = gutterLanePx(laneH, barrier);
+  const rampGutter = Math.max(fixed + depth * gutterPx, exitCount > 0 ? RAMP_GUTTER_PX : 0);
   const roadH = laneH * lanes;
   // Ramp gutter on the ramp side, km scale on the other; the road centres in
   // whatever is left over and encroaches on neither.
@@ -168,7 +205,21 @@ function roadLayout(opts: {
   const spaceBelow = CANVAS_PAD + (rampsAbove ? AXIS_H : rampGutter);
   const roadTop =
     spaceAbove + Math.max(0, (cssH - spaceAbove - spaceBelow - roadH) / 2);
-  return { rampGutter, laneH, roadH, roadTop, mToPx };
+  return { rampGutter, gutterPx, laneH, roadH, roadTop, mToPx };
+}
+
+/** The tallest lane height (6..max) whose total drawn height fits `budget`. `used` grows with the lane height. */
+function solveLaneH(budget: number, maxLaneH: number, used: (laneH: number) => number): number {
+  if (used(maxLaneH) <= budget) return maxLaneH;
+  let lo = 6;
+  let hi = maxLaneH;
+  if (used(lo) >= budget) return lo;
+  for (let i = 0; i < 30; i++) {
+    const mid = (lo + hi) / 2;
+    if (used(mid) <= budget) lo = mid;
+    else hi = mid;
+  }
+  return lo;
 }
 
 /**
@@ -194,31 +245,43 @@ function dualRoadLayout(opts: {
   segLenM: number;
   exitCount: number;
   maxLaneH: number;
+  /** Each carriageway's plazas and service areas, in lane units past its outer edge. */
+  facDepthNB?: number;
+  facDepthSB?: number;
+  facBarrierNB?: boolean;
+  facBarrierSB?: boolean;
 }) {
   const { cssW, cssH, lanesNB, lanesSB, segLenM, exitCount, maxLaneH } = opts;
+  const dNB = Math.max(0, opts.facDepthNB ?? 0);
+  const dSB = Math.max(0, opts.facDepthSB ?? 0);
+  const bNB = !!opts.facBarrierNB;
+  const bSB = !!opts.facBarrierSB;
   // EXITS is one corridor-wide list shared by both directions (SharedRoadInputs),
-  // so whether the gutter is needed at all is the same question for NB and SB —
-  // there is no case where one carriageway has ramps in view and the other does
-  // not, for the same km window.
-  const rampGutter = exitCount > 0 ? RAMP_GUTTER_PX : 0;
+  // so whether a point-ramp gutter is needed is the same question for NB and SB.
+  // The plazas are not: each carriageway's gutter holds its own, and a window
+  // with a big barrier plaza on one side need not widen the other.
+  const fixedOf = (d: number) => (d > 0 ? FACILITY_LABEL_PX : exitCount > 0 ? RAMP_GUTTER_PX : 0);
   const mToPx = segLenM > 0 ? cssW / segLenM : 1;
   const totalLanes = Math.max(1, lanesNB + lanesSB);
-  const laneH = Math.max(
-    6,
-    Math.min(
-      (cssH - CANVAS_PAD * 2 - rampGutter * 2 - MEDIAN_GUTTER_PX) / totalLanes,
-      maxLaneH,
-    ),
+  const laneH = solveLaneH(
+    cssH - CANVAS_PAD * 2 - fixedOf(dNB) - fixedOf(dSB) - MEDIAN_GUTTER_PX,
+    maxLaneH,
+    (lh) => lh * totalLanes + dNB * gutterLanePx(lh, bNB) + dSB * gutterLanePx(lh, bSB),
   );
+  const gutterPxNB = gutterLanePx(laneH, bNB);
+  const gutterPxSB = gutterLanePx(laneH, bSB);
+  const gutterNB = Math.max(fixedOf(dNB) + dNB * gutterPxNB, exitCount > 0 ? RAMP_GUTTER_PX : 0);
+  const gutterSB = Math.max(fixedOf(dSB) + dSB * gutterPxSB, exitCount > 0 ? RAMP_GUTTER_PX : 0);
   const nbRoadH = laneH * lanesNB;
   const sbRoadH = laneH * lanesSB;
   // Centre the whole block (ramp gutters, both roads, median) when lanes hit maxLaneH before
   // the canvas is used up — the single-carriageway roadLayout() does the same.
-  const usedH = rampGutter * 2 + sbRoadH + MEDIAN_GUTTER_PX + nbRoadH;
-  const sbRoadTop = CANVAS_PAD + rampGutter + Math.max(0, (cssH - CANVAS_PAD * 2 - usedH) / 2);
+  const usedH = gutterNB + gutterSB + sbRoadH + MEDIAN_GUTTER_PX + nbRoadH;
+  const sbRoadTop = CANVAS_PAD + gutterSB + Math.max(0, (cssH - CANVAS_PAD * 2 - usedH) / 2);
   const medianTop = sbRoadTop + sbRoadH;
   const nbRoadTop = medianTop + MEDIAN_GUTTER_PX;
-  return { rampGutter, laneH, nbRoadH, sbRoadH, nbRoadTop, medianTop, sbRoadTop, mToPx };
+  const rampGutter = Math.max(gutterNB, gutterSB);
+  return { rampGutter, gutterNB, gutterSB, gutterPxNB, gutterPxSB, laneH, nbRoadH, sbRoadH, nbRoadTop, medianTop, sbRoadTop, mToPx };
 }
 
 /**
@@ -518,6 +581,32 @@ export default function AiSandboxPage() {
     setSegToKm(Number(b.toFixed(3)));
   };
 
+  /* Jump the window to a toll plaza, barrier or service area, widening the
+     route to hold it if it lies outside: an operator asking "what happens at
+     the Bocaue barrier" should not have to work out which origin and
+     destination contain it first. */
+  const [placesOpen, setPlacesOpen] = useState(false);
+  const framePlace = (pl: CorridorPlace, dir: Direction) => {
+    const w = pl.frame;
+    if (w.fromKm < routeFromKm || w.toKm > routeToKm) {
+      let lo = 0;
+      for (let i = 0; i < EXITS.length; i++) if (EXITS[i].km <= w.fromKm) lo = i;
+      let hi = EXITS.length - 1;
+      for (let i = EXITS.length - 1; i >= 0; i--) if (EXITS[i].km >= w.toKm) hi = i;
+      const nextOrigin = Math.min(lo, Math.max(0, hi - 1));
+      const nextDestination = Math.max(hi, lo + 1);
+      if (nextOrigin !== origin || nextDestination !== destination) {
+        // The route effect opens this window once the new route is in.
+        pendingFrameRef.current = w;
+        setOrigin(nextOrigin);
+        setDestination(nextDestination);
+      }
+    }
+    setSegFromKm(w.fromKm);
+    setSegToKm(w.toKm);
+    if (view === "Both") setFocusedDirection(dir);
+  };
+
   /** Fit the whole origin -> destination route, as far as it can be drawn. */
   const fitRoute = () => {
     setSegFromKm(routeFromKm);
@@ -536,10 +625,16 @@ export default function AiSandboxPage() {
   /** Longest span that still draws legibly at the canvas's current width. */
   const maxLegibleM = Math.round((canvasW * CAR_M) / MIN_CAR_PX);
 
+  /* A window to open once the route has changed — set by jumping to a plaza
+     that lies outside the current route (framePlace). */
+  const pendingFrameRef = useRef<{ fromKm: number; toKm: number } | null>(null);
   useEffect(() => {
-    // A km range from the previous route may not exist on the new one.
-    setSegFromKm(null);
-    setSegToKm(null);
+    // A km range from the previous route may not exist on the new one — unless
+    // the route was changed precisely to hold one.
+    const pending = pendingFrameRef.current;
+    pendingFrameRef.current = null;
+    setSegFromKm(pending ? pending.fromKm : null);
+    setSegToKm(pending ? pending.toKm : null);
   }, [origin, destination]);
 
   /** The exit nearest the middle of the span, so the canvas can name the place. */
@@ -565,6 +660,15 @@ export default function AiSandboxPage() {
   // Expanded there is no card to respect, and capping it only left the
   // carriageway floating in the middle of an empty screen.
   const maxLaneRef = useRef(LANE_PX);
+  /** The plaza or service area the scenario panel is placing an event at, outlined on the road. */
+  const facilityHighlightRef = useRef<string | null>(null);
+  /* "Pick on road" from the scenario panel: the next click on the canvas is a
+     place for an event, handed back to the panel instead of placing anything. */
+  const pickRef = useRef<{ direction: Direction; done: (p: PickResult) => void } | null>(null);
+  const [pickArmed, setPickArmed] = useState(false);
+  const setHighlight = useCallback((id: string | null) => {
+    facilityHighlightRef.current = id;
+  }, []);
   maxLaneRef.current = expanded ? 240 : DOCKED_LANE_MAX;
   // Exits that fall inside the drawn span, so the road can name the places the
   // operator is looking at rather than only its km-posts.
@@ -772,6 +876,13 @@ export default function AiSandboxPage() {
   // view instant (nothing to (re)build) rather than mount/unmount churn.
   const nb = useDirectionSim("NB", sharedRoadInputs);
   const sb = useDirectionSim("SB", sharedRoadInputs);
+  /* How far each carriageway's plazas reach past its edge, in lanes. The docked
+     canvas grows by that much rather than squeezing the lanes to make room —
+     a plaza is worth drawing, but not at the price of the road beside it. */
+  const facDepthNB = useMemo(() => nb.facilities.reduce((m, f) => Math.max(m, specDepth(f, nb.laneCount)), 0), [nb.facilities, nb.laneCount]);
+  const facDepthSB = useMemo(() => sb.facilities.reduce((m, f) => Math.max(m, specDepth(f, sb.laneCount)), 0), [sb.facilities, sb.laneCount]);
+  const facDepthOf = (d: Direction) => (d === "NB" ? facDepthNB : facDepthSB);
+  const facBarrierOf = (d: Direction) => (d === "NB" ? nb : sb).facilities.some((f) => f.kind === "barrier");
   const byDirection: Record<Direction, DirectionApi> = { NB: nb, SB: sb };
   /** The carriageway the single-road things act on (see focusedDirection). NB-only/SB-only: this IS the (only) active direction. */
   const focused = byDirection[focusDirection];
@@ -805,7 +916,7 @@ export default function AiSandboxPage() {
     if (kind === "incident") d.setPlacingIncident(true);
     else d.setPlacingClosure(true);
   };
-  const placingArmed = activeDirections.some((dn) => byDirection[dn].placingIncident || byDirection[dn].placingClosure);
+  const placingArmed = pickArmed || activeDirections.some((dn) => byDirection[dn].placingIncident || byDirection[dn].placingClosure);
   placingArmedRef.current = placingArmed;
 
   /* ── Lane reallocation ────────────────────────────────────────────────────
@@ -949,6 +1060,7 @@ export default function AiSandboxPage() {
         inflowVehPerHour: focused.inflow,
         classProfile: classProfile,
         ramps: focused.ramps,
+        facilities: focused.facilities,
         warmupS: WARMUP_S,
       },
       // The interventions AS CURRENTLY SET, not a clean road: the operator is
@@ -1070,6 +1182,7 @@ export default function AiSandboxPage() {
         const simSB = sb.simRef.current;
         if (simNB && simSB) {
           const dayFraction = daylightFraction(clockStartMinRef.current + (simNB.time - WARMUP_S) / 60);
+          const alpha = running ? simAccRef.current : 0;
           renderBoth(
             ctx, canvas, simNB, simSB,
             { fromKm: marksRef.current.fromKm, toKm: marksRef.current.toKm },
@@ -1079,7 +1192,10 @@ export default function AiSandboxPage() {
             // Whatever is left in the accumulator is a fraction of a step the
             // engine has not applied yet; drawing it keeps the traffic moving
             // on frames where no step ran.
-            running ? simAccRef.current : 0,
+            alpha,
+            simNB.fac.list.length > 0 ? facilityView(simNB.fac, simNB.facilityStats(), alpha) : null,
+            simSB.fac.list.length > 0 ? facilityView(simSB.fac, simSB.facilityStats(), alpha) : null,
+            facilityHighlightRef.current,
           );
           paintVehicleProbe();
         }
@@ -1096,7 +1212,15 @@ export default function AiSandboxPage() {
             : liveSim;
         if (focusedSim) {
           const dayFraction = daylightFraction(clockStartMinRef.current + (focusedSim.time - WARMUP_S) / 60);
-          render(ctx, canvas, focusedSim as NonNullable<typeof liveSim>, locationRef.current, marksRef.current, maxLaneRef.current, exitsRef.current, scenarioOverlayRef.current[focusDirection] ?? null, animClockRef.current, dayFraction, ri !== null ? 0 : running ? simAccRef.current : 0);
+          const alpha = ri !== null ? 0 : running ? simAccRef.current : 0;
+          // Under review the plazas come from the recording too, drawn on the live geometry.
+          const facView =
+            liveSim && liveSim.fac.list.length > 0
+              ? ri !== null
+                ? replayRef.current[focusDirection].facilityViewAt(ri, liveSim.fac.list)
+                : facilityView(liveSim.fac, liveSim.facilityStats(), alpha)
+              : null;
+          render(ctx, canvas, focusedSim as NonNullable<typeof liveSim>, locationRef.current, marksRef.current, maxLaneRef.current, exitsRef.current, scenarioOverlayRef.current[focusDirection] ?? null, animClockRef.current, dayFraction, alpha, facView, facilityHighlightRef.current);
           paintVehicleProbe();
         }
       }
@@ -1140,7 +1264,96 @@ export default function AiSandboxPage() {
    * first click was on, and the second click only supplies the end km, which is the same km on either
    * carriageway (they share one axis) — so it completes the stretch wherever on either road it lands,
    * instead of throwing away the start because the end went over the median-side lane. */
+  /* Where a click lands, as an event place: a lane and km on either
+     carriageway, or a booth, pump or ramp of a plaza or service area. The
+     inverse of the drawing — the road at the road's scale, the gutter at its
+     own (gutterLanePx) — so the place clicked is the place drawn there. */
+  const resolvePick = (e: React.MouseEvent<HTMLCanvasElement>, want: Direction): PickResult | null => {
+    const canvas = canvasRef.current;
+    if (!canvas) return null;
+    const rect = canvas.getBoundingClientRect();
+    const cssW = rect.width;
+    const cssH = rect.height;
+    const cx = e.clientX - rect.left;
+    const cy = e.clientY - rect.top;
+    type Geo = { dir: Direction; roadTop: number; roadH: number; laneH: number; gutterPx: number; gutter: number; reverse: boolean };
+    const geos: Geo[] = [];
+    if (both) {
+      const simNB = nb.simRef.current;
+      const simSB = sb.simRef.current;
+      if (!simNB || !simSB) return null;
+      const L = dualRoadLayout({
+        cssW, cssH, lanesNB: simNB.cfg.laneCount, lanesSB: simSB.cfg.laneCount, segLenM: simNB.cfg.length,
+        exitCount: exitsRef.current.length, maxLaneH: maxLaneRef.current,
+        facDepthNB: facilityDepth(simNB.fac.list), facDepthSB: facilityDepth(simSB.fac.list),
+        facBarrierNB: hasBarrier(simNB.fac.list), facBarrierSB: hasBarrier(simSB.fac.list),
+      });
+      geos.push({ dir: "NB", roadTop: L.nbRoadTop, roadH: L.nbRoadH, laneH: L.laneH, gutterPx: L.gutterPxNB, gutter: L.gutterNB, reverse: false });
+      geos.push({ dir: "SB", roadTop: L.sbRoadTop, roadH: L.sbRoadH, laneH: L.laneH, gutterPx: L.gutterPxSB, gutter: L.gutterSB, reverse: true });
+    } else {
+      const sim0 = byDirection[focusDirection].simRef.current;
+      if (!sim0) return null;
+      const L = roadLayout({
+        cssW, cssH, lanes: sim0.cfg.laneCount, segLenM: sim0.cfg.length, exitCount: exitsRef.current.length,
+        maxLaneH: maxLaneRef.current, rampsAbove: false,
+        facDepth: facilityDepth(sim0.fac.list), facBarrier: hasBarrier(sim0.fac.list),
+      });
+      geos.push({ dir: focusDirection, roadTop: L.roadTop, roadH: L.roadH, laneH: L.laneH, gutterPx: L.gutterPx, gutter: L.rampGutter, reverse: false });
+    }
+    // The carriageway (with its gutter) the click is on.
+    const g = geos.find((q) => {
+      const lo = q.reverse ? q.roadTop - q.gutter : q.roadTop;
+      const hi = q.reverse ? q.roadTop + q.roadH : q.roadTop + q.roadH + q.gutter;
+      return cy >= lo && cy <= hi;
+    });
+    if (!g || g.dir !== want) return null;
+    const sim = byDirection[g.dir].simRef.current;
+    if (!sim) return null;
+    const lanes = sim.cfg.laneCount;
+    const along = g.dir === "SB" ? 1 - cx / cssW : cx / cssW;
+    const u = Math.max(0, Math.min(sim.cfg.length, along * sim.cfg.length));
+    const km = byDirection[g.dir].kmAt(u);
+    // Across: lane units outward from the outer lane's centre.
+    const out = g.reverse ? -1 : 1;
+    const outerCentreY = laneSlotTop(lanes - 1, g.roadTop, g.laneH, lanes, g.reverse) + g.laneH / 2;
+    const edgeY = g.reverse ? g.roadTop : g.roadTop + g.roadH;
+    const dOut = (cy - outerCentreY) * out;
+    const w = dOut <= 0.5 * g.laneH ? dOut / g.laneH : 0.5 + ((cy - edgeY) * out) / Math.max(1, g.gutterPx);
+    for (const f of sim.fac.list) {
+      if (u < f.u0 - 4 || u > f.u1 + 4) continue;
+      const onRoad = w <= 0.5;
+      if (onRoad && !f.laneEntries) continue; // a ramp plaza is off the road; a barrier is on it
+      if (!onRoad && w > f.wMax + 0.3) continue;
+      const stations = f.stations;
+      const name = f.spec.name;
+      if (stations.length === 0) return { direction: g.dir, km, lane: null, site: { facilityId: f.spec.id, facilityName: name, kind: "approach", stations: [] } };
+      const stopU = stations[0].u;
+      // Upstream of the booths' queuing area is the approach; anywhere else, the nearest booth or pump across.
+      if (u < stopU - 70) return { direction: g.dir, km, lane: null, site: { facilityId: f.spec.id, facilityName: name, kind: "approach", stations: [] } };
+      let best = stations[0];
+      for (const st of stations) if (Math.abs(st.w - w) < Math.abs(best.w - w)) best = st;
+      return { direction: g.dir, km, lane: null, site: { facilityId: f.spec.id, facilityName: name, kind: best.kind, stations: [best.index] } };
+    }
+    if (w > 0.5) return null; // the verge, not a place
+    const laneFloat = lanes - 1 + w;
+    const engineLane = Math.max(0, Math.min(lanes - 1, Math.round(laneFloat)));
+    return { direction: g.dir, km, lane: engineIndexToOperatorLane(engineLane, lanes), site: null };
+  };
+
   const handleCanvasClick = (e: React.MouseEvent<HTMLCanvasElement>) => {
+    const armedPick = pickRef.current;
+    if (armedPick) {
+      const res = resolvePick(e, armedPick.direction);
+      if (res) {
+        pickRef.current = null;
+        setPickArmed(false);
+        setPlaceNote(null);
+        armedPick.done(res);
+      } else {
+        setPlaceNote(`Click a lane, a booth or a pump on the ${armedPick.direction === "NB" ? "northbound" : "southbound"} carriageway.`);
+      }
+      return;
+    }
     const armed = activeDirections.find((dn) => byDirection[dn].placingIncident || byDirection[dn].placingClosure);
     if (armed === undefined) {
       pinVehicleAt(e);
@@ -1172,6 +1385,10 @@ export default function AiSandboxPage() {
         segLenM: simNB.cfg.length,
         exitCount: exitsRef.current.length,
         maxLaneH: maxLaneRef.current,
+        facDepthNB: facilityDepth(simNB.fac.list),
+        facDepthSB: facilityDepth(simSB.fac.list),
+        facBarrierNB: hasBarrier(simNB.fac.list),
+        facBarrierSB: hasBarrier(simSB.fac.list),
       });
       const inNB = cy >= layout.nbRoadTop && cy <= layout.nbRoadTop + layout.nbRoadH;
       const inSB = cy >= layout.sbRoadTop && cy <= layout.sbRoadTop + layout.sbRoadH;
@@ -1200,7 +1417,9 @@ export default function AiSandboxPage() {
         segLenM: sim0.cfg.length,
         exitCount: exitsRef.current.length,
         maxLaneH: maxLaneRef.current,
-        rampsAbove: target === "NB",
+        rampsAbove: false,
+        facDepth: facilityDepth(sim0.fac.list),
+        facBarrier: hasBarrier(sim0.fac.list),
       });
       laneH = single.laneH;
       roadTop = single.roadTop;
@@ -1454,8 +1673,8 @@ export default function AiSandboxPage() {
   const laneOverridden = segmentLanes != null && focused.laneCount !== segmentLanes;
 
   const recommendations: Record<Direction, ReturnType<typeof getRecommendation>> = {
-    NB: getRecommendation(nb.metrics, nb.baseline, [...nb.eff.closedLanes], nb.effIncidentCount, nb.eff.speedLimitKmh),
-    SB: getRecommendation(sb.metrics, sb.baseline, [...sb.eff.closedLanes], sb.effIncidentCount, sb.eff.speedLimitKmh),
+    NB: getRecommendation(nb.metrics, nb.baseline, [...nb.eff.closedLanes], nb.effIncidentCount, nb.eff.speedLimitKmh, { inflow: nb.inflow, inflowFrom: nb.inflowFrom, anchor: nb.dataAnchor }),
+    SB: getRecommendation(sb.metrics, sb.baseline, [...sb.eff.closedLanes], sb.effIncidentCount, sb.eff.speedLimitKmh, { inflow: sb.inflow, inflowFrom: sb.inflowFrom, anchor: sb.dataAnchor }),
   };
   const recommendation = recommendations[focusDirection];
 
@@ -1503,6 +1722,15 @@ export default function AiSandboxPage() {
       skipPlan,
       onSkip: d.skipToNextPhase,
       onCancelSkip: d.cancelSkip,
+      sites: d.facilities.map((f): SiteOption => ({
+        id: f.id,
+        name: f.name,
+        kind: f.kind,
+        km: f.km ?? d.kmAt(f.x),
+        // Booth or pump count as built (a barrier is sized to its lanes), else as specified.
+        stations: d.simRef.current?.fac.get(f.id)?.stations.length ?? f.booths,
+        recordNames: f.recordNames ?? [],
+      })),
     };
   };
   const nbEvents = nb.scenarioEvents.length;
@@ -1762,42 +1990,6 @@ export default function AiSandboxPage() {
               <button className="btn-muted" onClick={resetEverything} title="Back to a clean start: scenarios, closures, speed limits, incidents, baselines and any lane reallocation are all cleared">
                 Reset
               </button>
-              {replayIndex !== null && (
-                <span className="sandbox-replay" style={{ display: "inline-flex", alignItems: "center", gap: 8, marginLeft: 10 }}>
-                  <button
-                    className="btn-muted"
-                    title="One frame back"
-                    onClick={() => setReplayIndex((i) => Math.max(0, (i ?? 0) - 1))}
-                  >
-                    ◀
-                  </button>
-                  <input
-                    type="range"
-                    min={0}
-                    max={Math.max(0, replayLen - 1)}
-                    value={replayIndex}
-                    onChange={(e) => setReplayIndex(Number(e.target.value))}
-                    style={{ width: 180 }}
-                    aria-label="Scrub through the recording"
-                  />
-                  <button
-                    className="btn-muted"
-                    title="One frame forward"
-                    onClick={() => setReplayIndex((i) => Math.min(replayLen - 1, (i ?? 0) + 1))}
-                  >
-                    ▶
-                  </button>
-                  <span style={{ fontSize: "0.72rem", color: "var(--text-muted)", fontVariantNumeric: "tabular-nums" }}>
-                    {(() => {
-                      const f = replayRef.current[focusDirection].frame(replayIndex);
-                      const last = replayRef.current[focusDirection].lastTime;
-                      if (!f || last === null) return "reviewing";
-                      const behind = last - f.time;
-                      return behind < 0.2 ? "at the latest frame" : `${behind.toFixed(1)}s behind live`;
-                    })()}
-                  </span>
-                </span>
-              )}
               {expanded && (
                 <button
                   className="btn-muted"
@@ -1817,6 +2009,61 @@ export default function AiSandboxPage() {
               </button>
             </div>
           </div>
+
+          {/* Replay gets its OWN row.
+              It was inline in the transport row, between Reset and Controls.
+              That row is already full — speeds, Pause, Replay, Reset, Controls,
+              Full screen — so adding a 180px slider and three more controls
+              made it collide with the buttons beside it and with the keyboard
+              hints drawn over the card in full screen. A control that appears
+              only sometimes must not have to fit in a row sized without it. */}
+          {replayIndex !== null && (
+            <div
+              style={{
+                display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap",
+                padding: "8px 12px", marginTop: 8,
+                border: "1px solid var(--border-default)",
+                borderLeft: "3px solid var(--brand-primary)",
+                borderRadius: 10, background: "var(--bg-surface-hover)",
+                position: "relative", zIndex: 3,
+              }}
+            >
+              <span style={{
+                fontSize: "0.62rem", fontWeight: 800, letterSpacing: "0.06em",
+                textTransform: "uppercase", color: "var(--brand-primary)", whiteSpace: "nowrap",
+              }}>
+                Reviewing
+              </span>
+              <button className="btn-muted" title="One frame back"
+                onClick={() => setReplayIndex((i) => Math.max(0, (i ?? 0) - 1))}>◀</button>
+              <input
+                type="range"
+                min={0}
+                max={Math.max(0, replayLen - 1)}
+                value={replayIndex}
+                onChange={(e) => setReplayIndex(Number(e.target.value))}
+                style={{ flex: "1 1 220px", minWidth: 160, maxWidth: 420, accentColor: "var(--brand-primary)" }}
+                aria-label="Scrub through the recording"
+              />
+              <button className="btn-muted" title="One frame forward"
+                onClick={() => setReplayIndex((i) => Math.min(replayLen - 1, (i ?? 0) + 1))}>▶</button>
+              <span style={{
+                fontSize: "0.72rem", color: "var(--text-secondary)",
+                fontVariantNumeric: "tabular-nums", whiteSpace: "nowrap",
+              }}>
+                {(() => {
+                  const f = replayRef.current[focusDirection].frame(replayIndex);
+                  const last = replayRef.current[focusDirection].lastTime;
+                  if (!f || last === null) return "reviewing";
+                  const behind = last - f.time;
+                  return behind < 0.2 ? "at the latest frame" : `${behind.toFixed(1)}s behind live`;
+                })()}
+              </span>
+              <button className="btn-primary" onClick={() => { setReplayIndex(null); setRunning(true); }}>
+                Back to live
+              </button>
+            </div>
+          )}
 
           {/* Docked, the Carriageway choice is the strip under the page header. Full screen covers
               that strip, so the same choice is drawn here, on the card, while it is open. */}
@@ -1888,9 +2135,12 @@ export default function AiSandboxPage() {
                       view === "Both"
                         ? (nb.laneCount + sb.laneCount) * LANE_PX +
                           MEDIAN_GUTTER_PX +
-                          (exitsRef.current.length > 0 ? RAMP_GUTTER_PX * 2 : 0) +
+                          gutterFloorPx(facDepthNB, exitsRef.current.length > 0, facBarrierOf("NB")) +
+                          gutterFloorPx(facDepthSB, exitsRef.current.length > 0, facBarrierOf("SB")) +
                           CANVAS_PAD * 2
-                        : focused.laneCount * LANE_PX + CANVAS_PAD * 2,
+                        : focused.laneCount * LANE_PX +
+                          (facDepthOf(focusDirection) > 0 ? gutterFloorPx(facDepthOf(focusDirection), false, facBarrierOf(focusDirection)) : 0) +
+                          CANVAS_PAD * 2,
                   }
             }
             onClick={handleCanvasClick}
@@ -2098,6 +2348,61 @@ export default function AiSandboxPage() {
           {/* The stretch under study, as km-posts. An operator asks about
               "km 3.5 to km 6"; the simulation is parameterised on length, so it
               models exactly that rather than a fixed sample. */}
+          {/* Toll plazas, barriers and service areas on this carriageway, the
+              whole corridor long. One click frames the window on the place. */}
+          <div className="sandbox-slider-group" data-places>
+            <button
+              onClick={() => setPlacesOpen((o) => !o)}
+              aria-expanded={placesOpen}
+              className="sandbox-slider-header"
+              style={{ width: "100%", background: "none", border: 0, padding: 0, cursor: "pointer" }}
+            >
+              <span className="sandbox-slider-label" style={{ display: "inline-flex", alignItems: "center", gap: 5 }}>
+                <svg width="9" height="9" viewBox="0 0 16 16" fill="none"
+                     style={{ transform: placesOpen ? "rotate(90deg)" : "none", transition: "transform 140ms ease" }}>
+                  <path d="M6 3.5L10.5 8L6 12.5" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" />
+                </svg>
+                Toll plazas &amp; service areas
+              </span>
+              <span className="sandbox-slider-value is-info">
+                {focused.facilities.length} in view · {DIRECTION_NAME[focusDirection]}
+              </span>
+            </button>
+            {placesOpen && (
+              <>
+                <div style={{ display: "flex", flexWrap: "wrap", gap: 5 }}>
+                  {focused.places.map((pl) => {
+                    const on = focused.facilities.some((f) => f.id === pl.id);
+                    return (
+                      <button
+                        key={pl.id}
+                        data-place={pl.id}
+                        onClick={() => framePlace(pl, focusDirection)}
+                        title={`Frame the window on ${pl.name} (Km ${pl.km.toFixed(2)}, ${DIRECTION_NAME[focusDirection]})`}
+                        style={{
+                          border: on ? "1px solid #38bdf8" : "1px solid var(--border-default)",
+                          background: on ? "rgba(56,189,248,0.12)" : "transparent",
+                          color: "var(--text-secondary)",
+                          borderRadius: 999,
+                          padding: "3px 9px",
+                          fontSize: "0.74rem",
+                          cursor: "pointer",
+                          whiteSpace: "nowrap",
+                        }}
+                      >
+                        {pl.name.replace(" Toll Plaza", "")}
+                        <span style={{ opacity: 0.65, marginLeft: 4 }}>{pl.kind === "service_area" ? "fuel" : pl.kind === "barrier" ? "barrier" : pl.kind === "exit_ramp" ? "exit" : "entry"} · {pl.km.toFixed(1)}</span>
+                      </button>
+                    );
+                  })}
+                </div>
+                <span className="sandbox-slider-hint">
+                  Plazas stand where OpenStreetMap maps them, with their booth lanes (© OpenStreetMap contributors); where it maps none but tolled traffic is on record, the booths are estimated from the busiest hour. Service areas are the eleven mainline ones. Click one to frame it.
+                </span>
+              </>
+            )}
+          </div>
+
           {/* Exits on this route. A junction is the unit an operator actually
               thinks in — "what happens at Bocaue" — so clicking one frames the
               drawn window on it rather than making them convert to km posts
@@ -2339,11 +2644,11 @@ export default function AiSandboxPage() {
           {both ? (
             activeDirections.map((dn) => (
               <DirectionPanel key={dn} direction={dn} note="every control in this panel changes this carriageway only">
-                <InterventionControls d={byDirection[dn]} fromKm={fromKm} toKm={toKm} onArm={(kind) => armPlacing(dn, kind)} both />
+                <InterventionControls d={byDirection[dn]} fromKm={fromKm} toKm={toKm} onArm={(kind) => armPlacing(dn, kind)} />
               </DirectionPanel>
             ))
           ) : (
-            <InterventionControls d={focused} fromKm={fromKm} toKm={toKm} onArm={(kind) => armPlacing(focusDirection, kind)} both={false} />
+            <InterventionControls d={focused} fromKm={fromKm} toKm={toKm} onArm={(kind) => armPlacing(focusDirection, kind)} />
           )}
 
           </RailSection>
@@ -2368,6 +2673,17 @@ export default function AiSandboxPage() {
               fromKm={fromKm}
               toKm={toKm}
               clockStartMin={clockStartMin}
+              onPickOnRoad={(dn, done) => {
+                pickRef.current = { direction: dn, done };
+                setPickArmed(true);
+                setPlaceNote(`Click a lane, a booth or a pump on the ${dn === "NB" ? "northbound" : "southbound"} carriageway.`);
+              }}
+              onCancelPick={() => {
+                pickRef.current = null;
+                setPickArmed(false);
+                setPlaceNote(null);
+              }}
+              onHighlight={setHighlight}
             />
           </RailSection>
 
@@ -2815,13 +3131,12 @@ function InterventionControls({
   fromKm,
   toKm,
   onArm,
-  both,
 }: {
   d: DirectionApi;
   fromKm: number;
   toKm: number;
-  onArm: (kind: "incident" | "closure") => void;
-  both: boolean;
+  /** Arm placing a closed stretch on the road. (Incidents are placed as scenario events.) */
+  onArm: (kind: "closure") => void;
 }) {
   return (
     <>
@@ -2870,11 +3185,11 @@ function InterventionControls({
             onto the controls it describes as a tooltip. */}
       </div>
 
-      {/* One row, not two. "Set closed stretch" sat alone above its own
-          hint line, with the incident buttons in a second row below it —
-          three interactive controls spread over two rows and two gaps.
-          They are all "place something on the road", so they read better
-          as one cluster and cost a row less height. */}
+      {/* Incidents are placed as scenario events, which give them a kind, a
+          response and a timeline; the bare "Drop incident" that used to sit
+          here duplicated that with less. An incident the Command tab puts on
+          the road still lands among these, so it can still be cleared here —
+          the button shows only when there is one to clear. */}
       <div className="sandbox-btn-row sandbox-btn-row-3">
         <button
           className={`btn-muted ${d.placingClosure ? "active" : ""}`}
@@ -2884,25 +3199,13 @@ function InterventionControls({
         >
           {d.placingClosure ? (d.closureDraftKm == null ? "Click start…" : "Click end…") : "Set stretch"}
         </button>
-        <button
-          className={`btn-muted ${d.placingIncident ? "active" : ""}`}
-          title="Drop a stopped vehicle on a lane to see how traffic behaves around it."
-          onClick={() => onArm("incident")}
-        >
-          {d.placingIncident ? "Placing…" : "Drop incident"}
-        </button>
-        <button className="btn-muted" onClick={d.clearIncidents} disabled={d.incidentCount === 0}>
-          Clear ({d.incidentCount})
-        </button>
+        {d.incidentCount > 0 && (
+          <button className="btn-muted" onClick={d.clearIncidents}>
+            Clear incidents ({d.incidentCount})
+          </button>
+        )}
       </div>
       <ClosureHint placing={d.placingClosure} draftKm={d.closureDraftKm} />
-      {d.placingIncident && (
-        <p className="sandbox-place-hint">
-          {both
-            ? "Click a lane on either carriageway — the road you click is the one that changes · Esc to cancel"
-            : "Click a lane on the simulation to drop an incident · Esc to cancel"}
-        </p>
-      )}
 
       <div className="sandbox-slider-group">
         <div className="sandbox-slider-header">
@@ -3147,46 +3450,7 @@ function pctDelta(cur: number, base: number): number | null {
   return ((cur - base) / base) * 100;
 }
 
-function getRecommendation(
-  m: Metrics | null,
-  base: Baseline | null,
-  closedLanes: boolean[],
-  incidents: number,
-  speedLimit: number | null
-): { text: string; tone: "good" | "warn" | "bad" } {
-  if (!m) return { text: "Warming up the simulation…", tone: "good" };
-  const closed = closedLanes.filter(Boolean).length;
-  const speedDrop = base ? (base.avgSpeedKmh - m.avgSpeedKmh) / Math.max(1, base.avgSpeedKmh) : 0;
-
-  if (incidents > 0 && m.longestQueueM > 120) {
-    return {
-      text: `An incident is holding back a ${fmt(m.longestQueueM)} m queue and average speed is ${fmt(m.avgSpeedKmh)} km/h. Deploy responders to clear it before the queue spills upstream.`,
-      tone: "bad",
-    };
-  }
-  if (closed > 0 && (m.avgSpeedKmh < 20 || speedDrop > 0.3)) {
-    return {
-      text: `With ${closed} lane${closed > 1 ? "s" : ""} closed, flow has collapsed to ${fmt(m.avgSpeedKmh)} km/h${base ? ` (${(speedDrop * 100).toFixed(0)}% below baseline` : ""}${base ? ")" : ""}. Reopen a lane or schedule this closure during off-peak demand.`,
-      tone: "bad",
-    };
-  }
-  if (m.stoppedCount > 6 || m.longestQueueM > 80) {
-    return {
-      text: `Congestion is building — ${m.stoppedCount} vehicles stopped, queue ${fmt(m.longestQueueM)} m. Consider opening an additional toll/travel lane or metering inflow upstream.`,
-      tone: "warn",
-    };
-  }
-  if (speedLimit != null && m.avgSpeedKmh > 40) {
-    return {
-      text: `The ${speedLimit} km/h zone is holding flow smooth at ${fmt(m.avgSpeedKmh)} km/h with throughput ${fmt(m.throughputPerMin)}/min. Configuration is stable.`,
-      tone: "good",
-    };
-  }
-  return {
-    text: `Flow is stable at ${fmt(m.avgSpeedKmh)} km/h and ${fmt(m.throughputPerMin)} vehicles/min clearing the segment. Maintain the current configuration.`,
-    tone: "good",
-  };
-}
+// getRecommendation lives in recommendation.ts, where verify.ts can test its edge cases.
 
 // --------------------------------------------------------------------------
 // Canvas rendering — pure draw from sim state, no mutation.
@@ -3267,6 +3531,8 @@ type VehicleHit = {
   /** 1-based, the same numbering as the L1..L4 tags on the road. */
   lane: number;
   moto: boolean;
+  /** Off the carriageway: the plaza or service area it is in, said instead of a lane. */
+  where?: string;
 };
 type VehicleRef = { id: number; dir: Direction; born: number };
 
@@ -3308,7 +3574,7 @@ function drawVehicleProbes(
 function drawProbeBubble(ctx: CanvasRenderingContext2D, cssW: number, cssH: number, h: VehicleHit, pinned: boolean) {
   const accent = pinned ? "#fbbf24" : "#7dd3fc";
   const speed = `${Math.round(h.kmh)} km/h`;
-  const what = `${h.moto ? "Motorcycle" : VEHICLE_NAME[h.vClass]} · Lane ${h.lane}`;
+  const what = `${h.moto ? "Motorcycle" : VEHICLE_NAME[h.vClass]} · ${h.where ?? `Lane ${h.lane}`}`;
   const hint = pinned ? "click to unpin" : "click to pin";
 
   ctx.save();
@@ -3545,6 +3811,108 @@ const ASPHALT_NIGHT = "#20293a";
  *  concrete-white, which would fight the vehicle sprites (several of which are themselves white). */
 const ASPHALT_DAY = "#8b94a3";
 
+/** A small tile of grey speckle, generated once (lazily, on first draw) and
+ *  reused every frame as a repeating fillStyle pattern. Real asphalt is
+ *  never a flat colour; regenerating per-pixel noise every frame would cost
+ *  far more than a road this small is worth, so the randomness is paid for
+ *  exactly once and the pattern is just stamped down afterward. */
+let asphaltGrainTile: HTMLCanvasElement | null = null;
+function getAsphaltGrain(ctx: CanvasRenderingContext2D): CanvasPattern | null {
+  if (!asphaltGrainTile) {
+    const size = 96;
+    const tile = document.createElement("canvas");
+    tile.width = size;
+    tile.height = size;
+    const tctx = tile.getContext("2d");
+    if (!tctx) return null;
+    const img = tctx.createImageData(size, size);
+    for (let i = 0; i < img.data.length; i += 4) {
+      // Grey speckle, sparse and faint — a texture the road surface has,
+      // not a pattern the eye is drawn to.
+      const v = Math.random() < 0.5 ? 0 : 255;
+      img.data[i] = v;
+      img.data[i + 1] = v;
+      img.data[i + 2] = v;
+      img.data[i + 3] = Math.random() < 0.55 ? Math.round(6 + Math.random() * 14) : 0;
+    }
+    tctx.putImageData(img, 0, 0);
+    asphaltGrainTile = tile;
+  }
+  return ctx.createPattern(asphaltGrainTile, "repeat");
+}
+
+/* An agent that has crashed. Drawn from the vehicle list like everything
+ * else, at the angle it came to rest, with hazards going. */
+function drawWreckAgent(
+  ctx: CanvasRenderingContext2D, xNose: number, y: number,
+  len: number, wid: number, angle: number, sb: boolean, t: number,
+): void {
+  ctx.save();
+  ctx.translate(xNose - (sb ? -len / 2 : len / 2), y);
+  ctx.rotate(angle);
+  const r = Math.min(wid * 0.3, 4);
+  ctx.fillStyle = "rgba(0,0,0,0.34)";
+  roundRect(ctx, -len / 2 + 1.5, -wid / 2 + 2, len, wid, r);
+  ctx.fill();
+  ctx.fillStyle = "#b91c1c";
+  roundRect(ctx, -len / 2, -wid / 2, len, wid, r);
+  ctx.fill();
+  // Crumpled nose: a lighter wedge where the body has deformed.
+  ctx.fillStyle = "rgba(255,255,255,0.18)";
+  roundRect(ctx, len * 0.24, -wid * 0.42, len * 0.2, wid * 0.84, r * 0.6);
+  ctx.fill();
+  if (Math.floor(t * 2.2) % 2 === 0) {
+    ctx.fillStyle = "#fbbf24";
+    for (const sgn of [-1, 1]) {
+      ctx.beginPath();
+      ctx.arc(-len * 0.4, sgn * wid * 0.34, Math.max(1, wid * 0.14), 0, Math.PI * 2);
+      ctx.fill();
+    }
+  }
+  ctx.restore();
+}
+
+/** A responder, driving in and holding station. Livery by kind, bar flashing. */
+function drawResponderAgent(
+  ctx: CanvasRenderingContext2D, xNose: number, y: number,
+  len: number, wid: number, kind: "ambulance" | "police" | "tow" | "works", sb: boolean, t: number,
+): void {
+  const body =
+    kind === "police" ? "#1d4ed8" :
+    kind === "ambulance" ? "#f1f5f9" :
+    kind === "works" ? "#eab308" : "#f59e0b";
+  ctx.save();
+  ctx.translate(xNose - (sb ? -len / 2 : len / 2), y);
+  const r = Math.min(wid * 0.3, 4);
+  ctx.fillStyle = "rgba(0,0,0,0.32)";
+  roundRect(ctx, -len / 2 + 1.5, -wid / 2 + 2, len, wid, r);
+  ctx.fill();
+  ctx.fillStyle = body;
+  roundRect(ctx, -len / 2, -wid / 2, len, wid, r);
+  ctx.fill();
+  if (kind === "ambulance") {
+    ctx.fillStyle = "#dc2626";
+    ctx.fillRect(-len * 0.06, -wid * 0.1, len * 0.24, wid * 0.2);
+    ctx.fillRect(len * 0.02, -wid * 0.32, len * 0.08, wid * 0.64);
+  }
+  if (kind === "works") {
+    // Chevrons on the tail, which is what marks a works vehicle apart from a
+    // recovery truck at this size.
+    ctx.fillStyle = "#1f2937";
+    for (let i = 0; i < 3; i++) ctx.fillRect(-len * 0.46 + i * len * 0.1, -wid * 0.42, len * 0.05, wid * 0.84);
+  }
+  // The light bar: two halves alternating, which is what reads as a blue light
+  // at this size rather than a steady dot. A works truck gets a steady amber
+  // beacon instead — it is not running to anything.
+  const on = kind === "works" ? true : Math.floor(t * 4) % 2 === 0;
+  const w = Math.max(1.2, len * 0.1);
+  ctx.fillStyle = kind === "police" ? (on ? "#ef4444" : "#3b82f6") : "#fbbf24";
+  ctx.fillRect(-w / 2, -wid * 0.5, w, wid * (on ? 0.5 : 1));
+  ctx.fillStyle = kind === "police" ? (on ? "#3b82f6" : "#ef4444") : "#f59e0b";
+  ctx.fillRect(-w / 2, on ? 0 : -wid * 0.5, w, wid * 0.5);
+  ctx.restore();
+}
+
 function drawCarriageway(
   ctx: CanvasRenderingContext2D,
   sim: TrafficSim,
@@ -3586,19 +3954,47 @@ function drawCarriageway(
     borrowedLabel: string;
     /** 0 (night) to 1 (day) — see daylightFraction(). Tints the asphalt and lane markings. */
     dayFraction: number;
+    /** The toll plazas and service areas on this carriageway, and who is in them. */
+    facView: FacilityView | null;
+    /** A facility to outline — the one an operator is placing an event at. */
+    highlightFacility: string | null;
+    /** Pixels per lane unit past the road edge (roadLayout's gutterPx). */
+    gutterPx: number;
   },
 ) {
   const {
     cssW, cssH, roadTop, laneH, roadH, rampGutter, rampsAbove, reverseLanes,
     mToPx, sb, xPx, wPx, fromKm, toKm, exits, overlay, drawAxis, alphaS, flowLabel, location, animT, borrowed, borrowedLabel, dayFraction,
+    facView, highlightFacility, gutterPx,
   } = opts;
   const asphalt = mixHex(ASPHALT_NIGHT, ASPHALT_DAY, dayFraction);
   const lanes = sim.cfg.laneCount;
 
-  // asphalt
+  // asphalt — flat fill first, then a crown shade and a grain overlay so it
+  // reads as a road surface rather than a flat illustration. Both stay
+  // inside the same rounded rect the flat fill used, via one clip.
   ctx.fillStyle = asphalt;
   roundRect(ctx, 0, roadTop, cssW, roadH, 10);
   ctx.fill();
+  ctx.save();
+  roundRect(ctx, 0, roadTop, cssW, roadH, 10);
+  ctx.clip();
+  // Real tarmac catches light unevenly across its width (the crown that
+  // sheds rainwater to the shoulders) — darker at the edges, true colour in
+  // the middle, rather than one flat value corner to corner.
+  const crown = ctx.createLinearGradient(0, roadTop, 0, roadTop + roadH);
+  crown.addColorStop(0, "rgba(0,0,0,0.16)");
+  crown.addColorStop(0.5, "rgba(0,0,0,0)");
+  crown.addColorStop(1, "rgba(0,0,0,0.16)");
+  ctx.fillStyle = crown;
+  ctx.fillRect(0, roadTop, cssW, roadH);
+  // Fine speckle — a repeating tile generated once, not per pixel per frame.
+  const grain = getAsphaltGrain(ctx);
+  if (grain) {
+    ctx.fillStyle = grain;
+    ctx.fillRect(0, roadTop, cssW, roadH);
+  }
+  ctx.restore();
 
   // speed-limit zone. Not when it is a rain event's: rain's zone is the whole segment, so the wash would
   // tint the entire carriageway orange; rain shows a speed-limit sign and the rain itself instead.
@@ -3633,6 +4029,28 @@ function drawCarriageway(
     ctx.stroke();
   }
   ctx.setLineDash([]);
+
+  /* Toll plazas and service areas, as places: ramps, booth lanes, islands,
+   * pumps. Under the traffic and over the lane markings, so where a barrier
+   * plaza's booths stand the plaza replaces the lane lines, as on the road.
+   * They hang off the OUTER edge — the side the outer lane is drawn on —
+   * because that is the lane every vehicle leaves and joins from. */
+  const facOut: 1 | -1 = reverseLanes ? -1 : 1;
+  const outerCentreY = laneSlotTop(lanes - 1, roadTop, laneH, lanes, reverseLanes) + laneH / 2;
+  const facEdgeY = reverseLanes ? roadTop : roadTop + roadH;
+  const facGeom: FacGeom | null =
+    facView && facView.list.length > 0
+      ? {
+          ctx, xPx,
+          // On the road at the road's scale; past its edge at the gutter's own.
+          yOf: (w: number) => (w <= 0.5 ? outerCentreY + facOut * w * laneH : facEdgeY + facOut * (w - 0.5) * gutterPx),
+          laneH, gutterPx, mToPx,
+          fwd: sb ? -1 : 1, out: facOut, asphalt, dayFraction, t: animT, cssW, cssH,
+          roadEdgeY: facEdgeY, gutterEdgeY: facEdgeY + facOut * rampGutter,
+          roadInnerY: reverseLanes ? roadTop + roadH : roadTop,
+        }
+      : null;
+  if (facGeom && facView) drawFacilityGround(facGeom, facView);
 
   // What each scenario event looks like this frame (family, phase, the lanes and stretch it actually holds).
   const scenes: readonly SceneMark[] = overlay ? sceneMarks(overlay.events, roadOf(sim, overlay.frame), sim.time, overlay.owners) : [];
@@ -3823,7 +4241,15 @@ function drawCarriageway(
   const kOverflowCap = (laneH * 0.9) / Math.max(0.01, trueBusLen);
   const k = Math.min(kFloor, kSpacingCap, kOverflowCap);
   /** A car's own drawn length under that k — the scenario art's reference size for a "hero" vehicle. */
-  const drawnCarLen = trueCarLen * k;
+  const drawnCarLen = baseLengthPx(4.6, mToPx, k);
+  // Every class is drawn at the car's width scale (facilityArt: one steady size per class).
+  const widK = spriteWidthScale(mToPx, k);
+  /* How far across from a lane a vehicle can be drawn and still touch something
+     in it: half the widest sprite either side, and a little. A car changing
+     lanes counts against a lane only when it is that close to it — halfway
+     across it touches neither, and counting it in its new lane from the first
+     instant squeezed the cars around it the moment it signalled. */
+  const laneReach = Math.min(0.95, Math.min(laneH * 0.85, 2.6 * mToPx * widK * widScale) / Math.max(1, laneH) + 0.05);
 
   /* Lane identifiers.
    *
@@ -3873,25 +4299,64 @@ function drawCarriageway(
    *
    * Straddlers count in both lanes, the same rule the engine uses, so a car
    * halfway through a change cannot be drawn over one it is leaving. */
+  /* Where each vehicle's nose is DRAWN, which is not where the engine has it.
+   *
+   * Between engine steps the canvas extrapolates each vehicle forward by its
+   * own speed and acceleration, so a fast follower closes on a slow leader by
+   * more than the engine gap suggests. Measuring the room from v.x therefore
+   * allowed a sprite slightly longer than the space it would actually be
+   * drawn into. Both the gap map and the sprites use the same extrapolated
+   * positions now, so the cap below is exact rather than nearly right. */
+  const noseXm = new Map<number, number>();
+  for (const v of sim.vehicles) {
+    noseXm.set(v.id, v.x + Math.max(0, v.v + 0.5 * v.accel * alphaS) * alphaS);
+  }
+
   const noseGapM = new Map<number, number>();
+  /* The same room for the plaza vehicles still out on the carriageway — on a
+     taper leaving it, at the end of an acceleration lane joining it, anywhere
+     on a barrier's fans — against the road traffic behind them. The engine
+     keeps the two apart (its lane index counts both), but each layer used to
+     size its sprites against only its own vehicles, so a car could be drawn
+     into a truck leaving for a plaza, or a truck rejoining the road drawn back
+     over the car behind it. Plaza vehicles among themselves are still spaced
+     by the plaza layer, which knows their booth lanes. */
+  const plazaRoomM = new Map<number, number>();
   {
-    const bands = new Map<number, typeof sim.vehicles>();
-    const put = (b: number, v: (typeof sim.vehicles)[number]) => {
+    type Nose = { id: number; x: number; plaza: boolean };
+    const bands = new Map<number, Nose[]>();
+    const put = (b: number, n: Nose) => {
       const arr = bands.get(b);
-      if (arr) arr.push(v);
-      else bands.set(b, [v]);
+      if (arr) arr.push(n);
+      else bands.set(b, [n]);
     };
     for (const v of sim.vehicles) {
-      put(v.lane, v);
-      if (v.laneShift < 1 && v.laneFrom !== v.lane) put(v.laneFrom, v);
+      const n = { id: v.id, x: noseXm.get(v.id) ?? v.x, plaza: false };
+      const across = visualLane(v);
+      for (const b of v.laneFrom !== v.lane ? [v.lane, v.laneFrom] : [v.lane]) if (Math.abs(across - b) < laneReach) put(b, n);
     }
+    for (const a of facView?.agents ?? []) {
+      // In whichever lane its nose or its tail is drawn over; past the outer
+      // lane's edge it is off the carriageway.
+      const n = { id: a.id, x: a.u, plaza: true };
+      const into = new Set<number>();
+      for (const w of [a.w, a.tw]) if (w < 0.78) into.add(Math.max(0, Math.min(lanes - 1, Math.round(lanes - 1 + w))));
+      for (const b of into) put(b, n);
+    }
+    const tighter = (m: Map<number, number>, id: number, gap: number) => {
+      // Tightest constraint wins when a vehicle appears in two bands.
+      const prev = m.get(id);
+      if (prev === undefined || gap < prev) m.set(id, gap);
+    };
     for (const arr of bands.values()) {
       arr.sort((a, b) => a.x - b.x);
-      for (let i = 1; i < arr.length; i++) {
-        const gap = arr[i].x - arr[i - 1].x;
-        const prev = noseGapM.get(arr[i].id);
-        // Tightest constraint wins when a vehicle appears in two bands.
-        if (prev === undefined || gap < prev) noseGapM.set(arr[i].id, gap);
+      let behind: number | null = null;
+      let roadBehind: number | null = null;
+      for (const n of arr) {
+        if (!n.plaza && behind !== null) tighter(noseGapM, n.id, n.x - behind);
+        if (n.plaza && roadBehind !== null) tighter(plazaRoomM, n.id, n.x - roadBehind);
+        behind = n.x;
+        if (!n.plaza) roadBehind = n.x;
       }
     }
   }
@@ -3899,16 +4364,37 @@ function drawCarriageway(
   for (const v of sim.vehicles) {
     try {
       // One factor for every class, so a bus still reads as longer than a car.
-      // Capped at the room behind it — see noseGapM above.
-      const roomM = noseGapM.get(v.id) ?? Infinity;
-      const len = Math.max(2, Math.min(v.length * mToPx * k, roomM * mToPx));
-      const wid = Math.max(
-        2,
-        Math.min(laneH * 0.85, widthM[v.vClass] * mToPx * k * widScale),
-      );
+      // Capped by the room behind it — see noseGapM above.
+      /* Leave the gap visible, not just a seam.
+       *
+       * Capping at the full nose-to-nose distance made a sprite end exactly
+       * where the next one starts — a solid bar of car, indistinguishable from
+       * cars drawn through each other — and a 1.5 px seam was still read as
+       * vehicles overlapping once sprites were forty-odd pixels long. The
+       * physics diagnostic reported 0.00% throughout, because it measures v.x
+       * and v.length, the ENGINE's geometry, and never sees the inflated
+       * sprite. drawnLengthPx lets the enlargement take only part of the real
+       * gap behind a vehicle; the drawn length only, so the simulation is
+       * untouched. */
+      const len = drawnLengthPx(baseLengthPx(v.length, mToPx, k), v.length, noseGapM.get(v.id) ?? Infinity, mToPx);
+      let wid = drawnWidthPx(Math.max(2, Math.min(laneH * 0.85, widthM[v.vClass] * mToPx * widK * widScale)), len);
       // visualLane, not v.lane: the integer flips the instant MOBIL accepts
       // the move, which drew the change as a one-frame jump across a whole lane.
-      const y = laneSlotTop(visualLane(v), roadTop, laneH, lanes, reverseLanes) + laneH * 0.5;
+      const across = visualLane(v);
+      let y = laneSlotTop(across, roadTop, laneH, lanes, reverseLanes) + laneH * 0.5;
+      /* Still out beyond the outer lane: merging off an acceleration lane. The
+         plaza layer drew this vehicle there a frame ago, in the plaza's band at
+         the plaza's scale (narrower than the road's), and it is handed over as a
+         lane change from that slot. Drawn at the road's scale instead, it jumped
+         out by half a lane the moment it started to merge, then slid in — the
+         "teleport". Placed and sized by the plaza's own rule until it is across
+         the road edge, it glides in from exactly where it was. */
+      if (facGeom && across > lanes - 1) {
+        const w = across - (lanes - 1);
+        y = facGeom.yOf(w);
+        const slotWid = FAC_LANE * DRAW_W_FRAC * (w > 0.5 ? facGeom.gutterPx : laneH);
+        wid = Math.min(wid, slotWid + (wid - Math.min(wid, slotWid)) * Math.max(0, 1 - w));
+      }
       // Braking, or already stopped. The threshold is a real lift-off rather
       // than any negative value, so brake lights do not flicker on the small
       // corrections every car-following model makes continuously.
@@ -3920,9 +4406,21 @@ function drawCarriageway(
        * acceleration over a fraction of one step; clamped so a braking vehicle
        * is never drawn sliding backwards, which the kinematics would allow once
        * v + a*alpha goes negative. */
-      const xDrawn = v.x + Math.max(0, v.v + 0.5 * v.accel * alphaS) * alphaS;
+      const xDrawn = noseXm.get(v.id) ?? v.x;
       const xNose = xPx(xDrawn);
-      drawVehicle(ctx, xNose, y, len, wid, v.vClass, moto ? motorcyclePaintFor(v.id) : paintFor(v.id, v.vClass), braking, sb, trailerPaintFor(v.id), moto);
+      /* Wrecks and responders are real agents now, so they are drawn HERE,
+         with the traffic, rather than by the scene layer on top of it. That
+         is the whole point of the change: one list of vehicles, one set of
+         positions, so nothing can be drawn where the engine does not think it
+         is. A wreck keeps the angle it came to rest at; a responder gets its
+         own livery and a flashing bar. */
+      if (v.role === "wreck") {
+        drawWreckAgent(ctx, xNose, y, len, wid, v.restAngle ?? 0, sb, animT);
+      } else if (v.role === "responder") {
+        drawResponderAgent(ctx, xNose, y, len, wid, v.responderKind ?? "police", sb, animT);
+      } else {
+        drawVehicle(ctx, xNose, y, len, wid, v.vClass, moto ? motorcyclePaintFor(v.id) : paintFor(v.id, v.vClass), braking, sb, trailerPaintFor(v.id), moto);
+      }
       // The body trails behind the nose: to the left going north, to the right going south.
       vehicleHits.push({
         id: v.id,
@@ -3953,9 +4451,44 @@ function drawCarriageway(
     }
   }
 
+  /* Vehicles in the plazas and service areas: the same sprites at the same
+   * scale, turned to face along the lane they are on. */
+  if (facGeom && facView && facView.agents.length > 0) {
+    const nameOf = new Map(facView.list.map((f) => [f.spec.id, f.spec.name]));
+    const drawn = drawFacilityVehicles(facGeom, facView, k, plazaRoomM, (a, len, wid, braking) => {
+      if (a.role === "wreck") {
+        drawWreckAgent(ctx, 0, 0, len, wid, a.restAngle ?? 0, false, animT);
+      } else if (a.role === "responder") {
+        drawResponderAgent(ctx, 0, 0, len, wid, a.responderKind ?? "tow", false, animT);
+      } else {
+        const moto = isMotorcycle(a.id, a.vClass, motoShare);
+        drawVehicle(ctx, 0, 0, len, wid, a.vClass, moto ? motorcyclePaintFor(a.id) : paintFor(a.id, a.vClass), braking, false, trailerPaintFor(a.id), moto);
+      }
+    });
+    for (const h of drawn) {
+      const a = facView.agents.find((x) => x.id === h.id);
+      vehicleHits.push({
+        id: h.id, dir: sb ? "SB" : "NB", born: h.born, left: h.left, right: h.right, top: h.top, bottom: h.bottom,
+        kmh: h.kmh, vClass: h.vClass, lane: 0, moto: isMotorcycle(h.id, h.vClass, motoShare),
+        where: a ? nameOf.get(a.fid) : undefined,
+      });
+    }
+  }
+
   // What is on this carriageway right now, for the browser checks (a motorcycle is rare, so the picture alone is a poor test).
   ctx.canvas.dataset[sb ? "motoSb" : "motoNb"] = String(motorcycles);
   ctx.canvas.dataset[sb ? "class1Sb" : "class1Nb"] = String(class1);
+
+  // Plaza canopies and service-area roofs over the vehicles under them, then their labels —
+  // including any scenario event set at a booth, pump or ramp, labelled where it is.
+  if (facGeom && facView) {
+    const siteMarks = overlay
+      ? canvasMarks(overlay.events, roadOf(sim, overlay.frame), sim.time).flatMap((m) =>
+          m.site ? [{ site: m.site, name: m.name, text: m.text, state: m.state, secondsUntilStart: m.secondsUntilStart }] : [],
+        )
+      : [];
+    drawFacilityOverlay(facGeom, facView, highlightFacility, siteMarks);
+  }
 
   // incidents
   for (const inc of sim.interventions.incidents) {
@@ -4037,6 +4570,15 @@ function drawCarriageway(
     const fwd = sb ? -1 : 1; // on-screen direction of travel
 
     for (const ex of exits) {
+      // A plaza or ramp drawn as a place supersedes the wedge.
+      // Only an exit drawn as a place stands in for the wedge (an off-ramp): an
+      // interchange whose entry plaza is drawn but whose exit could not be laid
+      // out still has traffic leaving it there.
+      if (facView && facView.list.some((f) => {
+        if (f.spec.kind !== "exit_ramp" && f.spec.kind !== "barrier") return false;
+        const k = f.spec.interchangeKm ?? f.spec.km;
+        return k != null && Math.abs(k - ex.km) < 0.005;
+      })) continue;
       // Distance along travel; xPx mirrors it when southbound, so the km posts
       // stay put on screen and only the traffic changes direction.
       const x = xPx(sb ? (toKm - ex.km) * 1000 : (ex.km - fromKm) * 1000);
@@ -4204,6 +4746,9 @@ function render(
   dayFraction: number,
   /** See drawCarriageway's `alphaS`. */
   alphaS = 0,
+  /** The plazas and service areas on this carriageway, live or recorded. */
+  facView: FacilityView | null = null,
+  highlightFacility: string | null = null,
 ) {
   vehicleHits.length = 0; // re-recorded by drawCarriageway() below
   const dpr = window.devicePixelRatio || 1;
@@ -4232,8 +4777,14 @@ function render(
    * crossing it. The gutter is reserved on that same side, and the km scale
    * on the other — see roadLayout(), which owns all of that arithmetic and is
    * shared with the click handler and the page's canvas sizing. */
-  const rampsAbove = marks.direction === "NB";
-  const { rampGutter, laneH, roadH, roadTop } = roadLayout({
+  /* Ramps hang off the OUTER lane's side. That used to be "above for
+   * northbound, below for southbound" to tell the two apart, but a single
+   * carriageway draws its outer lane at the bottom in either direction — so
+   * northbound exits were drawn off the median side while the cars left from
+   * the other edge. Now that vehicles drive the ramps, they must be the same
+   * side. */
+  const rampsAbove = false;
+  const { rampGutter, gutterPx, laneH, roadH, roadTop } = roadLayout({
     cssW,
     cssH,
     lanes,
@@ -4241,6 +4792,8 @@ function render(
     exitCount: exits.length,
     maxLaneH,
     rampsAbove,
+    facDepth: facilityDepth(facView?.list),
+    facBarrier: hasBarrier(facView?.list),
   });
   const mToPx = cssW / L;
   /* The corridor keeps a fixed, map-like orientation: the low km post is always
@@ -4280,6 +4833,9 @@ function render(
     borrowed: 0,
     borrowedLabel: "",
     dayFraction,
+    facView,
+    highlightFacility,
+    gutterPx,
   });
 }
 
@@ -4307,6 +4863,9 @@ function renderBoth(
   dayFraction: number,
   /** See drawCarriageway's `alphaS`. */
   alphaS = 0,
+  facViewNB: FacilityView | null = null,
+  facViewSB: FacilityView | null = null,
+  highlightFacility: string | null = null,
 ) {
   vehicleHits.length = 0; // re-recorded by both drawCarriageway() calls below
   const dpr = window.devicePixelRatio || 1;
@@ -4321,7 +4880,7 @@ function renderBoth(
   if (cssW <= 0 || cssH <= 0) return; // see render()'s identical guard for why
 
   const L = simNB.cfg.length; // both directions share the same segment length (SharedRoadInputs)
-  const { rampGutter, laneH, nbRoadH, sbRoadH, nbRoadTop, medianTop, sbRoadTop, mToPx } = dualRoadLayout({
+  const { gutterNB, gutterSB, gutterPxNB, gutterPxSB, laneH, nbRoadH, sbRoadH, nbRoadTop, medianTop, sbRoadTop, mToPx } = dualRoadLayout({
     cssW,
     cssH,
     lanesNB: simNB.cfg.laneCount,
@@ -4329,6 +4888,10 @@ function renderBoth(
     segLenM: L,
     exitCount: exits.length,
     maxLaneH,
+    facDepthNB: facilityDepth(facViewNB?.list),
+    facDepthSB: facilityDepth(facViewSB?.list),
+    facBarrierNB: hasBarrier(facViewNB?.list),
+    facBarrierSB: hasBarrier(facViewSB?.list),
   });
 
   const xPxNB = (x: number) => x * mToPx; // NB: left to right, unmirrored
@@ -4354,7 +4917,7 @@ function renderBoth(
     roadTop: nbRoadTop,
     laneH,
     roadH: nbRoadH,
-    rampGutter,
+    rampGutter: gutterNB,
     rampsAbove: false,
     reverseLanes: false, // NB sits below the median: its top edge is already the median-adjacent one
     mToPx,
@@ -4373,6 +4936,9 @@ function renderBoth(
     borrowed: borrowedLanes(zipper, "NB"),
     borrowedLabel: zipper === null ? "" : "REALLOCATED",
     dayFraction,
+    facView: facViewNB,
+    highlightFacility,
+    gutterPx: gutterPxNB,
   });
   drawCarriageway(ctx, simSB, {
     cssW,
@@ -4380,7 +4946,7 @@ function renderBoth(
     roadTop: sbRoadTop,
     laneH,
     roadH: sbRoadH,
-    rampGutter,
+    rampGutter: gutterSB,
     rampsAbove: true,
     reverseLanes: true, // SB sits above the median: its bottom edge is the median-adjacent one
     mToPx,
@@ -4399,6 +4965,9 @@ function renderBoth(
     borrowed: borrowedLanes(zipper, "SB"),
     borrowedLabel: zipper === null ? "" : "REALLOCATED",
     dayFraction,
+    facView: facViewSB,
+    highlightFacility,
+    gutterPx: gutterPxSB,
   });
 }
 

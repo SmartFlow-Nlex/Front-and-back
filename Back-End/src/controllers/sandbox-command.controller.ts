@@ -4,6 +4,7 @@ import { parseCommand, CommandParseError } from "../services/sandbox-command.ser
 import { isGlmConfigured, providerInfo } from "../lib/glm.client.js";
 import { getScenarioContext } from "../services/sandbox-scenario.service.js";
 import { getDemandExits, getDemandProfile, getPlazaFlows } from "../services/sandbox-demand.service.js";
+import { getHotspots, type HotspotFamily } from "../services/sandbox-hotspots.service.js";
 
 /**
  * GET /api/ai-sandbox/command/status
@@ -133,6 +134,42 @@ export const plazaFlows = async (req: Request, res: Response) => {
       success: false,
       message: "The warehouse is unreachable, so plaza flows are unavailable.",
     });
+  }
+  return res.json({ success: true, data });
+};
+
+const HOTSPOT_FAMILIES: readonly HotspotFamily[] = [
+  "breakdown_in_lane",
+  "breakdown_shoulder",
+  "minor_collision",
+  "multi_vehicle_collision",
+  "self_accident",
+  "overturned_vehicle",
+];
+
+/**
+ * GET /api/ai-sandbox/hotspots?family=minor_collision&direction=NB&fromKm=19.9&toKm=20.5
+ *
+ * Where events of this kind have actually happened: the busiest 100 m
+ * stretches of the window (with their usual lane) and the plazas, interchanges
+ * and service areas on this carriageway, from the corridor's incident logs.
+ * What the Scenario panel's "where it usually happens" placement reads.
+ */
+export const hotspots = async (req: Request, res: Response) => {
+  const family = String(req.query.family ?? "") as HotspotFamily;
+  if (!HOTSPOT_FAMILIES.includes(family)) {
+    return res.status(400).json({ success: false, message: `family must be one of ${HOTSPOT_FAMILIES.join(", ")}.` });
+  }
+  const raw = typeof req.query.direction === "string" ? req.query.direction.toUpperCase() : "NB";
+  const direction: "NB" | "SB" = raw === "SB" ? "SB" : "NB";
+  const fromKm = Number(req.query.fromKm);
+  const toKm = Number(req.query.toKm);
+  if (!Number.isFinite(fromKm) || !Number.isFinite(toKm) || toKm <= fromKm) {
+    return res.status(400).json({ success: false, message: "fromKm and toKm must be numbers with fromKm < toKm." });
+  }
+  const data = await getHotspots(family, direction, fromKm, toKm);
+  if (!data) {
+    return res.status(503).json({ success: false, message: "The warehouse is unreachable, so incident hotspots are unavailable." });
   }
   return res.json({ success: true, data });
 };

@@ -270,7 +270,7 @@ for name, v in rows.items():
          (None if is_base or v["WMAPE"] < base
           else f"WMAPE {v['WMAPE']:.2f}% does not beat baseline {base:.2f}%"),
          f"held out {len(test_ev)} of {len(events)} event days chronologically "
-         f"({min(test_ev).date()} onward); {len(TE):,} exit-days scored"))
+         f"({min(test_ev).date()} to {max(test_ev).date()}); {len(TE):,} exit-days scored"))
 conn.commit()
 print(f"  gold.ml_model_metrics: {len(rows)} rows under target='Event Surge'")
 conn.close()

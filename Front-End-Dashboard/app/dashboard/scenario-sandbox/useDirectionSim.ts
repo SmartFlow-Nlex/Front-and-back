@@ -29,6 +29,9 @@ import {
 } from "./scenarios/adapter";
 import type { SkipView } from "./components/ScenarioPanel";
 import { shapeForecastMix, type ClassShares } from "./forecastMix";
+import { corridorPlaces, movementKm, planFacilities, type FacilityPlan } from "./facilityLayout";
+import type { InflowFrom } from "./recommendation";
+import { placeFuelStations } from "../../../lib/nlex-fuel-stations";
 
 /**
  * One carriageway's worth of simulation: its own TrafficSim, its own scenario
@@ -62,7 +65,15 @@ export type DemandProfile = {
   peakingFactor: number;
   days: number;
 };
-export type PlazaFlow = { exit: string; entriesByHour: number[]; exitsByHour: number[] };
+export type PlazaFlow = {
+  exit: string;
+  entriesByHour: number[];
+  exitsByHour: number[];
+  /** Where each figure comes from (Back-End getPlazaFlows): paid transactions, closed-system tickets
+   *  counted where they were taken, or — for the free open-system exits — an estimate. Absent: paid. */
+  entriesSource?: "paid" | "ticket" | "none";
+  exitsSource?: "paid" | "estimated" | "none";
+};
 
 export type Baseline = {
   avgSpeedKmh: number;
@@ -220,7 +231,7 @@ export function useDirectionSim(direction: Direction, shared: SharedRoadInputs) 
         });
       if (!f) return null;
       const h = Math.max(0, Math.min(23, hour));
-      return { entries: f.entriesByHour[h] ?? 0, exits: f.exitsByHour[h] ?? 0 };
+      return { entries: f.entriesByHour[h] ?? 0, exits: f.exitsByHour[h] ?? 0, entriesSource: f.entriesSource, exitsSource: f.exitsSource };
     },
     [plazaFlows],
   );
@@ -230,13 +241,25 @@ export function useDirectionSim(direction: Direction, shared: SharedRoadInputs) 
       if (!plazaFlows || EXITS.length === 0) return null;
       let flow = 0;
       let sawAny = false;
+      const upstream = (at: number) => (direction === "NB" ? at <= km + 1e-6 : at >= km - 1e-6);
       for (const e of EXITS) {
-        const upstream = direction === "NB" ? e.km <= km + 1e-6 : e.km >= km - 1e-6;
-        if (!upstream) continue;
+        // Each movement where its plaza stands, as the layout draws it (facilityLayout.movementKm).
+        const entersUp = upstream(movementKm(e.exit_name, "entry", direction, e.km));
+        const leavesUp = upstream(movementKm(e.exit_name, "exit", direction, e.km));
+        if (!entersUp && !leavesUp) continue;
         const f = flowAt(e.exit_name, hour);
         if (!f) continue;
         sawAny = true;
-        flow += f.entries - f.exits;
+        /* Paid transactions only, as this estimate has always been made. The
+           ticketed closed-system entries and the estimated open-system exits
+           send traffic through the plazas, but summed along the corridor they
+           do not yet agree with the counts that pin it down — southbound they
+           put 1,740 veh/h past Bocaue where its barrier records 3,872 paying —
+           because trips to SCTEX are never counted on NLEX and trips with no
+           recorded direction are split half and half. Until they do, the flow
+           entering a stretch stays what it was. */
+        if (entersUp && f.entriesSource !== "ticket") flow += f.entries;
+        if (leavesUp && f.exitsSource !== "estimated") flow -= f.exits;
       }
       return sawAny ? Math.max(0, Math.round(flow)) : null;
     },
@@ -303,6 +326,27 @@ export function useDirectionSim(direction: Direction, shared: SharedRoadInputs) 
     if (dataAnchor != null) setInflow(dataAnchor);
   }, [dataAnchor]);
 
+  /* Where the inflow now driving this carriageway came from, for the
+     recommendation (recommendation.ts), which has to say how far to trust it.
+     dataAnchor tries the forecast, then the flow along the expressway, then the
+     volume at the nearest interchange; "interchange" is that last resort, a
+     slip-road figure standing in for the mainline. "assumed" is a stretch none
+     of them covers: the slider still holds its starting default, or the
+     operator's own figure. */
+  const anchorKind = useMemo((): "forecast" | "mainline" | "interchange" | null => {
+    if (dataAnchor == null) return null;
+    if (forecastInflow != null) return "forecast";
+    const hr = hourOfDay ?? demand?.peakHour ?? 8;
+    const mainline = mainlineAtKm(direction === "NB" ? fromKm : toKm, hr);
+    return mainline != null && mainline > 0 ? "mainline" : "interchange";
+  }, [dataAnchor, forecastInflow, hourOfDay, demand, mainlineAtKm, direction, fromKm, toKm]);
+  const inflowFrom: InflowFrom =
+    anchorKind == null ? "assumed"
+      : inflow !== dataAnchor ? "operator"
+        : anchorKind === "forecast" ? "forecast"
+          : anchorKind === "mainline" ? "record"
+            : "interchange";
+
   // Following the road: each direction's lane count defaults to the corridor's own recorded value
   // for this km window when one exists (D2.4 — "defaulting to the same value" — both directions read
   // the same direction-independent segmentLanes, so they start equal; each can still be overridden
@@ -332,42 +376,59 @@ export function useDirectionSim(direction: Direction, shared: SharedRoadInputs) 
     return Object.keys(out).length ? out : undefined;
   }, [classProfile, activeHour, forecastShares]);
 
-  const ramps = useMemo(() => {
-    if (fromKm >= toKm) return [];
-    const nb = direction === "NB";
+  /* The busiest hour of each plaza movement, veh/h — what its booths are sized for. */
+  const peakAt = useCallback(
+    (exitName: string) => {
+      if (!plazaFlows) return null;
+      const key = String(exitName).toLowerCase().trim();
+      const f =
+        plazaFlows.find((x) => x.exit.toLowerCase().trim() === key) ??
+        plazaFlows.find((x) => {
+          const k = x.exit.toLowerCase().trim();
+          return k.includes(key) || key.includes(k);
+        });
+      if (!f) return null;
+      return { entries: Math.max(0, ...f.entriesByHour), exits: Math.max(0, ...f.exitsByHour), entriesSource: f.entriesSource, exitsSource: f.exitsSource };
+    },
+    [plazaFlows],
+  );
+
+  // Service areas on this corridor, placed on its km scale from their coordinates.
+  const stations = useMemo(() => placeFuelStations([...EXITS]), [EXITS]);
+
+  /* Interchanges, barrier plazas and service areas in the window, as PLACES:
+   * the plazas vehicles queue at, sized from the record — see facilityLayout.ts.
+   * What could not be laid out (two interchanges closer together than their
+   * ramps are long, in a short window) stays a point ramp so its traffic still
+   * joins and leaves. */
+  const plan: FacilityPlan = useMemo(() => {
+    if (fromKm >= toKm) return { facilities: [], ramps: [] };
     const hr = hourOfDay ?? demand?.peakHour ?? 8;
     const shape = activeHour && demand && demand.meanVehPerHour > 0 ? activeHour.vehPerHour / demand.meanVehPerHour : 1;
-    const out: { x: number; onVehPerHour: number; offFraction: number; name: string }[] = [];
-    for (const e of EXITS) {
-      if (e.km <= fromKm + 0.02 || e.km >= toKm - 0.02) continue;
-      const canJoin = nb ? e.nb_entry : e.sb_entry;
-      const canLeave = nb ? e.nb_exit : e.sb_exit;
-      if (!canJoin && !canLeave) continue;
-      const f = flowAt(e.exit_name, hr);
-      let on = 0;
-      let off = 0;
-      if (f) {
-        on = canJoin ? f.entries : 0;
-        off = canLeave ? f.exits : 0;
-      } else {
-        const key = String(e.exit_name).toLowerCase();
+    return planFacilities({
+      direction,
+      fromKm,
+      toKm,
+      segLengthM,
+      laneCount,
+      exits: EXITS,
+      stations,
+      flowAt,
+      peakAt,
+      mainlineAt: mainlineAtKm,
+      fallbackHourly: (exitName) => {
+        const key = String(exitName).toLowerCase();
         const total = plazaVol?.[key] ?? Object.entries(plazaVol ?? {}).find(([k]) => k.includes(key) || key.includes(k))?.[1];
-        if (!total) continue;
-        const hourly = (total / volDays / 24) * shape;
-        on = canJoin ? hourly / 2 : 0;
-        off = canLeave ? hourly / 2 : 0;
-      }
-      if (on <= 0 && off <= 0) continue;
-      const passing = mainlineAtKm(e.km, hr) ?? inflow;
-      out.push({
-        x: nb ? (e.km - fromKm) * 1000 : (toKm - e.km) * 1000,
-        onVehPerHour: Math.round(on),
-        offFraction: Math.max(0, Math.min(0.35, off / Math.max(1, passing))),
-        name: String(e.exit_name),
-      });
-    }
-    return out;
-  }, [EXITS, plazaVol, volDays, activeHour, demand, inflow, direction, fromKm, toKm, hourOfDay, flowAt, mainlineAtKm]);
+        return total ? (total / volDays / 24) * shape : null;
+      },
+      hour: hr,
+      inflow,
+    });
+  }, [EXITS, stations, plazaVol, volDays, activeHour, demand, inflow, direction, fromKm, toKm, segLengthM, laneCount, hourOfDay, flowAt, peakAt, mainlineAtKm]);
+  const ramps = plan.ramps;
+  const facilities = plan.facilities;
+  // Every plaza and service area on this carriageway, for jumping the window to one.
+  const places = useMemo(() => corridorPlaces(direction, EXITS, stations, peakAt, laneCount), [direction, EXITS, stations, peakAt, laneCount]);
 
   const rebuild = useCallback(() => {
     const sim = new TrafficSim(
@@ -378,6 +439,7 @@ export function useDirectionSim(direction: Direction, shared: SharedRoadInputs) 
         seed: SEED_BY_DIRECTION[direction],
         classProfile: effectiveClassProfile,
         ramps,
+        facilities,
         warmupS: WARMUP_S,
         /* A queue behind a blocked lane is where NLEX's own data says the next
            crash happens: 11.5% of incidents are followed by another within
@@ -410,7 +472,7 @@ export function useDirectionSim(direction: Direction, shared: SharedRoadInputs) 
      * is currently ticking. */
     setMetrics(sim.metrics());
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [laneCount, segLengthM, effectiveClassProfile, ramps, scenarioBinding, direction]);
+  }, [laneCount, segLengthM, effectiveClassProfile, ramps, facilities, scenarioBinding, direction]);
 
   useEffect(() => {
     rebuild();
@@ -662,7 +724,7 @@ export function useDirectionSim(direction: Direction, shared: SharedRoadInputs) 
     simRef,
     scenarioBinding,
     laneCount, setLaneCount,
-    inflow, setInflow, dataAnchor, inflowBasis,
+    inflow, setInflow, dataAnchor, inflowBasis, inflowFrom,
     demand, hourOfDay, activeHour,
     closedLanes, setClosedLanes, toggleLane, lockedLanes,
     speedLimit, setSpeedLimit, shownSpeedLimit,
@@ -678,6 +740,8 @@ export function useDirectionSim(direction: Direction, shared: SharedRoadInputs) 
     manualControls, scenarioFrame, scenarioRoad, scenarioNowS,
     kmAt, mAt, clampKm, spanM,
     ramps,
+    facilities,
+    places,
     rebuild,
     resetAll,
     publishOwners,

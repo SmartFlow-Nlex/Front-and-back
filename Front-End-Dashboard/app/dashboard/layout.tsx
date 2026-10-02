@@ -23,6 +23,10 @@ import {
   X,
 } from "lucide-react";
 import { supabase } from "../../lib/supabase";
+import { installBackendAuth, logActivity, logPageView } from "../../lib/backend-auth";
+
+// Before any page fetches: every request to the backend carries the signed-in user, for the audit log.
+if (typeof window !== "undefined") installBackendAuth();
 import ThemeToggle from "../../components/dashboard/ThemeToggle";
 
 // The sidebar is the product's spine, so it is grouped by what the user is
@@ -55,6 +59,21 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [isMobile, setIsMobile] = useState(false);
   const [showLogoutConfirm, setShowLogoutConfirm] = useState(false);
+  const [loggingOut, setLoggingOut] = useState(false);
+
+  // Which pages are actually used: the audit log's page views.
+  useEffect(() => {
+    if (pathname) logPageView(pathname);
+  }, [pathname]);
+
+  // Log out for real: the audit entry first (it needs the session to name the user), then end the
+  // Supabase session. Going back to the sign-in page alone left the session signed in.
+  async function logOut() {
+    setLoggingOut(true);
+    await logActivity({ type: "session.logout" });
+    await supabase.auth.signOut().catch(() => {});
+    router.push("/");
+  }
 
   // User States
   const [userRole, setUserRole] = useState<string>("data-analyst");
@@ -342,8 +361,8 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
               <button className="ds-button ds-button-ghost" onClick={() => setShowLogoutConfirm(false)}>
                 Cancel
               </button>
-              <button className="ds-button ds-button-danger" onClick={() => router.push("/")}>
-                Log Out
+              <button className="ds-button ds-button-danger" disabled={loggingOut} onClick={() => void logOut()}>
+                {loggingOut ? "Logging out…" : "Log Out"}
               </button>
             </div>
           </div>

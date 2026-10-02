@@ -233,7 +233,20 @@ export async function getScenarioContext(date?: string): Promise<ScenarioContext
   const notes: string[] = [];
 
   // ── volume ──────────────────────────────────────────────────────────────────
-  const champion = (metrics ?? []).find((m) => m.accepted && m.wmape != null) ?? null;
+  /* The best model available, preferring an accepted one.
+   *
+   * This used to REQUIRE `accepted`, and since the honest retrain every volume
+   * model fails the MASE gate — none beats a seasonal-naive baseline. So
+   * `champion` was always null, the column was never read, and the panel
+   * refused to load a day whose forecast was sitting right there: Prophet has
+   * 354,854 vehicles stored for 2026-01-21.
+   *
+   * Refusing to seed a what-if sandbox because the forecast is imperfect is
+   * not a choice to make on the operator's behalf. The best-ranked model is
+   * used and the rejection is REPORTED instead — the same call the traffic
+   * optimiser makes. */
+  const accepted = (metrics ?? []).find((m) => m.accepted && m.wmape != null) ?? null;
+  const champion = accepted ?? (metrics ?? []).find((m) => m.wmape != null) ?? null;
   const vRow = volFuture.get(chosen);
 
   // Read the champion's own column rather than a fixed one, so a retrain that
@@ -276,6 +289,14 @@ export async function getScenarioContext(date?: string): Promise<ScenarioContext
 
   let peakHourInflow: number | null = null;
   let clamped = false;
+  /* Seeded from a model that was rejected — said plainly rather than hidden.
+     The operator should know the level is indicative before they build a
+     scenario on it. */
+  if (champion != null && accepted == null) {
+    notes.push(
+      `${champion.model} is the best-ranked volume model but did NOT pass its acceptance gate: it does not beat a seasonal-naive baseline on MASE. The scenario is seeded from it anyway — treat the level as indicative.`,
+    );
+  }
   if (rawDaily != null && Number.isFinite(rawDaily) && segmentShare != null) {
     const raw = Math.round(((rawDaily * segmentShare) / 24) * PEAK_HOUR_FACTOR);
     peakHourInflow = Math.min(INFLOW_MAX, Math.max(INFLOW_MIN, raw));
@@ -286,7 +307,15 @@ export async function getScenarioContext(date?: string): Promise<ScenarioContext
       );
     }
   } else if (rawDaily == null) {
-    notes.push("The volume champion stored no prediction for this date.");
+    /* Say which of the two it actually is. "The champion stored no prediction"
+       was reported for BOTH a missing row and a missing champion, and it was
+       always the second — which sent the reader hunting for absent data that
+       was never absent. */
+    notes.push(
+      champion == null
+        ? "No volume model has usable metrics, so corridor volume could not be seeded."
+        : `The ${champion.model} forecast has no row for this date.`,
+    );
   }
 
   // ── incidents ───────────────────────────────────────────────────────────────

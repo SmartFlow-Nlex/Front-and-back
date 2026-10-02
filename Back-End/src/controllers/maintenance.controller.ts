@@ -11,17 +11,19 @@ import {
   MaintenanceStatusSchema,
   MaintenanceListQuerySchema,
 } from "../validators/maintenance.validator.js";
-import { saveAuditEventInDb } from "../services/audit-log.service.js";
+import { audit as record, type AuditEvent } from "../services/audit.js";
 
-// Fire-and-forget audit entry; never blocks or fails the actual operation.
-const audit = (req: Request, action: string, targetId: string, details: Record<string, unknown>) => {
-  void saveAuditEventInDb({
-    user_id: req.header("x-user") ?? "dashboard",
+// Fire-and-forget audit entry (services/audit.ts); never blocks or fails the actual operation.
+const audit = (req: Request, action: string, targetId: string, details: Record<string, unknown>, extra: Partial<AuditEvent> = {}) =>
+  record(req, {
     action,
-    target_resource: `maintenance:${targetId}`,
+    module: "maintenance",
+    entityType: "maintenance_schedule",
+    entityId: targetId,
+    target: `maintenance:${targetId}`,
     details,
+    ...extra,
   });
-};
 
 // NOTE: these endpoints are also consumed by the mobile app — no mock fallbacks;
 // a database failure must surface as an error, never as fake success.
@@ -44,7 +46,7 @@ export const createSchedule = async (req: Request, res: Response) => {
     direction: parsed.data.direction,
     startsAt: parsed.data.startsAt,
     endsAt: parsed.data.endsAt,
-  });
+  }, { toStatus: dbRow.status ?? "scheduled", outcome: "success" });
   res.status(201).json({ success: true, source: "database", data: dbRow });
 };
 
@@ -78,7 +80,7 @@ export const updateSchedule = async (req: Request, res: Response) => {
     endKm: parsed.data.endKm,
     startsAt: parsed.data.startsAt,
     endsAt: parsed.data.endsAt,
-  });
+  }, { fromStatus: result.row.status, toStatus: result.row.status, outcome: "success" });
   res.json({ success: true, source: "database", data: result.row });
 };
 
@@ -111,16 +113,26 @@ export const updateScheduleStatus = async (req: Request, res: Response) => {
     to: parsed.data.status,
     title: result.row.title,
     ...(parsed.data.reason ? { reason: parsed.data.reason } : {}),
+  }, {
+    fromStatus: result.from,
+    toStatus: parsed.data.status,
+    outcome: parsed.data.status === "cancelled" ? "cancelled" : "success",
+    // How long the schedule sat in the status it is leaving: where the flow waits.
+    durationMs: result.since ? Date.now() - result.since.getTime() : null,
   });
   res.json({ success: true, source: "database", data: result.row });
 };
 
 // DELETE /api/maintenance/:id
 export const deleteSchedule = async (req: Request, res: Response) => {
-  const success = await deleteMaintenanceScheduleInDb(req.params.id);
-  if (!success) {
+  const result = await deleteMaintenanceScheduleInDb(req.params.id);
+  if (!result) {
     return res.status(503).json({ success: false, message: "Could not delete schedule: database not reachable" });
   }
-  audit(req, "maintenance.schedule_deleted", req.params.id, {});
+  audit(req, "maintenance.schedule_deleted", req.params.id, result.deleted ? { title: result.deleted.title } : {}, {
+    fromStatus: result.deleted?.status ?? null,
+    toStatus: "deleted",
+    outcome: result.deleted ? "success" : "not found",
+  });
   res.json({ success: true, source: "database", message: "Deleted" });
 };

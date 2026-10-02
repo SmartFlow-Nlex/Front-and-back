@@ -42,6 +42,7 @@ function markFor(family: FamilyKey, vehicle: VehicleKind, intensity: RainIntensi
     kind: "closure",
     state: "active",
       secondsUntilStart: null,
+      secondsSinceStart: 0,
     xM: 84,
     lane: family === "breakdown_shoulder" || family === "rain" ? null : 1,
     text: "",

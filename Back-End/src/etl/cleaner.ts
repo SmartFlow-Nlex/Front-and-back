@@ -88,12 +88,17 @@ function isNlexPlaza(name: string | null | undefined): boolean {
 }
 
 /**
- * Extract numeric km value from strings like "Km 79+400", "Km. 14+200", "KM14+400"
+ * Extract the km post from strings like "Km 79+400", "Km. 14+200", "KM14+400":
+ * 79.4, 14.2, 14.4. The metres after the "+" used to be dropped, filing an
+ * incident at Km 79+900 under Km 79 while every row already in the warehouse
+ * keeps them (15.6, 14.4, ...).
  */
 export function extractKmPost(location: string | null | undefined): number | null {
   if (!location || typeof location !== "string") return null;
-  const match = location.match(/km\.?\s*(\d+)/i);
-  return match ? parseInt(match[1], 10) : null;
+  const match = location.match(/km\.?\s*(\d+)(?:\s*\+\s*(\d{1,3}))?/i);
+  if (!match) return null;
+  const metres = match[2] ? Number(match[2].padEnd(3, "0")) : 0;
+  return parseInt(match[1], 10) + metres / 1000;
 }
 
 function isNlexKmPost(km: number): boolean {
@@ -140,6 +145,24 @@ export function normalizeDate(dateStr: string | number | null): string | null {
 }
 
 /**
+ * Normalize a date-and-time to "YYYY-MM-DD HH:MM:SS", keeping the time. A
+ * value with no time is midnight. Emission rows are HOURLY: normalizing them
+ * with normalizeDate(), as this file used to, put all 24 hours of a day on
+ * 00:00.
+ */
+export function normalizeTimestamp(v: string | number | null): string | null {
+  if (v === null || v === undefined) return null;
+  const s = String(v).trim();
+  const m = s.match(/^(\d{4}-\d{2}-\d{2})(?:[T ](\d{1,2}):(\d{2})(?::(\d{2}))?)?/);
+  if (m) {
+    if (!m[2]) return `${m[1]} 00:00:00`;
+    return `${m[1]} ${m[2].padStart(2, "0")}:${m[3]}:${m[4] ?? "00"}`;
+  }
+  const date = normalizeDate(s);
+  return date ? `${date} 00:00:00` : null;
+}
+
+/**
  * Normalize time strings to 24h format (HH:MM:SS)
  */
 export function normalizeTime(timeStr: string | null): string | null {
@@ -164,56 +187,6 @@ export function normalizeTime(timeStr: string | null): string | null {
 }
 
 // ── Main Cleaning Functions ──────────────────────────────────────────
-
-function cleanTrafficVolume(rows: RawRow[]): CleanResult {
-  const accepted: RawRow[] = [];
-  const rejected: CleanResult["rejected"] = [];
-  const warnings: string[] = [];
-
-  for (const row of rows) {
-    const plaza = String(row.toll_plaza ?? row.plaza ?? "").trim();
-
-    if (!plaza) {
-      rejected.push({ row, reason: "Missing toll_plaza/plaza column value." });
-      continue;
-    }
-
-    if (!isNlexPlaza(plaza)) {
-      rejected.push({ row, reason: `Location '${plaza}' is NOT part of the NLEX corridor.` });
-      continue;
-    }
-
-    // Normalize date
-    const normalizedDate = normalizeDate(row.date as string);
-    if (!normalizedDate) {
-      rejected.push({ row, reason: `Invalid date format: '${row.date}'` });
-      continue;
-    }
-
-    // Validate direction
-    const dir = String(row.direction ?? "").toUpperCase().trim();
-    if (dir !== "NB" && dir !== "SB") {
-      rejected.push({ row, reason: `Invalid direction: '${row.direction}'. Must be 'NB' or 'SB'.` });
-      continue;
-    }
-
-    // Build clean row
-    const clean: RawRow = {
-      ...row,
-      date: normalizedDate,
-      direction: dir,
-      toll_plaza: plaza,
-    };
-
-    accepted.push(clean);
-  }
-
-  if (rejected.length > 0) {
-    warnings.push(`${rejected.length} row(s) rejected — non-NLEX locations or invalid data.`);
-  }
-
-  return { accepted, rejected, warnings };
-}
 
 function cleanIncident(rows: RawRow[], type: "road_crash" | "stalled_vehicle" | "motorcycle_crash"): CleanResult {
   const accepted: RawRow[] = [];
@@ -329,17 +302,17 @@ function cleanEmissions(rows: RawRow[]): CleanResult {
       row.vehicle_class = vcNum;
     }
 
-    // Normalize date/timestamp
+    // Normalize the timestamp, keeping its hour.
     const ts = row.timestamp_utc ?? row.date ?? row.timestamp;
-    const normalizedDate = normalizeDate(ts as string);
-    if (!normalizedDate) {
+    const normalized = normalizeTimestamp(ts as string);
+    if (!normalized) {
       rejected.push({ row, reason: `Invalid date/timestamp: '${ts}'` });
       continue;
     }
 
     const clean: RawRow = {
       ...row,
-      timestamp_utc: normalizedDate,
+      timestamp_utc: normalized,
     };
 
     accepted.push(clean);
@@ -353,12 +326,33 @@ function cleanEmissions(rows: RawRow[]): CleanResult {
 }
 
 /**
+ * The day a cleaned row of a record dataset belongs to (YYYY-MM-DD), or null
+ * for datasets that are not part of the corridor record. Air quality is a
+ * sensor feed that runs past the record, so it is not cut.
+ */
+export function recordDay(row: RawRow, datasetType: DatasetType): string | null {
+  const day = (v: unknown) => (v === null || v === undefined ? null : String(v).slice(0, 10));
+  switch (datasetType) {
+    case "road_crash":
+    case "motorcycle_crash":
+    case "stalled_vehicle":
+      return day(row.date);
+    case "accident_data":
+      return day(row.event_start_date);
+    case "breakdown_data":
+      return day(row.event_encoded_date);
+    case "emissions":
+      return "co2_grams" in row || "co_grams" in row ? day(row.timestamp_utc) : null;
+    default:
+      return null;
+  }
+}
+
+/**
  * Main clean function — delegates to the correct cleaner based on dataset type
  */
 export function cleanData(rows: RawRow[], datasetType: DatasetType): CleanResult {
   switch (datasetType) {
-    case "traffic_volume":
-      return cleanTrafficVolume(rows);
     case "road_crash":
     case "motorcycle_crash":
     case "stalled_vehicle":

@@ -11,8 +11,8 @@
 import { useEffect, useMemo, useState } from "react";
 import InfoTooltip from "./InfoTooltip";
 import {
-  loadForecast, championValue, fuzzyUrgency, topsisRank, manilaDate,
-  type ForecastPayload,
+  loadForecast, championValue, topsisRank, manilaDate, loadPrescriptive,
+  type ForecastPayload, type TrafficPrescriptive, type BoothHour,
 } from "./prescriptiveTraffic.shared";
 
 const fmtInt = (n: number) => Math.round(n).toLocaleString("en-US");
@@ -78,100 +78,161 @@ const Foot = ({ children }: { children: React.ReactNode }) => (
 );
 
 /* ==================================================================== 1 ====
- * Booth staffing plan, per plaza.
+ * Booth staffing plan, per plaza, per hour.
  *
- * The first version of this panel allocated "extra lanes" across a
- * corridor-wide count -- 58 lanes open at once -- which is not a quantity
- * anyone manages. Staffing is decided one plaza at a time: how many booths to
- * open for the peak. So the corridor forecast is apportioned to each plaza by
- * its observed share of volume, then to the plaza's own busiest hour by its
- * observed hourly profile, and divided by what one booth can serve. The single
- * assumption left is booth throughput, which the warehouse does not hold and
- * the operator does.
+ * The model moved to the backend (traffic-prescriptive.service.ts). Two things
+ * were wrong with computing it here:
+ *
+ *   - it ran on props the DESCRIPTIVE tab happened to have loaded, so the
+ *     recommendation changed when the operator moved a date range that has
+ *     nothing to do with next week's staffing, and
+ *   - it only ever covered each plaza's single busiest hour, because that is
+ *     all the page had. "How many booths at 10am" had no answer.
+ *
+ * The server returns the full 24-hour profile per plaza, split weekday from
+ * weekend, so the shift plan below is real. Throughput is still the operator's
+ * dial; everything else is measured.
  */
-export type PlazaShare = { plaza: string; v: number };
-export type PlazaHour = { plaza: string; hour: number; v: number };
 
-export function BoothStaffingPanel({ byPlaza, plazaHour, typicalDaily }: {
-  byPlaza: PlazaShare[];
-  plazaHour: PlazaHour[];
-  typicalDaily: number | null;
-}) {
-  const { data, error } = useForecast();
+function usePrescriptive(throughput: number) {
+  const [data, setData] = useState<TrafficPrescriptive | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  useEffect(() => {
+    let off = false;
+    setData(null);
+    setError(null);
+    loadPrescriptive(throughput)
+      .then((d) => { if (!off) setData(d); })
+      .catch((e) => { if (!off) setError(e instanceof Error ? e.message : String(e)); });
+    return () => { off = true; };
+  }, [throughput]);
+  return { data, error };
+}
+
+/** A 24-cell strip: one block per hour, height by booths needed. Where that
+ *  is more than the plaza can open, the excess is hatched red on top: needed,
+ *  but there is no booth for it. */
+function HourStrip({ hours, peakHour, max }: { hours: BoothHour[]; peakHour: number; max: number }) {
+  return (
+    <div style={{ display: "grid", gridTemplateColumns: "repeat(24, 1fr)", gap: 1, alignItems: "end", height: 34 }}>
+      {hours.map((h) => {
+        const frac = max > 0 ? h.need / max : 0;
+        const short = h.need - h.staffed;
+        const isPeak = h.hour === peakHour;
+        return (
+          <div
+            key={h.hour}
+            title={
+              `${fmtHour(h.hour)} — ${h.need} booth${h.need === 1 ? "" : "s"} for ${fmtInt(h.demand)} vehicles` +
+              (short > 0 ? `; ${h.staffed} can open, so about ${fmtInt(h.unmet)} vehicles queue` : "")
+            }
+            style={{
+              height: `${Math.max(8, frac * 100)}%`,
+              display: "flex", flexDirection: "column",
+              borderRadius: "2px 2px 0 0", overflow: "hidden",
+            }}
+          >
+            {short > 0 && (
+              <div style={{ flex: short, background: "repeating-linear-gradient(135deg, var(--color-danger) 0 2px, transparent 2px 4px)" }} />
+            )}
+            <div style={{
+              flex: Math.max(1, h.staffed),
+              background: isPeak ? "var(--brand-primary)" : "color-mix(in srgb, var(--brand-primary) 55%, transparent)",
+            }} />
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+const listOf = (xs: string[]) =>
+  xs.length <= 1 ? xs.join("") : `${xs.slice(0, -1).join(", ")} and ${xs[xs.length - 1]}`;
+
+export function BoothStaffingPanel() {
   const [rate, setRate] = useState(350);
+  const [view, setView] = useState<"week" | "hour">("week");
   const [showAll, setShowAll] = useState(false);
+  const { data, error } = usePrescriptive(rate);
 
-  const days = useMemo(() => {
-    if (!data) return [];
-    return data.volumes
-      .filter((v) => v.is_future)
-      .map((v) => ({ date: manilaDate(v.date), forecast: championValue(v, data.championModel) ?? 0 }))
-      .filter((d) => d.forecast > 0)
-      .sort((a, b) => (a.date < b.date ? -1 : 1))
-      .slice(0, 7);
-  }, [data]);
+  if (error) return <Empty msg={`Prescriptive traffic unavailable: ${error}`} />;
+  if (!data) return <Empty msg="Computing the staffing plan…" />;
+  if (data.week.length === 0 || !data.shiftPlan) return <Empty msg="No future days in the volume forecast." />;
+  if (data.shiftPlan.plazas.length === 0) return <Empty msg="No plaza volumes are recorded to apportion the forecast with." />;
 
-  /* Per plaza: share of corridor volume, and the share of its own day that
-     falls in its busiest hour. Both measured over the selected range. */
-  const plazas = useMemo(() => {
-    const total = byPlaza.reduce((s, p) => s + p.v, 0);
-    if (total <= 0) return [];
-    const byName = new Map<string, { sum: number; peak: number; peakHour: number }>();
-    for (const r of plazaHour) {
-      const cur = byName.get(r.plaza) ?? { sum: 0, peak: 0, peakHour: 0 };
-      cur.sum += r.v;
-      if (r.v > cur.peak) { cur.peak = r.v; cur.peakHour = r.hour; }
-      byName.set(r.plaza, cur);
-    }
-    return byPlaza
-      .filter((p) => p.v > 0)
-      .map((p) => {
-        const h = byName.get(p.plaza);
-        const peakShare = h && h.sum > 0 ? h.peak / h.sum : null;
-        return { plaza: p.plaza, share: p.v / total, peakShare, peakHour: h?.peakHour ?? null };
-      })
-      .filter((p) => p.peakShare != null) as { plaza: string; share: number; peakShare: number; peakHour: number }[];
-  }, [byPlaza, plazaHour]);
-
-  if (error) return <Empty msg={`Forecast unavailable: ${error}`} />;
-  if (!data) return <Empty msg="Loading forecast…" />;
-  if (days.length === 0) return <Empty msg="No future days in the forecast." />;
-  if (plazas.length === 0 || typicalDaily == null) return <Empty msg="Waiting for the descriptive plaza and hourly profiles." />;
-
-  const booths = (dailyCorridor: number, p: { share: number; peakShare: number }) =>
-    Math.max(1, Math.ceil((dailyCorridor * p.share * p.peakShare) / rate));
-
-  const rows = plazas.map((p) => {
-    const typical = booths(typicalDaily, p);
-    const need = days.map((d) => booths(d.forecast, p));
-    return { ...p, typical, need };
-  });
-
-  const visible = showAll ? rows : rows.slice(0, 8);
+  const days = data.week;
+  const plan = data.shiftPlan;
   const first = days[0];
-  const corridorTomorrow = rows.reduce((s, r) => s + r.need[0], 0);
+
+  // Week table: booths to open at each plaza's peak, per day, ordered by the
+  // busiest. "To open", not "needed": a plaza cannot open booths it does not
+  // have, and where it would need more, the cell says so.
+  const plazaNames = plan.plazas.map((p) => p.plaza);
+  const byDay = new Map(days.map((d) => [d.date, new Map(d.plazas.map((p) => [p.plaza, p]))] as const));
+  const rows = plazaNames.map((name) => {
+    const p = plan.plazas.find((x) => x.plaza === name)!;
+    const each = days.map((d) => byDay.get(d.date)!.get(name) ?? null);
+    return {
+      plaza: name,
+      peakHour: p.peakHour,
+      typical: p.typicalPeakStaffed,
+      booths: p.booths,
+      boothBasis: p.boothBasis,
+      need: each.map((x) => x?.peakStaffed ?? 0),
+      short: each.map((x) => x?.worstUnmet ?? null),
+    };
+  });
+  const visible = showAll ? rows : rows.slice(0, 8);
+
   const corridorTypical = rows.reduce((s, r) => s + r.typical, 0);
   const biggest = [...rows].sort((a, b) => (b.need[0] - b.typical) - (a.need[0] - a.typical))[0];
   const daysUp = days.filter((_, i) => rows.some((r) => r.need[i] > r.typical)).length;
+  const hourMax = Math.max(1, ...plan.plazas.flatMap((p) => p.hours.map((h) => h.need)));
+  // Demand that every booth open would still not clear: worst first, and how
+  // many other plaza-days run past their booths too.
+  const worst = data.overCapacity[0] ?? null;
+  const overDays = new Set(data.overCapacity.map((o) => `${o.date}|${o.plaza}`)).size;
+  const noBooths = data.basis.plazasWithoutBooths;
+
+  const Toggle = (
+    <div style={{ display: "inline-flex", border: "1px solid var(--border-strong)", borderRadius: 999, overflow: "hidden" }}>
+      {(["week", "hour"] as const).map((v) => (
+        <button
+          key={v}
+          onClick={() => setView(v)}
+          style={{
+            border: "none", cursor: "pointer", padding: "4px 12px", fontSize: "0.72rem", fontWeight: 700,
+            background: view === v ? "var(--brand-primary)" : "transparent",
+            color: view === v ? "#fff" : "var(--text-secondary)",
+          }}
+        >
+          {v === "week" ? "Week ahead" : "Hour by hour"}
+        </button>
+      ))}
+    </div>
+  );
 
   return (
     <Shell
       title="Booth Staffing Plan"
-      hint="Booths to open at each plaza's busiest hour for the next seven forecast days. Corridor forecast × the plaza's observed share of volume × the share of its day that falls in its peak hour, divided by what one booth serves. Throughput is the one assumption; everything else is measured."
+      hint="Corridor forecast apportioned to each plaza by its measured share of volume, then across the day by that plaza's own hourly profile, split weekday from weekend. Divided by what one booth serves, and capped at the booths each plaza has (OpenStreetMap): demand beyond them is shown as queuing, not as booths that do not exist. Throughput is the one figure you set; the rest is measured."
       right={
-        <label style={{ display: "grid", gap: 4, minWidth: 220 }}>
-          <span style={{ display: "flex", justifyContent: "space-between", fontSize: "0.72rem", color: "var(--text-secondary)" }}>
-            <span>One booth serves</span><b style={{ color: "var(--text-primary)" }}>{rate} veh/hr</b>
-          </span>
-          <input type="range" min={150} max={800} step={25} value={rate}
-            onChange={(e) => setRate(Number(e.target.value))} style={{ accentColor: "var(--brand-primary)" }} />
-        </label>
+        <div style={{ display: "grid", gap: 6, justifyItems: "end" }}>
+          {Toggle}
+          <label style={{ display: "grid", gap: 4, minWidth: 220 }}>
+            <span style={{ display: "flex", justifyContent: "space-between", fontSize: "0.72rem", color: "var(--text-secondary)" }}>
+              <span>One booth serves</span><b style={{ color: "var(--text-primary)" }}>{rate} veh/hr</b>
+            </span>
+            <input type="range" min={150} max={800} step={25} value={rate}
+              onChange={(e) => setRate(Number(e.target.value))} style={{ accentColor: "var(--brand-primary)" }} />
+          </label>
+        </div>
       }
     >
       <Banner>
-        <b>{shortDay(first.date)}: open {corridorTomorrow} booths across the corridor at the peak</b>
-        {corridorTomorrow !== corridorTypical && (
-          <> — {corridorTomorrow > corridorTypical ? "+" : "−"}{Math.abs(corridorTomorrow - corridorTypical)} versus a typical day</>
+        <b>{shortDay(first.date)}: open {first.totalPeakBooths} booths across the corridor at the peak</b>
+        {first.totalPeakBooths !== corridorTypical && (
+          <> — {first.totalPeakBooths > corridorTypical ? "+" : "\u2212"}{Math.abs(first.totalPeakBooths - corridorTypical)} versus a typical day</>
         )}.{" "}
         {biggest && biggest.need[0] !== biggest.typical ? (
           <>The largest change is at <b>{biggest.plaza}</b> ({biggest.typical} → {biggest.need[0]}, peak {fmtHour(biggest.peakHour)}).{" "}</>
@@ -181,46 +242,106 @@ export function BoothStaffingPanel({ byPlaza, plazaHour, typicalDaily }: {
           : <>No day in the next {days.length} exceeds typical staffing anywhere.</>}
       </Banner>
 
-      <div style={{ overflowX: "auto" }}>
-        <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "0.78rem" }}>
-          <thead>
-            <tr style={{ textAlign: "left", color: "var(--text-muted)", borderBottom: "1px solid var(--border-default)" }}>
-              <th style={{ padding: "6px 8px", fontWeight: 700 }}>Plaza</th>
-              <th style={{ padding: "6px 8px", fontWeight: 700 }}>Peak hour</th>
-              <th style={{ padding: "6px 8px", fontWeight: 700, textAlign: "right" }}>Typical</th>
-              {days.map((d) => (
-                <th key={d.date} style={{ padding: "6px 8px", fontWeight: 700, textAlign: "right", whiteSpace: "nowrap" }}>
-                  {new Date(`${d.date}T00:00:00`).toLocaleDateString("en-US", { weekday: "short" })}
-                  <span style={{ display: "block", fontWeight: 500, fontSize: "0.68rem" }}>
-                    {new Date(`${d.date}T00:00:00`).toLocaleDateString("en-US", { month: "short", day: "numeric" })}
+      {worst && (
+        <Banner tone="alert">
+          <b style={{ color: "var(--color-danger)" }}>Not enough booths.</b>{" "}
+          {shortDay(worst.date)} at {fmtHour(worst.hour)}, <b>{worst.plaza}</b>&apos;s {worst.where} booths would need {worst.need},{" "}
+          and there are {worst.booths}: about <b>{fmtInt(worst.vehicles)} vehicles an hour</b> queue with every one of them open.
+          Staffing cannot clear that; divert traffic or post an advisory there.
+          {overDays > 1 && (
+            <> {overDays - 1} more plaza-day{overDays - 1 === 1 ? "" : "s"} this week run past their booths too, marked{" "}
+            <b style={{ color: "var(--color-danger)" }}>!</b> below.</>
+          )}
+        </Banner>
+      )}
+
+      {view === "hour" ? (
+        <>
+          <div style={{ fontSize: "0.74rem", color: "var(--text-secondary)" }}>
+            Booths needed hour by hour on <b>{shortDay(plan.date)}</b> ({plan.dayType}).
+            Plazas do not peak together — the tallest bar is each plaza&apos;s own busiest hour.
+            {plan.plazas.some((p) => p.unmetVehicles > 0) && <> Red hatching is need beyond the booths the plaza has.</>}
+          </div>
+          <div style={{ display: "grid", gap: 10 }}>
+            {(showAll ? plan.plazas : plan.plazas.slice(0, 8)).map((p) => (
+              <div key={p.plaza} style={{ display: "grid", gridTemplateColumns: "150px 1fr 128px", gap: 10, alignItems: "end" }}>
+                <div style={{ fontSize: "0.76rem", fontWeight: 600, paddingBottom: 2 }}>
+                  {p.plaza}
+                  <span style={{ display: "block", fontWeight: 500, fontSize: "0.66rem", color: "var(--text-muted)" }}>
+                    {p.sharePct}% of corridor
                   </span>
-                </th>
-              ))}
-            </tr>
-          </thead>
-          <tbody>
-            {visible.map((r) => (
-              <tr key={r.plaza} style={{ borderBottom: "1px solid var(--border-default)" }}>
-                <td style={{ padding: "6px 8px", fontWeight: 600, whiteSpace: "nowrap" }}>{r.plaza}</td>
-                <td style={{ padding: "6px 8px", color: "var(--text-secondary)", whiteSpace: "nowrap" }}>{fmtHour(r.peakHour)}</td>
-                <td style={{ padding: "6px 8px", textAlign: "right", fontVariantNumeric: "tabular-nums", color: "var(--text-secondary)" }}>{r.typical}</td>
-                {r.need.map((n, i) => {
-                  const delta = n - r.typical;
-                  return (
-                    <td key={days[i].date} style={{
-                      padding: "6px 8px", textAlign: "right", fontVariantNumeric: "tabular-nums", fontWeight: delta !== 0 ? 800 : 500,
-                      color: delta > 0 ? "var(--color-danger)" : delta < 0 ? "var(--color-success)" : "var(--text-primary)",
-                      background: delta > 0 ? "color-mix(in srgb, var(--color-danger) 7%, transparent)" : undefined,
-                    }}>
-                      {n}{delta !== 0 && <span style={{ fontSize: "0.66rem", marginLeft: 3 }}>{delta > 0 ? `+${delta}` : delta}</span>}
-                    </td>
-                  );
-                })}
-              </tr>
+                </div>
+                <HourStrip hours={p.hours} peakHour={p.peakHour} max={hourMax} />
+                <div style={{ fontSize: "0.72rem", color: "var(--text-secondary)", textAlign: "right", paddingBottom: 2 }} title={p.boothBasis}>
+                  peak <b style={{ color: "var(--text-primary)" }}>{p.peakStaffed}</b>
+                  {p.booths != null && <> of {p.booths}</>} at {fmtHour(p.peakHour)}
+                  {p.worstUnmet && (
+                    <span style={{ display: "block", color: "var(--color-danger)", fontWeight: 700 }}>
+                      {fmtInt(p.worstUnmet.vehicles)}/h queue at {fmtHour(p.worstUnmet.hour)}
+                      {/* Which booths: a plaza can have spare booths on one side while the other is full. */}
+                      {p.worstUnmet.where && (
+                        <span style={{ display: "block", fontWeight: 500, fontSize: "0.66rem" }}>{p.worstUnmet.where} full</span>
+                      )}
+                    </span>
+                  )}
+                </div>
+              </div>
             ))}
-          </tbody>
-        </table>
-      </div>
+          </div>
+        </>
+      ) : (
+        <div style={{ overflowX: "auto" }}>
+          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "0.78rem" }}>
+            <thead>
+              <tr style={{ textAlign: "left", color: "var(--text-muted)", borderBottom: "1px solid var(--border-default)" }}>
+                <th style={{ padding: "6px 8px", fontWeight: 700 }}>Plaza</th>
+                <th style={{ padding: "6px 8px", fontWeight: 700 }}>Peak hour</th>
+                <th style={{ padding: "6px 8px", fontWeight: 700, textAlign: "right" }}>Booths</th>
+                <th style={{ padding: "6px 8px", fontWeight: 700, textAlign: "right" }}>Typical</th>
+                {days.map((d) => (
+                  <th key={d.date} style={{ padding: "6px 8px", fontWeight: 700, textAlign: "right", whiteSpace: "nowrap" }}>
+                    {new Date(`${d.date}T00:00:00`).toLocaleDateString("en-US", { weekday: "short" })}
+                    <span style={{ display: "block", fontWeight: 500, fontSize: "0.68rem" }}>
+                      {new Date(`${d.date}T00:00:00`).toLocaleDateString("en-US", { month: "short", day: "numeric" })}
+                    </span>
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {visible.map((r) => (
+                <tr key={r.plaza} style={{ borderBottom: "1px solid var(--border-default)" }}>
+                  <td style={{ padding: "6px 8px", fontWeight: 600, whiteSpace: "nowrap" }}>{r.plaza}</td>
+                  <td style={{ padding: "6px 8px", color: "var(--text-secondary)", whiteSpace: "nowrap" }}>{fmtHour(r.peakHour)}</td>
+                  <td
+                    title={r.booths != null ? r.boothBasis : "No toll booths mapped in OpenStreetMap: not capped"}
+                    style={{ padding: "6px 8px", textAlign: "right", fontVariantNumeric: "tabular-nums", color: "var(--text-muted)" }}
+                  >
+                    {r.booths ?? "—"}
+                  </td>
+                  <td style={{ padding: "6px 8px", textAlign: "right", fontVariantNumeric: "tabular-nums", color: "var(--text-secondary)" }}>{r.typical}</td>
+                  {r.need.map((n, i) => {
+                    const delta = n - r.typical;
+                    const short = r.short[i];
+                    return (
+                      <td key={days[i].date}
+                        title={short ? `At ${fmtHour(short.hour)} the ${short.where ?? "plaza's"} booths are full: about ${fmtInt(short.vehicles)} vehicles an hour queue with every one of them open.` : undefined}
+                        style={{
+                          padding: "6px 8px", textAlign: "right", fontVariantNumeric: "tabular-nums", fontWeight: delta !== 0 ? 800 : 500,
+                          color: delta > 0 ? "var(--color-danger)" : delta < 0 ? "var(--color-success)" : "var(--text-primary)",
+                          background: delta > 0 || short ? "color-mix(in srgb, var(--color-danger) 7%, transparent)" : undefined,
+                        }}>
+                        {n}{delta !== 0 && <span style={{ fontSize: "0.66rem", marginLeft: 3 }}>{delta > 0 ? `+${delta}` : delta}</span>}
+                        {short && <b style={{ color: "var(--color-danger)", marginLeft: 3 }}>!</b>}
+                      </td>
+                    );
+                  })}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
 
       {rows.length > 8 && (
         <button onClick={() => setShowAll((v) => !v)} style={{
@@ -232,9 +353,21 @@ export function BoothStaffingPanel({ byPlaza, plazaHour, typicalDaily }: {
       )}
 
       <Foot>
-        Volume is the {data.championModel ?? "champion"} forecast. Each plaza&apos;s share of the corridor and its peak-hour share are
-        measured over the selected Range; &ldquo;typical&rdquo; is the same calculation on the range&apos;s average day. Booth
-        throughput is the only assumption — the warehouse holds no plaza capacity, so it is yours to set.
+        Volume is the {data.champion.model ?? "champion"} forecast
+        {data.champion.wmapePct != null && <> (WMAPE {data.champion.wmapePct}%)</>}
+        {!data.champion.accepted && <>, which did <b>not</b> pass its acceptance gate — the staffing SHAPE comes from measured profiles, the level it is scaled to is less certain</>}.
+        {data.basis.forecastFrom && data.basis.profileTo && data.basis.forecastFrom <= data.basis.profileTo ? (
+          // Traffic was loaded after the model was trained: the "week ahead" is then a stretch the record already holds.
+          <> <b>Its first day, {data.basis.forecastFrom}, is already inside the record, which now runs to {data.basis.profileTo}:
+          the model was trained before the latest traffic was loaded, so this plan is for days already past. Retrain the volume models to plan the coming week.</b></>
+        ) : (
+          <> Its first day, {data.basis.forecastFrom}, follows the last recorded day.</>
+        )}
+        Profiles measured over {data.basis.profileFrom} to {data.basis.profileTo} across {data.basis.plazasProfiled} plazas.
+        Booth counts are from {data.basis.boothsFrom}, since the warehouse holds none: each plaza&apos;s booths for the movement
+        that pays there, per carriageway where known
+        {noBooths.length > 0 && <>; {listOf(noBooths)} {noBooths.length === 1 ? "has" : "have"} none mapped, so {noBooths.length === 1 ? "it is" : "they are"} not capped</>}.
+        Booth throughput is the one figure that is yours to set.
       </Foot>
     </Shell>
   );
@@ -244,29 +377,32 @@ export function BoothStaffingPanel({ byPlaza, plazaHour, typicalDaily }: {
  * Congestion response advisory.
  */
 export function CongestionResponsePanel() {
-  const { data, error } = useForecast();
+  /* The fuzzy controller runs server-side now (traffic-prescriptive.service.ts)
+     against the same forecast rows this panel used to read. Same memberships,
+     same nine rules, same centroid defuzzification — verified against an
+     independent reimplementation on all 20 segments before this was switched
+     over, because moving a model is only safe if it still gives the same
+     answer. Throughput is irrelevant to this half, so the default is fine. */
   const [showRest, setShowRest] = useState(false);
+  const { data, error } = usePrescriptive(350);
 
   const rows = useMemo(() => {
     if (!data) return [];
-    type Row = { segment: string; km: number; first: number | null; peak: number; peakHour: number; urgency: number; label: "Monitor" | "Prepare" | "Act" };
-    const bySeg = new Map<string, Row>();
-    for (const c of data.congestion) {
-      const p = Number(c.probability);
-      if (!Number.isFinite(p)) continue;
-      const high = String(c.state).toLowerCase() === "high";
-      const u = fuzzyUrgency(high ? p : 1 - p, c.hours);
-      const cur: Row = bySeg.get(c.segment) ?? { segment: c.segment, km: c.km, first: null, peak: 0, peakHour: 0, urgency: 0, label: "Monitor" };
-      if (high && cur.first == null) cur.first = c.hours;
-      if (high && p > cur.peak) { cur.peak = p; cur.peakHour = c.hours; }
-      if (u.score > cur.urgency) { cur.urgency = u.score; cur.label = u.label; }
-      bySeg.set(c.segment, cur);
-    }
-    return [...bySeg.values()].sort((a, b) => b.urgency - a.urgency || (a.first ?? 99) - (b.first ?? 99));
+    return data.congestion.map((c) => ({
+      segment: c.segment,
+      km: c.km ?? 0,
+      // The server reports the hour its winning row came from, and always as
+      // the probability of HIGH, so these read the same way round as before.
+      first: c.hoursAhead,
+      peak: c.probability,
+      peakHour: c.hoursAhead,
+      urgency: c.urgency,
+      label: c.label,
+    }));
   }, [data]);
 
-  if (error) return <Empty msg={`Forecast unavailable: ${error}`} />;
-  if (!data) return <Empty msg="Loading forecast…" />;
+  if (error) return <Empty msg={`Prescriptive traffic unavailable: ${error}`} />;
+  if (!data) return <Empty msg="Ranking segments…" />;
   if (rows.length === 0) return <Empty msg="No congestion forecast available." />;
 
   const act = rows.filter((r) => r.label === "Act");
@@ -274,6 +410,9 @@ export function CongestionResponsePanel() {
   const top = act.slice(0, 3);
   const rest = rows.filter((r) => !top.includes(r) && r.label !== "Monitor");
   const lead = top.length ? Math.min(...top.map((r) => r.first ?? 99)) : null;
+  // A segment with no forecast rows is not a quiet segment. It is named, and
+  // "corridor clear" is not said while any is missing.
+  const missing = data.congestionMissing ?? [];
 
   const ACTION: Record<string, string> = {
     Act: "Deploy counter-flow and post VMS advisories before the first High hour.",
@@ -297,6 +436,8 @@ export function CongestionResponsePanel() {
           </>
         ) : prepare.length > 0 ? (
           <><b>No segment reaches Act.</b> {prepare.length} at Prepare — stage, don&apos;t intervene.</>
+        ) : missing.length > 0 ? (
+          <><b>No forecast segment crosses Prepare</b> inside the 12-hour horizon, but {missing.length} segment{missing.length === 1 ? " has" : "s have"} no forecast at all.</>
         ) : (
           <><b>Corridor clear.</b> No segment crosses Prepare inside the 12-hour horizon.</>
         )}
@@ -338,6 +479,13 @@ export function CongestionResponsePanel() {
               ))}
             </div>
           )}
+        </div>
+      )}
+
+      {missing.length > 0 && (
+        <div style={{ fontSize: "0.76rem", color: "var(--text-secondary)" }}>
+          <b style={{ color: "var(--color-warning)" }}>No forecast:</b> {listOf(missing)}. Not ranked, and not clear either:
+          treat {missing.length === 1 ? "it" : "them"} as unknown until the congestion model next runs.
         </div>
       )}
 

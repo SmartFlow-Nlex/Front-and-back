@@ -139,6 +139,117 @@ export function loadForecast(): Promise<ForecastPayload> {
   return cache;
 }
 
+/* ------------------------------------------------------ server-side ----
+ *
+ * The booth-staffing and congestion models now run in the backend against the
+ * warehouse (traffic-prescriptive.service.ts). The LP and the fuzzy controller
+ * below are kept because the sandbox and the tests still call them directly,
+ * but the PANELS read these types instead: the recommendation should not
+ * depend on which date range the operator happens to have selected on the
+ * descriptive tab, and an hour-by-hour plan needs the full hourly profile,
+ * which the page never loaded.
+ */
+export type BoothHour = {
+  hour: number;
+  demand: number;
+  /** Booths that would clear the hour, whether or not the plaza has that many. */
+  need: number;
+  /** Booths to open: need, limited to the booths the plaza has. */
+  staffed: number;
+  /** Vehicles left queuing with `staffed` open. */
+  unmet: number;
+};
+export type BoothPlazaDay = {
+  plaza: string;
+  sharePct: number;
+  peakHour: number;
+  peakNeed: number;
+  peakStaffed: number;
+  /** Booth lanes for the movement that pays there (OpenStreetMap); null where none are mapped. */
+  booths: number | null;
+  boothBasis: string;
+  typicalPeakNeed: number;
+  typicalPeakStaffed: number;
+  unmetVehicles: number;
+  /** The hour leaving the most vehicles, and which booths ("SB exit") leave them. */
+  worstUnmet: { hour: number; vehicles: number; need: number; staffed: number; where: string | null } | null;
+  hours: BoothHour[];
+};
+export type BoothDay = {
+  date: string;
+  dayType: "weekday" | "weekend";
+  corridorForecast: number;
+  totalPeakBooths: number;
+  unmetVehicles: number;
+  plazas: BoothPlazaDay[];
+};
+/** A plaza-day whose demand outruns every booth of one of its booth sets. */
+export type OverCapacity = {
+  date: string;
+  plaza: string;
+  where: string;
+  hour: number;
+  vehicles: number;
+  need: number;
+  booths: number;
+};
+export type CongestionAdvice = {
+  segment: string;
+  km: number | null;
+  probability: number;
+  hoursAhead: number;
+  urgency: number;
+  label: "Monitor" | "Prepare" | "Act";
+  action: string;
+};
+export type TrafficPrescriptive = {
+  champion: { model: string | null; wmapePct: number | null; accepted: boolean };
+  assumptions: string[];
+  basis: {
+    profileFrom: string | null;
+    profileTo: string | null;
+    plazasProfiled: number;
+    forecastFrom: string | null;
+    forecastTo: string | null;
+    throughputPerBoothHour: number;
+    poolBoothHours: number | null;
+    boothsFrom: string;
+    plazasWithoutBooths: string[];
+  };
+  shiftPlan: BoothDay | null;
+  week: BoothDay[];
+  overCapacity: OverCapacity[];
+  congestion: CongestionAdvice[];
+  /** Segments on the exit list with no congestion forecast. */
+  congestionMissing: string[];
+};
+
+/* Keyed by throughput: changing the dial is a different question, not a
+   refresh, and each answer is worth keeping while the operator compares. */
+const prescriptiveCache = new Map<string, Promise<TrafficPrescriptive>>();
+
+export function loadPrescriptive(throughput: number): Promise<TrafficPrescriptive> {
+  const key = String(throughput);
+  const hit = prescriptiveCache.get(key);
+  if (hit) return hit;
+  const req = fetch(`${BACKEND}/api/traffic/prescriptive?throughput=${throughput}`)
+    .then((r) => {
+      if (!r.ok) throw new Error(`prescriptive ${r.status}`);
+      return r.json();
+    })
+    .then((j) => {
+      if (!j?.success) throw new Error(j?.message ?? "request failed");
+      return j.data as TrafficPrescriptive;
+    })
+    .catch((e) => {
+      // A failed fetch must not be cached, or every later mount replays it.
+      prescriptiveCache.delete(key);
+      throw e;
+    });
+  prescriptiveCache.set(key, req);
+  return req;
+}
+
 /* ------------------------------------------------------------------ LP ----
  *
  * Staffing allocation, as a linear program:

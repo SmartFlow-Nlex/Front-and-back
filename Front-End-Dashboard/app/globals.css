@@ -10676,14 +10676,27 @@ details[open] > .evidence-summary .evidence-close-label { display: inline; }
   gap: 8px;
 }
 .sandbox-main.is-expanded .sandbox-view-seg .k { color: #93a4c4; }
+/* Pinned to the BOTTOM, not 62px from the top.
+ *
+ * The head above it is absolutely positioned and its height depends on what
+ * is in it — the carriageway tabs, the speed buttons, Pause, Reset, Controls,
+ * Full screen, and now a replay row that appears only while reviewing. A
+ * hint strip at a fixed 62px was fine for the head it was measured against
+ * and lands on top of the buttons the moment that head grows or wraps.
+ *
+ * The bottom of the screen has no such problem: the metric row is the only
+ * thing there and its height is known, so clearing it is a fixed offset that
+ * cannot drift. */
 .sandbox-main.is-expanded .sandbox-fs-keys {
-  top: 62px;
+  top: auto;
+  bottom: 74px;
   left: 50%;
   transform: translateX(-50%);
   padding: 7px 12px;
   margin: 0;
   color: #93a4c4;
   white-space: nowrap;
+  pointer-events: none;
 }
 .sandbox-main.is-expanded .sandbox-fs-keys b { color: #dce6fb; }
 /* The readout sits along the bottom, out of the traffic's way. */
@@ -11116,6 +11129,39 @@ details[open] > .evidence-summary .evidence-close-label { display: inline; }
   gap: 4px;
   margin-top: 10px;
 }
+
+/* "Where": the incident log's busiest places, a click on the road, a plaza, or a km. */
+.sandbox-scn-place { margin-top: 10px; }
+.sandbox-scn-place .sandbox-mini-label { margin-top: 0; }
+.sandbox-scn-place .sandbox-speed-seg { flex-wrap: wrap; margin: 0 0 6px; }
+.sandbox-scn-place .sandbox-speed-seg button:disabled { opacity: 0.45; cursor: not-allowed; }
+.sandbox-scn-hot { display: flex; flex-direction: column; gap: 4px; }
+.sandbox-scn-hot-row {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 1px;
+  text-align: left;
+  padding: 6px 9px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-default);
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: border-color var(--transition-fast), background var(--transition-fast);
+}
+.sandbox-scn-hot-row b { font-size: 0.8rem; color: var(--text-primary); }
+.sandbox-scn-hot-row span { font-size: 0.72rem; color: var(--text-muted); line-height: 1.35; }
+.sandbox-scn-hot-row:hover { border-color: color-mix(in srgb, var(--page-accent, var(--brand-primary)) 45%, transparent); }
+.sandbox-scn-hot-row.active {
+  border-color: color-mix(in srgb, var(--page-accent, var(--brand-primary)) 70%, transparent);
+  background: color-mix(in srgb, var(--page-accent, var(--brand-primary)) 10%, transparent);
+}
+.sandbox-scn-site { display: flex; flex-direction: column; gap: 6px; }
+.sandbox-scn-site select { width: 100%; }
+.sandbox-scn-stations { display: flex; flex-direction: column; gap: 3px; }
+.sandbox-scn-check { display: flex; align-items: center; gap: 6px; font-size: 0.78rem; color: var(--text-secondary); cursor: pointer; }
+.sandbox-scn-check input { margin: 0; }
 .sandbox-scn-desc {
   margin: 4px 0 0;
   font-size: 0.74rem;
@@ -11436,4 +11482,227 @@ details[open] > .evidence-summary .evidence-close-label { display: inline; }
     gap: 6px;
     font-size: 0.74rem;
   }
+}
+
+/* Data Management, "What can I upload?": the layouts in one block per area,
+   side by side. A block with more than two layouts is twice as wide and lists
+   them in two columns, so the blocks come out about the same height. */
+.dm-formats {
+  container-type: inline-size;
+}
+
+.dm-format-groups {
+  display: grid;
+  grid-template-columns: 1fr 2fr 1fr 1fr;
+  grid-auto-flow: dense;   /* a smaller block fills the gap a wide one leaves */
+  gap: 12px;
+  margin-top: 12px;
+}
+
+.dm-format-group {
+  padding: 12px 14px;
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-md);
+  background: var(--bg-surface-hover);
+}
+
+.dm-format-group h4 {
+  margin: 0 0 8px;
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--text-secondary);
+}
+
+.dm-format-group ul {
+  display: grid;
+  gap: 10px 18px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.dm-format-group.is-wide ul {
+  grid-template-columns: 1fr 1fr;
+}
+
+.dm-format-group li b {
+  display: block;
+  font-size: 0.88rem;
+  color: var(--text-primary);
+}
+
+.dm-format-group li span {
+  display: block;
+  margin-top: 2px;
+  font-size: 0.78rem;
+  line-height: 1.4;
+  color: var(--text-secondary);
+}
+
+.dm-format-group li.is-off {
+  opacity: 0.7;
+}
+
+@container (max-width: 1000px) {
+  .dm-format-groups {
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .dm-format-group.is-wide {
+    grid-column: span 2;
+  }
+}
+
+@container (max-width: 560px) {
+  .dm-format-groups {
+    grid-template-columns: 1fr;
+  }
+
+  .dm-format-group.is-wide {
+    grid-column: auto;
+  }
+
+  .dm-format-group.is-wide ul {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* ── Audit Log insights ──────────────────────────────────────────────────── */
+.audit-insights {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 320px), 1fr));
+  gap: 12px;
+  margin-top: 16px;
+}
+
+.audit-card {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+  padding: 14px 16px;
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-md);
+  background: var(--bg-surface);
+  box-shadow: var(--shadow-sm);
+}
+
+.audit-card h3 {
+  margin: 0 0 4px;
+  font-size: 0.78rem;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--text-secondary);
+}
+
+.audit-bars {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.audit-bars li {
+  display: grid;
+  grid-template-columns: minmax(90px, 38%) 1fr auto;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.8rem;
+}
+
+.audit-bar-label {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  color: var(--text-primary);
+}
+
+.audit-bar-track {
+  height: 8px;
+  border-radius: var(--radius-full);
+  background: var(--bg-surface-hover);
+  overflow: hidden;
+}
+
+.audit-bar-fill {
+  display: block;
+  height: 100%;
+  border-radius: var(--radius-full);
+  background: var(--page-accent, var(--brand-primary));
+}
+
+.audit-bar-value {
+  font-variant-numeric: tabular-nums;
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+
+.audit-days {
+  display: flex;
+  align-items: flex-end;
+  gap: 2px;
+  height: 84px;
+}
+
+.audit-day {
+  position: relative;
+  display: flex;
+  flex: 1;
+  flex-direction: column-reverse;
+  height: 100%;
+  min-width: 3px;
+}
+
+.audit-day-actions,
+.audit-day-views {
+  display: block;
+  width: 100%;
+}
+
+.audit-day-actions {
+  border-radius: 2px 2px 0 0;
+  background: var(--page-accent, var(--brand-primary));
+}
+
+.audit-day-views {
+  background: var(--color-purple-bg);
+}
+
+.audit-key {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  margin: 0 4px 0 8px;
+  border-radius: 2px;
+  vertical-align: -1px;
+}
+
+.audit-key.actions { margin-left: 0; background: var(--page-accent, var(--brand-primary)); }
+.audit-key.views { background: var(--color-purple-bg); }
+
+.audit-note,
+.audit-line,
+.audit-empty {
+  margin: 0;
+  font-size: 0.8rem;
+  color: var(--text-secondary);
+}
+
+.audit-line b,
+.audit-note b {
+  color: var(--text-primary);
+}
+
+.audit-empty,
+.audit-muted {
+  color: var(--text-muted);
+}
+
+.audit-warn,
+.audit-note b.audit-warn {
+  color: var(--color-warning);
 }

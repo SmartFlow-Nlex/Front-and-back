@@ -1,41 +1,28 @@
 import { db } from "../config/db.js";
 
-// [DEV-01] Save Audit Event
-export async function saveAuditEventInDb(data: any) {
+// Entries are written by services/audit.ts; this reads them.
+
+/** The latest entries, newest first. Page views are left out unless asked for: they would bury every other entry. */
+export async function getAuditLogsFromDb(filters: {
+  user_id?: string; action?: string; module?: string; include_views?: "0" | "1"; limit?: number;
+  start_date?: string; end_date?: string;
+}) {
   if (!db) return null;
   try {
-    const { rows } = await db.query(`
-      INSERT INTO audit_logs (user_id, action, target_resource, details) 
-      VALUES ($1, $2, $3, $4)
-      RETURNING *
-    `, [data.user_id, data.action, data.target_resource, JSON.stringify(data.details || {})]);
-    return rows[0];
-  } catch (error) {
-    console.error("Database query failed for save audit event:", error);
-    return null;
-  }
-}
-
-// [DEV-02, DEV-03] Get Audit Logs (with basic filtering)
-export async function getAuditLogsFromDb(filters: any) {
-  if (!db) return null;
-  try {
-    let query = `SELECT * FROM audit_logs WHERE 1=1`;
-    const params = [];
-    let idx = 1;
-
-    if (filters.user_id) {
-      query += ` AND user_id = $${idx++}`;
-      params.push(filters.user_id);
-    }
-    if (filters.action) {
-      query += ` AND action = $${idx++}`;
-      params.push(filters.action);
-    }
-
-    query += ` ORDER BY timestamp DESC LIMIT 100`;
-
-    const { rows } = await db.query(query, params);
+    const where: string[] = [];
+    const params: unknown[] = [];
+    const add = (sql: string, v: unknown) => { params.push(v); where.push(sql.replace("?", `$${params.length}`)); };
+    if (filters.user_id) add("user_id = ?", filters.user_id);
+    if (filters.action) add("action = ?", filters.action);
+    if (filters.module) add("module = ?", filters.module);
+    if (filters.start_date) add(`"timestamp" >= ?`, filters.start_date);
+    if (filters.end_date) add(`"timestamp" <= ?`, filters.end_date);
+    if (filters.include_views !== "1") where.push(`action <> 'page.viewed'`);
+    params.push(filters.limit ?? 500);
+    const { rows } = await db.query(
+      `SELECT * FROM audit_logs ${where.length ? `WHERE ${where.join(" AND ")}` : ""} ORDER BY "timestamp" DESC LIMIT $${params.length}`,
+      params,
+    );
     return rows;
   } catch (error) {
     console.error("Database query failed for list audit logs:", error);

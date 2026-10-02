@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import {
   addEventToBucket,
   addTargets,
@@ -37,6 +37,17 @@ import DirectionPill, { DIRECTION_NAME } from "./DirectionPill";
 import FamilyIcon from "./FamilyIcon";
 import ScenePreview from "./ScenePreview";
 import InfoTooltip from "../../../../components/dashboard/InfoTooltip";
+import {
+  HOTSPOT_FAMILIES,
+  SITE_FAMILIES,
+  candidatesFrom,
+  resolvePlace,
+  stationLabel,
+  useHotspots,
+  type PickResult,
+  type PlaceMode,
+  type SiteOption,
+} from "./placement";
 
 /**
  * The Add-event panel and the event list (phase 3).
@@ -96,6 +107,8 @@ export type DirectionScenarioData = {
   skipPlan: SkipPlan | null;
   onSkip: () => void;
   onCancelSkip: () => void;
+  /** Toll plazas, ramps and service areas on this carriageway's stretch. */
+  sites: readonly SiteOption[];
 };
 
 type Props = {
@@ -118,6 +131,12 @@ type Props = {
    * after warm-up (the engine's clock); this is what lets the form and the list speak in time of day.
    */
   clockStartMin: number;
+  /** Arm the canvas: the next click on the road (or a booth) is handed back here. */
+  onPickOnRoad?: (direction: Direction, done: (p: PickResult) => void) => void;
+  /** Disarm it again. */
+  onCancelPick?: () => void;
+  /** Outline a plaza or service area on the canvas while it is the chosen place. */
+  onHighlight?: (facilityId: string | null) => void;
 };
 
 type DurationChoice = "sampled" | "p50" | "p90" | "manual";
@@ -418,11 +437,17 @@ function EventRow({
   // "Shoulder" is right for a breakdown beside the road; rain has no location at all (its zone is the whole
   // segment, see ASSUMPTIONS.RAIN_ZONE) so it gets its own word instead of borrowing a place that isn't true of it.
   const place =
-    event.variant.family === "rain"
-      ? `Corridor-wide · ${ASSUMPTIONS.RAIN_SPEED_KMH.value[event.variant.intensity]} km/h cap`
-      : event.lane === null
-        ? "Shoulder"
-        : `Lane ${event.lane}`;
+    event.site
+      ? `${event.site.facilityName} · ${
+          event.site.kind === "approach"
+            ? event.site.facilityId.startsWith("barrier:") ? "before the booths" : "on the ramp"
+            : `${event.site.kind} ${event.site.stations.map((i) => i + 1).join(", ")}`
+        }`
+      : event.variant.family === "rain"
+        ? `Corridor-wide · ${ASSUMPTIONS.RAIN_SPEED_KMH.value[event.variant.intensity]} km/h cap`
+        : event.lane === null
+          ? "Shoulder"
+          : `Lane ${event.lane}`;
   const where = `${place} · Km ${event.positionKm.toFixed(2)} · starts ${clockLabel(clockStartMin + event.startS / 60)}`;
   return (
     <div className={`sandbox-scn-event${invalid ? " is-invalid" : ""}`} data-scn-event={event.id}>
@@ -491,6 +516,17 @@ export default function ScenarioPanel(props: Props) {
   const [wantBoth, setWantBoth] = useState(false);
   // The scenario's description lives behind the "i" on its picture rather than taking up the panel.
   const [infoOpen, setInfoOpen] = useState(false);
+  /* Where: from the incident log, a click on the road, a plaza or service
+     area, or a typed km — see placement.ts. The log is the default for
+     anything it records: "where it usually happens" is the first question
+     to ask of an incident, and the answer is in the corridor's own record. */
+  const [placeMode, setPlaceMode] = useState<PlaceMode>("data");
+  const [hotChoice, setHotChoice] = useState<string | null>(null);
+  const [pick, setPick] = useState<PickResult | null>(null);
+  const [picking, setPicking] = useState(false);
+  const [siteId, setSiteId] = useState<string | null>(null);
+  const [siteStations, setSiteStations] = useState<number[]>([0]);
+  const [siteApproach, setSiteApproach] = useState(false);
 
   const pickFamily = (f: FamilyKey) => {
     const t = getTemplate(f);
@@ -501,6 +537,9 @@ export default function ScenarioPanel(props: Props) {
     setExtraLanes([]);
     setPosKm(null);
     setRefusal(null);
+    setHotChoice(null);
+    // Keep the operator's way of placing wherever it still applies to the new family.
+    setPlaceMode((m) => (m === "data" && !HOTSPOT_FAMILIES.has(f) ? "km" : m === "site" && !SITE_FAMILIES.has(f) ? "km" : m === "km" && HOTSPOT_FAMILIES.has(f) ? "data" : m));
     // A family with no calibration entry only accepts Manual (resolveDuration throws otherwise);
     // force it here so the panel can never sit on a now-invalid Sampled/Median/90th choice.
     if (t.durationSource === "manual_only") setChoice("manual");
@@ -530,10 +569,64 @@ export default function ScenarioPanel(props: Props) {
   // Where this Add goes: one carriageway (the focused one) or, for weather and flooding in Both mode, both.
   const targets = addTargets(template.carriageways, directions, direction, wantBoth);
   const onBoth = targets.length > 1;
+
+  // Where the event goes. With two targets (weather, flooding) only a km makes sense.
+  const mode: PlaceMode = onBoth ? "km" : placeMode === "data" && !HOTSPOT_FAMILIES.has(family) ? "km" : placeMode === "site" && !SITE_FAMILIES.has(family) ? "km" : placeMode;
+  const defaultKm = Math.min(toKm, Math.max(fromKm, data[targets[0]].kmAtPct(template.defaultPlacement.pct)));
+  const sites = onBoth ? [] : data[direction].sites;
+  const hot = useHotspots(family, direction, fromKm, toKm, mode === "data");
+  const candidates = candidatesFrom(hot.data, SITE_FAMILIES.has(family) ? sites : [], fromKm, toKm);
+  const place = resolvePlace({
+    mode,
+    defaultKm,
+    fromKm,
+    toKm,
+    posKm,
+    candidates,
+    choice: hotChoice,
+    pick: pick && pick.direction === direction ? pick : null,
+    sites,
+    siteId,
+    siteStations,
+    siteApproach,
+    hotLoading: hot.loading,
+    hotError: hot.error,
+  });
+  const site = SITE_FAMILIES.has(family) ? place.site : null;
+  const siteSel = sites.find((x) => x.id === siteId) ?? sites[0] ?? null;
+  // The plaza or service area being aimed at is outlined on the road.
+  const highlightId = site?.facilityId ?? (mode === "site" ? siteSel?.id ?? null : null);
+  const { onHighlight, onPickOnRoad, onCancelPick } = props;
+  useEffect(() => {
+    onHighlight?.(highlightId);
+  }, [highlightId, onHighlight]);
+  useEffect(() => () => onHighlight?.(null), [onHighlight]);
+  const armPick = () => {
+    if (!onPickOnRoad) return;
+    setPicking(true);
+    onPickOnRoad(direction, (res) => {
+      setPick(res);
+      setPicking(false);
+      setLane(null);
+    });
+  };
+  const choosePlaceMode = (m: PlaceMode) => {
+    setPlaceMode(m);
+    setLane(null);
+    if (m === "pick") armPick();
+    else if (picking) {
+      setPicking(false);
+      onCancelPick?.();
+    }
+  };
   // Lane numbers mean the same on both carriageways (lane 1 against the median), so with two targets the
   // lane list is the shorter road's and both events get the same lane.
   const laneCap = Math.min(...targets.map((d) => data[d].laneCount));
-  const laneNow = lane === null ? defaultOperatorLane(template, laneCap) : Math.min(Math.max(1, lane), laneCap);
+  // The place's own lane (the log's usual lane there, or the lane clicked) until the operator picks one.
+  const laneNow =
+    lane === null
+      ? Math.min(Math.max(1, place.lane ?? defaultOperatorLane(template, laneCap)), laneCap)
+      : Math.min(Math.max(1, lane), laneCap);
   // Re-clamped every render against the current laneCap/laneNow, same spirit as laneNow above: a lane
   // picked before switching to Both (a narrower road) or before changing the primary lane never lingers
   // as an out-of-range or duplicate entry.
@@ -541,11 +634,12 @@ export default function ScenarioPanel(props: Props) {
     ? [...new Set(extraLanes.filter((l) => l >= 1 && l <= laneCap && l !== laneNow))]
     : [];
   // One place for both carriageways: the first target's default, so Both does not put the two events at different km.
-  const kmNow = Math.min(toKm, Math.max(fromKm, posKm === null ? data[targets[0]].kmAtPct(template.defaultPlacement.pct) : posKm));
+  const kmNow = Math.min(toKm, Math.max(fromKm, place.positionKm));
   const variant = variantFor(family, vehicle, cause, label, intensity);
   const duration: DurationMode =
     choice === "sampled" ? { kind: "sampled", seed } : choice === "p50" ? { kind: "p50" } : choice === "p90" ? { kind: "p90" } : { kind: "manual", minutes: manualMin };
-  const specFor = (d: Direction): NewEventSpec => ({ variant, direction: d, lane: hasLane(family) ? laneNow : null, extraLanes: extraLanesNow, positionKm: kmNow, startMinutes: startMin, duration });
+  // At a plaza the event has no lane of the carriageway: the booth or pump is its place.
+  const specFor = (d: Direction): NewEventSpec => ({ variant, direction: d, lane: site ? null : hasLane(family) ? laneNow : null, extraLanes: site ? [] : extraLanesNow, positionKm: kmNow, startMinutes: startMin, duration, site });
 
   // The same call "Add event" makes, once per target, so what is shown is what will be stored (and why not, if
   // it will not). With two targets the Add is all or nothing: one refusal blocks both, and names its carriageway.
@@ -554,6 +648,8 @@ export default function ScenarioPanel(props: Props) {
     const v = addEventToBucket(d, data[d].events, specFor(d), data[d].road, data[d].nextSeq, data[d].manualClosure);
     if (!v.ok && refusalNow === null) refusalNow = v.reason;
   }
+  // A place not chosen yet comes first: until there is one, nothing else can be judged.
+  if (place.incomplete) refusalNow = place.note ?? "Choose where the event happens.";
   let preview: ResolvedDuration | null = null;
   try {
     preview = resolveDuration(variant, duration);
@@ -713,8 +809,109 @@ export default function ScenarioPanel(props: Props) {
         </label>
       )}
 
+      <div className="sandbox-scn-place" data-scn="place">
+        <span className="sandbox-mini-label">Where</span>
+        <div className="sandbox-speed-seg" role="radiogroup" aria-label="Where the event happens">
+          {HOTSPOT_FAMILIES.has(family) && !onBoth && (
+            <button role="radio" aria-checked={mode === "data"} className={mode === "data" ? "active" : ""} data-scn-place="data" onClick={() => choosePlaceMode("data")}
+                    title="Where the incident log records this kind of event most often on this stretch">
+              Most frequent
+            </button>
+          )}
+          {!onBoth && onPickOnRoad && (
+            <button role="radio" aria-checked={mode === "pick"} className={mode === "pick" ? "active" : ""} data-scn-place="pick" onClick={() => choosePlaceMode("pick")}
+                    title="Click a lane, a toll booth or a pump on the road">
+              Pick on road
+            </button>
+          )}
+          {SITE_FAMILIES.has(family) && !onBoth && (
+            <button role="radio" aria-checked={mode === "site"} className={mode === "site" ? "active" : ""} data-scn-place="site" onClick={() => choosePlaceMode("site")}
+                    disabled={sites.length === 0}
+                    title={sites.length === 0 ? "No toll plaza, ramp or service area on this stretch for this carriageway — widen the window, or frame one from the Corridor section." : "At a toll plaza's booths, a service area's pumps, or on a ramp"}>
+              At a plaza
+            </button>
+          )}
+          <button role="radio" aria-checked={mode === "km"} className={mode === "km" ? "active" : ""} data-scn-place="km" onClick={() => choosePlaceMode("km")}>
+            Km
+          </button>
+        </div>
+
+        {mode === "data" && (
+          <div className="sandbox-scn-hot" data-scn="hotspots">
+            {candidates.slice(0, 5).map((c, i) => {
+              const on = (hotChoice ?? candidates[0]?.key) === c.key;
+              return (
+                <button key={c.key} className={`sandbox-scn-hot-row${on ? " active" : ""}`} data-scn-hot={i}
+                        onClick={() => { setHotChoice(c.key); setLane(null); }}>
+                  <b>{c.label}</b>
+                  <span>{c.detail}</span>
+                </button>
+              );
+            })}
+            {hot.data && (
+              <span className="sandbox-slider-hint" data-scn="hot-source">
+                {hot.data.inWindow.toLocaleString()} recorded on this stretch of the {direction === "NB" ? "northbound" : "southbound"} carriageway
+                {hot.data.period ? `, ${hot.data.period.from} to ${hot.data.period.to}` : ""}. Source: {hot.data.source}.{hot.data.note ? ` ${hot.data.note}` : ""}
+              </span>
+            )}
+          </div>
+        )}
+
+        {mode === "pick" && (
+          <div className="sandbox-btn-row" style={{ marginTop: 4 }}>
+            <button className={`btn-muted${picking ? " active" : ""}`} data-scn="pick-arm" onClick={() => (picking ? (setPicking(false), onCancelPick?.()) : armPick())}>
+              {picking ? "Cancel picking" : pick && pick.direction === direction ? "Pick again" : "Pick on road"}
+            </button>
+          </div>
+        )}
+
+        {mode === "site" && siteSel && (
+          <div className="sandbox-scn-site" data-scn="site">
+            <label>
+              Place
+              <select data-scn="site-id" value={siteSel.id} onChange={(e) => { setSiteId(e.target.value); setSiteStations([0]); setSiteApproach(false); }}>
+                {sites.map((x) => (
+                  <option key={x.id} value={x.id}>{x.name} · Km {x.km.toFixed(2)}</option>
+                ))}
+              </select>
+            </label>
+            {siteSel.stations > 0 ? (
+              <div className="sandbox-scn-stations" data-scn="stations">
+                {Array.from({ length: siteSel.stations }, (_, i) => (
+                  <label key={i} className="sandbox-scn-check">
+                    <input type="checkbox" data-scn-station={i} checked={!siteApproach && siteStations.includes(i)} disabled={siteApproach}
+                           onChange={(e) => {
+                             const next = e.target.checked ? [...siteStations, i] : siteStations.filter((x) => x !== i);
+                             if (next.length > 0) setSiteStations(next);
+                           }} />
+                    {stationLabel(siteSel.kind, i, siteSel.stations)}
+                  </label>
+                ))}
+                <label className="sandbox-scn-check">
+                  <input type="checkbox" data-scn="site-approach" checked={siteApproach} onChange={(e) => setSiteApproach(e.target.checked)} />
+                  {siteSel.kind === "barrier" ? "Before the booths (the plaza's approach)" : "On the ramp before the " + (siteSel.kind === "service_area" ? "pumps" : "booths") + " — blocks all of them"}
+                </label>
+              </div>
+            ) : (
+              <span className="sandbox-slider-hint">An untolled ramp: the event blocks the ramp itself, single file, so everything using it stops.</span>
+            )}
+          </div>
+        )}
+
+        {mode === "km" && (
+          <div className="sandbox-scn-row">
+            <label>
+              Position (km)
+              <NumberField value={kmNow} min={fromKm} max={toKm} step={0.05} decimals={2} scn="km" onCommit={setPosKm} />
+            </label>
+          </div>
+        )}
+        {place.note && mode !== "data" && <span className="sandbox-slider-hint" data-scn="place-note">{place.note}</span>}
+        {mode === "data" && place.note && candidates.length === 0 && <span className="sandbox-slider-hint" data-scn="place-note">{place.note}</span>}
+      </div>
+
       <div className="sandbox-scn-row">
-        {hasLane(family) && (
+        {hasLane(family) && !site && (
           <label>
             Lane
             <select data-scn="lane" value={laneNow} onChange={(e) => setLane(Number(e.target.value))}>
@@ -725,7 +922,7 @@ export default function ScenarioPanel(props: Props) {
           </label>
         )}
       </div>
-      {canAddExtraLanes(family) && lane !== null && (
+      {canAddExtraLanes(family) && lane !== null && !site && (
         <div className="sandbox-scn-row" data-scn="extra-lanes">
           <label style={{ flex: 1, minWidth: 0 }}>
             <span className="sandbox-mini-label" style={{ margin: "0 0 3px" }}>
@@ -788,13 +985,6 @@ export default function ScenarioPanel(props: Props) {
           />
         </label>
       </div>
-      <div className="sandbox-scn-row">
-        <label>
-          Position (km)
-          <NumberField value={kmNow} min={fromKm} max={toKm} step={0.05} decimals={2} scn="km" onCommit={setPosKm} />
-        </label>
-      </div>
-
       <span className="sandbox-mini-label">Duration</span>
       {template.durationSource === "manual_only" ? (
         <p className="sandbox-scn-desc" data-scn="manual-only-note">

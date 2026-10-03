@@ -158,7 +158,7 @@ async function getData<T>(path: string): Promise<T> {
   }
   if (!body?.success) {
     // A 404 here means a backend started before this endpoint existed.
-    throw new Error(body?.error ?? `${path} answered ${response.status}${response.status === 404 ? " (restart the backend to pick up this page's endpoints)" : ""}`);
+    throw new Error(body?.error ?? body?.message ?? `${path} answered ${response.status}${response.status === 404 ? " (restart the backend to pick up this page's endpoints)" : ""}`);
   }
   return body.data as T;
 }

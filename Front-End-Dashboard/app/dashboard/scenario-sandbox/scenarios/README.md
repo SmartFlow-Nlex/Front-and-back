@@ -19,7 +19,7 @@ the [lane reallocation](#lane-reallocation) control.
 | `catalogue.ts` | What an operator can add: the 9 `ScenarioTemplate`s, their phases, resources, defaults, and the `FamilyKey`/`ScenarioVariant` type machinery. Structure only — no numbers live here except display labels/ordering. |
 | `sampler.ts` | Turns a variant + a `DurationMode` (`sampled` / `p50` / `p90` / `manual`) into a `ResolvedDuration`, via `calibration.json`'s quantiles and the breakdown fallback hierarchy (cause × vehicle → cause → vehicle → family). `resolveDuration` is the one entry point; `calibratedVariantOf()` is where it branches for a family with no calibration entry. |
 | `adapter.ts` | The pure core: `composeInterventions(manual, events, simTime, road, previous) -> { interventions, owners }` is the ONE function that decides what the engine holds, given the operator's own settings and the scenario events. Also: scheduling (`schedulePhases`, `boundaryTimes`), conflict/ownership rules, the `EngineBinding` that applies a composition to a real `TrafficSim`, and every view the UI reads (`resolutionView`, `canvasMarks`, `effectiveState`, …). |
-| `../sceneArt.ts` | The drawing of every event on the canvas: rain, flowing flood water, roadworks, breakdowns, collisions and their responders, the movable barrier and borrowed lanes. Pure canvas drawing that reads `SceneMark`s and imports only types, so `verify.ts` runs it in Node against a recording context. |
+| `../sceneArt.ts` | The drawing of every event on the canvas: rain, flowing flood water, roadworks, breakdowns, collisions and their responders, and the borrowed lanes with their cones. Pure canvas drawing that reads `SceneMark`s and imports only types, so `verify.ts` runs it in Node against a recording context. |
 | `../vehiclePaint.ts` | The colour mix of the traffic: palettes and weights for cars, buses, truck cabs and trailers, and `paintFor(id, class)`. Pure decoration; `verify.ts` checks the spread. |
 | `../motorcycleArt.ts` | The motorcycle sprite (slim bike, rider's shoulders and helmet, lights), pure drawing that `verify.ts` runs against a recording context. |
 | `tools/motorcycle_share.py` | Counts the motorcycle records in the client's breakdown exports and where NLEX files them (reads only the vehicle type and class columns, never a plate or a driver). Read-only. |
@@ -166,6 +166,25 @@ scenario is chosen and offers what applies to it (one carriageway in NB-only or 
 Which carriageways a click means is `addTargets` in `adapter.ts` (pure, pinned in `verify.ts`); which
 families reach both is data on the template.
 
+### Dragging a scenario onto the road
+
+Since 2026-10-03 the scenario chips can be **dragged onto the road** and dropped where the event should
+happen.
+- **While dragging,** the road is outlined. A ring under the pointer names the place it would land (carriageway,
+  lane and km, or the booth or pump of a plaza), and turns red where nothing can go (the median, the verge, or
+  a booth for a family that happens on a lane).
+- **Placement:** a drop goes through the same `resolvePick` as "Pick on the road", including a lane lent
+  under a lane reallocation.
+- **The rest of the event** comes from the form below: vehicle, cause, duration and the Start time. If that
+  start has already passed, the event starts now.
+- **Carriageway:** the event goes on the carriageway it was dropped on. Rain and flooding set to **Both** go
+  on both, at the dropped km.
+- **Refusals:** a refusal (a conflict, say) is shown in the panel and under the road, and nothing is added.
+
+The chip sets `SCENARIO_DRAG_TYPE` (`placement.ts`). The page resolves the drop, and the panel adds the
+event through `dropRef` (`ScenarioDrop`). HTML drag and drop needs a mouse; on a touch screen, use "Pick on
+the road".
+
 ### Reset
 
 Reset takes **everything back, the scenarios with it**, on both carriageways (and on the one, in a single
@@ -272,14 +291,35 @@ sit on the seam just past the lanes an event holds rather than on top of it.
 The scenes are illustrations of the engine's state, not measurements: the wreck's angle, the debris and the
 number of responders are decoration. Wreck *length*, lanes and duration are still the recorded assumptions.
 
+## Lanes: from the road
+
+Each carriageway's lane count follows the road under the stretch on screen. `lib/nlex-lanes.ts` holds through
+lanes per direction between consecutive interchanges, from the `lanes` tags in OpenStreetMap
+(© OpenStreetMap contributors). `scenarios/tools/build_lanes.py` measures and writes them (one cached Overpass
+request, free).
+- **Widths:** 4 lanes from Balintawak to Tambubong, 3 from Tabang to San Fernando, and 2 north of San Fernando,
+  the same both ways.
+- **Narrowest wins:** where the stretch crosses a change in width, the narrowest is used.
+- **Display:** Corridor shows the counts as a line ("Lanes NB 4 · SB 4", with the source). The sliders sit behind
+  **Change lanes** as an override, with **Back to the road's** once one is moved.
+- **Overrides:** an override stands until the window moves onto a different width.
+
+Until 2026-10-03 the table was empty, and every stretch ran at the slider's 4.
+
 ## Lane reallocation
 
-In Both mode, a control under the Lanes sliders moves **1 or 2 lanes** from one carriageway to the other:
-`NB +1`, `NB +2`, `SB +1`, `SB +2`, or Off. The control's "i" says what it does: *Lanes are reassigned
-between carriageways; vehicles do not cross the median.* The canvas draws a movable barrier (yellow and
-black, with the transfer vehicle) in the median in place of the fixed one, and marks the lanes the recipient
-was given (its innermost n, against the barrier) with reversible-lane chevrons. (It was first built as a
-"zipper lane" for one lane and "counterflow" for two; those names are gone from everything an operator reads.)
+In Both mode, a control in **Interventions** (after the two carriageways' own panels, since it acts on both) moves **1 or 2 lanes** from one carriageway to the other:
+`NB +1`, `NB +2`, `SB +1`, `SB +2`, or Off. It works the way NLEX opens a lane of the opposite bound: the
+recipient's traffic crosses the median at an opening at each end of the stretch and drives the other
+carriageway's innermost lanes, coned off from that carriageway's own traffic, which keeps its remaining lanes.
+The canvas draws exactly that (since 2026-10-03): both carriageways keep the lanes they are built with
+(`builtLanes`), the lent lanes are drawn on the giver's side against the median (`dualLanes`), with
+reversible-lane chevrons and a line of cones, the median is open for `crossoverM()` at each end (150 m,
+`ZIPPER_LANES.crossoverM`, or a fifth of a short stretch), and cars using the lent lanes are drawn easing
+across the opening there. Clicks map through the same geometry, so a click on a lent lane places an
+incident in it. It used to be drawn as a movable barrier with the recipient's lanes widened in place; the
+operator asked for the lane to come from the opposite bound. (It was first built as a "zipper lane" for one
+lane and "counterflow" for two; those names are gone from everything an operator reads.)
 
 **Which stretch.** A real reallocation covers a stretch of road, usually about a kilometre, not the whole
 corridor, so the control **asks for it**: *From km* and *To km* (either order), suggested at 1 km (the middle
@@ -297,13 +337,18 @@ real scheme, not a figure from data). The canvas label names the stretch (`Km 3.
 **What it models, and what it does not.** The engine cannot change a carriageway's lane count mid-run and
 the carriageways still never interact (see the limitation above), so this is a **lane-count transfer**: the
 two `setLaneCount`s change together, the total is conserved, and **both runs restart** (any lane-count
-change does). What changes is the capacity of each carriageway — not flow crossing the median. There is
+change does). The recipient's run carries the lent lanes as its own innermost ones (`SimConfig.borrowed`):
+the engine lets a vehicle into or out of them only within `crossoverM()` of either end, and not one that
+leaves the expressway before the far opening (it would be shut in); a vehicle already in one when the road
+is first filled is through traffic. The giver's run simply has fewer lanes; the two runs still never
+interact, which the cones make true on the road as well. There is
 deliberately **no timed reallocation event**: a scheme that switches on at some minute would need the engine
 to change lanes mid-run. The limits (a carriageway keeps at least 2 lanes and takes at most 6; at most 2
 lanes move) are `ASSUMPTIONS.ZIPPER_LANES` — modelling bounds, not operating rules; the Lanes sliders reach 6
 while a reallocation is on. The scheme is dropped the moment either lane count stops matching what it set
-(the Lanes slider, a segment change), so the barrier is never drawn where it is not. Off restores the
-original lane counts. Whether NLEX runs a movable barrier on this corridor is not recorded anywhere here.
+(the Lanes slider, a segment change), so the openings and cones are never drawn where they are not. Off
+restores the original lane counts. Where NLEX opens a lane of the opposite bound on this corridor, and how
+long its crossovers are, is not recorded anywhere here: 150 m is a modelling choice.
 
 **What a change restarts.** Both carriageways, always — a transfer changes both lane counts, so there is no
 unaffected direction. Each carriageway is rebuilt (`rebuild()` in `useDirectionSim.ts`): a new engine, so the
@@ -487,9 +532,10 @@ time they were written.
   stretch is the simulated road and there is no upstream approach or downstream road around it. Showing
   lanes appear and disappear inside a longer window would need lane counts that vary along the road in
   `simulation.ts`.
-- **A lane reallocation cannot be timed and does not carry traffic across**: see the lane reallocation
-  section. `ZIPPER_LANES` (2 to 6 lanes, at most 2 moved) is a modelling bound and needs NLEX guidance on
-  movable barriers. Timing it would need a lane change mid-run in `simulation.ts`, and carrying traffic across
-  the median would end the independence of the two carriageways, which is the model's core simplification.
+- **A lane reallocation cannot be timed, and its crossovers sit at the ends of the simulated stretch**: see
+  the lane reallocation section. `ZIPPER_LANES` (2 to 6 lanes, at most 2 moved, 150 m crossovers) is a
+  modelling bound and needs NLEX guidance on how it opens a lane of the opposite bound. Timing it would need a
+  lane change mid-run in `simulation.ts`. The merge back at the far opening is where a real scheme queues, and
+  the road past it is not simulated, so that queue is not seen.
 - **Lane reallocation restarts both carriageways without a confirmation step** (the Lanes slider does the
   same): see what a change restarts. A confirm dialog is the obvious follow-up if operators lose work to it.

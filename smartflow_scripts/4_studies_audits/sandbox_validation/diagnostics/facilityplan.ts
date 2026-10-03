@@ -7,7 +7,7 @@
  */
 import * as fs from "fs";
 import { TrafficSim, visualLane } from "../../../../Front-End-Dashboard/app/dashboard/scenario-sandbox/simulation";
-import { planFacilities, frameFor, corridorPlaces, movementKm } from "../../../../Front-End-Dashboard/app/dashboard/scenario-sandbox/facilityLayout";
+import { planFacilities, frameFor, corridorPlaces, movementKm, southboundFromBarrier } from "../../../../Front-End-Dashboard/app/dashboard/scenario-sandbox/facilityLayout";
 import { FALLBACK_EXITS } from "../../../../Front-End-Dashboard/lib/nlex-exits";
 import { placeFuelStations } from "../../../../Front-End-Dashboard/lib/nlex-fuel-stations";
 
@@ -25,7 +25,16 @@ function find(dir: "NB" | "SB", name: string) {
   return flows[dir].find((x) => x.exit.toLowerCase().trim() === key) ??
     flows[dir].find((x) => { const k = x.exit.toLowerCase().trim(); return k.includes(key) || key.includes(k); }) ?? null;
 }
+function flowOf(dir: "NB" | "SB", n: string, h: number) {
+  const f = find(dir, n);
+  return f ? { entries: f.entriesByHour[h] ?? 0, exits: f.exitsByHour[h] ?? 0, entriesSource: f.entriesSource, exitsSource: f.exitsSource } : null;
+}
 function mainlineAt(dir: "NB" | "SB", km: number, h: number) {
+  // Southbound from the Bocaue Barrier's count, as the sandbox's own estimate (useDirectionSim.mainlineAtKm).
+  if (dir === "SB") {
+    const counted = southboundFromBarrier(km, h, FALLBACK_EXITS, (n, hr) => flowOf("SB", n, hr));
+    if (counted != null) return counted;
+  }
   let flow = 0, any = false;
   const upstream = (at: number) => (dir === "NB" ? at <= km + 1e-6 : at >= km - 1e-6);
   for (const e of FALLBACK_EXITS) {
@@ -46,7 +55,7 @@ function run(label: string, dir: "NB" | "SB", fromKm: number, toKm: number, hour
   const L = Math.round((toKm - fromKm) * 1000);
   const plan = planFacilities({
     direction: dir, fromKm, toKm, segLengthM: L, laneCount: 4, exits: FALLBACK_EXITS, stations,
-    flowAt: (n, h) => { const f = find(dir, n); return f ? { entries: f.entriesByHour[h] ?? 0, exits: f.exitsByHour[h] ?? 0, entriesSource: f.entriesSource, exitsSource: f.exitsSource } : null; },
+    flowAt: (n, h) => flowOf(dir, n, h),
     peakAt: (n) => { const f = find(dir, n); return f ? { entries: Math.max(...f.entriesByHour), exits: Math.max(...f.exitsByHour), entriesSource: f.entriesSource, exitsSource: f.exitsSource } : null; },
     mainlineAt: (km, h) => mainlineAt(dir, km, h),
     fallbackHourly: () => null, hour, inflow,

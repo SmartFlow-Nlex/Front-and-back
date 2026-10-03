@@ -290,18 +290,30 @@ for oi, cut in enumerate([] if _cached is not None else origins, 1):
             preds["Derived"][ds] = float(v)
     except Exception:
         fails["Derived"] += 1
-    # Baselines the models must beat.
-    for ds in fut.ds:
-        preds["SeasonalNaive"][ds] = float(tr.y.iloc[-SEASON])
-    doy = tr.assign(k=tr.ds.dt.dayofyear).groupby("k").y.mean()
-    for ds in fut.ds:
-        preds["Climatology"][ds] = float(doy.get(ds.dayofyear, tr.y.mean()))
     if oi % 10 == 0 or oi == 1:
         print(f"  origin {oi}/{N_ORIGINS}  train={cut}d  predict {fut.ds.iloc[0].date()} -> {fut.ds.iloc[-1].date()}")
 
 if _cached is None:
     with open(CACHE, "wb") as fh:
         pickle.dump((CACHE_KEY, (preds, fails)), fh)
+
+# Baselines the models must beat: cheap, so computed fresh every run rather
+# than read back from the cache. Seasonal naive is the same weekday last week,
+# day by day, as in the volume trainer (retrain_honest.m_seasonal_naive). Until
+# 2026-10-03 it was tr.y.iloc[-SEASON] for EVERY day of the window: one day's
+# value for all seven, blind to the weekday/weekend cycle. That scored 15.04%
+# WMAPE against 9.83% done properly, so the gate the candidates had to clear,
+# and the "baseline" the panel printed, were far too easy.
+preds["SeasonalNaive"], preds["Climatology"] = {}, {}
+for cut in origins:
+    tr, fut = d.iloc[:cut], d.iloc[cut:cut + HORIZON]
+    if len(fut) < HORIZON:
+        break
+    last_week = tr.y.values[-SEASON:]
+    doy = tr.assign(k=tr.ds.dt.dayofyear).groupby("k").y.mean()
+    for i, ds in enumerate(fut.ds):
+        preds["SeasonalNaive"][ds] = float(last_week[i % SEASON])
+        preds["Climatology"][ds] = float(doy.get(ds.dayofyear, tr.y.mean()))
 
 banner("STEP 4: Results")
 truth = d.set_index("ds").y
@@ -510,8 +522,13 @@ for lo, hi in BUCKETS:
     base = min((g.a - g.sn).abs().sum() / g.a.sum() * 100,
                (g.a - g.cl).abs().sum() / g.a.sum() * 100)
     ok = bool(wm < base and ms < 1.0)
-    note = ("validated range" if hi <= HORIZON else
-            "weakest stretch - loses to repeating last week" if not ok else
+    # Days 1-7 are what the main evaluation validates, on far more origins
+    # (N_ORIGINS weekly, against this study's handful a month apart), so where
+    # the two disagree the note says so instead of a bare "validated range".
+    note = ("validated range" if hi <= HORIZON and ok else
+            f"validated on {N_ORIGINS} weekly origins; loses on these {len(hz_origins)} wider-spaced ones"
+            if hi <= HORIZON else
+            "loses to the baseline (last week repeated, or the day-of-year average)" if not ok else
             "beyond the validated range but still clears both gates")
     CO2_HORIZON.append((lo, hi, wm, mp, ms, e.mean(), base, ok, note))
     print(f"  {f'd{lo}-{hi}':<10}{wm:>9.2f}{mp:>8.2f}{ms:>8.3f}{e.mean():>9.1f}{base:>11.2f}"

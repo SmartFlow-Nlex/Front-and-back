@@ -1323,45 +1323,12 @@ function assertNeverFamily(family: never): never {
 /* ── lane reallocation ─────────────────────────────────────────────────────── */
 
 /**
- * The movable barrier in the median when lanes have been moved between the carriageways: a chain of
- * yellow-and-black segments instead of the fixed white stripe, with the barrier transfer vehicle
- * (yellow, amber beacon) driving along it — the thing that actually moves a movable barrier.
+ * The lanes a carriageway has been LENT by the other, where they are: the other carriageway's innermost lanes,
+ * against the median. An amber wash and chevrons running the way the traffic using them goes, the scheme's name,
+ * and a line of traffic cones along the edge away from the median (`away`: +1 when the lanes are below it, -1
+ * above), between them and the other carriageway's own traffic.
  */
-export function drawMovableBarrier(ctx: SceneCtx, cssW: number, y: number, h: number, t: number, fwd: 1 | -1): void {
-  const seg = 14;
-  for (let x = 0; x < cssW; x += seg) {
-    ctx.fillStyle = Math.floor(x / seg) % 2 === 0 ? "#facc15" : "#1f2937";
-    rrect(ctx, x, y, seg - 1, h, 1.2);
-    ctx.fill();
-  }
-  const tx = wrap(t * 46 * fwd, cssW + 80) - 40;
-  const x = fwd === 1 ? tx : cssW - tx;
-  ctx.save();
-  ctx.translate(x, y + h / 2);
-  ctx.scale(fwd, 1);
-  ctx.fillStyle = "rgba(0,0,0,0.35)";
-  rrect(ctx, -17, -h * 0.9 + 2, 34, h * 1.8, 3);
-  ctx.fill();
-  ctx.fillStyle = "#eab308";
-  rrect(ctx, -18, -h * 0.9, 34, h * 1.8, 3);
-  ctx.fill();
-  ctx.fillStyle = "#0f172a";
-  ctx.fillRect(-14, -h * 0.5, 16, h);
-  ctx.fillStyle = "#e2e8f0";
-  ctx.fillRect(7, -h * 0.55, 7, h * 1.1);
-  const on = Math.floor(t * 3) % 2 === 0;
-  ctx.fillStyle = on ? "#fde047" : "#854d0e";
-  ctx.beginPath();
-  ctx.arc(2, 0, 2.6, 0, Math.PI * 2);
-  ctx.fill();
-  ctx.restore();
-}
-
-/**
- * The lanes a carriageway has BORROWED from the other, drawn as reversible lanes: an amber wash, solid
- * amber edge, and chevrons running the way this carriageway's traffic goes, with the scheme's name.
- */
-export function drawBorrowedLanes(g: SceneGeometry, borrowed: number, label: string): void {
+export function drawBorrowedLanes(g: SceneGeometry, borrowed: number, label: string, away: 1 | -1 = 1): void {
   if (borrowed <= 0) return;
   const c = g.ctx;
   for (let l = 0; l < borrowed; l++) {
@@ -1383,21 +1350,37 @@ export function drawBorrowedLanes(g: SceneGeometry, borrowed: number, label: str
       c.stroke();
     }
   }
-  // solid amber line on the lane edge away from the median, separating the borrowed lanes from the rest
-  const edgeY = g.laneCenterY(borrowed - 1) + (g.laneCenterY(borrowed) - g.laneCenterY(borrowed - 1)) / 2;
-  c.strokeStyle = "rgba(250,204,21,0.9)";
-  c.lineWidth = 2;
+  // The cones, on an amber line, on the lane edge away from the median.
+  const edgeY = g.laneCenterY(borrowed - 1) + (away * g.laneH) / 2;
+  c.strokeStyle = "rgba(250,204,21,0.7)";
+  c.lineWidth = 1.5;
   c.setLineDash([]);
   c.beginPath();
   c.moveTo(0, edgeY);
   c.lineTo(g.cssW, edgeY);
   c.stroke();
+  const r = Math.max(2, Math.min(4.5, g.laneH * 0.09));
+  const step = Math.max(14, r * 6);
+  for (let x = step / 2; x < g.cssW; x += step) {
+    c.fillStyle = "rgba(0,0,0,0.35)";
+    c.beginPath();
+    c.arc(x + 0.8, edgeY + 0.8, r, 0, Math.PI * 2);
+    c.fill();
+    c.fillStyle = "#f97316";
+    c.beginPath();
+    c.arc(x, edgeY, r, 0, Math.PI * 2);
+    c.fill();
+    c.fillStyle = "#fff7ed";
+    c.beginPath();
+    c.arc(x, edgeY, r * 0.42, 0, Math.PI * 2);
+    c.fill();
+  }
   if (g.laneH >= 16) {
     c.font = "800 9px system-ui";
     c.textAlign = "left";
     c.textBaseline = "middle";
     c.fillStyle = "rgba(253,224,71,0.95)";
-    c.fillText(label, 30, g.laneCenterY(0));
+    c.fillText(label, 52, g.laneCenterY(0));
     c.textAlign = "left";
     c.textBaseline = "top";
   }

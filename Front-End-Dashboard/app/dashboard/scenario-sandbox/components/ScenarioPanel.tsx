@@ -46,6 +46,8 @@ import {
   useHotspots,
   type PickResult,
   type PlaceMode,
+  type ScenarioDrop,
+  SCENARIO_DRAG_TYPE,
   type SiteOption,
 } from "./placement";
 
@@ -133,6 +135,10 @@ type Props = {
   clockStartMin: number;
   /** Arm the canvas: the next click on the road (or a booth) is handed back here. */
   onPickOnRoad?: (direction: Direction, done: (p: PickResult) => void) => void;
+  /** Filled by the panel: what the road calls when a scenario chip is dropped on it. */
+  dropRef?: { current: ScenarioDrop | null };
+  /** A chip is being dragged (its family), or the drag ended (null): the road shows where it would land. */
+  onDragFamily?: (family: FamilyKey | null) => void;
   /** Disarm it again. */
   onCancelPick?: () => void;
   /** Outline a plaza or service area on the canvas while it is the chosen place. */
@@ -682,6 +688,48 @@ export default function ScenarioPanel(props: Props) {
     if (getTemplate(f).durationSource !== "manual_only") setChoice("sampled");
   };
 
+  /* A chip dropped on the road: this family as the form below has it (vehicle, cause, duration, start), at the
+     place it landed. The start is the form's, or now if that time has already passed, so a dropped incident
+     appears on the road straight away rather than in the past. Weather and flooding set to "Both" go on both
+     carriageways at the dropped km, as Add event would put them. */
+  const dropAt: ScenarioDrop = (f, at) => {
+    const t = getTemplate(f);
+    // Dragging a chip selects it first (onDragStart); a drop that beats that render is simply asked again.
+    if (f !== family) return `Drop ${t.displayName} again: it was still being selected.`;
+    if (at.site !== null && !SITE_FAMILIES.has(f)) return `${t.displayName} happens on a lane: drop it on a lane, not on a booth or pump.`;
+    const onto = onBoth && at.site === null ? targets : [at.direction];
+    if (!onto.includes(at.direction)) return `${t.displayName} cannot be added to that carriageway here.`;
+    const cap = Math.min(...onto.map((d) => data[d].laneCount));
+    const laneAt = at.site !== null || !hasLane(f) ? null : Math.min(Math.max(1, at.lane ?? defaultOperatorLane(t, cap)), cap);
+    const extras = laneAt === null || !canAddExtraLanes(f) ? [] : [...new Set(extraLanes.filter((l) => l >= 1 && l <= cap && l !== laneAt))];
+    let failure: string | null = null;
+    for (const d of onto) {
+      const r = data[d].onAdd({
+        variant, direction: d, lane: laneAt, extraLanes: extras,
+        positionKm: Math.min(toKm, Math.max(fromKm, at.km)),
+        startMinutes: Math.max(startMin, data[d].nowS / 60),
+        duration, site: SITE_FAMILIES.has(f) ? at.site : null,
+      });
+      if (!r.ok && failure === null) failure = r.reason;
+    }
+    if (failure !== null) {
+      setRefusal(failure);
+      return failure;
+    }
+    if (at.direction !== direction) props.onFocus(at.direction);
+    clearAnswers(f);
+    return null;
+  };
+  useEffect(() => {
+    if (props.dropRef) props.dropRef.current = dropAt;
+  });
+  useEffect(() => {
+    const ref = props.dropRef;
+    return () => {
+      if (ref) ref.current = null;
+    };
+  }, [props.dropRef]);
+
   const add = () => {
     let failure: string | null = null;
     for (const d of targets) {
@@ -695,9 +743,27 @@ export default function ScenarioPanel(props: Props) {
   return (
     <div className="sandbox-scn" data-scn="panel">
       <span className="sandbox-mini-label">Add a real-incident scenario</span>
+      <span className="sandbox-slider-hint" data-scn="drag-hint">
+        Drag one onto the road to put it there, or choose it and set where below.
+      </span>
       <div className="sandbox-scn-families">
         {SCENARIO_TEMPLATES.map((t) => (
-          <button key={t.family} className={`sandbox-scn-fam${family === t.family ? " active" : ""}`} data-scn-family={t.family} onClick={() => pickFamily(t.family)}>
+          <button
+            key={t.family}
+            className={`sandbox-scn-fam${family === t.family ? " active" : ""}`}
+            data-scn-family={t.family}
+            onClick={() => pickFamily(t.family)}
+            draggable
+            onDragStart={(e) => {
+              e.dataTransfer.setData(SCENARIO_DRAG_TYPE, t.family);
+              e.dataTransfer.effectAllowed = "copy";
+              // Selected as it is picked up, so the form below is this scenario's and the drop uses it.
+              if (family !== t.family) pickFamily(t.family);
+              props.onDragFamily?.(t.family);
+            }}
+            onDragEnd={() => props.onDragFamily?.(null)}
+            title={`Drag onto the road to place ${t.displayName} there`}
+          >
             <FamilyIcon family={t.family} />
             <span>{t.displayName}</span>
           </button>

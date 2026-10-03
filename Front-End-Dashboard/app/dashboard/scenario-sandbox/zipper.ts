@@ -3,15 +3,17 @@ import type { Direction } from "./scenarios/adapter";
 
 /**
  * Lane reallocation, as far as this sandbox can honestly model it. (The file and its identifiers keep the
- * name "zipper" from when the feature was first built as a zipper lane / counterflow; the operator-facing
- * name is REALLOCATION_NAME, and the engine's own "zipper merge" is an unrelated thing.)
+ * name "zipper" from when the feature was first built as a zipper lane; the operator-facing name is
+ * REALLOCATION_NAME, and the engine's own "zipper merge" is an unrelated thing.)
  *
- * Reallocation moves 1 or 2 lanes from one carriageway to the other, as a movable barrier would: one
- * carriageway gains lanes and the other loses the same number. The engine has no cross-carriageway traffic
- * and cannot change a carriageway's lane count mid-run, so this is modelled as what it does to capacity: the
- * two carriageways' lane counts are changed together, the total kept, and both runs restart (a lane count
- * change always does, see the Lanes slider). Lanes are reassigned; vehicles do not cross the median, and the
- * carriageways still never interact (see the README's limitation).
+ * Reallocation lends 1 or 2 lanes from one carriageway to the other, the way NLEX opens a lane of the
+ * opposite bound: the receiving carriageway's traffic crosses the median at a crossover, drives the other
+ * carriageway's innermost lanes coned off from its traffic, and crosses back at the far end. The engine
+ * cannot change a carriageway's lane count mid-run, so the two lane counts are changed together, the total
+ * kept, and both runs restart (a lane count change always does, see the Lanes slider). The receiving run
+ * carries the lent lanes as its own innermost ones (SimConfig.borrowed): it is entered and left only at the
+ * crossovers, within crossoverM() of either end. The two runs still never interact otherwise (see the
+ * README's limitation); the canvas draws the lent lanes on the other carriageway, where they are.
  *
  * Pure, so verify.ts pins the limits and the refusal wording.
  */
@@ -69,6 +71,12 @@ export function zipperCounts(state: ZipperState): Readonly<Record<Direction, num
 export function zipperHolds(state: ZipperState, current: Readonly<Record<Direction, number>>): boolean {
   const want = zipperCounts(state);
   return current.NB === want.NB && current.SB === want.SB;
+}
+
+/** How far from either end of a `lengthM` stretch traffic may cross into or out of the lent lanes: the
+ *  recorded crossover length, or a fifth of the stretch if that is shorter (both crossovers must fit). */
+export function crossoverM(lengthM: number): number {
+  return Math.max(0, Math.min(ASSUMPTIONS.ZIPPER_LANES.value.crossoverM, lengthM / 5));
 }
 
 /** How many of `direction`'s innermost lanes it has borrowed (0 for the donor and when no scheme is on). */

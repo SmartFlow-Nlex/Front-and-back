@@ -38,6 +38,12 @@ export type SiteOption = {
 /** What a click on the canvas resolved to. */
 export type PickResult = { direction: Direction; km: number; lane: number | null; site: EventSite | null };
 
+/** What a scenario chip carries while it is dragged onto the road (its family key). */
+export const SCENARIO_DRAG_TYPE = "application/x-smartflow-scenario";
+
+/** Where a scenario chip dropped on the road lands: the road calls this, the panel adds the event (null), or says why not. */
+export type ScenarioDrop = (family: FamilyKey, at: PickResult) => string | null;
+
 export type ResolvedPlace = {
   positionKm: number;
   /** A lane the placement itself chose (operator numbering), or null to use the Lane picker's. */

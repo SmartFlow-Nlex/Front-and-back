@@ -17,8 +17,8 @@ import { readFileSync } from "node:fs";
 import calibrationJson from "./calibration.json";
 import { CLASS_META, TrafficSim, type Interventions, type Metrics } from "../simulation";
 import { combineBaselines, combineMetrics, flowWeightedSpeed } from "../bothMetrics";
-import { drawBorrowedLanes, drawMovableBarrier, drawScenes, drawWater, drawWeather, hasSceneArt, type SceneCtx, type SceneGeometry } from "../sceneArt";
-import { borrowedLanes, defaultStretch, planStretch, planZipper, REALLOCATION_NAME, zipperCounts, zipperHolds, type StretchLimits } from "../zipper";
+import { drawBorrowedLanes, drawScenes, drawWater, drawWeather, hasSceneArt, type SceneCtx, type SceneGeometry } from "../sceneArt";
+import { borrowedLanes, crossoverM, defaultStretch, planStretch, planZipper, REALLOCATION_NAME, zipperCounts, zipperHolds, type StretchLimits } from "../zipper";
 import { drawMotorcycle, type BikeCtx } from "../motorcycleArt";
 import { shapeForecastMix, type ClassShares } from "../forecastMix";
 import { getRecommendation, CLOSURE_LANE_CAPACITY_VEH_H, type Supply } from "../recommendation";
@@ -2062,16 +2062,41 @@ const roadMarks = (evs: readonly ScenarioEvent[], min: number, owners = NO_OWNER
   );
   const roadworks = paintScene([{ ...collision, family: "scheduled_roadworks", phaseId: "active" }]);
   check("scene art: roadworks paint a work zone — cones, barrels, a truck and its lit arrow board (many arcs and filled rects)", roadworks.count("arc") > 15 && roadworks.count("fillRect") > 5);
-  const barrierA = new Recorder();
-  drawMovableBarrier(barrierA, 800, 200, 6, 1, 1);
-  const barrierB = new Recorder();
-  drawMovableBarrier(barrierB, 800, 200, 6, 3, 1);
-  check("reallocation art: the movable barrier is a chain of segments with a transfer vehicle that MOVES along it", barrierA.count("arcTo") > 100 && barrierA.calls.join("|") !== barrierB.calls.join("|"));
   const lanesR = new Recorder();
-  drawBorrowedLanes(geom(lanesR, 1), 1, "REALLOCATED");
+  drawBorrowedLanes(geom(lanesR, 1), 1, "REALLOCATED", 1);
   const noLanes = new Recorder();
-  drawBorrowedLanes(geom(noLanes, 1), 0, "REALLOCATED");
-  check("reallocation art: borrowed lanes are marked (wash, chevrons, an edge line and the scheme's name); none borrowed paints nothing", lanesR.count("fillRect") >= 1 && lanesR.count("fillText") === 1 && lanesR.count("stroke") > 5 && noLanes.calls.length === 0);
+  drawBorrowedLanes(geom(noLanes, 1), 0, "REALLOCATED", 1);
+  check("reallocation art: borrowed lanes are marked (wash, chevrons, a line of traffic cones on the edge away from the median, and the scheme's name); none borrowed paints nothing", lanesR.count("fillRect") >= 1 && lanesR.count("fillText") === 1 && lanesR.count("stroke") > 5 && lanesR.count("arc") > 30 && noLanes.calls.length === 0);
+}
+
+// --- lane reallocation in the engine: lent lanes are entered and left only at the crossovers
+{
+  check("lane reallocation: the crossover is the recorded 150 m, or a fifth of a stretch too short for two", crossoverM(1000) === 150 && crossoverM(500) === 100 && ASSUMPTIONS.ZIPPER_LANES.value.crossoverM === 150);
+  const len = 1000;
+  const lent = { lanes: 1, crossM: crossoverM(len) };
+  const e = new TrafficSim({ length: len, laneCount: 5, inflowVehPerHour: 6000, seed: 12345, warmupS: 60, ramps: [{ x: 450, onVehPerHour: 0, offFraction: 0.08, name: "mid exit" }], borrowed: lent });
+  const was = new Map<number, number>();
+  let outside = 0;
+  let into = 0;
+  let outOf = 0;
+  let shutIn = 0;
+  for (let t = 0; t < 300; t += 0.05) {
+    e.step(0.05);
+    for (const v of e.vehicles) {
+      const p = was.get(v.id);
+      if (p !== undefined && (p < lent.lanes) !== (v.lane < lent.lanes)) {
+        if (v.x > lent.crossM && v.x < len - lent.crossM) outside++;
+        else if (v.lane < lent.lanes) into++;
+        else outOf++;
+      }
+      if (v.lane < lent.lanes && v.exitAtX != null && v.exitAtX < len - lent.crossM) shutIn++;
+      was.set(v.id, v.lane);
+    }
+  }
+  check(
+    `lane reallocation (engine): traffic moves between its own lanes and the lent one only at the crossovers (${outside} elsewhere; ${into} in, ${outOf} out), and nobody leaving before the far one is in it (${shutIn})`,
+    outside === 0 && into > 0 && outOf > 0 && shutIn === 0,
+  );
 }
 
 // --- lane reallocation (was zipper lane / counterflow): the lane-transfer rules, pure
@@ -2276,8 +2301,8 @@ const roadMarks = (evs: readonly ScenarioEvent[], min: number, owners = NO_OWNER
   const operatorText = [pageSource, artSource, panelSource, previewSource, readFileSync(new URL("./assumptions.ts", import.meta.url), "utf8"), readFileSync(new URL("./catalogue.ts", import.meta.url), "utf8"), readFileSync(new URL("../../../globals.css", import.meta.url), "utf8")].join("\n");
   check("lane reallocation: nothing the operator can read still calls it a zipper lane or counterflow (UI strings, canvas labels, assumption text)", !/Zipper lane|ZIPPER LANE|Counterflow|COUNTERFLOW|zipper lane|counterflow/.test(operatorText));
   check(
-    "lane reallocation: the control is titled with the name and its \"i\" states the model — 'Lanes are reassigned between carriageways; vehicles do not cross the median.' — and warns what a change restarts",
-    /<InfoLabel info=\{REALLOCATION_INFO\}>\{REALLOCATION_NAME\}<\/InfoLabel>/.test(pageSource) && /Lanes are reassigned between carriageways; vehicles do not cross the median\./.test(pageSource) &&
+    "lane reallocation: the control is titled with the name and its \"i\" states the model — the other carriageway's inner lanes, entered and left at a median opening at each end — and warns what a change restarts",
+    /<InfoLabel info=\{REALLOCATION_INFO\}>\{REALLOCATION_NAME\}<\/InfoLabel>/.test(pageSource) && /Its traffic crosses the median at an opening at each end of the stretch and drives the borrowed lanes coned off from the other carriageway's traffic/.test(pageSource) &&
       /Changing it restarts BOTH carriageways: clocks, baselines, and hand-set closures, speed limits and incidents are cleared\. Scenario events stay and replay from their start\./.test(pageSource) &&
       /\$\{REALLOCATION_NAME\.toUpperCase\(\)\} · /.test(pageSource),
   );
@@ -2339,7 +2364,7 @@ const roadMarks = (evs: readonly ScenarioEvent[], min: number, owners = NO_OWNER
     /\{both && \(\s*<ZipperControl\s/.test(pageSource) && /const plan = planZipper\(zipper === null \? laneCounts : zipper\.base, toward, lanes\);/.test(pageSource) && /if \(zipper !== null && !zipperHolds\(zipper, \{ NB: nb\.laneCount, SB: sb\.laneCount \}\)\) setZipper\(null\);/.test(pageSource),
   );
   check("lane reallocation: 'Off' restores the lane counts the road had before the scheme", /nb\.setLaneCount\(zipper\.base\.NB\);\s*sb\.setLaneCount\(zipper\.base\.SB\);/.test(pageSource));
-  check("lane reallocation: the canvas draws the movable barrier and the borrowed lanes only when a scheme is on (borrowedLanes(zipper, ...) feeds each carriageway)", /borrowed: borrowedLanes\(zipper, "NB"\)/.test(pageSource) && /borrowed: borrowedLanes\(zipper, "SB"\)/.test(pageSource) && /if \(zipper === null\) \{\s*drawMedian/.test(pageSource));
+  check("lane reallocation: the canvas opens the median and draws the borrowed lanes only when a scheme is on (borrowedLanes(zipper, ...) feeds each carriageway)", /borrowed: borrowedLanes\(zipper, "NB"\)/.test(pageSource) && /borrowed: borrowedLanes\(zipper, "SB"\)/.test(pageSource) && /if \(zipper === null\) \{\s*drawMedian/.test(pageSource));
 }
 
 /* ───────────── forecast fleet mix, and how each class moves ───────────── */

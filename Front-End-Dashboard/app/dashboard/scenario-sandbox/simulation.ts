@@ -247,6 +247,11 @@ export type SimConfig = {
    * movement is NOT also listed in `ramps`: a facility's diverge is added to
    * the exit list here, and its arrivals come off its own approach road. */
   facilities?: FacilitySpec[];
+  /* Lanes lent by the other carriageway: this run's innermost `lanes`, which
+   * on the road are the other carriageway's, past the median and coned off.
+   * Traffic gets into or out of them only at the crossover at either end,
+   * within `crossM` of the start or the end of the span. */
+  borrowed?: { lanes: number; crossM: number };
 };
 
 /** An interchange on the simulated stretch: traffic joins, leaves, or both. */
@@ -1125,7 +1130,8 @@ export class TrafficSim {
           reactionS: d.reactionS,
           reactTimer: d.reactTimer,
           accel: 0,
-          exitAtX: this.pickExit(0),
+          // Already in a lent lane: through traffic, which leaves the expressway after the far crossover if at all.
+          exitAtX: this.cfg.borrowed && lane < this.cfg.borrowed.lanes ? this.pickExit(this.cfg.length - this.cfg.borrowed.crossM) : this.pickExit(0),
           length: c.len,
           // Negative so the first throughput readings are not skewed by a
           // cohort that appears to have crossed the segment instantly.
@@ -1453,6 +1459,20 @@ export class TrafficSim {
     const permitted = candidates.filter((l) => laneAllowsClass(v.vClass, l));
     const desperate = mustEscape && v.v < CREEP_SPEED;
     if (!mustEscape || (permitted.length > 0 && !desperate)) candidates = permitted;
+
+    /* Lent lanes are across the median behind cones: in or out only at a
+     * crossover, and not for a driver leaving before the far one, who would be
+     * shut in past their exit. A lane closing ahead lifts this, as roadworks
+     * lift every lane rule (see mustEscape). */
+    const lent = this.cfg.borrowed;
+    if (lent && lent.lanes > 0 && !mustEscape) {
+      const atCrossover = v.x <= lent.crossM || v.x >= this.cfg.length - lent.crossM;
+      const shutIn = v.exitAtX != null && v.exitAtX < this.cfg.length - lent.crossM;
+      candidates = candidates.filter((l) => {
+        if ((l < lent.lanes) === (v.lane < lent.lanes)) return true;
+        return atCrossover && !(l < lent.lanes && shutIn);
+      });
+    }
 
     /* How badly this vehicle needs the gap: 0 far upstream of the taper, 1 at
      * it. Drives both how hard it may push the new follower and how strongly
@@ -2143,6 +2163,11 @@ export class TrafficSim {
       // A one-lane road is all inner lane; there is nowhere legal to put a
       // truck, and refusing to spawn it would silently drop freight instead.
       if (legal.length === 0) legal.push(0);
+      // Not into a lent lane for anyone leaving before the far crossover: they could not get back out.
+      const lent = this.cfg.borrowed;
+      if (lent && exitAtX != null && exitAtX < this.cfg.length - lent.crossM && legal.some((l) => l >= lent.lanes)) {
+        for (let i = legal.length - 1; i >= 0; i--) if (legal[i] < lent.lanes) legal.splice(i, 1);
+      }
 
       /* Try every lane the class may use, not just one at random.
        *

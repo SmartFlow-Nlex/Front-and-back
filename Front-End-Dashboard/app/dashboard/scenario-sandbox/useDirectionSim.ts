@@ -29,8 +29,9 @@ import {
 } from "./scenarios/adapter";
 import type { SkipView } from "./components/ScenarioPanel";
 import { shapeForecastMix, type ClassShares } from "./forecastMix";
-import { corridorPlaces, movementKm, planFacilities, type FacilityPlan } from "./facilityLayout";
+import { corridorPlaces, movementKm, planFacilities, southboundFromBarrier, type FacilityPlan } from "./facilityLayout";
 import type { InflowFrom } from "./recommendation";
+import { borrowedLanes, crossoverM, type ZipperState } from "./zipper";
 import { placeFuelStations } from "../../../lib/nlex-fuel-stations";
 
 /**
@@ -92,8 +93,9 @@ export type SharedRoadInputs = {
   readonly segLengthM: number;
   readonly EXITS: readonly NlexExit[];
   readonly nearestExit: NlexExit | null;
-  /** The corridor's own recorded lane count for this km window, if any — see lib/nlex-lanes.ts. Direction-independent: it is a property of the road, not of which way you drive it. */
-  readonly segmentLanes: number | null;
+  /** Each carriageway's lane count over the km window, from the corridor's lane table (lib/nlex-lanes.ts,
+   *  OpenStreetMap), or null where the table has nothing. Per direction: the two carriageways are mapped apart. */
+  readonly segmentLanes: Readonly<Record<Direction, number | null>>;
   readonly hourOfDay: number | null;
   /** The hook calls this once, only if hourOfDay is still null, with its OWN demand profile's peak hour — whichever direction's fetch resolves first wins. See the D2 report for why this is a stated interim behaviour, not a bug. */
   readonly proposeHourOfDay: (hour: number) => void;
@@ -124,6 +126,8 @@ export type SharedRoadInputs = {
    * direction, from that direction's own demand profile (see forecastMix.ts).
    */
   readonly forecastMix: ClassShares | null;
+  /** The lane reallocation in force (Both mode), or null: the carriageway it lends lanes to runs them as its own innermost lanes. */
+  readonly reallocation: ZipperState | null;
 };
 
 function buildInterventions(lanes: number, len: number): Partial<Interventions> {
@@ -141,7 +145,8 @@ function buildInterventions(lanes: number, len: number): Partial<Interventions> 
 const SEED_BY_DIRECTION: Readonly<Record<Direction, number>> = { NB: 12345, SB: 12345 + 7919 };
 
 export function useDirectionSim(direction: Direction, shared: SharedRoadInputs) {
-  const { BACKEND, fromKm, toKm, segLengthM, EXITS, nearestExit, segmentLanes, hourOfDay, proposeHourOfDay, classProfile, resetSimAccumulator, forecastInflow, forecastIncidents, forecastMix } = shared;
+  const { BACKEND, fromKm, toKm, segLengthM, EXITS, nearestExit, segmentLanes, hourOfDay, proposeHourOfDay, classProfile, resetSimAccumulator, forecastInflow, forecastIncidents, forecastMix, reallocation } = shared;
+  const lentLanes = borrowedLanes(reallocation, direction);
 
   const simRef = useRef<TrafficSim | null>(null);
   const [scenarioBinding] = useState(createEngineBinding);
@@ -239,6 +244,12 @@ export function useDirectionSim(direction: Direction, shared: SharedRoadInputs) 
   const mainlineAtKm = useCallback(
     (km: number, hour: number): number | null => {
       if (!plazaFlows || EXITS.length === 0) return null;
+      // Southbound runs off the Bocaue Barrier's count (facilityLayout.southboundFromBarrier):
+      // the paid-only sum below is negative at every southbound interchange.
+      if (direction === "SB") {
+        const counted = southboundFromBarrier(km, hour, EXITS, flowAt);
+        if (counted != null) return counted;
+      }
       let flow = 0;
       let sawAny = false;
       const upstream = (at: number) => (direction === "NB" ? at <= km + 1e-6 : at >= km - 1e-6);
@@ -313,6 +324,13 @@ export function useDirectionSim(direction: Direction, shared: SharedRoadInputs) 
         ? `Inflow from the volume recorded at ${String(nearestExit?.exit_name ?? "")} — an interchange figure, not a through-flow.`
         : null;
     }
+    const barrier = EXITS.find((e) => e.node_type === "toll-barrier");
+    if (direction === "SB" && barrier && southboundFromBarrier(entryKm, hr, EXITS, flowAt) != null) {
+      const south = entryKm <= movementKm(barrier.exit_name, "exit", "SB", barrier.km);
+      return south
+        ? `Mainline flow at Km ${entryKm.toFixed(2)}: ${mainline.toLocaleString()} veh/h — the southbound cars counted paying at ${barrier.exit_name}, plus those joining and minus those leaving between it and here.`
+        : `Mainline flow at Km ${entryKm.toFixed(2)}: ${mainline.toLocaleString()} veh/h — entries minus exits north of here, balanced to the southbound count at ${barrier.exit_name}.`;
+    }
     const feeders = EXITS.filter((e) => (direction === "NB" ? e.km <= entryKm + 1e-6 : e.km >= entryKm - 1e-6)).filter((e) => {
       const f = flowAt(e.exit_name, hr);
       return f && (f.entries > 0 || f.exits > 0);
@@ -347,13 +365,13 @@ export function useDirectionSim(direction: Direction, shared: SharedRoadInputs) 
           : anchorKind === "mainline" ? "record"
             : "interchange";
 
-  // Following the road: each direction's lane count defaults to the corridor's own recorded value
-  // for this km window when one exists (D2.4 — "defaulting to the same value" — both directions read
-  // the same direction-independent segmentLanes, so they start equal; each can still be overridden
-  // independently afterwards).
+  // Following the road: this carriageway's lane count is the corridor's own for the km window whenever
+  // that changes (a primitive, so a fresh object from the page does not re-fire it); the operator can
+  // still override it, and the override stands until the road under the window has a different width.
+  const roadLanes = segmentLanes[direction];
   useEffect(() => {
-    if (segmentLanes != null) setLaneCount(segmentLanes);
-  }, [segmentLanes]);
+    if (roadLanes != null) setLaneCount(roadLanes);
+  }, [roadLanes]);
 
   // The mix the road runs. With a forecast day loaded that is the fleet-mix forecast (shaped to the hour); without
   // one, the observed mix for the hour. Keyed on the three shares, not the object: this feeds rebuild(), and a new
@@ -452,6 +470,8 @@ export function useDirectionSim(direction: Direction, shared: SharedRoadInputs) 
            RNG, so the same seed gives the same run and a baseline capture is
            still comparable. */
         secondaryIncidents: true,
+        // Lanes lent by the other carriageway: entered and left only at the crossovers (zipper.ts).
+        borrowed: lentLanes > 0 ? { lanes: lentLanes, crossM: crossoverM(segLengthM) } : undefined,
       },
       buildInterventions(laneCount, segLengthM),
     );
@@ -472,7 +492,7 @@ export function useDirectionSim(direction: Direction, shared: SharedRoadInputs) 
      * is currently ticking. */
     setMetrics(sim.metrics());
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [laneCount, segLengthM, effectiveClassProfile, ramps, facilities, scenarioBinding, direction]);
+  }, [laneCount, segLengthM, effectiveClassProfile, ramps, facilities, scenarioBinding, direction, lentLanes]);
 
   useEffect(() => {
     rebuild();

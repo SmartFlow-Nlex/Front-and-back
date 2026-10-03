@@ -2809,6 +2809,11 @@ body {
 
 /* Incident placement mode */
 .sandbox-canvas.placing { cursor: crosshair; }
+/* A scenario chip is being dragged: the road is where it goes. */
+.sandbox-canvas.is-drop-target {
+  outline: 2px dashed color-mix(in srgb, var(--page-accent, var(--brand-primary)) 70%, transparent);
+  outline-offset: -2px;
+}
 .btn-muted.active {
   background: var(--color-danger-bg);
   color: var(--color-danger);
@@ -10627,7 +10632,8 @@ details[open] > .evidence-summary .evidence-close-label { display: inline; }
   /* Inset, not inset:0. A full-bleed canvas put the outer lane under the
      readout strip and the top lane under the toolbar, so the HUD hid the very
      traffic it was describing. The road owns the band between them. */
-  top: 104px;
+  /* --fs-top is the floating header's measured bottom (page.tsx), 96px until measured. */
+  top: calc(var(--fs-top, 96px) + 8px);
   left: 0;
   right: 0;
   width: 100%;
@@ -10635,8 +10641,7 @@ details[open] > .evidence-summary .evidence-close-label { display: inline; }
      replaced element, so height:auto resolves to its own height ATTRIBUTE --
      which render() sets from the size it last measured -- and the bottom inset
      is then dropped as over-constrained. The box grew every frame. */
-  height: calc(104px + var(--fs-strip) + 8px);
-  height: calc(100% - 104px - var(--fs-strip) - 8px);
+  height: calc(100% - var(--fs-top, 96px) - 8px - var(--fs-strip) - 8px);
   margin: 0;
   border-radius: 0;
   min-height: 0;
@@ -10683,9 +10688,10 @@ details[open] > .evidence-summary .evidence-close-label { display: inline; }
   font-size: 1rem;
   letter-spacing: 0.01em;
 }
-/* Carriageway and the key hints/notes toggle share one row so they in turn
-   can never overlap each other — wrap lets them drop to a second line
-   rather than clip or overlap at a narrow width. */
+/* Carriageway, Forecast day and the key hints/notes toggle share one row so
+   they in turn can never overlap each other — wrap lets them drop to a second
+   line rather than clip or overlap at a narrow width. (Forecast day had a row
+   of its own, which the fixed 104px canvas top then ran under.) */
 .sandbox-hud-row {
   display: flex;
   align-items: center;
@@ -11121,6 +11127,9 @@ details[open] > .evidence-summary .evidence-close-label { display: inline; }
   color: var(--text-primary);
 }
 .sandbox-scn-fam svg { flex: none; }
+/* Chips can be dragged onto the road (ScenarioPanel). */
+.sandbox-scn-fam[draggable="true"] { cursor: grab; }
+.sandbox-scn-fam[draggable="true"]:active { cursor: grabbing; }
 
 /* The animated preview of what is about to be added. */
 .sandbox-scn-scene,
@@ -11762,3 +11771,92 @@ details[open] > .evidence-summary .evidence-close-label { display: inline; }
 @media (prefers-reduced-motion: reduce) {
   .ds-auth-gate-spinner { animation: none; opacity: 0.5; }
 }
+
+/* Scenario sandbox: what lies along the chosen route, one row per place in km
+   order (components/PlacesList.tsx): km, name, and a button per facility there. */
+.sb-places {
+  display: grid;
+  gap: 2px;
+  max-height: 320px;
+  overflow-y: auto;
+  margin: 2px 0 6px;
+  padding-right: 2px;
+}
+.sb-place {
+  display: grid;
+  grid-template-columns: 34px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 6px;
+  border-radius: 8px;
+}
+.sb-place:hover { background: var(--bg-surface-hover); }
+.sb-place.is-on {
+  background: var(--color-info-bg);
+  box-shadow: inset 2px 0 0 var(--color-info);
+}
+.sb-place-km {
+  font-size: 0.7rem;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+.sb-place-name {
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  font-size: 0.8rem;
+  color: var(--text-primary);
+  text-align: left;
+  line-height: 1.25;
+  overflow-wrap: anywhere;
+  cursor: pointer;
+}
+.sb-place-name:hover { text-decoration: underline; }
+.sb-place-kinds {
+  display: inline-flex;
+  gap: 4px;
+}
+.sb-place-kind {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 4px;
+  padding: 1px 8px;
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-full);
+  background: transparent;
+  font-size: 0.68rem;
+  font-weight: 600;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.sb-place-kind.k-entry_ramp { color: var(--color-success); border-color: var(--color-success-border); }
+.sb-place-kind.k-exit_ramp { color: var(--color-info); border-color: var(--color-info-border); }
+.sb-place-kind.k-service_area { color: var(--color-warning); border-color: var(--color-warning-border); }
+.sb-place-kind.k-barrier { color: var(--color-purple); border-color: var(--color-purple); }
+.sb-place-kind.is-on { background: var(--color-info-bg); }
+/* The first junction of a span being picked. */
+.sb-place.is-anchor {
+  background: var(--color-warning-bg);
+  box-shadow: inset 2px 0 0 var(--color-warning);
+}
+.sb-place.is-stop .sb-place-name { color: var(--text-secondary); }
+/* What the buttons mean, once, above the list. */
+.sb-places-key {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+  margin: 4px 0 2px;
+  font-size: 0.68rem;
+  color: var(--text-muted);
+}
+/* Each half wraps as a whole, never "service area" alone on a line. */
+.sb-places-key > span {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  white-space: nowrap;
+}
+.sb-places-key .sb-place-kind { cursor: default; padding: 0 6px; }

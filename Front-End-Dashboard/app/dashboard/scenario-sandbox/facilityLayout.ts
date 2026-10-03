@@ -173,6 +173,69 @@ export function movementKm(exitName: string, movement: "exit" | "entry", directi
   return mapped(exitName, movement, direction)?.km ?? interchangeKm;
 }
 
+/**
+ * Southbound flow on the expressway just past `km`, taken from the Bocaue
+ * Barrier's count, or null where the barrier has no count for the hour.
+ *
+ * Every southbound car leaving the closed system pays at the barrier (its
+ * exit fares) and drives on into the open system, so the barrier counts the
+ * whole carriageway there. Summing paid figures from the north end instead
+ * subtracted those fares as cars leaving, and came out negative at every
+ * interchange; the sandbox then fell back to the nearest slip road's volume.
+ *
+ * South of the barrier (open system): its count, plus its own entries (cars
+ * joining at Bocaue pay there), plus entries since, minus exits since (free,
+ * so estimated). North of it (closed system): entries (tickets) minus paid
+ * exits, summed from the north end, with the tickets scaled so the sum
+ * arrives at the barrier with its count. The tickets alone fall short of it,
+ * and one factor spreads that shortfall across every entry rather than
+ * piling it onto the stretch nearest the barrier.
+ */
+export function southboundFromBarrier(
+  km: number,
+  hour: number,
+  exits: readonly NlexExit[],
+  flowAt: (exitName: string, hour: number) => FlowPair | null,
+): number | null {
+  const bar = exits.find((e) => e.node_type === "toll-barrier");
+  const counted = bar ? flowAt(bar.exit_name, hour) : null;
+  if (!bar || !counted || counted.exits <= 0) return null;
+  const barKm = movementKm(bar.exit_name, "exit", "SB", bar.km);
+  const moves = exits
+    .filter((e) => e !== bar)
+    .map((e) => {
+      const f = flowAt(e.exit_name, hour);
+      return {
+        inKm: movementKm(e.exit_name, "entry", "SB", e.km),
+        outKm: movementKm(e.exit_name, "exit", "SB", e.km),
+        entries: f?.entries ?? 0,
+        exits: f?.exits ?? 0,
+      };
+    });
+  // A movement at km or north of it has happened by the time traffic is past km.
+  if (km <= barKm) {
+    let flow = counted.exits + counted.entries;
+    for (const m of moves) {
+      if (m.inKm >= km && m.inKm < barKm) flow += m.entries;
+      if (m.outKm >= km && m.outKm < barKm) flow -= m.exits;
+    }
+    return Math.max(0, Math.round(flow));
+  }
+  let tickets = 0;
+  let paidOut = 0;
+  for (const m of moves) {
+    if (m.inKm > barKm) tickets += m.entries;
+    if (m.outKm > barKm) paidOut += m.exits;
+  }
+  const scale = tickets > 0 ? (counted.exits + paidOut) / tickets : 1;
+  let flow = 0;
+  for (const m of moves) {
+    if (m.inKm >= km && m.inKm > barKm) flow += scale * m.entries;
+    if (m.outKm >= km && m.outKm > barKm) flow -= m.exits;
+  }
+  return Math.max(0, Math.round(flow));
+}
+
 /** The stretch of road a facility takes, laid out as planFacilities lays it out: its booths (or pumps) at `km`. */
 function spanKm(kind: FacilityKind, booths: number, km: number, direction: "NB" | "SB"): { low: number; high: number } {
   const before = boothLineAtM(kind, booths) / 1000;

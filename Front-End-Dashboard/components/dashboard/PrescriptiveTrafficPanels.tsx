@@ -607,8 +607,8 @@ export function CongestionResponsePanel() {
                 { k: "Where", v: <><b>{r.segment}</b>{km != null && <span className="nct-dim"> · km {fmtKm(km)}</span>}</> },
                 ...(r.first != null
                   ? [
-                      { k: "When", v: <>First High <b>+{r.first}h</b></> },
-                      { k: "Confidence", v: <>Peak <b>{Math.round(r.peak * 100)}%</b> at +{r.peakHour}h</> },
+                      { k: "When", v: <>Most urgent hour <b>+{r.first}h</b></> },
+                      { k: "Confidence", v: <><b>{Math.round(r.peak * 100)}%</b> chance of High at +{r.peakHour}h</> },
                     ]
                   : [{ k: "When", v: <span style={{ fontStyle: "italic" }}>Never reaches High inside the horizon</span> }]),
               ]}

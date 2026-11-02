@@ -4,9 +4,9 @@ import { delayCarbon, EMISSIONS_TABLE, recordBounds } from "./emissions-source.j
 // ---------------------------------------------------------------------------
 // Emissions analytics for the descriptive dashboard.
 // Sources: gold.fact_emissions_hourly (hourly CO2 per exit and direction, from
-// the toll counts x segment km x the DENR/DOTC per-class factors; see
+// vehicle-km per trip x the EMEP/EEA per-class factors; see
 // emissions-source.ts for why this and not nlex_theoretical_emissions),
-// nlex_emissions (measured air quality from OpenWeatherMap, AQI 1-5) and
+// nlex_emissions (air quality estimates from OpenWeatherMap, AQI 1-5) and
 // nlex_emission_factors (per-class g/km factors). Dates and hours are local.
 // ---------------------------------------------------------------------------
 
@@ -75,10 +75,10 @@ export async function getEmissionsAnalyticsFromDb(filters: EmissionsAnalyticsFil
        service stopped reading it when the source moved to gold.fact_emissions_hourly, so picking a class
        changed nothing while the chip said it had. That table carries the three class counts as columns
        rather than a vehicle_class row key, so the filter is applied as an expression: one class's CO2 is
-       its count x segment km x its factor, the same arithmetic the per-class columns already use (and
+       its vehicle-km x its factor, the same arithmetic the per-class columns already use (and
        which sums to co2_tonnes). With no class chosen every query reads exactly what it read before. */
     const k = filters.vehicleClass;
-    const CO2 = k ? `(e.class_${k} * e.segment_km * f.f${k} / 1e6)` : `e.co2_tonnes`;
+    const CO2 = k ? `(e.vkm_${k} * f.f${k} / 1e6)` : `e.co2_tonnes`;
     const JOIN_F = k ? FACTORS : "";
     /** A class column, or 0 when the filter excludes that class. */
     const cls = (n: 1 | 2 | 3, expr: string) => (k && k !== n ? "0" : expr);
@@ -88,14 +88,14 @@ export async function getEmissionsAnalyticsFromDb(filters: EmissionsAnalyticsFil
     const spanDays = Math.round((Date.parse(hi) - Date.parse(lo)) / 86_400_000);
     const includeHourly = spanDays <= 14;
 
-    const [trend, hourly, heatmap, classes, kpi, aqiMonthly, aqiKpi, exits, delay] = await Promise.all([
+    const [trend, hourly, heatmap, classes, kpi, aqiMonthly, aqiKpi, exits, delay, range] = await Promise.all([
       // Daily CO2 (tonnes) by vehicle class, and by direction: northbound, southbound, and the
       // plazas the record does not split by direction (bothdir), so the three add up to the day.
       db.query(
         `SELECT e.date::text AS d,
-                ${cls(1, `ROUND((SUM(e.class_1 * e.segment_km) * MAX(f.f1) / 1e6)::numeric, 2)::float`)} AS c1,
-                ${cls(2, `ROUND((SUM(e.class_2 * e.segment_km) * MAX(f.f2) / 1e6)::numeric, 2)::float`)} AS c2,
-                ${cls(3, `ROUND((SUM(e.class_3 * e.segment_km) * MAX(f.f3) / 1e6)::numeric, 2)::float`)} AS c3,
+                ${cls(1, `ROUND((SUM(e.vkm_1) * MAX(f.f1) / 1e6)::numeric, 2)::float`)} AS c1,
+                ${cls(2, `ROUND((SUM(e.vkm_2) * MAX(f.f2) / 1e6)::numeric, 2)::float`)} AS c2,
+                ${cls(3, `ROUND((SUM(e.vkm_3) * MAX(f.f3) / 1e6)::numeric, 2)::float`)} AS c3,
                 ROUND(COALESCE(SUM(${CO2}) FILTER (WHERE e.direction = 'NB'), 0)::numeric, 2)::float AS nb,
                 ROUND(COALESCE(SUM(${CO2}) FILTER (WHERE e.direction = 'SB'), 0)::numeric, 2)::float AS sb,
                 ROUND(COALESCE(SUM(${CO2}) FILTER (WHERE e.direction IS NULL OR e.direction NOT IN ('NB', 'SB')), 0)::numeric, 2)::float AS bothdir
@@ -108,9 +108,9 @@ export async function getEmissionsAnalyticsFromDb(filters: EmissionsAnalyticsFil
       includeHourly
         ? db.query(
             `SELECT e.date::text AS d, e.hour::int AS hour,
-                    ${cls(1, `ROUND((SUM(e.class_1 * e.segment_km) * MAX(f.f1) / 1e6)::numeric, 3)::float`)} AS c1,
-                    ${cls(2, `ROUND((SUM(e.class_2 * e.segment_km) * MAX(f.f2) / 1e6)::numeric, 3)::float`)} AS c2,
-                    ${cls(3, `ROUND((SUM(e.class_3 * e.segment_km) * MAX(f.f3) / 1e6)::numeric, 3)::float`)} AS c3,
+                    ${cls(1, `ROUND((SUM(e.vkm_1) * MAX(f.f1) / 1e6)::numeric, 3)::float`)} AS c1,
+                    ${cls(2, `ROUND((SUM(e.vkm_2) * MAX(f.f2) / 1e6)::numeric, 3)::float`)} AS c2,
+                    ${cls(3, `ROUND((SUM(e.vkm_3) * MAX(f.f3) / 1e6)::numeric, 3)::float`)} AS c3,
                     ROUND(COALESCE(SUM(${CO2}) FILTER (WHERE e.direction = 'NB'), 0)::numeric, 3)::float AS nb,
                     ROUND(COALESCE(SUM(${CO2}) FILTER (WHERE e.direction = 'SB'), 0)::numeric, 3)::float AS sb,
                     ROUND(COALESCE(SUM(${CO2}) FILTER (WHERE e.direction IS NULL OR e.direction NOT IN ('NB', 'SB')), 0)::numeric, 3)::float AS bothdir
@@ -132,9 +132,9 @@ export async function getEmissionsAnalyticsFromDb(filters: EmissionsAnalyticsFil
       // (a filtered-out class at zero), so a client indexing them by position never mislabels one.
       db.query(
         `WITH s AS (
-           SELECT ${cls(1, "SUM(class_1)")} AS v1, ${cls(1, "SUM(class_1 * segment_km)")} AS k1,
-                  ${cls(2, "SUM(class_2)")} AS v2, ${cls(2, "SUM(class_2 * segment_km)")} AS k2,
-                  ${cls(3, "SUM(class_3)")} AS v3, ${cls(3, "SUM(class_3 * segment_km)")} AS k3
+           SELECT ${cls(1, "SUM(class_1)")} AS v1, ${cls(1, "SUM(vkm_1)")} AS k1,
+                  ${cls(2, "SUM(class_2)")} AS v2, ${cls(2, "SUM(vkm_2)")} AS k2,
+                  ${cls(3, "SUM(class_3)")} AS v3, ${cls(3, "SUM(vkm_3)")} AS k3
              FROM ${EMISSIONS_TABLE} e WHERE ${WHERE})
          SELECT f.vehicle_class AS class, f.class_label AS label, f.co2_g_per_km::float AS co2_g_per_km,
                 ROUND(CASE f.vehicle_class WHEN 1 THEN s.v1 WHEN 2 THEN s.v2 ELSE s.v3 END)::bigint AS volume,
@@ -179,6 +179,24 @@ export async function getEmissionsAnalyticsFromDb(filters: EmissionsAnalyticsFil
       db.query(`SELECT COUNT(DISTINCT exit_canonical)::int AS n FROM ${EMISSIONS_TABLE} e WHERE ${WHERE}`, params),
       // Delay-induced carbon: the idling of the queues behind accidents that blocked a lane in the Range.
       delayCarbon(lo, hi),
+      /* The range on the total: the lowest and highest the two uncertain inputs allow together. Open-section trips have
+         no exit on record, so they run from the nearest exit to the farthest (gold.open_plaza_km); a toll class is a mix
+         of vehicles, so its factor runs from the lowest fitting EMEP/EEA category to the highest. */
+      db.query(
+        `WITH k AS (SELECT ${cls(1, "SUM(e.vkm_1)")} AS k1, ${cls(2, "SUM(e.vkm_2)")} AS k2, ${cls(3, "SUM(e.vkm_3)")} AS k3
+                      FROM ${EMISSIONS_TABLE} e WHERE ${WHERE}),
+              o AS (SELECT ${[1, 2, 3].map((n) => `COALESCE(SUM(t.class_${n} * (p.km_low - p.km_central)), 0) AS l${n}, COALESCE(SUM(t.class_${n} * (p.km_high - p.km_central)), 0) AS h${n}`).join(", ")}
+                      FROM gold.fact_traffic_hourly t
+                      JOIN gold.open_plaza_km p ON p.exit_canonical = t.exit_canonical AND p.direction IS NOT DISTINCT FROM t.direction
+                     WHERE t.toll_system = 'OS' AND t.role = 'Entry' AND t.date BETWEEN $1 AND $2),
+              f AS (SELECT ${[1, 2, 3].map((n) => `max(co2_low_g_per_km) FILTER (WHERE vehicle_class = ${n}) AS lo${n}, max(co2_high_g_per_km) FILTER (WHERE vehicle_class = ${n}) AS hi${n}`).join(", ")}
+                      FROM nlex_emission_factors)
+         SELECT (k1 + k2 + k3)::float AS vkm,
+                (${[1, 2, 3].map((n) => cls(n as 1 | 2 | 3, `(k${n} + l${n}) * lo${n}`)).join(" + ")})::float / 1e6 AS low_t,
+                (${[1, 2, 3].map((n) => cls(n as 1 | 2 | 3, `(k${n} + h${n}) * hi${n}`)).join(" + ")})::float / 1e6 AS high_t
+           FROM k, o, f`,
+        params
+      ),
     ]);
 
     const totalCo2T = kpi.rows[0].cur_t ?? 0;
@@ -188,6 +206,9 @@ export async function getEmissionsAnalyticsFromDb(filters: EmissionsAnalyticsFil
       kpis: {
         totalCo2T,
         prevCo2T: kpi.rows[0].prev_t ?? 0,
+        co2LowT: Math.round(range.rows[0]?.low_t ?? 0),
+        co2HighT: Math.round(range.rows[0]?.high_t ?? 0),
+        vehicleKm: Math.round(range.rows[0]?.vkm ?? 0),
         avgAqi: aqiKpi.rows[0].avg_aqi,
         aqiSamples: aqiKpi.rows[0].samples,
         avgPm25: aqiKpi.rows[0].avg_pm25,
@@ -379,7 +400,7 @@ export async function getFleetMixForecast(days?: number) {
 /* ── Fleet profile for the simulation sandbox ────────────────────────────────
  *
  * The sandbox modelled CO2 from constants compiled into the browser bundle —
- * 160/550/950 g/km against the 192/354/1492 in nlex_emission_factors, and a
+ * 160/550/950 g/km against the figures in nlex_emission_factors, and a
  * fleet of 78/16/6 against an observed 78.1/13.0/8.9. So the sandbox's CO2
  * rate and the Emissions dashboard computed the same quantity from different
  * numbers, and the sandbox understated heavy-vehicle output by a third —

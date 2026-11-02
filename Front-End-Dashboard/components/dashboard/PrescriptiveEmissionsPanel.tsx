@@ -874,7 +874,7 @@ export default function PrescriptiveEmissionsPanel({
                 return h ? (
                   <p className="nc-em-context">
                     Large trucks drive {h.vkmSharePct.toFixed(1)}% of the distance but emit {h.co2SharePct.toFixed(1)}% of
-                    the CO₂: each of their kilometres emits {(h.gPerKm / 192).toFixed(1)} times a car&apos;s.
+                    the CO₂: each of their kilometres emits {(h.gPerKm / (data.classKm.find((c) => c.cls === 1)?.gPerKm ?? h.gPerKm)).toFixed(1)} times a car&apos;s.
                   </p>
                 ) : null;
               })()}

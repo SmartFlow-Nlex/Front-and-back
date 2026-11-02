@@ -1189,8 +1189,8 @@ export default function PredictiveEmissionChart() {
         quantity="emissions"
         quantityNote={
           "CO₂ is not measured: it is derived from the same traffic series the volume forecast uses, times the per-class " +
-          "DENR/DOTC emission factors and each exit's corridor segment, so the two panels reconcile by construction. The " +
-          "factors themselves are unvalidated, so an error in them shifts every tonnage without changing any accuracy figure. " +
+          "EMEP/EEA Guidebook 2023 emission factors and the distance each trip drove, so the two panels reconcile by construction. " +
+          "The factors are European fleet figures, not measured on NLEX, so an error in them shifts every tonnage without changing any accuracy figure. " +
           "Weather over the forecast window is day-of-year climatology in both scoring and projection, never observation."
         }
       />

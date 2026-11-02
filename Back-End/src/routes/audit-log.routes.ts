@@ -5,10 +5,6 @@ import { authenticateToken, authorizeRoles } from "../middleware/auth.middleware
 
 const router = Router();
 
-// Reads are public like the other dashboard data endpoints
-router.get("/list", asyncHandler(listAuditLogs));
-router.get("/summary", asyncHandler(getAuditSummary));
-
 // What a page reports about itself (viewed, signed in, signed out, exported): any user, signed in or not.
 // Only those four kinds are accepted; the user is the one the token names, if any.
 router.post("/activity", asyncHandler(recordActivity));
@@ -17,6 +13,9 @@ router.post("/activity", asyncHandler(recordActivity));
 router.use(authenticateToken);
 router.use(authorizeRoles(["data-analyst"]));
 
+// Reads name people and what they did, and the page is the data analyst's only, so the API says the same (31 Oct 2026).
+router.get("/list", asyncHandler(listAuditLogs));
+router.get("/summary", asyncHandler(getAuditSummary));
 router.post("/event", asyncHandler(writeAuditEvent));
 router.get("/export", asyncHandler(exportAuditLogs));
 

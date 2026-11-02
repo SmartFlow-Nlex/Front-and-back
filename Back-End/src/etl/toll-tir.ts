@@ -34,6 +34,7 @@ import fs from "fs";
 import { db } from "../config/db.js";
 import type { RawRow } from "./parser.js";
 import { aggregateTollHourly, loadCutoff, type Cutoff, type TollHourlyAggregate } from "./toll-hourly.js";
+import { OTHER_EXPRESSWAY_PLAZAS } from "./trip-km.js";
 
 export const TIR_COLUMNS = ["TrxDate", "Trx_Hour", "Entry_Plaza", "Exit_Plaza", "Bound", "Class", "Trx_Count"] as const;
 
@@ -137,14 +138,6 @@ export const PLAZA_CODES: Readonly<Record<number, string>> = {
   308: "España Main SB",  // client reference, 23 Oct 2026
 };
 
-/** Plazas on SCTEX, SFEX and the NLEX Connector (the client's reference, plaza_code_ref.csv "exprway", 23 Oct 2026).
-    A trip PAID at one of them is not an NLEX exit transaction and is held back, as it was while these codes had no
-    name: naming them must not move trips into the warehouse (Mabiga 248/256 would otherwise resolve to the NLEX
-    SCTEX exit, and Tipo/Concepcion/Tarlac to connecting roads). As an ENTRY they still name the trip's origin. */
-export const OTHER_EXPRESSWAY_PLAZAS: ReadonlySet<number> = new Set([
-  192, 193, 195, 202, 203, 213, 214, 231, 232, 245, 246, 247, 248, 250, 251, 253, 254, 256, 257, 259, 260, 262, 263, 270, 271, 273, 274, 286, 287, 289, 290, 292, 293, 302, 306, 308,
-]);
-
 /** Is this file the client's hourly export? Read from its first line only. */
 export function isTirFile(filePath: string): boolean {
   try {
@@ -245,6 +238,8 @@ export function aggregateTir(filePath: string, adjust: LevelAdjustment, cutoff: 
   stats.spillYears = [...perYear.keys()].filter((y) => y !== year).sort();
   const yearAdjust = year ? adjust.get(Number(year)) : undefined;
   let adj = { rows: 0, before: 0, after: 0, minFactor: Infinity, maxFactor: -Infinity };
+  // Trips by class before and after, for the trips the table has no factor for (below).
+  const scaled = { before: [0, 0, 0], after: [0, 0, 0] };
 
   const ix = (name: string) => header!.findIndex((h) => h.toLowerCase() === name.toLowerCase());
   const iDate = ix("TrxDate"), iHour = ix("Trx_Hour"), iEntry = ix("Entry_Plaza"), iExit = ix("Exit_Plaza"), iClass = ix("Class"), iCount = ix("Trx_Count");
@@ -264,12 +259,22 @@ export function aggregateTir(filePath: string, adjust: LevelAdjustment, cutoff: 
       if (cls !== "1" && cls !== "2" && cls !== "3") { stats.badClass++; continue; }
       const entry = (f[iEntry] ?? "").trim();
       const exit = (f[iExit] ?? "").trim();
-      if (OTHER_EXPRESSWAY_PLAZAS.has(Number(exit))) { stats.otherExpressway++; stats.trips.otherExpressway += count || 0; continue; }
+      if (OTHER_EXPRESSWAY_PLAZAS.has(Number(exit))) {
+        stats.otherExpressway++; stats.trips.otherExpressway += count || 0;
+        // Held back from the traffic record; the aggregate takes only the km it drove on NLEX.
+        yield {
+          date, hour: f[iHour], exit_plaza: exit, entry_plaza: entry, exit_plaza_name: nameOf(exit), entry_plaza_name: nameOf(entry),
+          class_1: cls === "1" ? count : 0, class_2: cls === "2" ? count : 0, class_3: cls === "3" ? count : 0, total: count, off_nlex: 1,
+        } as RawRow;
+        continue;
+      }
       if (entry === "0") { stats.entryZero++; stats.trips.entryZero += count || 0; }
       else if (entry === exit) { stats.samePlaza++; stats.trips.samePlaza += count || 0; }
       const factor = yearAdjust?.get(`${exit}|${cls}`);
       if (factor !== undefined && Number.isFinite(count)) {
+        scaled.before[Number(cls) - 1] += count;
         adj.rows++; adj.before += count; count = count * factor; adj.after += count;
+        scaled.after[Number(cls) - 1] += count;
         if (factor < adj.minFactor) adj.minFactor = factor;
         if (factor > adj.maxFactor) adj.maxFactor = factor;
       }
@@ -290,5 +295,11 @@ export function aggregateTir(filePath: string, adjust: LevelAdjustment, cutoff: 
 
   const agg = aggregateTollHourly(rows(), cutoff);
   if (adj.rows > 0) stats.adjusted = adj;
+  /* The level adjustment has factors for NLEX plazas only. A trip paid off NLEX is scaled as that class was over the
+     rest of the file, or its km would sit at the unscaled level beside scaled neighbours. */
+  for (const [key, v] of agg.vkm) {
+    if (!key.endsWith("\toff_nlex")) continue;
+    for (let i = 0; i < 3; i++) if (scaled.before[i] > 0) v[i] *= scaled.after[i] / scaled.before[i];
+  }
   return { agg, stats };
 }

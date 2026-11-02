@@ -52,6 +52,9 @@ type Analytics = {
   meta: { minDate: string; maxDate: string; source?: string; exits?: number; vehicleClass?: number | null };
   kpis: {
     totalCo2T: number;
+    co2LowT?: number;
+    co2HighT?: number;
+    vehicleKm?: number;
     prevCo2T: number;
     /** Idling CO2 behind accidents that blocked a lane in the Range (Back-End emissions-source.ts). */
     delayCarbonT?: number;
@@ -422,7 +425,7 @@ export default function SustainabilityPage() {
       return { values: cls.map((c) => c[key]), shares: cls.map((c) => (tot > 0 ? (c[key] / tot) * 100 : 0)), tot };
     };
     // `code` is what the axis prints; `name` is the full pollutant name printed under it.
-    const pollutant = (code: "CO₂" | "NO₂" | "PM2.5", key: "co2_t" | "no2_kg" | "pm25_kg", unit: string) => ({
+    const pollutant = (code: "CO₂" | "NOx" | "PM2.5", key: "co2_t" | "no2_kg" | "pm25_kg", unit: string) => ({
       label: code,
       name: POLLUTANT_NAMES[code].split(":")[0],
       full: spelled(code),
@@ -433,7 +436,7 @@ export default function SustainabilityPage() {
     return {
       cls,
       base: { label: BASELINE_LABEL, name: "toll-plaza counts", full: "Share of the vehicles counted at the toll plazas", unit: "vehicles", isBase: true, ...metric("volume") },
-      pollutants: [pollutant("CO₂", "co2_t", "t"), pollutant("NO₂", "no2_kg", "kg"), pollutant("PM2.5", "pm25_kg", "kg")],
+      pollutants: [pollutant("CO₂", "co2_t", "t"), pollutant("NOx", "no2_kg", "kg"), pollutant("PM2.5", "pm25_kg", "kg")],
     };
   }, [data, derived]);
 
@@ -834,14 +837,14 @@ export default function SustainabilityPage() {
     const tot = r.good + r.moderate + r.poor;
     setDetail({
       title: monthLabel(r.m),
-      subtitle: "Measured air quality (OpenWeatherMap, hourly station readings)",
+      subtitle: "Air quality estimates (OpenWeatherMap air pollution model, hourly)",
       rows: [
         [AQI_BANDS[0], `${fmtInt(r.good)} readings (${tot > 0 ? ((r.good / tot) * 100).toFixed(1) : "—"}%)`],
         [AQI_BANDS[1], `${fmtInt(r.moderate)} readings (${tot > 0 ? ((r.moderate / tot) * 100).toFixed(1) : "—"}%)`],
         [AQI_BANDS[2], `${fmtInt(r.poor)} readings (${tot > 0 ? ((r.poor / tot) * 100).toFixed(1) : "—"}%)`],
         [`Avg ${spelled("PM2.5")}`, r.pm25 != null ? `${fmt1(r.pm25)} µg/m³` : "—"],
       ],
-      note: `AQI (Air Quality Index) is the 1–5 OpenWeatherMap scale measured at expressway stations — the observed counterpart to the modeled emissions. ${filtersNote}`,
+      note: `AQI (Air Quality Index) is the 1–5 OpenWeatherMap scale, OpenWeatherMap's modelled estimate at each exit's location: a separate estimate from the toll-based emissions, not a roadside measurement. ${filtersNote}`,
     });
   };
 
@@ -1082,7 +1085,7 @@ export default function SustainabilityPage() {
               <span className={styles.kpiIcon} aria-hidden="true"><Leaf size={15} /></span>
               {/* One span per label: the tile's h3 is a flex row, and loose words beside an <abbr> would
                   each become a flex item with their spaces dropped. */}
-              <h3><span>Total <Term t="CO₂" /> (Modeled)</span><InfoTooltip text="Tonnes of CO₂ (carbon dioxide) over the Range: the hourly toll counts at every exit × that exit's segment length × the DENR/DOTC factor for each vehicle class. Modeled, not a sensor reading — and the same record the CO₂ forecast is trained on, so the two agree." /></h3>
+              <h3><span>Total <Term t="CO₂" /> (Modeled)</span><InfoTooltip text="Tonnes of tailpipe CO₂ (carbon dioxide) over the Range: the kilometres each toll trip drove on NLEX, read from its entry and exit plaza, × the EMEP/EEA Guidebook 2023 factor for its vehicle class. Modeled, not a sensor reading: no CO₂ is metered on NLEX. Range: open-section trips have no exit on record, and a toll class is a mix of vehicles, so the low and high take the nearest exit with the lowest fitting factor and the farthest with the highest. The same record the CO₂ forecast is trained on, so the two agree." /></h3>
               <div className={styles.kpiValue} title={data ? `${fmtInt(data.kpis.totalCo2T)} tonnes` : undefined}>
                 {kpiValue(data ? `${fmtCompact(data.kpis.totalCo2T)} t` : null)}
               </div>
@@ -1091,6 +1094,7 @@ export default function SustainabilityPage() {
                   <span className={derived.deltaPct <= 0 ? styles.deltaUp : styles.deltaDown}>{fmtPct(derived.deltaPct)}</span>
                 ) : "—"}{" "}
                 vs previous period
+                {data?.kpis.co2LowT ? <> · range {fmtCompact(data.kpis.co2LowT)}–{fmtCompact(data.kpis.co2HighT ?? 0)} t</> : null}
               </p>
             </article>
             <article className={styles.kpiTile}>
@@ -1139,7 +1143,7 @@ export default function SustainabilityPage() {
             <article className={styles.kpiTile}>
               <span className={styles.kpiIcon} aria-hidden="true"><Wind size={15} /></span>
               {/* Was described as the "latest" readings; the figure is the Range's average (17 Oct 2026). */}
-              <h3>Measured Air Quality<InfoTooltip text="Average AQI (Air Quality Index, OpenWeatherMap's 1 = good to 5 = very poor scale) over the Range, from the hourly readings at the expressway stations, with their average PM2.5 (fine particulate matter). Measured, not modeled, and not split by vehicle class: shown beside the modeled CO₂ for context." /></h3>
+              <h3>Estimated Air Quality<InfoTooltip text="Average AQI (Air Quality Index, OpenWeatherMap's 1 = good to 5 = very poor scale) over the Range, from OpenWeatherMap's hourly air pollution estimates at each exit's location, with their average PM2.5 (fine particulate matter). OpenWeatherMap's model, not a roadside instrument, and not split by vehicle class: shown beside the modeled CO₂ for context. It is the air level from every source nearby, weather included, so it is not a check on the emission totals." /></h3>
               <div className={styles.kpiValue} title={POLLUTANT_NAMES.AQI}>
                 {kpiValue(data?.kpis.avgAqi != null ? `${data.kpis.avgAqi.toFixed(1)} / 5` : null)}
               </div>
@@ -1149,7 +1153,7 @@ export default function SustainabilityPage() {
                     {aqiWord(data.kpis.avgAqi)} · avg <Term t="PM2.5" /> {data.kpis.avgPm25 != null ? fmt1(data.kpis.avgPm25) : "—"} µg/m³
                   </>
                 ) : (
-                  "no station readings in range"
+                  "no estimates in range"
                 )}
               </p>
             </article>
@@ -1252,7 +1256,7 @@ export default function SustainabilityPage() {
           <article className={`${styles.chartCard} ${styles.chart3} nc-em-half`}>
             <div className={styles.chartHead}>
               <div className={styles.headText}>
-                <h3>Fleet Mix vs Pollution Load<InfoTooltip text="Each vehicle class's share of three modeled pollutants: CO₂ (carbon dioxide), NO₂ (nitrogen dioxide) and PM2.5 (fine particulate matter). All three are modeled as vehicles × km × a per-class factor, so where a class's pollutant share is larger than its share of the vehicles counted, it pollutes out of proportion to its numbers. Hover a bar for that multiple; Vehicle baseline draws the vehicle shares as a faded bar on top. Click a class in the legend to hide it." /></h3>
+                <h3>Fleet Mix vs Pollution Load<InfoTooltip text="Each vehicle class's share of three modeled pollutants: CO₂ (carbon dioxide), NOx (nitrogen oxides) and PM2.5 (fine particulate matter). All three are modeled as vehicles × km × a per-class factor, so where a class's pollutant share is larger than its share of the vehicles counted, it pollutes out of proportion to its numbers. Hover a bar for that multiple; Vehicle baseline draws the vehicle shares as a faded bar on top. Click a class in the legend to hide it." /></h3>
                 {fleetTakeaway && derived && (
                   <p className="nc-em-answer">
                     <b>{derived.heavyCo2Pct.toFixed(1)}%</b>
@@ -1273,7 +1277,7 @@ export default function SustainabilityPage() {
                         className={fleetSort === k ? "active" : ""}
                         aria-pressed={fleetSort === k}
                         onClick={() => setFleetSort(k)}
-                        title={k === "heavy" ? "Pollutants ordered by the share that comes from Class 2 + 3, largest first" : "CO₂, NO₂, PM2.5"}
+                        title={k === "heavy" ? "Pollutants ordered by the share that comes from Class 2 + 3, largest first" : "CO₂, NOx, PM2.5"}
                       >
                         {label}
                       </button>
@@ -1332,7 +1336,7 @@ export default function SustainabilityPage() {
             <div className={styles.chartHead}>
               <div className={styles.headText}>
                 {/* The ⓘ promised pollutant levels; the bars are the share of readings in each AQI band (17 Oct 2026). */}
-                <h3>Measured Air Quality by Month<InfoTooltip text="For each month, the share of hourly station readings near the corridor in each AQI (Air Quality Index, OpenWeatherMap's 1–5 scale) band; the tooltip adds that month's average PM2.5 (fine particulate matter). Measured, not modeled, and not split by vehicle class: a reading cannot be attributed to one." /></h3>
+                <h3>Estimated Air Quality by Month<InfoTooltip text="For each month, the share of OpenWeatherMap's hourly estimates along the corridor in each AQI (Air Quality Index, OpenWeatherMap's 1–5 scale) band; the tooltip adds that month's average PM2.5 (fine particulate matter). OpenWeatherMap's model, not a roadside instrument. The source's levels shift sharply between March and April 2025, so compare across that date with care." /></h3>
                 {aqiGoodPct != null && aqiTotals && (
                   <p className="nc-em-answer">
                     <b>{aqiGoodPct.toFixed(1)}%</b>
@@ -1341,12 +1345,12 @@ export default function SustainabilityPage() {
                 )}
                 {aqiGoodPct != null && aqiTotals && (
                   <p className={styles.subtitle}>
-                    {fmtInt(aqiTotals.all)} station readings · {aqiSpan}
+                    {fmtInt(aqiTotals.all)} hourly estimates · {aqiSpan}
                   </p>
                 )}
               </div>
             </div>
-            <div className={styles.chartBody}>{chartFrame(aqiOption, "No station readings in the selected range", onAqiClick)}</div>
+            <div className={styles.chartBody}>{chartFrame(aqiOption, "No estimates in the selected range", onAqiClick)}</div>
           </article>
 
           {/* Heat grid: the hour × weekday data the page already loads */}

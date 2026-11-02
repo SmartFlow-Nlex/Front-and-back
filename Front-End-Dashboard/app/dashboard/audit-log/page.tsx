@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { cachedJson } from "../../../lib/cached-json";
+import { authedJson } from "../../../lib/api";
 import { Activity, ClipboardList, Eye, Upload, Users } from "lucide-react";
 import PageHeader from "../../../components/dashboard/PageHeader";
 import StateNote from "../../../components/stage/StateNote";
@@ -311,8 +312,8 @@ export default function AuditLogPage() {
   const [insightsError, setInsightsError] = useState<string | null>(null);
 
   useEffect(() => {
-    cachedJson<{ success: boolean; message?: string; data: RawLog[] }>(
-      `${BACKEND}/api/audit-log/list?limit=500${showHourly ? "&include_hourly=1" : ""}`, 15_000)
+    authedJson<{ success: boolean; message?: string; data: RawLog[] }>(
+      `${BACKEND}/api/audit-log/list?limit=500${showHourly ? "&include_hourly=1" : ""}`)
       .then((json) => {
         if (!json.success) throw new Error(json.message ?? "Request failed");
         setAuditLogs(json.data.map(mapLog));
@@ -323,7 +324,7 @@ export default function AuditLogPage() {
 
   useEffect(() => {
     setInsightsError(null);
-    cachedJson<{ success: boolean; message?: string; data: Insights }>(`${BACKEND}/api/audit-log/summary?days=${days}`, 15_000)
+    authedJson<{ success: boolean; message?: string; data: Insights }>(`${BACKEND}/api/audit-log/summary?days=${days}`)
       .then((json) => {
         if (!json.success) throw new Error(json.message ?? "Request failed");
         setInsights(json.data);

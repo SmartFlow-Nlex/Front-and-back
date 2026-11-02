@@ -1,6 +1,6 @@
 import { db } from "../config/db.js";
 import { exitDisplayName, fmtKm, kmMeasured, kmPost, KM_POST_ANCHORS, KM_POST_START, nearestExitName } from "../lib/km-post.js";
-import { clearedIncidents, EMISSIONS_TABLE, exposureByHour, idleKg, IDLING_KG_PER_VEHICLE_MINUTE, recordBounds } from "./emissions-source.js";
+import { clearedIncidents, EMISSIONS_TABLE, exposureByHour, idleKg, IDLING_SOURCE, recordBounds } from "./emissions-source.js";
 
 /* Exit names beside every km the Prescriptive tab prints (19 Oct 2026, testers: a bare "Southbound Km 50–60"
    meant nothing to a reader who knows the road by its exits), from lib/km-post.ts's one exit-name map, so the
@@ -34,11 +34,10 @@ function pointLabel(measured: number): string {
 
    THE MODEL THESE OPTIMISE AGAINST
 
-     CO2(exit, hour, class, direction) = volume x segment_distance_km x F(class)
+     CO2(exit, hour, class, direction) = vehicle-km x F(class)
 
-   with F from nlex_emission_factors: 192 / 354 / 1492 g/km for classes 1/2/3.
-   Verified against the live table — dividing co2_grams by volume x distance
-   returns those three constants to the cent.
+   with vehicle-km from each trip's entry and exit (gold.fact_vkm_hourly) and F
+   from nlex_emission_factors, the EMEP/EEA factors read from the table below.
 
    WHAT THAT RULES OUT
 
@@ -166,12 +165,6 @@ export type PrescriptiveResult = {
 const cache = new Map<string, { at: number; data: PrescriptiveResult }>();
 const TTL_MS = 10 * 60 * 1000;
 
-/** Per the warehouse's own factor table. Kept for the counterfactual: what a
- *  displaced heavy vehicle-km would emit if it moved to the medium class. */
-const F_HEAVY = 1492;
-const F_MEDIUM = 354;
-const F_LIGHT = 192;
-
 /* Monte Carlo for the two incident strategies. Their saving depends on WHICH
    incidents happen in a Range — and because idling is quadratic, on how many
    long ones — so one figure overstates how well it is known. The incidents are
@@ -255,14 +248,14 @@ export async function getPrescriptiveStrategies(
     return data;
   }
 
-  const [totals, exposure, incidents, monthly, hourly, byExitHour] = await Promise.all([
+  const [totals, exposure, incidents, monthly, hourly, byExitHour, factorRows] = await Promise.all([
     // The denominator every reduction is expressed against, and Strategy A's raw material.
     db.query(
       `SELECT COALESCE(SUM(co2_tonnes), 0)                 AS co2_tonnes,
-              COALESCE(SUM(total * segment_km), 0)         AS all_vkm,
-              COALESCE(SUM(class_1 * segment_km), 0)       AS c1_vkm,
-              COALESCE(SUM(class_2 * segment_km), 0)       AS c2_vkm,
-              COALESCE(SUM(class_3 * segment_km), 0)       AS heavy_vkm
+              COALESCE(SUM(vkm_1 + vkm_2 + vkm_3), 0)      AS all_vkm,
+              COALESCE(SUM(vkm_1), 0)                      AS c1_vkm,
+              COALESCE(SUM(vkm_2), 0)                      AS c2_vkm,
+              COALESCE(SUM(vkm_3), 0)                      AS heavy_vkm
          FROM ${EMISSIONS_TABLE} WHERE date BETWEEN $1 AND $2`,
       [lo, hi],
     ),
@@ -276,22 +269,28 @@ export async function getPrescriptiveStrategies(
     // Strategy A's evidence: the heavy share of vehicle-km in every month of the record.
     db.query(
       `SELECT to_char(date_trunc('month', date), 'YYYY-MM') AS m,
-              (100 * SUM(class_3 * segment_km) / NULLIF(SUM(total * segment_km), 0))::float AS share
+              (100 * SUM(vkm_3) / NULLIF(SUM(vkm_1 + vkm_2 + vkm_3), 0))::float AS share
          FROM ${EMISSIONS_TABLE} GROUP BY 1 ORDER BY 2`,
     ),
     // The window advisory's raw material: vehicle-km by hour of day, all classes and Class 3.
     db.query(
-      `SELECT hour::int AS h, SUM(total * segment_km)::float AS vkm, SUM(class_3 * segment_km)::float AS c3
+      `SELECT hour::int AS h, SUM(vkm_1 + vkm_2 + vkm_3)::float AS vkm, SUM(vkm_3)::float AS c3
          FROM ${EMISSIONS_TABLE} WHERE date BETWEEN $1 AND $2 GROUP BY 1 ORDER BY 1`,
       [lo, hi],
     ),
     // The tolling recommendation's: Class-3 vehicle-km by exit and hour.
     db.query(
-      `SELECT exit_canonical AS exit, hour::int AS h, SUM(class_3 * segment_km)::float AS c3
+      `SELECT exit_canonical AS exit, hour::int AS h, SUM(vkm_3)::float AS c3
          FROM ${EMISSIONS_TABLE} WHERE date BETWEEN $1 AND $2 GROUP BY 1, 2`,
       [lo, hi],
     ),
+    // g CO2 per km by class, for what a displaced vehicle-km would emit in the class below it.
+    db.query(`SELECT vehicle_class AS c, co2_g_per_km::float AS g FROM nlex_emission_factors WHERE vehicle_class IN (1, 2, 3)`),
   ]);
+  const factorOf = (c: number) => Number((factorRows.rows as { c: number; g: number }[]).find((r) => Number(r.c) === c)?.g ?? 0);
+  const F_LIGHT = factorOf(1);
+  const F_MEDIUM = factorOf(2);
+  const F_HEAVY = factorOf(3);
 
   const actualTonnes = Number(totals.rows[0]?.co2_tonnes ?? 0);
   const heavyVkm = Number(totals.rows[0]?.heavy_vkm ?? 0);
@@ -308,8 +307,7 @@ export async function getPrescriptiveStrategies(
   /* ── A. Fleet mix ───────────────────────────────────────────────────────
      Displacing one heavy vehicle-km does not delete the trip, it moves the
      freight to the next class down, so the saving is the DIFFERENCE between
-     the factors, not the whole heavy factor. Assuming the whole 1492 g/km
-     disappears would roughly double the answer. */
+     the factors, not the whole heavy factor. */
   const heavySharePct = allVkm > 0 ? (heavyVkm / allVkm) * 100 : 0;
   // A target, capped at the heavy share actually present: no more heavy vehicle-km can move than exist.
   const deltaPp = Math.round(Math.max(0, Math.min(filters.heavyShiftPp ?? 1, heavySharePct)) * 100) / 100;
@@ -339,15 +337,15 @@ export async function getPrescriptiveStrategies(
   // Strategy C reallocates a fixed capacity, so it can only improve the hours
   // it is pointed at. Pointed at the busiest half of the day — where a saved
   // minute traps the most vehicles — and deliberately NOT at the rest.
-  const hoursByLoad = [...exposure.entries()].sort((a, b) => b[1] - a[1]);
+  const hoursByLoad = [...exposure.entries()].sort((a, b) => b[1].veh - a[1].veh);
   const targetHours = new Set(hoursByLoad.slice(0, 12).map(([h]) => h));
 
   /** Per incident: idling now, with B (every incident to its floor) and with C (only in the target hours). */
   const perIncident = incidents.map((e) => {
-    const veh = exposure.get(e.hr) ?? 0;
+    const x = exposure.get(e.hr);
     const floor = Math.min(e.minutes, floorOf.get(`${e.band}|${e.hr}`) ?? e.minutes);
-    const now = idleKg(veh, e.minutes);
-    const b = idleKg(veh, floor);
+    const now = idleKg(x, e.minutes);
+    const b = idleKg(x, floor);
     return { e, saveB: now - b, saveC: targetHours.has(e.hr) ? now - b : 0 };
   });
 
@@ -485,7 +483,7 @@ export async function getPrescriptiveStrategies(
         "Idling is the area of the queue triangle, lambda x T^2 / 2: vehicles join while the lane is blocked and drain as it clears. Still quadratic in delay, so the long tail dominates.",
         "One incident is taken to affect one exit-segment in one direction, not the whole corridor.",
         "The floor per band is that band's observed 10th percentile, so the target is a response time this corridor has already delivered.",
-        `Idling factor ${IDLING_KG_PER_VEHICLE_MINUTE} kg CO2 per vehicle-minute, from Climatiq's petrol-car factor scaled by 0.10 for idling.`,
+        `Idling: ${IDLING_SOURCE} Weighted by each hour's class mix. US figures: none were found for the Philippine fleet.`,
         "Incident records end before the emissions record does; the window is stated in basis.",
         mcNote,
       ],
@@ -521,7 +519,7 @@ export async function getPrescriptiveStrategies(
       evidenceNote: fleetNote,
       assumptions: [
         `NOT bounded by evidence. ${fleetNote}`,
-        "The freight still moves: the saving is the gap between the heavy and medium factors (1492 - 354 g/km), not the whole heavy factor.",
+        `The freight still moves: the saving is the gap between the Class 3 and Class 2 factors (${Math.round(F_HEAVY)} - ${Math.round(F_MEDIUM)} g/km), not the whole Class 3 factor.`,
         "Linear in the shift, so the figure doubles if the target doubles. Read it as a sensitivity: it has no Monte Carlo range because nothing in it is uncertain except the target you choose.",
       ],
     },
@@ -544,7 +542,7 @@ export async function getPrescriptiveStrategies(
   const shown = strategies.filter((s) => !unavailable.some((u) => u.key === s.key));
 
   /* ── CO2 per class-km ───────────────────────────────────────────────────
-     The diagram's KPI for this box. Per vehicle-km the factors ARE the model (192 / 354 / 1492 g), so the
+     The diagram's KPI for this box. Per vehicle-km the factors ARE the model, so the
      finding is the gap between a class's share of the distance driven and its share of the CO2. */
   const c1 = Number(totals.rows[0]?.c1_vkm ?? 0);
   const c2 = Number(totals.rows[0]?.c2_vkm ?? 0);

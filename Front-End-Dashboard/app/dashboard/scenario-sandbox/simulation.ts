@@ -306,9 +306,9 @@ export type SimConfig = {
   /** Per-class CO2 (g/m) and fleet share, from the warehouse.
    *
    *  The constants below are defaults so the simulation still runs standalone,
-   *  but they are NOT the corridor's numbers: they had Class 3 at 950 g/km
-   *  against the 1,492 in nlex_emission_factors, and the fleet at 78/16/6
-   *  against an observed 78.1/13.0/8.9. Supplying this makes the sandbox agree
+   *  but they are NOT the corridor's numbers: they have Class 3 at 950 g/km
+   *  against the 798 in nlex_emission_factors, and the fleet at 78/16/6
+   *  against an observed 78.1/13.5/8.4. Supplying this makes the sandbox agree
    *  with the Emissions dashboard instead of quietly contradicting it. */
   classProfile?: Partial<Record<VehicleClass, { co2PerM?: number; share?: number }>>;
   /* How long to let the road fill before statistics mean anything.

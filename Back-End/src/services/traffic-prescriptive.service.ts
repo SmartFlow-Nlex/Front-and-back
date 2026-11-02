@@ -364,7 +364,7 @@ function boothGroups(plaza: string, rows: ProfileRow[]): BoothGroup[] {
 
 /* ── what the plan is computed from ──────────────────────────────────────── */
 
-type CongestionRow = { segment: string; km?: number | null; hours: number; state: string; probability: number | string; baseTs?: string | null };
+type CongestionRow = { segment: string; km?: number | null; hours: number; state: string; probability: number | string; pHigh?: number | string | null; baseTs?: string | null };
 
 type Inputs = {
   champion: { model_name: string; wmape: string | null; accepted: boolean };
@@ -692,13 +692,12 @@ export async function getTrafficPrescriptive(opts: {
     const p = Number(c.probability);
     if (!Number.isFinite(p)) continue;
     const high = String(c.state).toLowerCase() === "high";
-    /* A "low" row is evidence AGAINST congestion, so it enters the controller
-       as its complement rather than being dropped. The COMPLEMENT is what gets
-       reported too: reporting the raw p while scoring 1 - p made the published
-       probability disagree with the urgency beside it, which is worse than
-       either number alone. `probability` therefore always means "probability
-       of High", whichever row it came from. */
-    const pHigh = high ? p : 1 - p;
+    /* `probability` is always the chance of High, and that is the forecast's own p_high. It used to be 1 - p for
+       any row not labelled High, which only holds with two states: with Low, Med and High the remainder also holds
+       Med, so a Low row at 48% read as a 52% chance of High when the model gave 7%, and half the segments at
+       Prepare did not belong there (31 Oct 2026). The complement stays only for a row with no p_high. */
+    const stored = Number(c.pHigh);
+    const pHigh = c.pHigh != null && Number.isFinite(stored) ? stored : high ? p : 1 - p;
     const { score, label } = fuzzyUrgency(pHigh, Number(c.hours));
     const cur = bySeg.get(c.segment);
     if (!cur || score > cur.urgency) {

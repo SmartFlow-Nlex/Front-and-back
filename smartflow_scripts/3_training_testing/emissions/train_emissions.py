@@ -9,8 +9,8 @@ BOTH trivial baselines (WMAPE below the better of seasonal-naive/climatology,
 AND MASE < 1 against a seasonal naive).
 
 SOURCE
-  gold.fact_emissions_hourly, rebuilt from gold.fact_traffic_hourly x the
-  DENR/DOTC per-class factors x gold.exit_segment_km. It reconciles with the
+  gold.fact_emissions_hourly, vehicle-km per trip (gold.fact_vkm_hourly) x the
+  EMEP/EEA per-class factors. It reconciles with the
   volume series to within 0.5 vehicles/day, so the CO2 panel cannot contradict
   the volume panel.
 

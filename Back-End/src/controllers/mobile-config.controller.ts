@@ -1,7 +1,7 @@
 import type { Request, Response } from "express";
 import { getMobileConfigFromDb, saveMobileConfigInDb } from "../services/mobile-config.service.js";
 import { MobileConfigSchema } from "../validators/mobile-config.validator.js";
-import { audit as record } from "../services/audit.js";
+import { audit as record, actorOf } from "../services/audit.js";
 
 // Fire-and-forget audit entry (services/audit.ts); never blocks or fails the actual operation.
 const audit = (req: Request, action: string, details: Record<string, unknown>) =>
@@ -45,7 +45,7 @@ export const writeMobileConfig = async (req: Request, res: Response) => {
   }
 
   const before = await getMobileConfigFromDb();
-  const saved = await saveMobileConfigInDb(parsed.data, req.header("x-user") ?? "dashboard");
+  const saved = await saveMobileConfigInDb(parsed.data, (await actorOf(req)).user);
   if (!saved) {
     return res.status(503).json({
       success: false,

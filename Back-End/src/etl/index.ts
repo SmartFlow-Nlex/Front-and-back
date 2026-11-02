@@ -15,7 +15,7 @@
  * (publish.ts); hourly toll files go straight to the gold traffic record
  * (toll-hourly.ts). Every load is one transaction, and a "check" runs every
  * step and rolls it back.
- * Sources: File Upload | OpenWeather API | Climatiq API | Waze Partner Hub | Events Scraper
+ * Sources: File Upload | OpenWeather API | Waze Partner Hub | Events Scraper
  */
 import { parseFile, type ParseResult } from "./parser.js";
 import { classifyDataset, type ClassifyResult, type DatasetType } from "./classifier.js";
@@ -123,7 +123,7 @@ export async function runPipeline(filePath: string, originalFilename: string, op
 
 /**
  * Run the ETL pipeline on data extracted from any API source.
- * This is the unified entry point for OpenWeather, Climatiq, Waze, and Events data.
+ * This is the unified entry point for OpenWeather, Waze, and Events data.
  * The data has already been extracted by the source-specific extractor —
  * this function runs it through the shared Validation Gates 2–4.
  */

@@ -1,3 +1,4 @@
+import type { QueryResult } from "pg";
 import { db } from "../config/db.js";
 import { RECORD_END } from "../etl/toll-hourly.js";
 // Reused rather than duplicated: this is the same nlex_exits + dim_location
@@ -111,6 +112,24 @@ const EVENTS_CTE = `
     WHERE event_encoded_date IS NOT NULL
   )`;
 
+/** db.query, at most `limit` at a time; the rest wait here rather than in the pool's timed queue. */
+function oneAtATime(limit: number) {
+  let running = 0;
+  const waiting: (() => void)[] = [];
+  return (sql: string, params?: unknown[]) =>
+    new Promise<QueryResult<any>>((resolve, reject) => {
+      const start = () => {
+        running++;
+        db!.query(sql, params as unknown[]).then(resolve, reject).finally(() => {
+          running--;
+          waiting.shift()?.();
+        });
+      };
+      if (running < limit) start();
+      else waiting.push(start);
+    });
+}
+
 export async function getIncidentAnalyticsFromDb(filters: IncidentAnalyticsFilters) {
   if (!db) return null;
 
@@ -198,6 +217,11 @@ export async function getIncidentAnalyticsFromDb(filters: IncidentAnalyticsFilte
                                  AND w.h = EXTRACT(hour FROM ${tsExpr})::int
                                  AND w.wet = (${weatherParam} = 'wet')))`;
 
+    /* With a Weather filter these fifteen queries each scan the wet/dry hours and can run past a minute. The pool
+       holds ten connections, so the rest waited out its 45 s connect timeout and the page said "database not
+       reachable" with the database healthy (31 Oct 2026). Five at a time takes longer and finishes. */
+    const queued = oneAtATime(wx ? 5 : 15);
+
     const [
       trend,
       hotspot,
@@ -216,7 +240,7 @@ export async function getIncidentAnalyticsFromDb(filters: IncidentAnalyticsFilte
       breakdownDeploy,
     ] = await Promise.all([
       // Daily counts by event type (client rolls up to weekly/monthly)
-      db.query(
+      queued(
         `WITH ${EVENTS_CTE}, ${WXALL_CTE}
          SELECT d::text, COUNT(*) FILTER (WHERE src = 'accident')::int AS accident,
                 COUNT(*) FILTER (WHERE src = 'breakdown')::int AS breakdown
@@ -233,7 +257,7 @@ export async function getIncidentAnalyticsFromDb(filters: IncidentAnalyticsFilte
       // official list has no posts (the Balintawak approaches and the Harbor
       // Link side, and some mis-keyed rows); they are one group, km_bin 0, which
       // the page names "South of Km 12" rather than "Km 0-4".
-      db.query(
+      queued(
         `WITH ${EVENTS_CTE}, ${WXALL_CTE}
          SELECT (CASE WHEN ${kmPostSql("(corridor_km + 12)")} < ${KM_POST_START} THEN 0
                       ELSE GREATEST(FLOOR(${kmPostSql("(corridor_km + 12)")} / 5) * 5, ${KM_POST_START}) END)::int AS km_bin,
@@ -249,7 +273,7 @@ export async function getIncidentAnalyticsFromDb(filters: IncidentAnalyticsFilte
       // Hour x day-of-week frequency. Split by event type as well as the total (19 Oct 2026, testers
       // IN-8): the panel under the heatmap breaks the hovered or selected cell into accidents and
       // breakdowns, which the total alone cannot give. `v` stays the total its callers already read.
-      db.query(
+      queued(
         `WITH ${EVENTS_CTE}, ${WXALL_CTE}
          SELECT EXTRACT(dow FROM d)::int AS dow, h AS hour, COUNT(*)::int AS v,
                 COUNT(*) FILTER (WHERE src = 'accident')::int AS accident,
@@ -262,7 +286,7 @@ export async function getIncidentAnalyticsFromDb(filters: IncidentAnalyticsFilte
       // Error"); main_cause rides along as the broader bucket (e.g. "Human
       // Error") rather than being the group itself, since grouping by
       // main_cause alone would collapse everything into ~4 bars.
-      db.query(
+      queued(
         `WITH ${WXALL_CTE}
          SELECT sub_cause AS label, main_cause AS "mainCause", COUNT(*)::int AS total,
                 SUM(COALESCE(number_of_injured,0))::int AS injuries,
@@ -277,7 +301,7 @@ export async function getIncidentAnalyticsFromDb(filters: IncidentAnalyticsFilte
       // entirely from accident causes, kept as its own ranking rather than
       // merged into one list (see the earlier audit of this chart). No
       // injuries/fatalities column: the breakdown table has neither.
-      db.query(
+      queued(
         `WITH ${WXALL_CTE}
          SELECT sub_cause AS label, main_cause AS "mainCause", COUNT(*)::int AS total
          FROM silver.nlex_breakdown_events_clean e
@@ -289,7 +313,7 @@ export async function getIncidentAnalyticsFromDb(filters: IncidentAnalyticsFilte
       // Top accident types (type_of_event) — breakdowns have no discrete
       // "type" field, so this stays accident-only, same restriction the old
       // query applied to stalled vehicles.
-      db.query(
+      queued(
         `WITH ${WXALL_CTE}
          SELECT type_of_event AS label, COUNT(*)::int AS total,
                 SUM(COALESCE(number_of_injured,0))::int AS injuries,
@@ -302,7 +326,7 @@ export async function getIncidentAnalyticsFromDb(filters: IncidentAnalyticsFilte
       ),
       // Weather exposure: wet vs dry hours in range (unchanged — reads only
       // hourly_weather, no incident table involved)
-      db.query(
+      queued(
         `WITH ${WX_CTE}
          SELECT COUNT(*) FILTER (WHERE rain > 0.3)::int AS wet_hours,
                 COUNT(*) FILTER (WHERE rain <= 0.3)::int AS dry_hours
@@ -314,7 +338,7 @@ export async function getIncidentAnalyticsFromDb(filters: IncidentAnalyticsFilte
          comparison, and its hour denominators above never followed the filter. Filtering only the
          counts left Weather=Wet with no dry side (the Crash Rate in Rain tile went blank) and
          Weather=Dry with zero wet crashes (the tile read 0.00x). Incident type still applies. */
-      db.query(
+      queued(
         `WITH ${EVENTS_CTE}, ${WX_CTE}
          SELECT (w.rain > 0.3) AS wet, e.src, COUNT(*)::int AS n
          FROM events e JOIN wx w ON w.d = e.d AND w.h = e.h
@@ -326,7 +350,7 @@ export async function getIncidentAnalyticsFromDb(filters: IncidentAnalyticsFilte
          "add an hour/day filter"). Exposure hours and incident counts per (dow, hour), so the card can
          sum any day/hour selection and still divide incidents by the hours of that weather in the
          same slots. Summed over every slot, these equal the two blocks above. */
-      db.query(
+      queued(
         `WITH ${EVENTS_CTE}, ${WX_CTE},
          expo AS (
            SELECT EXTRACT(dow FROM d)::int AS dow, h,
@@ -355,13 +379,13 @@ export async function getIncidentAnalyticsFromDb(filters: IncidentAnalyticsFilte
       // hour-band and day-type slice. Same definitions as the two queries above
       // (wet = expressway-average rain > 0.3 mm), just not collapsed over time, so the
       // client can re-slice without another request. dow is EXTRACT(dow): 0 = Sunday.
-      db.query(
+      queued(
         `WITH ${WX_CTE}
          SELECT EXTRACT(dow FROM d)::int AS dow, h AS hour, (rain > 0.3) AS wet, COUNT(*)::int AS hours
          FROM wx GROUP BY 1, 2, 3`,
         [lo, hi]
       ),
-      db.query(
+      queued(
         `WITH ${EVENTS_CTE}, ${WX_CTE}
          SELECT EXTRACT(dow FROM e.d)::int AS dow, e.h AS hour, (w.rain > 0.3) AS wet, e.src, COUNT(*)::int AS n
          FROM events e JOIN wx w ON w.d = e.d AND w.h = e.h
@@ -371,7 +395,7 @@ export async function getIncidentAnalyticsFromDb(filters: IncidentAnalyticsFilte
         params
       ),
       // Traffic impact: avg jam speed on wet vs dry hours (unchanged)
-      db.query(
+      queued(
         `WITH ${WX_CTE}
          SELECT (w.rain > 0.3) AS wet,
                 ROUND(AVG(j.avg_speed_kmh)::numeric, 1)::float AS speed,
@@ -385,7 +409,7 @@ export async function getIncidentAnalyticsFromDb(filters: IncidentAnalyticsFilte
       // time is deliberately absent here — see accidentClearance/
       // breakdownDeploy below, which replace the old single avgResponseMin
       // with two metrics that don't conflate the two event types.
-      db.query(
+      queued(
         `WITH ${EVENTS_CTE}, ${WXALL_CTE}
          SELECT
            COUNT(*) FILTER (WHERE ${WHERE})::int AS cur_total,
@@ -401,7 +425,7 @@ export async function getIncidentAnalyticsFromDb(filters: IncidentAnalyticsFilte
       // (event start -> site cleared) on this table — nothing to derive,
       // just aggregate with a sanity floor at 0 (a negative value here would
       // be a data-entry error, not a real duration).
-      db.query(
+      queued(
         `WITH ${WXALL_CTE}
          SELECT COUNT(*)::int AS total,
                 COUNT(*) FILTER (WHERE clearance_min IS NOT NULL AND clearance_min >= 0)::int AS valid_n,
@@ -419,7 +443,7 @@ export async function getIncidentAnalyticsFromDb(filters: IncidentAnalyticsFilte
       // and "last departure" are picked by MIN/MAX(dispatch_time) instead of
       // array position [0]/[-1] — using array order would silently mislabel
       // the first responder on roughly 1 in 6 multi-dispatch events.
-      db.query(
+      queued(
         `WITH ${WXALL_CTE},
          scoped AS (
            SELECT b.event_number, b.event_encoded_date, b.deployments

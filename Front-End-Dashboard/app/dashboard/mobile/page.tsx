@@ -37,6 +37,7 @@ import {
   X,
 } from "lucide-react";
 import PageHeader from "../../../components/dashboard/PageHeader";
+import { apiFetch } from "../../../lib/api";
 import StateNote from "../../../components/stage/StateNote";
 
 const BACKEND = process.env.NEXT_PUBLIC_BACKEND_URL ?? "http://localhost:4000";
@@ -347,7 +348,7 @@ export default function MobileControlPage() {
     setSaving(true);
     setError(null);
     try {
-      const res = await fetch(`${BACKEND}/api/mobile-config`, {
+      const res = await apiFetch(`${BACKEND}/api/mobile-config`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         // `features` is derived from `sections` by the API, so it is not sent.

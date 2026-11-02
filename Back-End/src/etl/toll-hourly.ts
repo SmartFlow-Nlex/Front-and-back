@@ -20,8 +20,10 @@
  *                                      (build_origin.mjs, exactly the same key)
  *   gold.daily_traffic_volume_corrected  the daily series the volume models train
  *                                      on: each day's rounded sum of the first
- *   gold.fact_emissions_hourly         CO2 from the first, by the formula in
- *                                      2_reference_tables/build_emissions.js
+ *   gold.fact_vkm_hourly               the km those trips drove on NLEX, on the first's key
+ *                                      (trip-km.ts), plus trips paid off NLEX, on their
+ *                                      NLEX entry plaza with status 'off_nlex'
+ *   gold.fact_emissions_hourly         emissions from it: EMISSIONS_SELECT below
  *   public.nlex_traffic_volume         the Descriptive tab's view, refreshed
  *
  * Every plaza-hour in the file REPLACES the warehouse's figure for it, so
@@ -42,6 +44,7 @@ import { resolvePlaza, type ResolvedPlaza } from "./canonical-exit.js";
 import type { RawRow } from "./parser.js";
 import { compareToll, type UploadComparison } from "./compare.js";
 import { UndoJournal, type UndoKey } from "./undo.js";
+import { tripKm } from "./trip-km.js";
 
 /* The keys the load replaces by, for its undo journal (undo.ts). */
 const FACT_KEY: UndoKey = { cols: ["date", "hour", "exit_canonical", "status", "direction", "role", "toll_system"], nullable: ["direction", "role", "toll_system"] };
@@ -54,12 +57,16 @@ export const TOLL_HOURLY_COLUMNS = [
 ] as const;
 
 type Sums = [number, number, number, number];
+/** Vehicle-km of classes 1..3. */
+export type Vkm = [number, number, number];
 
 export interface TollHourlyAggregate {
   /** date \t hour \t exit \t direction \t role \t system \t status -> class_1..3, total */
   fact: Map<string, Sums>;
   /** date \t hour \t entry \t direction \t status -> class_1..3, total */
   origin: Map<string, Sums>;
+  /** The fact key -> vehicle-km on NLEX. Trips paid off NLEX are keyed on their entry plaza, status "off_nlex". */
+  vkm: Map<string, Vkm>;
   dates: string[];
   rowsAccepted: number;
   rowsRejected: number;
@@ -113,6 +120,20 @@ export function aggregateTollHourly(rows: Iterable<RawRow>, cutoff: Cutoff = loa
 
   const fact = new Map<string, Sums>();
   const origin = new Map<string, Sums>();
+  const vkm = new Map<string, Vkm>();
+  /** Trips nothing says the distance of, by fact key: charged the mean of the known trips at the plaza (below). */
+  const unknownKm = new Map<string, Vkm>();
+  /** plaza (the fact key less date and hour) -> known km and trips, by class; "" is the whole file. */
+  const knownKm = new Map<string, [Vkm, Vkm]>();
+  const addVkm = (key: string, i: number, v: number) => {
+    const a = vkm.get(key);
+    if (a) a[i] += v; else { const n: Vkm = [0, 0, 0]; n[i] = v; vkm.set(key, n); }
+  };
+  const addKnown = (plaza: string, i: number, trips: number, km: number) => {
+    let a = knownKm.get(plaza);
+    if (!a) { a = [[0, 0, 0], [0, 0, 0]]; knownKm.set(plaza, a); }
+    a[0][i] += trips * km; a[1][i] += trips;
+  };
   const dates = new Set<string>();
   const lateDates = new Set<string>();
   const heldBack = { late: 0, offCorridorExit: 0, malformed: 0 };
@@ -141,6 +162,17 @@ export function aggregateTollHourly(rows: Iterable<RawRow>, cutoff: Cutoff = loa
       keep("late", row, lateReason);
       continue;
     }
+    const entryCode = num(row.entry_plaza), exitCode = num(row.exit_plaza);
+    if (row.off_nlex) {
+      // Paid on SCTEX, SFEX or the Connector: not in the traffic record, but the part driven on NLEX is NLEX emissions.
+      const en = resolve(String(row.entry_plaza_name ?? ""));
+      const t = tripKm(entryCode, exitCode, en, resolve(String(row.exit_plaza_name ?? "")));
+      if (en.status === "nlex" && t.kind === "known" && t.km > 0) {
+        const key = `${date}\t${hour}\t${en.canonical}\t${en.direction ?? ""}\t${en.role ?? ""}\t${en.system ?? ""}\toff_nlex`;
+        for (let i = 0; i < 3; i++) if (c[i] > 0) addVkm(key, i, c[i] * t.km);
+      }
+      continue;
+    }
     const ex = resolve(String(row.exit_plaza_name ?? ""));
     if (ex.status === "unresolved") {
       heldBack.offCorridorExit++;
@@ -157,6 +189,21 @@ export function aggregateTollHourly(rows: Iterable<RawRow>, cutoff: Cutoff = loa
     if (fa) { fa[0] += c[0]; fa[1] += c[1]; fa[2] += c[2]; fa[3] += c[3]; } else fact.set(fk, [c[0], c[1], c[2], c[3]]);
 
     const en = resolve(String(row.entry_plaza_name ?? ""));
+    if (!vkm.has(fk)) vkm.set(fk, [0, 0, 0]);
+    const t = tripKm(entryCode, exitCode, en, ex);
+    const plaza = fk.slice(fk.indexOf("\t", date.length + 1) + 1);
+    for (let i = 0; i < 3; i++) {
+      if (c[i] === 0) continue;
+      if (t.kind === "unknown") {
+        const u = unknownKm.get(fk);
+        if (u) u[i] += c[i]; else { const n: Vkm = [0, 0, 0]; n[i] = c[i]; unknownKm.set(fk, n); }
+      } else {
+        addVkm(fk, i, c[i] * t.km);
+        addKnown(plaza, i, c[i], t.km);
+        addKnown("", i, c[i], t.km);
+      }
+    }
+
     if (en.status === "unresolved") { unplacedOrigins++; continue; }
     const name = en.canonical ?? en.base;
     const ok = `${date}\t${hour}\t${name}\t${en.direction ?? ""}\t${en.status}`;
@@ -164,10 +211,21 @@ export function aggregateTollHourly(rows: Iterable<RawRow>, cutoff: Cutoff = loa
     if (oa) { oa[0] += c[0]; oa[1] += c[1]; oa[2] += c[2]; oa[3] += c[3]; } else origin.set(ok, [c[0], c[1], c[2], c[3]]);
   }
 
+  for (const [fk, trips] of unknownKm) {
+    const plaza = knownKm.get(fk.slice(fk.indexOf("\t", fk.indexOf("\t") + 1) + 1));
+    const all = knownKm.get("");
+    for (let i = 0; i < 3; i++) {
+      if (trips[i] === 0) continue;
+      const k = plaza && plaza[1][i] > 0 ? plaza : all;
+      if (k && k[1][i] > 0) addVkm(fk, i, trips[i] * (k[0][i] / k[1][i]));
+    }
+  }
+
   const ld = [...lateDates].sort();
   return {
     fact,
     origin,
+    vkm,
     dates: [...dates].sort(),
     rowsAccepted: accepted,
     rowsRejected: heldBack.late + heldBack.offCorridorExit + heldBack.malformed,
@@ -201,6 +259,27 @@ export interface TollHourlyLoad {
 const BATCH = 20_000;
 const r2 = (v: number) => Math.round(v * 100) / 100;
 
+/**
+ * Emissions per row: vehicle-km by class x each class's factor. Rows of trips paid off NLEX carry vehicle-km and no
+ * vehicles, because those vehicles are not in the traffic record. A SELECT with `v` as gold.fact_vkm_hourly, so the
+ * upload and scripts/build-vehicle-km.ts write the same thing.
+ */
+export const EMISSIONS_COLUMNS = "date, hour, exit_canonical, direction, class_1, class_2, class_3, total, vkm_1, vkm_2, vkm_3, co2_tonnes, co_kg, no2_kg, pm25_kg";
+const byClass = (col: string) => `v.vkm_1 * f1.${col} + v.vkm_2 * f2.${col} + v.vkm_3 * f3.${col}`;
+export const EMISSIONS_SELECT = `
+  SELECT v.date, v.hour, v.exit_canonical, v.direction,
+         COALESCE(t.class_1, 0), COALESCE(t.class_2, 0), COALESCE(t.class_3, 0), COALESCE(t.total, 0),
+         v.vkm_1, v.vkm_2, v.vkm_3,
+         (${byClass("co2_g_per_km")}) / 1e6, (${byClass("co_g_per_km")}) / 1e3, (${byClass("no2_g_per_km")}) / 1e3, (${byClass("pm25_g_per_km")}) / 1e3
+    FROM gold.fact_vkm_hourly v
+    LEFT JOIN gold.fact_traffic_hourly t
+      ON t.date = v.date AND t.hour = v.hour AND t.exit_canonical = v.exit_canonical AND t.status = v.status
+     AND COALESCE(t.direction, '') = COALESCE(v.direction, '') AND COALESCE(t.role, '') = COALESCE(v.role, '')
+     AND COALESCE(t.toll_system, '') = COALESCE(v.toll_system, '')
+   CROSS JOIN (SELECT * FROM bronze.nlex_emission_factors WHERE vehicle_class = 1) f1
+   CROSS JOIN (SELECT * FROM bronze.nlex_emission_factors WHERE vehicle_class = 2) f2
+   CROSS JOIN (SELECT * FROM bronze.nlex_emission_factors WHERE vehicle_class = 3) f3`;
+
 /* Staged into temp tables first, then swapped in by key: delete exactly the
    plaza-hours the file holds, insert its figures for them. */
 async function insertFact(c: PoolClient, entries: [string, Sums][]): Promise<number> {
@@ -217,6 +296,26 @@ async function insertFact(c: PoolClient, entries: [string, Sums][]): Promise<num
          (date, hour, exit_canonical, direction, role, toll_system, status, class_1, class_2, class_3, total)
        SELECT * FROM unnest($1::date[], $2::smallint[], $3::text[], $4::text[], $5::text[], $6::text[], $7::text[],
                             $8::numeric[], $9::numeric[], $10::numeric[], $11::numeric[])`,
+      cols,
+    );
+  }
+  return entries.length;
+}
+
+async function insertVkm(c: PoolClient, table: string, entries: [string, Vkm][]): Promise<number> {
+  for (let i = 0; i < entries.length; i += BATCH) {
+    const cols: unknown[][] = [[], [], [], [], [], [], [], [], [], []];
+    for (const [k, v] of entries.slice(i, i + BATCH)) {
+      const [date, hour, exit, direction, role, system, status] = k.split("\t");
+      cols[0].push(date); cols[1].push(Number(hour)); cols[2].push(exit);
+      cols[3].push(direction || null); cols[4].push(role || null); cols[5].push(system || null); cols[6].push(status);
+      cols[7].push(r2(v[0])); cols[8].push(r2(v[1])); cols[9].push(r2(v[2]));
+    }
+    await c.query(
+      `INSERT INTO ${table}
+         (date, hour, exit_canonical, direction, role, toll_system, status, vkm_1, vkm_2, vkm_3)
+       SELECT * FROM unnest($1::date[], $2::smallint[], $3::text[], $4::text[], $5::text[], $6::text[], $7::text[],
+                            $8::numeric[], $9::numeric[], $10::numeric[])`,
       cols,
     );
   }
@@ -247,6 +346,8 @@ async function insertOrigin(c: PoolClient, entries: [string, Sums][]): Promise<n
  * every table moves together or none does. `dryRun` does all of it and rolls
  * back, which is how a load is rehearsed against the real warehouse.
  */
+export { insertVkm };
+
 export async function loadTollHourly(agg: TollHourlyAggregate, opts: { dryRun?: boolean; replaceDays?: boolean } = {}): Promise<TollHourlyLoad> {
   /* replaceDays: the file is a complete record of every day it covers (NLEX's own yearly export), so it
      replaces those days whole — every plaza-hour of them, not only the ones it holds. Replacing by plaza-hour
@@ -269,18 +370,21 @@ export async function loadTollHourly(agg: TollHourlyAggregate, opts: { dryRun?: 
     await c.query(`CREATE TEMP TABLE th_origin (LIKE gold.fact_traffic_hourly_origin) ON COMMIT DROP`);
     out.factRows = await insertFact(c, [...agg.fact.entries()]);
     out.originRows = await insertOrigin(c, [...agg.origin.entries()]);
+    await c.query(`CREATE TEMP TABLE th_vkm (LIKE gold.fact_vkm_hourly) ON COMMIT DROP`);
+    await insertVkm(c, "th_vkm", [...agg.vkm.entries()]);
 
     // Before anything is replaced: how the file compares with what is loaded,
     // and the undo journal of every row about to change.
     out.comparison = await compareToll(c);
     const journal = await UndoJournal.open(c, "toll_hourly");
     if (whole) {
-      for (const table of ["gold.fact_traffic_hourly", "gold.fact_traffic_hourly_origin"]) {
+      for (const table of ["gold.fact_traffic_hourly", "gold.fact_traffic_hourly_origin", "gold.fact_vkm_hourly"]) {
         await journal.saveOld(table, DAY_KEY, `FROM ${table} t WHERE t.date = ANY($1::date[])`, [days]);
         await journal.saveNew(table, DAY_KEY, `SELECT unnest($1::date[]) AS date`, [days]);
       }
       await c.query(`DELETE FROM gold.fact_traffic_hourly WHERE date = ANY($1::date[])`, [days]);
       await c.query(`DELETE FROM gold.fact_traffic_hourly_origin WHERE date = ANY($1::date[])`, [days]);
+      await c.query(`DELETE FROM gold.fact_vkm_hourly WHERE date = ANY($1::date[])`, [days]);
     } else {
     await journal.saveOld("gold.fact_traffic_hourly", FACT_KEY, `
       FROM gold.fact_traffic_hourly t JOIN th_fact k
@@ -293,6 +397,12 @@ export async function loadTollHourly(agg: TollHourlyAggregate, opts: { dryRun?: 
         ON t.date = k.date AND t.hour = k.hour AND t.entry_canonical = k.entry_canonical AND t.status = k.status
        AND t.direction IS NOT DISTINCT FROM k.direction`);
     await journal.saveNew("gold.fact_traffic_hourly_origin", ORIGIN_KEY, `SELECT * FROM th_origin`);
+    await journal.saveOld("gold.fact_vkm_hourly", FACT_KEY, `
+      FROM gold.fact_vkm_hourly t JOIN th_vkm k
+        ON t.date = k.date AND t.hour = k.hour AND t.exit_canonical = k.exit_canonical AND t.status = k.status
+       AND t.direction IS NOT DISTINCT FROM k.direction AND t.role IS NOT DISTINCT FROM k.role
+       AND t.toll_system IS NOT DISTINCT FROM k.toll_system`);
+    await journal.saveNew("gold.fact_vkm_hourly", FACT_KEY, `SELECT * FROM th_vkm`);
     }
     for (const table of ["gold.daily_traffic_volume_corrected", "gold.fact_emissions_hourly"]) {
       await journal.saveOld(table, DAY_KEY, `FROM ${table} t WHERE t.date = ANY($1::date[])`, [days]);
@@ -310,6 +420,12 @@ export async function loadTollHourly(agg: TollHourlyAggregate, opts: { dryRun?: 
        WHERE f.date = t.date AND f.hour = t.hour AND f.entry_canonical = t.entry_canonical
          AND f.direction IS NOT DISTINCT FROM t.direction AND f.status = t.status`);
     await c.query(`INSERT INTO gold.fact_traffic_hourly_origin SELECT * FROM th_origin`);
+    await c.query(`
+      DELETE FROM gold.fact_vkm_hourly f USING th_vkm t
+       WHERE f.date = t.date AND f.hour = t.hour AND f.exit_canonical = t.exit_canonical
+         AND f.direction IS NOT DISTINCT FROM t.direction AND f.role IS NOT DISTINCT FROM t.role
+         AND f.toll_system IS NOT DISTINCT FROM t.toll_system AND f.status = t.status`);
+    await c.query(`INSERT INTO gold.fact_vkm_hourly SELECT * FROM th_vkm`);
 
     // The daily series and CO2 are recomputed for every day the file touched,
     // from the whole fact table, so a partial file leaves them consistent.
@@ -322,25 +438,9 @@ export async function loadTollHourly(agg: TollHourlyAggregate, opts: { dryRun?: 
     );
     out.dailyRows = daily.rowCount ?? 0;
 
-    // CO2 from the same rows, by build_emissions.js's formula and segments.
+    // Emissions from the same rows' vehicle-km.
     await c.query(`DELETE FROM gold.fact_emissions_hourly WHERE date = ANY($1::date[])`, [days]);
-    const em = await c.query(
-      `INSERT INTO gold.fact_emissions_hourly
-         (date, hour, exit_canonical, direction, segment_km, class_1, class_2, class_3, total, co2_tonnes, co_kg, no2_kg, pm25_kg)
-       SELECT t.date, t.hour, t.exit_canonical, t.direction, s.segment_km::numeric(6,3),
-              t.class_1, t.class_2, t.class_3, t.total,
-              (t.class_1 * s.segment_km * f1.co2_g_per_km + t.class_2 * s.segment_km * f2.co2_g_per_km + t.class_3 * s.segment_km * f3.co2_g_per_km) / 1e6,
-              (t.class_1 * s.segment_km * f1.co_g_per_km + t.class_2 * s.segment_km * f2.co_g_per_km + t.class_3 * s.segment_km * f3.co_g_per_km) / 1e3,
-              (t.class_1 * s.segment_km * f1.no2_g_per_km + t.class_2 * s.segment_km * f2.no2_g_per_km + t.class_3 * s.segment_km * f3.no2_g_per_km) / 1e3,
-              (t.class_1 * s.segment_km * f1.pm25_g_per_km + t.class_2 * s.segment_km * f2.pm25_g_per_km + t.class_3 * s.segment_km * f3.pm25_g_per_km) / 1e3
-         FROM gold.fact_traffic_hourly t
-         JOIN gold.exit_segment_km s ON s.exit_name = t.exit_canonical
-        CROSS JOIN (SELECT co2_g_per_km, co_g_per_km, no2_g_per_km, pm25_g_per_km FROM bronze.nlex_emission_factors WHERE vehicle_class = 1) f1
-        CROSS JOIN (SELECT co2_g_per_km, co_g_per_km, no2_g_per_km, pm25_g_per_km FROM bronze.nlex_emission_factors WHERE vehicle_class = 2) f2
-        CROSS JOIN (SELECT co2_g_per_km, co_g_per_km, no2_g_per_km, pm25_g_per_km FROM bronze.nlex_emission_factors WHERE vehicle_class = 3) f3
-        WHERE t.date = ANY($1::date[])`,
-      [days],
-    );
+    const em = await c.query(`INSERT INTO gold.fact_emissions_hourly (${EMISSIONS_COLUMNS}) ${EMISSIONS_SELECT} WHERE v.date = ANY($1::date[])`, [days]);
     out.emissionRows = em.rowCount ?? 0;
     await journal.close();
 
@@ -365,6 +465,7 @@ export async function loadTollHourly(agg: TollHourlyAggregate, opts: { dryRun?: 
       await db.query("REFRESH MATERIALIZED VIEW public.nlex_traffic_volume");
       await db.query("ANALYZE gold.fact_traffic_hourly");
       await db.query("ANALYZE gold.fact_traffic_hourly_origin");
+      await db.query("ANALYZE gold.fact_vkm_hourly");
       out.viewRefreshed = true;
     } catch (e: any) {
       out.errors.push(`Loaded, but the Descriptive view did not refresh (run REFRESH MATERIALIZED VIEW public.nlex_traffic_volume): ${e.message}`);

@@ -73,9 +73,9 @@ contains a password, key or machine path any more.** Never commit or upload
 | hourly emissions | `gold.fact_emissions_hourly` | `2_reference_tables/build_emissions.js` |
 | volume forecast + metrics | `gold.ml_predictive_volume`, `gold.ml_model_metrics` (`Total Traffic`) | `3_training_testing/traffic_volume/retrain_honest.py` |
 | volume 90-day future + horizon accuracy | `gold.ml_predictive_volume`, `gold.ml_horizon_accuracy` | `3_training_testing/traffic_volume/extend_future_volume.py` |
-| congestion map | `gold.ml_predictive_congestion`, `gold.ml_congestion_horizon_accuracy`, metrics `Congestion` | `3_training_testing/congestion/train_congestion_horizon.py` (see note below) |
+| congestion map | `gold.ml_congestion_forecast`, `gold.ml_congestion_horizon_accuracy`, metrics `Congestion` | `All_Scripts/Predictive_Modeling/train_congestion_horizon.py` (see note below; the old copy here is archived) |
 | CO₂ forecast | `gold.ml_predictive_emissions`, metrics `Corridor CO2` | `3_training_testing/emissions/train_emissions.py`. Candidates: GBR, Polynomial, LSTM and **Derived** (volume Prophet × CO₂ per vehicle by weekday), all scored by the served day-by-day procedure since 2026-10-02 (before, GBR/Polynomial saw each window's actual lags, so their holdout was a next-day score). `4_studies_audits/co2_derived_forecast_study.py` is the read-only comparison that prompted it. |
-| event surge | `gold.ml_event_surge_forecast`; metrics `Event Surge` | `3_training_testing/event_surge/build_event_surge.py`; `eval_event_surge.py` |
+| event surge | `gold.ml_event_surge_forecast`; metrics `Event Surge` | `All_Scripts/Predictive_Modeling/build_event_surge.py` (event days from the Philippine Arena calendar; it scores itself). The old busy-day version and its eval are archived in `_archive_do_not_run/old_trainers_2026-11/` (2 Nov 2026): the weekly batch was still running them. |
 | incident forecast, severity, spatial risk, weather-speed | `public.ml_predictive_incidents`, `public.ml_daily_actuals`, `public.ml_training_metadata`, `gold.ml_incident_*`, `gold.ml_weather_speed_*` | `Back-End/incident_model_scripts/` (stays there: the incident services and the clearance panel refer to that path) |
 | uploads on the Data Management page | every layout's bronze table, then its silver table (or the gold traffic record) | `Back-End/src/etl/`: one transaction per upload; rows already loaded are skipped by their natural key; dated record rows after `RECORD_END` (2026-06-30) are held back; "Check only" runs it all and rolls back. **No need to re-run the medallion SQL after an upload any more** — `publish.ts` applies the same silver rules to the rows it wrote. |
 | every model's holdout metrics, in one place | `gold.model_evaluation` (a read-only view over the rows above: metric, strongest baseline, holdout window) | `Back-End/scripts/medallion/11-gold-model-evaluation.sql`; re-run it only if a trainer changes what it writes |
@@ -167,10 +167,10 @@ Each step depends on the ones above it.
    models' `(forecast, fitted)` pair as one array; `train_fleet_mix.py` read
    credentials from a path that no longer exists.
 2. **The congestion forecast runs hourly, from outside this repo.** The
-   Scheduled Task "SmartFlow congestion refresh" (since 2026-09-17) runs
-   `Front-and-back-ForDSU-Push-Kia/All_Scripts/Predictive_Modeling/train_congestion_horizon.py --fast`.
-   That copy has 660 lines; `3_training_testing/congestion/` has a 460-line
-   one, so the two differ. It only runs while this PC is on. The card marks the
+   Scheduled Task "SmartFlow congestion refresh" runs
+   `All_Scripts/Predictive_Modeling/refresh_congestion_hidden.ps1` in this repo (re-pointed 26 Oct 2026), and the
+   GitHub workflow congestion-hourly.yml runs the same trainer. The old 12 h copy that was in
+   `3_training_testing/congestion/` is archived (2 Nov 2026). The task only runs while this PC is on. The card marks the
    forecast expired once `base_ts` is more than a day old.
 3. **The source files are named `synthetic`.** This applies to
    `synthetic-nlex-data/`, `synthetic_data_varying/` and `*_synthetic.csv`.

@@ -32,7 +32,9 @@ const HEAT_UNIT = "t CO₂ / h";
 const BACKEND = process.env.NEXT_PUBLIC_BACKEND_URL ?? "http://localhost:4000";
 
 const CLASS_SHORT = ["Class 1 · Light", "Class 2 · Medium", "Class 3 · Heavy"];
-const AQI_BANDS = ["Good (AQI 1–2)", "Moderate (AQI 3)", "Poor (AQI 4–5)"] as const;
+// OpenWeatherMap's own words for its 1-5 scale (1 Good, 2 Fair, 3 Moderate, 4 Poor, 5 Very poor), grouped in three
+// bands. The first band said "Good" for AQI 2 while the tile, rightly, calls 2 "Fair" (fix list A9, 2 Nov 2026).
+const AQI_BANDS = ["Good or Fair (AQI 1–2)", "Moderate (AQI 3)", "Poor or Very poor (AQI 4–5)"] as const;
 /** The Fleet Mix chart's reference row: each class's share of the vehicles counted. */
 const BASELINE_LABEL = "Vehicles (baseline)";
 /** What the class-vs-class cards say once the Class filter leaves only one class to compare. */
@@ -191,6 +193,11 @@ export default function SustainabilityPage() {
     const totCo2 = classes.reduce((s, c) => s + c.co2_t, 0);
     const heavy = classes.filter((c) => c.class >= 2);
     const heavyVolPct = totVol > 0 ? (heavy.reduce((s, c) => s + c.volume, 0) / totVol) * 100 : 0;
+    /* "Heavy" = Class 2+3 by vehicle-km everywhere (fix list A10, 2 Nov 2026). CO2 is vehicle-km x the class factor,
+       so each class's vehicle-km is its CO2 over its factor. The tile compared CO2 with the count of vehicles. */
+    const vkmOf = (c: (typeof classes)[number]) => (c.co2_g_per_km > 0 ? (c.co2_t * 1e6) / c.co2_g_per_km : 0);
+    const totVkm = classes.reduce((s, c) => s + vkmOf(c), 0);
+    const heavyVkmPct = totVkm > 0 ? (heavy.reduce((s, c) => s + vkmOf(c), 0) / totVkm) * 100 : 0;
     const heavyCo2Pct = totCo2 > 0 ? (heavy.reduce((s, c) => s + c.co2_t, 0) / totCo2) * 100 : 0;
 
     const days = data.dailyTrend.length;
@@ -205,7 +212,7 @@ export default function SustainabilityPage() {
       .map((c) => `Class ${c.class} ${fmtInt(c.co2_g_per_km)}`)
       .join(", ");
 
-    return { deltaPct, heavyVolPct, heavyCo2Pct, avgDailyT, totVol, totCo2, oneClass, factorText };
+    return { deltaPct, heavyVolPct, heavyVkmPct, heavyCo2Pct, avgDailyT, totVol, totCo2, oneClass, factorText };
   }, [data]);
 
     // ---------- Hero: CO2 trend by class ----------
@@ -451,8 +458,8 @@ export default function SustainabilityPage() {
   // The heavy CO2 share is the card's answer; the takeaway sets it against
   // the heavy share of vehicles, which is the baseline.
   const fleetTakeaway =
-    derived && !derived.oneClass && derived.heavyVolPct > 0
-      ? `From just ${derived.heavyVolPct.toFixed(1)}% of vehicles · ${fleetBaseline ? "compare each bar with the faded vehicle baseline" : "hover a bar to set each class against its share of vehicles"}`
+    derived && !derived.oneClass && derived.heavyVkmPct > 0
+      ? `From just ${derived.heavyVkmPct.toFixed(1)}% of vehicle-km · ${fleetBaseline ? "compare each bar with the faded vehicle baseline" : "hover a bar to set each class against its share of vehicles"}`
       : null;
 
   const fleetOption = useMemo<EChartsOption | null>(() => {
@@ -1110,13 +1117,13 @@ export default function SustainabilityPage() {
               <span className={styles.kpiIcon} aria-hidden="true"><Truck size={15} /></span>
               {/* Says which window and which denominator (17 Oct 2026, testers EM-6.2): this is the whole
                   Range, and "traffic" meant the share of vehicles counted. */}
-              <h3>Heavy-Vehicle Impact<InfoTooltip text={`Share of the modeled CO₂ over the whole Range that comes from Class 2–3 (buses and trucks), against their share of the vehicles counted at the toll plazas. Heavy classes emit far more per kilometre${derived ? ` (g CO₂/km: ${derived.factorText})` : ""}. The Heavy-Vehicle Share of CO₂ chart below breaks the same share down period by period; its dashed line is this figure.`} /></h3>
+              <h3>Heavy-Vehicle Impact<InfoTooltip text={`Share of the modeled CO₂ over the whole Range that comes from Class 2–3 (buses and trucks), against their share of the vehicle-km driven on NLEX. Heavy classes emit far more per kilometre${derived ? ` (g CO₂/km: ${derived.factorText})` : ""}. The Heavy-Vehicle Share of CO₂ chart below breaks the same share down period by period; its dashed line is this figure.`} /></h3>
               <div className={styles.kpiValue}>{kpiValue(derived ? (derived.oneClass ? "—" : `${derived.heavyCo2Pct.toFixed(1)}%`) : null)}</div>
               <p className={styles.kpiHint}>
                 {derived
                   ? derived.oneClass
                     ? "Compares classes · set Class to all"
-                    : `of the Range's CO₂, from just ${derived.heavyVolPct.toFixed(1)}% of vehicles`
+                    : `of the Range's CO₂, from just ${derived.heavyVkmPct.toFixed(1)}% of vehicle-km`
                   : "—"}
               </p>
             </article>

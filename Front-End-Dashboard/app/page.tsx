@@ -155,14 +155,41 @@ export default function Home() {
     window.location.assign('/dashboard');
   }
 
-  // A session that stopped after the password is never resumed (lib/mfa.ts): a reload, or a
-  // bounce back from the dashboard, starts again from the password. The one exception is the link in a
-  // password-reset email, which opens a session meant only for choosing a new password.
+  // A session found when the page opens (a closed tab reopened, a reload, a bounce back from the dashboard):
+  //   - signed in with "Remember me" ticked: carried on. Past both steps, the dashboard opens; past the
+  //     password only, the card opens at the code step ("You're signed in, the code is still needed").
+  //     The code is still asked for: only the password is not typed again (3 Nov 2026, user request).
+  //   - without "Remember me", a session that stopped after the password is not resumed (lib/mfa.ts),
+  //     so a half-finished sign-in on a shared PC cannot be picked up by the next person.
+  // The link in a password-reset email is left alone: its session is meant only for a new password.
   const viaResetLink = useRef(false);
+  const [resumedAs, setResumedAs] = useState(""); // the email of a sign-in carried on at the code step
   useEffect(() => {
     viaResetLink.current = /type=recovery/.test(window.location.hash);
-    void supabase.auth.getSession().then(({ data }) => {
-      if (data.session && !isFullySignedIn(data.session) && !passwordSent.current && !viaResetLink.current) dropPasswordOnlySession();
+    void supabase.auth.getSession().then(async ({ data }) => {
+      const s = data.session;
+      if (!s || passwordSent.current || viaResetLink.current) return;
+      const email = (s.user.email ?? "").trim().toLowerCase();
+      const remembered = !!email && rememberedEmail() === email;
+      if (isFullySignedIn(s)) {
+        if (remembered) window.location.assign("/dashboard");
+        return;
+      }
+      if (!remembered) {
+        dropPasswordOnlySession();
+        return;
+      }
+      passwordSent.current = true;
+      try {
+        const next = await beginSecondStep();
+        setStepped(true);
+        setCode("");
+        setResumedAs(s.user.email ?? email);
+        setStep(next);
+      } catch {
+        passwordSent.current = false;
+        dropPasswordOnlySession();
+      }
     });
     const remembered = rememberedEmail();
     if (remembered) {
@@ -253,6 +280,7 @@ export default function Home() {
       }
 
       // The password was right. That opens nothing yet: the code does.
+      setResumedAs("");
       try {
         const next = await beginSecondStep();
         setStepped(true);
@@ -272,6 +300,7 @@ export default function Home() {
   /** Back to the password, ending the half-finished sign-in (or password reset). */
   function backToPassword() {
     dropPasswordOnlySession();
+    setResumedAs("");
     setErrorMessage("");
     setCode("");
     setSignInPassword("");
@@ -847,6 +876,11 @@ export default function Home() {
             onFocus={() => setHoldFocus(true)}
             onBlur={(e) => { if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setHoldFocus(false); }}
           >
+            {resumedAs && (
+              <div className="login-alert success mfa-resumed" role="status">
+                You&rsquo;re signed in as <b>{resumedAs}</b>, but your code is still needed to open the dashboard.
+              </div>
+            )}
             {step.kind === "enroll" ? (
               <div className="mfa-setup">
                 <div className="mfa-qr">
@@ -869,6 +903,7 @@ export default function Home() {
             ) : (
               <p className="mfa-lead">Open your authenticator app and enter the code it shows for SmartFlow NLEX.</p>
             )}
+
 
             {/* The message sits under the field it is about, not above the QR code a screen away. */}
             <div className="mfa-field">

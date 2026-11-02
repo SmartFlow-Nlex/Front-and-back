@@ -22,6 +22,7 @@ const { typedWindowFrom, MIN_SEG_M, MAX_SEG_M } = evaluate<any>(
     declaration(src, "MAX_SEG_M"),
     `const typedWindowFrom = (draft: string, routeFromKm: number, routeToKm: number, defaultFrom: number) => {
        let segFromKm: number | null = null;
+       const min = routeFromKm, max = routeToKm; // the From box's own range props on the full-corridor route
        const onCommit = (km: number) => { segFromKm = km; };
        const setDraft = (_: unknown) => {};
        ${commitBody}

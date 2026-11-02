@@ -3,26 +3,26 @@
 ================================================================================
 
   GWR — cross-section over 20 exits, IN-SAMPLE fit (see fit_gwr docstring)
-    bandwidth (fixed, degrees) = 0.7300
-    MAE              = 2.308
-    Poisson_Deviance = 1.384
+    bandwidth (fixed, degrees) = 0.7000
+    MAE              = 2.082
+    Poisson_Deviance = 1.272
     n                = 20
-    Leave-one-exit-out MAE = 2.703  (n=20 folds) — the honest generalization estimate; compare against the in-sample MAE above
+    Leave-one-exit-out MAE = 2.838  (n=20 folds) — the honest generalization estimate; compare against the in-sample MAE above
 
-    13 of 60 non-intercept (exit, variable) coefficients are locally significant (|t| > 1.96)
+    20 of 60 non-intercept (exit, variable) coefficients are locally significant (|t| > 1.96)
 
   Spatial LSTM — pooled across exits, genuine temporal holdout
-    MAE              = 2.161
-    Poisson_Deviance = 1.284
+    MAE              = 2.169
+    Poisson_Deviance = 1.286
     baseline MAE     = 2.318 (per-exit train mean)  6.560 (predict zero)
     holdout n        = 1220 exit-days across 20 exits
-    epochs trained   = 25
+    epochs trained   = 31
 
   Next-24h high-risk segments (top 5 of 28-day rollout, day 1):
-    #1  exit_id=3   predicted=12.687  last_observed=13
-    #2  exit_id=14  predicted=12.534  last_observed=9
-    #3  exit_id=13  predicted=12.410  last_observed=10
-    #4  exit_id=1   predicted=11.629  last_observed=14
-    #5  exit_id=4   predicted=11.622  last_observed=12
-  Day 28 top exit: exit_id=13 predicted=12.967 (recursive rollout -- compounded, treat with less confidence than day 1)
+    #1  exit_id=3   predicted=12.739  last_observed=13
+    #2  exit_id=14  predicted=12.047  last_observed=9
+    #3  exit_id=13  predicted=12.045  last_observed=10
+    #4  exit_id=4   predicted=11.632  last_observed=12
+    #5  exit_id=1   predicted=10.464  last_observed=14
+  Day 28 top exit: exit_id=3 predicted=13.032 (recursive rollout -- compounded, treat with less confidence than day 1)
 ================================================================================

@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import { RefreshCw, X } from "lucide-react";
 import TrafficMapPanel from "./TrafficMapPanel";
 import MapLegend from "./MapLegend";
-import ForecastHorizonPicker, { clockFor, type HorizonRangeKey } from "./ForecastHorizonPicker";
+import ForecastHorizonPicker, { clockFor, hoursFromNow, type HorizonRangeKey } from "./ForecastHorizonPicker";
 
 const BACKEND = process.env.NEXT_PUBLIC_BACKEND_URL ?? "http://localhost:4000";
 
@@ -118,7 +118,7 @@ export default function ForecastExpandModal({
             <div>
               <h2>Forecasted Traffic</h2>
               <p>
-                {`+${horizon} h · around ${clockFor(horizon)}`}
+                {`${hoursFromNow(horizon) <= 0 ? "Now" : `+${hoursFromNow(horizon)} h`} · around ${clockFor(horizon)}`}
                 {model?.name ? ` · ${model.name}` : ""}
                 {model?.accuracy != null ? ` · ${Math.round(model.accuracy * 100)}% accurate` : ""}
               </p>

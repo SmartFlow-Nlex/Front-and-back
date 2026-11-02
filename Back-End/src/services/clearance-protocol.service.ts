@@ -1,32 +1,29 @@
 import { db } from "../config/db.js";
-import { solve } from "yalps";
-import { getIncidentPredictiveAnchors, getIncidentPredictiveFromDb } from "./incident.service.js";
 
 // ---------------------------------------------------------------------------
 // Incident → Prescriptive: Clearance Response Protocol.
 //
 // Answers a different question than PrescriptiveDeploymentPanel (where to
-// station units) or PatrolAlertWindowPanel (when to be on alert): given an
-// incident has just been reported, how many units to dispatch now, and
-// whether/how much to escalate at a fixed decision point, to minimize the
-// combined cost of unit-hours and downstream queue delay.
+// place units) or PatrolAlertWindowPanel (when to be on alert): once an
+// incident is reported, when to escalate it.
 //
-// Method, end to end:
-//   1. Kaplan-Meier clearance-time curve from real per-event durations
+// Data only (2 Nov 2026, "no assumptions across the prescriptive analytics").
+// This used to be a two-stage stochastic MILP that picked a dispatch count
+// from a unit effect, unit and delay costs, lane capacity, a demand v/c level
+// and a response delay, none of which the record holds; the count followed
+// whatever those were set to. What is left is what the record measures:
+//   1. A Kaplan-Meier clearance-time curve from real per-event durations
 //      (silver.nlex_accident_events_clean / silver.nlex_breakdown_events_clean),
-//      right-censored at 1440 min rather than dropped — see
-//      toObservations()'s own comment for why this differs from the
-//      Descriptive tab's MTTC, which drops invalid rows outright.
-//   2. The curve is cut into 4 scenarios (fast/typical/slow/extreme) at its
-//      own P50/P80/P95 — not fixed cutoffs, so a corridor with a
-//      slower-clearing mix gets wider bands automatically.
-//   3. A two-stage stochastic MILP (YALPS): dispatch x units now (first
-//      stage), optionally escalate by e more at tau = P50 once the operator
-//      learns the incident outnumbered a "fast" one (second stage,
-//      scenario-dependent recourse).
-//   4. EVPI/VSS compare the stochastic solution against perfect-information
-//      and mean-value baselines -- the evidence that solving this
-//      stochastically, not with one average duration, is worth doing.
+//      right-censored at 1440 min rather than dropped -- see toObservations().
+//      Type, severity and weather pick which events go in; they are filters
+//      on the data, not settings.
+//   2. The escalation rule read off that curve: if an incident is still open
+//      at the set's own P50, the chance it runs past the P80 is
+//      S(P80) / S(P50), the curve's conditional survival, with a Greenwood
+//      95% interval (escalationRule()).
+//   3. Checkpoints at P25 / P50 / P80: the share still open, how many events
+//      that rests on, the median time left, and the chance of running past
+//      the P95 (checkpointAt()).
 // ---------------------------------------------------------------------------
 
 type CacheEntry = { at: number; data: unknown };
@@ -36,7 +33,6 @@ const CACHE_TTL_MS = 10 * 60 * 1000;
 export type ClearanceType = "accident" | "breakdown";
 export type ClearanceSeverity = "all" | "pdo" | "injury" | "fatal";
 export type ClearanceWeather = "all" | "dry" | "wet";
-export type ClearanceDemandLevel = "offpeak" | "normal" | "peak";
 
 export type ClearanceProtocolFilters = {
   type: ClearanceType;
@@ -45,12 +41,6 @@ export type ClearanceProtocolFilters = {
   months: "3" | "12" | "all";
   from?: string;
   to?: string;
-  maxUnits: number;
-  unitCostPerHour: number;
-  delayCostPerVehHour: number;
-  unitEffect: number;
-  demandLevel: ClearanceDemandLevel;
-  deltaResponseMin: number;
 };
 
 // ---------------------------------------------------------------------------
@@ -74,7 +64,8 @@ export function toObservations(rawMinutes: (number | null)[]): Observation[] {
   const obs: Observation[] = [];
   for (const raw of rawMinutes) {
     if (raw == null || !Number.isFinite(raw)) continue;
-    if (raw < 0) continue;
+    // 0 minutes is a recording artefact, not a clearance (fix list A7, 2 Nov 2026); negatives were already dropped.
+    if (raw <= 0) continue;
     if (raw > 1440) obs.push({ duration: 1440, censored: true });
     else obs.push({ duration: raw, censored: false });
   }
@@ -200,199 +191,78 @@ export function buildScenarios(curve: SurvivalPoint[], rawEvents: number[]): { s
   return { scenarios, p50, p80, p95 };
 }
 
-/**
- * Deterministic vertical-queueing delay for a temporary capacity drop:
- * total delay (veh-hr) = D^2 (q-cr)(c-cr) / (2(c-q)), D in HOURS.
- * Guards: q must stay below c (capped here, flagged) or the formula
- * diverges/goes negative; if demand never exceeds the REDUCED capacity
- * (q <= cr), no queue forms at all and delay is exactly 0, not negative.
- */
-export function queueDelayVehHours(durationMin: number, q: number, c: number, cr: number): { delayVehHours: number; qCapped: boolean } {
-  let qq = q;
-  let qCapped = false;
-  if (qq >= c) {
-    qq = c * 0.999;
-    qCapped = true;
-  }
-  if (qq <= cr) return { delayVehHours: 0, qCapped };
-  const hours = durationMin / 60;
-  const delayVehHours = (hours * hours * (qq - cr) * (c - cr)) / (2 * (c - qq));
-  return { delayVehHours, qCapped };
-}
+/** A probability read off the curve, with its 95% interval. */
+export type Chance = { p: number; lo: number; hi: number };
 
 /**
- * Effective (real) clearance duration with x units deployed from t=0 and
- * optionally e more added at the real decision time tau. Worked in raw
- * "1-unit-equivalent minutes" of work, not compressed time, specifically to
- * avoid a bug an earlier version of this function had: applying
- * baseRate(x) to the whole duration and THEN a separate (1+beta*e) factor to
- * the post-tau remainder compounds the two multiplicatively (e.g.
- * baseRate(3)=1.5 then x1.25 for e=1 gives an effective 1.875x speedup),
- * which can exceed baseRate(x+e) (1.75x for x+e=4) -- i.e. it let adding ONE
- * more unit partway through a response outperform having deployed that same
- * total headcount from t=0, which is physically backwards (staging units
- * can never beat having them all there from the start) and silently broke
- * EVPI>=0 the moment a real scenario set made escalation competitive, since
- * the two-stage solve could then look better than even the perfect-
- * information baseline. The fix: the post-tau portion is rated at
- * baseRate(x+e) -- total headcount present at that point, not a second
- * multiplier stacked on top of x's own rate.
- *
- * x units complete tauMin*baseRate(x) raw minutes of work by the real time
- * tau. If that already covers the whole incident, it cleared before the
- * operator ever had to decide on escalation (D/baseRate(x) <= tau) --
- * matching "fast scenarios end before tau" at the x-adjusted level, not
- * just the raw scenario level. Otherwise the remaining raw work is finished
- * at the combined (x+e)-unit rate.
+ * P(T > b | T > a) = S(b) / S(a): of the incidents still open at minute a,
+ * the share still open at minute b. On the Kaplan-Meier curve that is the
+ * product of (1 - d/n) over the event times in (a, b]. Its 95% interval uses
+ * Greenwood's variance over the same times, on the log scale (the default in
+ * R's survfit), capped at 1. d at each point is recovered from the curve
+ * itself: S(t) = S(t-) x (1 - d/n).
  */
-export function effectiveDurationMin(durationMin: number, tauMin: number, x: number, e: number, beta: number): number {
-  const baseRateX = 1 + beta * (x - 1);
-  const workDoneByTau = tauMin * baseRateX;
-  if (workDoneByTau >= durationMin) return durationMin / baseRateX;
-  const remainingWork = durationMin - workDoneByTau;
-  const baseRateXE = 1 + beta * (x + e - 1);
-  return tauMin + remainingWork / baseRateXE;
-}
-
-export type CapacityConfig = { q: number; c: number; cr: number };
-
-/** The single-scenario, no-recourse cost of flatly deploying x units for a
- *  KNOWN duration -- the "if we'd known which scenario it was" sub-problem
- *  WS and EEV are both built from. */
-function flatCost(x: number, durationMin: number, beta: number, unitCostPerHour: number, delayCostPerVehHour: number, cap: CapacityConfig): number {
-  const eff = durationMin / (1 + beta * (x - 1));
-  const { delayVehHours } = queueDelayVehHours(eff, cap.q, cap.c, cap.cr);
-  return x * unitCostPerHour * (eff / 60) + delayCostPerVehHour * delayVehHours;
-}
-
-function solveDeterministic(durationMin: number, maxUnits: number, beta: number, unitCostPerHour: number, delayCostPerVehHour: number, cap: CapacityConfig): { x: number; cost: number } {
-  let best = { x: 1, cost: Infinity };
-  for (let x = 1; x <= maxUnits; x++) {
-    const cost = flatCost(x, durationMin, beta, unitCostPerHour, delayCostPerVehHour, cap);
-    if (cost < best.cost) best = { x, cost };
+export function conditionalSurvival(curve: SurvivalPoint[], a: number, b: number): Chance {
+  let p = 1;
+  let v = 0;
+  for (let i = 1; i < curve.length; i++) {
+    const pt = curve[i];
+    if (pt.minute <= a) continue;
+    if (pt.minute > b) break;
+    const prev = curve[i - 1].survival;
+    const n = pt.atRisk;
+    const step = prev > 0 ? pt.survival / prev : 0;
+    const d = Math.round(n * (1 - step));
+    p *= step;
+    if (n > d && n > 0) v += d / (n * (n - d));
   }
-  return best;
+  if (p <= 0) return { p: 0, lo: 0, hi: 0 };
+  const se = Math.sqrt(v);
+  return { p, lo: p * Math.exp(-1.96 * se), hi: Math.min(1, p * Math.exp(1.96 * se)) };
 }
 
-/** For a FIXED x, the cheapest escalation e for one scenario -- exactly the
- *  per-(x,s) term the two-stage MILP's objective minimizes over e, factored
- *  out so EEV can reuse it below without re-solving the whole MILP. */
-function bestRecourseCost(x: number, s: ScenarioDef, tauMin: number, maxUnits: number, beta: number, unitCostPerHour: number, delayCostPerVehHour: number, cap: CapacityConfig): number {
-  let best = Infinity;
-  for (let e = 0; e <= maxUnits - x; e++) {
-    const eff = effectiveDurationMin(s.durationMin, tauMin, x, e, beta);
-    const afterTauHr = Math.max(eff - tauMin, 0) / 60;
-    const { delayVehHours } = queueDelayVehHours(eff, cap.q, cap.c, cap.cr);
-    const cost = (x + e) * unitCostPerHour * afterTauHr + delayCostPerVehHour * delayVehHours;
-    if (cost < best) best = cost;
-  }
-  return best;
+/** Of the incidents still open at minute t, the median further time to clear: the first event time u with
+ *  S(u) / S(t) <= 0.5, minus t. Null when the curve never gets there (too much censoring). */
+export function medianRemaining(curve: SurvivalPoint[], t: number): number | null {
+  const base = survivalAt(curve, t);
+  if (base <= 0) return null;
+  for (const pt of curve) if (pt.minute > t && pt.survival / base <= 0.5) return pt.minute - t;
+  return null;
 }
 
-/** firstStageCost(x) + Sum_s p_s * bestRecourseCost(x,s,...) -- the exact
- *  function the MILP minimizes over x. RP (the MILP's optimum) is this
- *  function's minimum by construction, so evaluating it at any OTHER fixed
- *  x (as EEV does, at the mean-value-optimal x) can only come out >= RP --
- *  this is what guarantees VSS = EEV - RP >= 0 mathematically, not just
- *  empirically. */
-function totalCostAtFixedX(x: number, scenarios: ScenarioDef[], tauMin: number, maxUnits: number, beta: number, unitCostPerHour: number, delayCostPerVehHour: number, cap: CapacityConfig): number {
-  const firstStage = x * unitCostPerHour * (tauMin / 60);
-  return firstStage + scenarios.reduce((sum, s) => sum + s.probability * bestRecourseCost(x, s, tauMin, maxUnits, beta, unitCostPerHour, delayCostPerVehHour, cap), 0);
+export type EscalationRule = { checkAtMinute: number; pastMinute: number; chance: Chance; openAtCheck: number };
+
+/** The rule: still open at the P50, the chance of running past the P80. `obs` gives how many were still open. */
+export function escalationRule(curve: SurvivalPoint[], obs: Observation[], p50: number, p80: number): EscalationRule {
+  return {
+    checkAtMinute: p50,
+    pastMinute: p80,
+    chance: conditionalSurvival(curve, p50, p80),
+    openAtCheck: obs.filter((o) => o.duration > p50).length,
+  };
 }
 
-export type ProtocolSolution = {
-  unitsAtDispatch: number;
-  escalationByScenario: Record<ScenarioLabel, number>;
-  scenarioResults: { label: ScenarioLabel; effectiveDurationMin: number; delayVehHours: number }[];
-  rp: number;
-  evpi: number;
-  vss: number;
+export type Checkpoint = {
+  label: "P25" | "P50" | "P80";
+  minute: number;
+  /** S(minute): the share of all incidents still open then. */
+  stillOpen: number;
+  /** How many of the measured incidents were still open then: what the figures after it rest on. */
+  openCount: number;
+  medianRemainingMin: number | null;
+  /** Still open at minute, the chance of running past the P95. */
+  pastP95: Chance;
 };
 
-/**
- * The two-stage stochastic MILP. Binary z_x (first stage, Sum z_x = 1) picks
- * the dispatch size; binary w_{x,s,e} (second stage, Sum_e w_{x,s,e} = z_x
- * for every x,s) picks each scenario's escalation IF x was chosen -- the
- * equality both forces exactly one e per (chosen x, scenario) and forces
- * every w for a non-chosen x to 0. Fast scenarios only get an e=0 variable,
- * realizing "no escalation is possible before tau" as a modelling
- * restriction rather than a separate constraint.
- *
- * Objective: z_x carries the flat, scenario-independent cost of committing
- * x units through the tau-minute observation window (paid regardless of how
- * the incident turns out); each w_{x,s,e} carries that scenario's p_s-
- * weighted cost of keeping x units (and any e escalation units) on scene
- * beyond tau, plus the delay its effective duration causes.
- */
-export function solveClearanceProtocol(
-  scenarios: ScenarioDef[],
-  tauMin: number,
-  maxUnits: number,
-  beta: number,
-  unitCostPerHour: number,
-  delayCostPerVehHour: number,
-  cap: CapacityConfig,
-): ProtocolSolution {
-  const constraints: Record<string, { min?: number; max?: number; equal?: number }> = { pick_x: { equal: 1 } };
-  const variables: Record<string, Record<string, number>> = {};
-
-  for (let x = 1; x <= maxUnits; x++) {
-    variables[`z${x}`] = { pick_x: 1, cost: x * unitCostPerHour * (tauMin / 60) };
-  }
-
-  for (let x = 1; x <= maxUnits; x++) {
-    for (const s of scenarios) {
-      const linkKey = `link_${x}_${s.label}`;
-      constraints[linkKey] = { equal: 0 };
-      variables[`z${x}`][linkKey] = -1;
-      const esAllowed = s.label === "fast" ? [0] : Array.from({ length: maxUnits - x + 1 }, (_, i) => i);
-      for (const e of esAllowed) {
-        const eff = effectiveDurationMin(s.durationMin, tauMin, x, e, beta);
-        const afterTauHr = Math.max(eff - tauMin, 0) / 60;
-        const { delayVehHours } = queueDelayVehHours(eff, cap.q, cap.c, cap.cr);
-        const cost = s.probability * ((x + e) * unitCostPerHour * afterTauHr + delayCostPerVehHour * delayVehHours);
-        variables[`w_${x}_${s.label}_${e}`] = { [linkKey]: 1, cost };
-      }
-    }
-  }
-
-  const solution = solve({ direction: "minimize", objective: "cost", constraints, variables, binaries: true });
-  const chosenX = Number(
-    solution.variables.find(([k, v]: [string, number]) => k.startsWith("z") && v > 0.5)?.[0].slice(1) ?? 1,
-  );
-  const escalationByScenario = {} as Record<ScenarioLabel, number>;
-  const scenarioResults: ProtocolSolution["scenarioResults"] = [];
-  for (const s of scenarios) {
-    const prefix = `w_${chosenX}_${s.label}_`;
-    const chosenW = solution.variables.find(([k, v]: [string, number]) => k.startsWith(prefix) && v > 0.5)?.[0];
-    const e = chosenW ? Number(chosenW.slice(prefix.length)) : 0;
-    escalationByScenario[s.label] = e;
-    const eff = effectiveDurationMin(s.durationMin, tauMin, chosenX, e, beta);
-    const { delayVehHours } = queueDelayVehHours(eff, cap.q, cap.c, cap.cr);
-    scenarioResults.push({ label: s.label, effectiveDurationMin: eff, delayVehHours });
-  }
-
-  const rp = solution.status === "optimal" ? solution.result : Infinity;
-
-  // WS (wait-and-see): solve each scenario separately with perfect
-  // foreknowledge of its duration, weighted by probability.
-  const ws = scenarios.reduce((sum, s) => sum + s.probability * solveDeterministic(s.durationMin, maxUnits, beta, unitCostPerHour, delayCostPerVehHour, cap).cost, 0);
-  const evpi = rp - ws;
-
-  // EEV (expected value of the mean-value solution): pick the single best x
-  // for the PROBABILITY-WEIGHTED MEAN duration (the "if we just planned for
-  // the average incident" x), then see what that FIXED x truly costs when
-  // each real scenario still gets its own optimal escalation -- using
-  // flatCost (no recourse) here would understate EEV relative to RP (which
-  // does get recourse) and could make VSS come out negative, which is
-  // mathematically impossible for a correct solve; totalCostAtFixedX keeps
-  // the comparison apples-to-apples.
-  const meanDuration = scenarios.reduce((sum, s) => sum + s.probability * s.durationMin, 0);
-  const meanValueX = solveDeterministic(meanDuration, maxUnits, beta, unitCostPerHour, delayCostPerVehHour, cap).x;
-  const eev = totalCostAtFixedX(meanValueX, scenarios, tauMin, maxUnits, beta, unitCostPerHour, delayCostPerVehHour, cap);
-  const vss = eev - rp;
-
-  return { unitsAtDispatch: chosenX, escalationByScenario, scenarioResults, rp, evpi, vss };
+export function checkpointAt(curve: SurvivalPoint[], obs: Observation[], label: Checkpoint["label"], minute: number, p95: number): Checkpoint {
+  return {
+    label,
+    minute,
+    stillOpen: survivalAt(curve, minute),
+    openCount: obs.filter((o) => o.duration > minute).length,
+    medianRemainingMin: medianRemaining(curve, minute),
+    pastP95: conditionalSurvival(curve, minute, p95),
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -412,144 +282,12 @@ export function ragFor(type: ClearanceType, minutes: number): "green" | "amber" 
 }
 
 // ---------------------------------------------------------------------------
-// Capacity/demand config — no Mejia & Sigua capacity-drop factor, lane
-// capacity, or hourly segment-demand forecast exists anywhere in this
-// warehouse (confirmed by search, Phase 1). These are therefore stated
-// config defaults, not fitted or measured -- surfaced in `assumptions`
-// below and in the UI, never presented as data.
-// ---------------------------------------------------------------------------
-
-const LANE_CAPACITY_VEH_HR = 2000;
-const LANES_PER_DIRECTION = 3;
-const CAPACITY_VEH_HR = LANE_CAPACITY_VEH_HR * LANES_PER_DIRECTION; // 6000 veh/hr
-const REDUCED_CAPACITY_FACTOR = 0.5;
-const REDUCED_CAPACITY_VEH_HR = CAPACITY_VEH_HR * REDUCED_CAPACITY_FACTOR; // 3000 veh/hr
-const DEMAND_VC_RATIO: Record<ClearanceDemandLevel, number> = { offpeak: 0.5, normal: 0.7, peak: 0.9 };
-
-const DEFAULT_UNIT_COST_PER_HOUR = 1500; // PHP/hr per unit — illustrative, not from the warehouse
-const DEFAULT_DELAY_COST_PER_VEH_HOUR = 300; // PHP/veh-hr — illustrative value-of-time proxy
-const DEFAULT_UNIT_EFFECT_BETA = 0.25;
-const DEFAULT_DELTA_RESPONSE_MIN = 15; // minutes — see deriveUncoveredIncidentCost's own comment
-
-export { DEFAULT_UNIT_COST_PER_HOUR, DEFAULT_DELAY_COST_PER_VEH_HOUR, DEFAULT_UNIT_EFFECT_BETA, DEFAULT_DELTA_RESPONSE_MIN, CAPACITY_VEH_HR, REDUCED_CAPACITY_VEH_HR };
-
-/**
- * Coverage opportunity cost: a unit committed to this incident isn't on
- * patrol elsewhere, so it isn't suppressing/covering whatever incidents its
- * own zone would otherwise see -- the same tradeoff
- * PrescriptiveDeploymentPanel's covering-location solve is built around,
- * just priced here instead of optimized spatially. Without this, the model
- * only weighs unit-hours against downstream queue delay, and more units are
- * nearly always worth it (confirmed empirically: the MILP picked max units
- * in every tested configuration before this existed) -- a trivial "send
- * everything" corner solution that doesn't reflect a real fleet being finite.
- *
- * Rate = (expected incidents/hr in one "average" coverage zone, from the
- * SAME forecast PrescriptiveDeploymentPanel uses) x (a DERIVED cost per
- * incident that zone goes uncovered for -- not a flat guess). See
- * deriveUncoveredIncidentCost for the derivation. incidentsPerHourPerUnit
- * returns null (coverage cost skipped, flagged in assumptions) only once a
- * retry has also come back empty -- see the cache below for why a single
- * null here used to be worse than it looked.
- *
- * Cached on its own, separately from clearanceCache: this call takes no
- * filters (always {weather:"all", months:"12"}), so every distinct
- * accident/severity/weather/demandLevel/slider combination the operator
- * tries was re-running the SAME heavy nested forecast query -- the one
- * /api/incident/predictive keeps warm for everyone else via server.ts's
- * cache warmer -- because this is a direct function call, not an HTTP
- * request, so it never touched that warm HTTP-level cache. That made EVERY
- * new control combination pay the forecast's full cold cost (seconds, per
- * the warmer's own measurements) on top of this file's own KM/MILP work,
- * which is the main reason Clearance Response Protocol felt unreliable and
- * "stuck" after a control change -- a slow request with no distinct answer
- * to show yet, not a different one failing to arrive.
- *
- * Worse, a transient null used to be indistinguishable from a genuinely
- * empty pipeline: getClearanceProtocolFromDb would fold it into a
- * "coverage cost skipped" response that still reports success, and that
- * whole response is then cached for real -- not just by clearanceCache's
- * 10-minute TTL, but by the generic /api route cache in
- * middleware/route-cache.ts, which stores any 200 JSON body for 3 hours.
- * That is the same shape of bug already fixed once on the Predictive tab:
- * a resolved null persisted as if it were the real, final answer. The retry
- * below plus caching only a real number (never null) closes it here too --
- * null is now only ever returned, and only ever reaches that 3-hour cache,
- * after two attempts both come back empty, which is a much stronger signal
- * that the pipeline genuinely has no output yet rather than one cold query.
- */
-type RateCacheEntry = { at: number; value: number };
-let rateCache: RateCacheEntry | null = null;
-const RATE_CACHE_TTL_MS = 10 * 60 * 1000;
-/* Single-flight for the nested forecast (19 Oct 2026, testers IN-15..IN-21: "not loading or reflecting
-   changes"). Each slider step is a different URL, so the route cache's own per-URL single-flight never
-   coalesced them: dragging Max units 1 -> 6 on a cold rate cache started five copies of this ~3 s forecast
-   read at once, plus each one's own sample query, against a pool of ten -- the request the operator
-   actually wanted (the last one) queued behind four it no longer needed. One shared promise now. */
-let rateInflight: Promise<number | null> | null = null;
-
-async function computeIncidentsPerHourPerUnit(): Promise<number | null> {
-  const anchors = await getIncidentPredictiveAnchors();
-  if (!anchors) return null;
-  // months is NOT optional in practice despite the type: omitting it (even
-  // though IncidentPredictiveFilters marks it optional) returns
-  // success:true with corridorForecast missing -- confirmed by direct test
-  // against the live endpoint. "12" matches PrescriptiveDeploymentPanel's
-  // own default Range.
-  const predictive = await getIncidentPredictiveFromDb({ weather: "all", months: "12" }, anchors);
-  if (!predictive || !predictive.corridorForecast || predictive.corridorForecast.length === 0) return null;
-  const totalPredicted = predictive.corridorForecast.reduce((s, x) => s + x.predictedIncidents, 0);
-  const horizonHours = predictive.corridorForecastDays * 24;
-  const numZones = predictive.corridorForecast.length;
-  if (horizonHours <= 0 || numZones <= 0) return null;
-  return totalPredicted / horizonHours / numZones;
-}
-
-async function refreshIncidentsPerHourPerUnit(): Promise<number | null> {
-  let result = await computeIncidentsPerHourPerUnit();
-  if (result == null) {
-    // One short retry before accepting "no output yet" -- cheap (only runs
-    // on a cache miss that also came back empty) and turns a cold-start
-    // blip into a transparent extra few hundred ms instead of a silently
-    // degraded answer that then gets cached for hours.
-    await new Promise((r) => setTimeout(r, 300));
-    result = await computeIncidentsPerHourPerUnit();
-  }
-  if (result == null) return null; // genuinely nothing to cache yet
-
-  rateCache = { at: Date.now(), value: result };
-  return result;
-}
-
-async function getIncidentsPerHourPerUnit(): Promise<number | null> {
-  if (rateCache && Date.now() - rateCache.at < RATE_CACHE_TTL_MS) return rateCache.value;
-
-  if (!rateInflight) {
-    rateInflight = refreshIncidentsPerHourPerUnit()
-      .catch(() => null)
-      .finally(() => {
-        rateInflight = null;
-      });
-  }
-  // Expired but present: answer with the last real rate now and let the
-  // refresh above land for the next request. The forecast behind it is
-  // rewritten by a weekly retrain, so a rate a few minutes past its TTL is
-  // still the right one -- whereas waiting on it made the first control
-  // change after every ten-minute lull pay the full ~3 s forecast read.
-  if (rateCache) return rateCache.value;
-  return rateInflight;
-}
-
-// ---------------------------------------------------------------------------
 // The clearance-duration sample, cached on the filters that actually select it
 // ---------------------------------------------------------------------------
 
-/* Only type/severity/weather/Range pick WHICH events go into the curve. Demand level, Max units, beta and
-   delta change only the in-memory KM-to-MILP arithmetic (~0.1 s), yet clearanceCache is keyed on every
-   filter, so each slider step re-ran the bounds query and the event scan -- 1.5-2.7 s per step with
-   weather Wet/Dry or type Breakdown (the hourly_weather join and the deployments JSON unnest), the
-   "graphs and info do not change with the controls" testers saw while a drag queued up. Cached and
-   single-flighted here on just those four, so a slider is pure compute once its sample is read. */
+/* Only type/severity/weather/Range pick WHICH events go into the curve, so the sample is cached and
+   single-flighted on just those: the bounds query and the event scan take 1.5-2.7 s with weather Wet/Dry or
+   type Breakdown (the hourly_weather join and the deployments JSON unnest). */
 type ClearanceSample = { lo: string; hi: string; rawMinutes: (number | null)[] };
 const sampleCache = new Map<string, { at: number; data: ClearanceSample }>();
 /* A sample holds every event's minutes (tens of thousands of numbers for a wide Range), and each custom Range
@@ -590,46 +328,19 @@ async function getClearanceSample(filters: ClearanceProtocolFilters): Promise<Cl
   return p;
 }
 
-/**
- * What one incident going "uncovered" actually costs, derived from the SAME
- * queueing model already in this file rather than a flat guess: if the
- * nearest unit is committed elsewhere, a new incident in its zone waits an
- * extra deltaResponseMin before a (farther) unit reaches it, which (via the
- * same deterministic-queue formula) adds delay(D+deltaResponseMin) -
- * delay(D) extra vehicle-hours to THAT incident's own queue -- valued at the
- * same delayCostPerVehHour already in use. D is the scenario-weighted
- * expected clearance duration (not the chosen protocol's duration -- that
- * would be circular, since this cost feeds INTO the choice of protocol).
- * Deliberately NOT tuned to produce a particular (x, escalation) outcome:
- * every input is either already a model parameter or the stated
- * deltaResponseMin assumption.
- */
-function deriveUncoveredIncidentCost(meanDurationMin: number, deltaResponseMin: number, delayCostPerVehHour: number, cap: CapacityConfig): number {
-  const delayAtD = queueDelayVehHours(meanDurationMin, cap.q, cap.c, cap.cr).delayVehHours;
-  const delayAtDPlusDelta = queueDelayVehHours(meanDurationMin + deltaResponseMin, cap.q, cap.c, cap.cr).delayVehHours;
-  return delayCostPerVehHour * (delayAtDPlusDelta - delayAtD);
-}
-
 // ---------------------------------------------------------------------------
 // DB-backed orchestrator
 // ---------------------------------------------------------------------------
 
 export type ClearanceProtocolOk = {
   status: "ok";
-  recommendation: {
-    unitsAtDispatch: number;
-    escalateAtMinute: number;
-    escalationUnitsByScenario: Record<ScenarioLabel, number>;
-    action: string;
-    when: string;
-    effect: string;
-    confidence: string;
-  };
+  /** "If not cleared by {P50} min, there is a {x}% chance it runs past {P80} min -> escalate." */
+  rule: EscalationRule & { text: string };
+  checkpoints: Checkpoint[];
   survivalCurve: SurvivalPoint[];
   quantiles: { p50: number; p80: number; p95: number };
-  scenarios: { label: ScenarioLabel; probability: number; durationMin: number; delayVehHours: number; recourseUnits: number; effectiveDurationMin: number }[];
   kpi: {
-    projectedMttr: number;
+    /** Restricted mean clearance time, the area under the measured curve. */
     baselineMttr: number;
     rag: "green" | "amber" | "red";
     targets: { greenMax: number; amberMax: number };
@@ -638,14 +349,8 @@ export type ClearanceProtocolOk = {
     /** True for breakdowns: the warehouse has no "lane reopened" timestamp for them, so RAG is a proxy reading, not a direct one. */
     indicative: boolean;
   };
-  evpi: number;
-  vss: number;
-  /** False when the forecast behind the coverage-opportunity cost was unavailable: the answer is real but
-   *  degraded, so the controller keeps it out of the 3-hour route cache and the next request tries again. */
-  coverageCostApplied: boolean;
-  assumptions: string[];
-  sensitivity: { beta: number; delayCostMultiplier: number; unitsAtDispatch: number; maxEscalation: number }[];
-  deltaSensitivity: { deltaResponseMin: number; unitsAtDispatch: number; maxEscalation: number; derivedCostPerUncoveredIncident: number }[];
+  /** How the durations are measured: data definitions, not settings. */
+  method: string[];
   scoringWindow: { from: string; to: string };
   sampleSize: number;
   censoredCount: number;
@@ -710,7 +415,7 @@ async function loadClearanceSample(filters: ClearanceProtocolFilters): Promise<C
          GROUP BY 1, 2
        )
        -- site_cleared, NOT blockage_cleared -- see this file's "Clearance
-       -- method" assumption: blockage_cleared equals event_start_date
+       -- method" note: blockage_cleared equals event_start_date
        -- exactly (0-minute "clearance") in 21-32% of rows across every
        -- severity, a spike no real road-reopening-time distribution would
        -- produce, consistent with a data-entry default rather than a
@@ -730,7 +435,7 @@ async function loadClearanceSample(filters: ClearanceProtocolFilters): Promise<C
     // uses for its own breakdown MTTC -- last departure across every
     // logged unit, minus the encoded report time. Only events that HAVE a
     // deployments log with at least one real departure_time contribute;
-    // see assumptions[] for what that excludes.
+    // see method[] for what that excludes.
     const { rows } = await db.query(
       `WITH wxall AS (
          SELECT (timestamp_utc + interval '8 hours')::date AS d,
@@ -769,7 +474,7 @@ async function loadClearanceSample(filters: ClearanceProtocolFilters): Promise<C
 export async function getClearanceProtocolFromDb(filters: ClearanceProtocolFilters): Promise<ClearanceProtocolResult | null> {
   if (!db) return null;
 
-  const cacheKey = JSON.stringify(filters);
+  const cacheKey = sampleKey(filters);
   const cached = clearanceCache.get(cacheKey);
   if (cached && Date.now() - cached.at < CACHE_TTL_MS) return cached.data as ClearanceProtocolResult;
 
@@ -793,139 +498,48 @@ export async function getClearanceProtocolFromDb(filters: ClearanceProtocolFilte
     }
 
     const curve = kaplanMeier(observations);
-    const rawEvents = observations.filter((o) => !o.censored).map((o) => o.duration);
-    const { scenarios, p50, p80, p95 } = buildScenarios(curve, rawEvents);
+    const p25 = quantileFromCurve(curve, 0.25);
+    const p50 = quantileFromCurve(curve, 0.5);
+    const p80 = quantileFromCurve(curve, 0.8);
+    const p95 = quantileFromCurve(curve, 0.95);
 
-    const cap: CapacityConfig = {
-      q: CAPACITY_VEH_HR * DEMAND_VC_RATIO[filters.demandLevel],
-      c: CAPACITY_VEH_HR,
-      cr: REDUCED_CAPACITY_VEH_HR,
-    };
+    const rule = escalationRule(curve, observations, p50, p80);
+    const pct = (x: number) => Math.round(x * 100);
+    const text = `If not cleared by ${Math.round(p50)} min, there is a ${pct(rule.chance.p)}% chance it runs past ${Math.round(p80)} min → escalate.`;
+    const checkpoints: Checkpoint[] = [
+      checkpointAt(curve, observations, "P25", p25, p95),
+      checkpointAt(curve, observations, "P50", p50, p95),
+      checkpointAt(curve, observations, "P80", p80, p95),
+    ];
 
-    // Coverage opportunity cost, derived (not a flat guess -- see
-    // deriveUncoveredIncidentCost) and folded into one combined
-    // per-unit-hour rate (see getIncidentsPerHourPerUnit's own comment) --
-    // the solver's cost terms are all already structured as (units x rate x
-    // hours), so this keeps every first- and second-stage cost term correct
-    // without touching the MILP-building code itself, and still "keeps the
-    // existing hourly unit cost" exactly as asked, additively.
-    const incidentsPerHourPerUnit = await getIncidentsPerHourPerUnit();
-    const meanDurationMin = scenarios.reduce((sum, s) => sum + s.probability * s.durationMin, 0);
-
-    // delayCostPerVehHour is an input to the derivation itself (the derived
-    // cost is valued at that same rate), so when sweeping it in sensitivity
-    // below, the coverage-cost term is recomputed too, not held at the base
-    // rate -- otherwise a "2x delay cost" row would be internally
-    // inconsistent with its own coverage-cost component.
-    const effectiveRate = (delayCostPerVehHour: number, deltaResponseMin: number) => {
-      const derivedCost = deriveUncoveredIncidentCost(meanDurationMin, deltaResponseMin, delayCostPerVehHour, cap);
-      const coverageRate = incidentsPerHourPerUnit != null ? incidentsPerHourPerUnit * derivedCost : 0;
-      return { rate: filters.unitCostPerHour + coverageRate, derivedCost };
-    };
-
-    const { rate: effectiveUnitCostPerHour, derivedCost: derivedCostPerUncoveredIncident } = effectiveRate(filters.delayCostPerVehHour, filters.deltaResponseMin);
-
-    const solution = solveClearanceProtocol(scenarios, p50, filters.maxUnits, filters.unitEffect, effectiveUnitCostPerHour, filters.delayCostPerVehHour, cap);
-
-    // Sensitivity strip 1: does the recommendation hold up across a
-    // reasonable spread of the two parameters that are pure assumptions
-    // (beta) or illustrative (delay cost)? Coverage cost is recomputed per
-    // delay-cost multiplier (see effectiveRate above); deltaResponseMin is
-    // held at the request's own value.
-    const SENSITIVITY_BETAS = [0.1, 0.15, 0.25, 0.35, 0.5];
-    const SENSITIVITY_DELAY_MULTIPLIERS = [0.5, 1, 2];
-    const sensitivity = SENSITIVITY_BETAS.flatMap((b) =>
-      SENSITIVITY_DELAY_MULTIPLIERS.map((m) => {
-        const dcph = filters.delayCostPerVehHour * m;
-        const { rate } = effectiveRate(dcph, filters.deltaResponseMin);
-        const sol = solveClearanceProtocol(scenarios, p50, filters.maxUnits, b, rate, dcph, cap);
-        const maxEscalation = Math.max(0, ...Object.values(sol.escalationByScenario));
-        return { beta: b, delayCostMultiplier: m, unitsAtDispatch: sol.unitsAtDispatch, maxEscalation };
-      }),
-    );
-
-    // Sensitivity strip 2: deltaResponseMin, the one new assumption this
-    // round introduced, swept on its own (beta/delay cost held at the
-    // request's own values) rather than crossed into strip 1 -- a 5x3x3
-    // table stops being "compact."
-    const SENSITIVITY_DELTA_RESPONSE = [5, 15, 30];
-    const deltaSensitivity = SENSITIVITY_DELTA_RESPONSE.map((delta) => {
-      const { rate, derivedCost } = effectiveRate(filters.delayCostPerVehHour, delta);
-      const sol = solveClearanceProtocol(scenarios, p50, filters.maxUnits, filters.unitEffect, rate, filters.delayCostPerVehHour, cap);
-      const maxEscalation = Math.max(0, ...Object.values(sol.escalationByScenario));
-      return { deltaResponseMin: delta, unitsAtDispatch: sol.unitsAtDispatch, maxEscalation, derivedCostPerUncoveredIncident: derivedCost };
-    });
-
-    const projectedMttr = scenarios.reduce((sum, s, i) => sum + s.probability * solution.scenarioResults[i].effectiveDurationMin, 0);
     const baselineMttr = restrictedMean(curve);
-    const rag = ragFor(filters.type, projectedMttr);
-    const targets = KPI_TARGETS[filters.type];
     const metricLabel =
       filters.type === "accident"
         ? "Scene fully cleared - report time (overstates lane-clearance slightly)"
         : "Last responder departs scene (not lane-clearance time)";
 
-    const escalatedScenarios = scenarios.filter((s) => solution.escalationByScenario[s.label] > 0).map((s) => s.label);
-    const action =
-      escalatedScenarios.length > 0
-        ? `Dispatch ${solution.unitsAtDispatch} unit${solution.unitsAtDispatch === 1 ? "" : "s"}; escalate if not cleared by minute ${Math.round(p50)} (${escalatedScenarios.join(", ")} scenarios add ${escalatedScenarios.map((l) => solution.escalationByScenario[l]).join("/")} unit${Math.max(...escalatedScenarios.map((l) => solution.escalationByScenario[l])) === 1 ? "" : "s"}).`
-        : `Dispatch ${solution.unitsAtDispatch} unit${solution.unitsAtDispatch === 1 ? "" : "s"}; no scenario's expected delay cost justifies escalating further.`;
-
-    const assumptions: string[] = [
-      `Unit cost: ${filters.unitCostPerHour} PHP/hr per unit — illustrative, not sourced from the warehouse (no responder operating-cost figure exists in this data).`,
-      `Response delay (delta): ${filters.deltaResponseMin} min — stated assumption for how much longer a NEW incident waits when the nearest unit is already committed here. Feeds the derived coverage cost below, not tuned to produce any particular recommendation.`,
-      incidentsPerHourPerUnit != null
-        ? `Coverage opportunity cost (derived, not a flat guess): delay(${meanDurationMin.toFixed(1)}+${filters.deltaResponseMin} min) - delay(${meanDurationMin.toFixed(1)} min) at this demand level, valued at ${filters.delayCostPerVehHour} PHP/veh-hr, = ${derivedCostPerUncoveredIncident.toFixed(0)} PHP per incident a zone goes uncovered for. x ${incidentsPerHourPerUnit.toFixed(4)} predicted incidents/hr in an average unit's coverage area (same /api/incident/predictive forecast PrescriptiveDeploymentPanel uses) = ${(incidentsPerHourPerUnit * derivedCostPerUncoveredIncident).toFixed(2)} PHP/hr added on top of the raw unit cost above, giving an effective ${effectiveUnitCostPerHour.toFixed(2)} PHP/hr per unit actually used in the solve.`
-        : `Coverage opportunity cost: skipped (the predictive forecast pipeline hasn't written output yet) — only the raw ${filters.unitCostPerHour} PHP/hr unit cost above was used.`,
-      `Delay cost: ${filters.delayCostPerVehHour} PHP/veh-hr — illustrative value-of-time proxy, not a measured figure.`,
-      `Unit effect (beta=${filters.unitEffect}): a stated assumption, not fit from data. The warehouse's own deployment_count is confounded with severity — a prior analysis in this repo (smartflow_scripts/4_studies_audits/incident_response/README.md) found "more units sent goes with longer clearance within each severity, but bigger incidents get more units, so this does not show that units slow or speed clearance."`,
-      `Capacity: ${CAPACITY_VEH_HR} veh/hr/direction (${LANE_CAPACITY_VEH_HR} veh/hr/lane x ${LANES_PER_DIRECTION} lanes) — a config default; no Mejia & Sigua capacity-drop factor or lane-capacity figure exists in this warehouse.`,
-      `Reduced capacity during the incident: ${REDUCED_CAPACITY_VEH_HR} veh/hr (${REDUCED_CAPACITY_FACTOR * 100}% of capacity) — a config default, not measured.`,
-      `Demand: "${filters.demandLevel}" maps to v/c = ${DEMAND_VC_RATIO[filters.demandLevel]} (q = ${Math.round(cap.q)} veh/hr) — a stated level, not a per-segment forecast. nlex_traffic_volume has real hourly counts but only at toll plazas, not at arbitrary incident locations, so it is not proxied in here.`,
-      filters.type === "breakdown"
-        ? "Breakdown durations come only from events with a deployments log (last departure time recorded) — roughly 31% of all breakdowns in this warehouse have one; the rest cannot be timed and are excluded, not treated as censored."
-        : "Accident durations use event_start_date -> site_cleared (full scene cleared) -- see the clearance-method note below.",
+    const method: string[] = [
       filters.type === "accident"
-        ? "Clearance method: event_start_date -> site_cleared. blockage_cleared (road reopened) was tried and reverted: it equals event_start_date exactly (a 0-minute \"clearance\") in 21-32% of rows across EVERY severity (PDO 31.5%, Injury 21.4%, Fatal 30.8%) -- a sharp spike no real road-reopening-time distribution would produce, and not specific to one severity, consistent with a data-entry default rather than a genuine timestamp. site_cleared therefore overstates true road-impact duration somewhat (it includes post-blockage scene cleanup), so RAG here should be read as a conservative (not optimistic) estimate of lane-clearance time, not an exact one."
-        : "Clearance method: last logged unit departure_time -> event_encoded_date. This is NOT the same quantity as \"lane cleared\" -- a stalled vehicle's lane can reopen well before the last responder (e.g. a tow truck) actually leaves the scene, and this warehouse has no separate \"road reopened\" timestamp for breakdowns the way accidents do. KPI RAG below is therefore marked indicative, not a direct read of the manuscript's lane-clearance target.",
-      `Censoring: durations recomputed from raw timestamps so that >1440 min could be told apart from missing/negative -- >1440 is right-censored at 1440 (${censoredCount} of ${sampleSize} observations here), not dropped. The Descriptive tab's own MTTC instead drops anything outside [0,1440] from its average; this panel's baselineMttr is a restricted-mean (area under the Kaplan-Meier curve), which is why it will not exactly equal the Descriptive tab's figure even on the same filters.`,
+        ? "Accident clearance: event_start_date -> site_cleared (scene fully cleared). blockage_cleared was not used: it equals the start time exactly in 21-32% of rows at every severity, a data-entry default, so site_cleared slightly overstates lane-clearance time."
+        : "Breakdown clearance: report time -> the last logged unit's departure. Only breakdowns with a deployments log can be timed (about 31%); the rest are left out. There is no lane-reopened time for breakdowns, so this is not lane clearance.",
+      `Durations over 1,440 min are kept as still open at 1,440 (${censoredCount} of ${sampleSize}), not dropped; 0-minute and negative durations are recording errors and left out.`,
+      "The chance and its 95% range are the Kaplan-Meier curve's conditional survival S(P80) / S(P50) with Greenwood's variance.",
     ];
 
     const data: ClearanceProtocolOk = {
       status: "ok",
-      recommendation: {
-        unitsAtDispatch: solution.unitsAtDispatch,
-        escalateAtMinute: Math.round(p50),
-        escalationUnitsByScenario: solution.escalationByScenario,
-        action,
-        when: `Decision point at minute ${Math.round(p50)} (this set's own median clearance time)`,
-        effect: `Projected mean clearance ${projectedMttr.toFixed(1)} min vs a ${baselineMttr.toFixed(1)} min historical baseline`,
-        confidence: `n=${sampleSize} (${censoredCount} right-censored at 1440 min)`,
-      },
+      rule: { ...rule, text },
+      checkpoints,
       survivalCurve: curve,
       quantiles: { p50, p80, p95 },
-      scenarios: scenarios.map((s, i) => ({
-        label: s.label,
-        probability: s.probability,
-        durationMin: s.durationMin,
-        delayVehHours: solution.scenarioResults[i].delayVehHours,
-        recourseUnits: solution.escalationByScenario[s.label],
-        effectiveDurationMin: solution.scenarioResults[i].effectiveDurationMin,
-      })),
-      kpi: { projectedMttr, baselineMttr, rag, targets, metricLabel, indicative: filters.type === "breakdown" },
-      evpi: solution.evpi,
-      vss: solution.vss,
-      coverageCostApplied: incidentsPerHourPerUnit != null,
-      assumptions,
-      sensitivity,
-      deltaSensitivity,
+      kpi: { baselineMttr, rag: ragFor(filters.type, baselineMttr), targets: KPI_TARGETS[filters.type], metricLabel, indicative: filters.type === "breakdown" },
+      method,
       scoringWindow,
       sampleSize,
       censoredCount,
     };
 
-    // A degraded answer (coverage cost skipped) is served but not kept: the next request retries the forecast.
-    if (data.coverageCostApplied) clearanceCache.set(cacheKey, { at: Date.now(), data });
+    clearanceCache.set(cacheKey, { at: Date.now(), data });
     return data;
   } catch (error) {
     console.error("Database query failed for clearance protocol:", error);

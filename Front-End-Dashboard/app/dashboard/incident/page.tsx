@@ -59,7 +59,14 @@ type Analytics = {
     // from, so they contribute nothing here rather than a fabricated value.
     // Replaced the old single avgResponseMin, which conflated accidents and
     // breakdowns despite having no accident-side data behind it at all.
-    avgTimeToFirstResponder: { min: number | null; n: number; totalBreakdowns: number };
+    avgTimeToFirstResponder: { min: number | null; medianMin?: number | null; p90Min?: number | null; n: number; totalBreakdowns: number };
+    /** Time to clear (MTTC), by type, with how many incidents carry the times (K9, K15). */
+    mttc?: {
+      overallMin: number | null;
+      accident?: { meanMin: number | null; medianMin: number | null; p90Min: number | null };
+      breakdown?: { meanMin: number | null; medianMin: number | null; p90Min: number | null };
+      coverage: { pctValid: number | null };
+    };
     rainyCrashes: number;
     weatherKnown: number;
   };
@@ -248,14 +255,16 @@ export default function IncidentPage() {
     // quietly in the background once stale. See lib/cached-json.
     /* A deadline on the request (19 Oct 2026, testers IN-2). With the backend's database pool stuck, the
        request never settled and every KPI tile sat on its skeleton, or on "No data" and a dash after a
-       failure, with nothing to say why. Now it fails after 45 s (an uncached "All" measures about 7 s) and
+       failure, with nothing to say why. Now it fails after a deadline (see below; an uncached "All" measures about 7 s) and
        the strip says so, with Try again. The deadline is this effect's own, raced against the request:
        cachedJson shares one fetch per URL, so an abort signal passed in would abort it for every caller
        waiting on it (the deployment panel reads the same URL), and a re-run that joined the fetch in flight
        would have no deadline at all once the first run's timer was cleared. The shared fetch is never aborted. */
     let deadline: ReturnType<typeof setTimeout> | undefined;
     const timeout = new Promise<never>((_, reject) => {
-      deadline = setTimeout(() => reject(new Error("The incident analytics request timed out")), 45_000);
+      // 125 s: just past the backend's own 120 s query limit. At 45 s a cold Weather = Dry or Wet (59-61 s on
+      // 2 Nov 2026) gave up before the server could answer.
+      deadline = setTimeout(() => reject(new Error("The incident analytics request timed out")), 125_000);
     });
     Promise.race([cachedJson<{ success: boolean; message?: string; data: Analytics }>(`${BACKEND}/api/incident/analytics?${qs}`, 5 * 60_000), timeout])
       .then((json) => {
@@ -329,7 +338,48 @@ export default function IncidentPage() {
     else if (dryRate === 0) rainEmptyReason = "No crashes in dry hours to compare against";
     else rainMultiplier = wetRate / dryRate;
 
-    return { deltaPct, topHotspot, hotspotTotal, wetRate, dryRate, rainMultiplier, rainEmptyReason };
+    /* Same hour of day on both sides (2 Nov 2026). Rain falls mostly in the afternoon, when traffic and crashes peak
+       whatever the weather, so the plain ratio partly measured the time of day: 1.19x over 12 months, 1.02x with the
+       hour held fixed. Each wet hour is now set against the dry crash rate of that same hour of the day: observed wet
+       crashes over the crashes those wet hours would have had at their own hours' dry rate. Falls back to the plain
+       ratio when the API sends no per-hour cells. */
+    let rainSameHour = false;
+    /* 95% interval (fix list A13, 2 Nov 2026), approximate, on the log scale. Plain ratio: exp(ln RR +/- 1.96
+       sqrt(1/n_wet + 1/n_dry)). Same-hour ratio: the expected count is built from the dry crashes, so its own Poisson
+       variance, sum of (wet hours / dry hours)^2 x dry crashes per hour, is added to 1/observed. */
+    let rainLo: number | null = null;
+    let rainHi: number | null = null;
+    const ci = (r: number, varLog: number) => {
+      const half = 1.96 * Math.sqrt(varLog);
+      rainLo = Math.exp(Math.log(r) - half);
+      rainHi = Math.exp(Math.log(r) + half);
+    };
+    if (rainMultiplier != null && wetCrashes > 0 && dryCrashes > 0) ci(rainMultiplier, 1 / wetCrashes + 1 / dryCrashes);
+    if (rainMultiplier != null && Array.isArray(wx.cells) && wx.cells.length > 0) {
+      const byHour = new Map<number, { wetH: number; dryH: number; wetA: number; dryA: number }>();
+      for (const c of wx.cells) {
+        const b = byHour.get(c.hour) ?? { wetH: 0, dryH: 0, wetA: 0, dryA: 0 };
+        b.wetH += c.wetHours; b.dryH += c.dryHours; b.wetA += c.wetAccident; b.dryA += c.dryAccident;
+        byHour.set(c.hour, b);
+      }
+      let observed = 0;
+      let expected = 0;
+      let varExpected = 0;
+      for (const b of byHour.values()) {
+        if (b.wetH === 0 || b.dryH === 0) continue;
+        observed += b.wetA;
+        expected += b.wetH * (b.dryA / b.dryH);
+        varExpected += (b.wetH / b.dryH) ** 2 * b.dryA;
+      }
+      if (expected > 0) {
+        rainMultiplier = observed / expected;
+        rainSameHour = true;
+        rainLo = rainHi = null;
+        if (observed > 0) ci(rainMultiplier, 1 / observed + varExpected / expected ** 2);
+      }
+    }
+
+    return { deltaPct, topHotspot, hotspotTotal, wetRate, dryRate, rainMultiplier, rainEmptyReason, rainSameHour, rainLo: rainLo as number | null, rainHi: rainHi as number | null };
   }, [data, source]);
 
     // ---------- Trend ----------
@@ -1134,7 +1184,7 @@ export default function IncidentPage() {
                 </div>
                 <p className={styles.kpiHint}>
                   {data && data.kpis.avgTimeToFirstResponder.min != null
-                    ? `breakdowns only · ${fmtInt(data.kpis.avgTimeToFirstResponder.n)} of ${fmtInt(data.kpis.avgTimeToFirstResponder.totalBreakdowns)} logged`
+                    ? `${data.kpis.avgTimeToFirstResponder.medianMin != null ? `median ${data.kpis.avgTimeToFirstResponder.medianMin} · p90 ${data.kpis.avgTimeToFirstResponder.p90Min} min · ` : ""}breakdowns only · ${fmtInt(data.kpis.avgTimeToFirstResponder.n)} of ${fmtInt(data.kpis.avgTimeToFirstResponder.totalBreakdowns)} logged`
                     : data && source === "accident"
                       ? "Breakdowns only: Incident type is set to Accidents"
                       : data && data.kpis.avgTimeToFirstResponder.totalBreakdowns === 0
@@ -1142,6 +1192,28 @@ export default function IncidentPage() {
                         : data
                           ? `None of the ${fmtInt(data.kpis.avgTimeToFirstResponder.totalBreakdowns)} breakdowns in range has a dispatch response logged`
                           : pendingHint}
+                </p>
+              </article>
+              {/* Time to clear (MTTC, KPI 3.6.2): computed by the API since October but never shown (fix list A15,
+                  2 Nov 2026). Mean beside median and 90th percentile, because a few very long clearances pull the
+                  mean up; and how many incidents carry the times at all. */}
+              <article className={styles.kpiTile}>
+                <span className={styles.kpiIcon} aria-hidden="true"><Timer size={15} /></span>
+                <h3>
+                  Avg Time to Clear
+                  {kpiInfo("Minutes from an incident being reported until the road was cleared: accidents from their recorded clearance time, breakdowns until the last responding unit left. The headline is the mean of both, weighted by how many of each have times; the hint gives the median and 90th percentile by type, since a few very long clearances pull the mean up.")}
+                </h3>
+                <div className={styles.kpiValue}>
+                  {kpiValue(data?.kpis.mttc?.overallMin != null ? `${data.kpis.mttc.overallMin} min` : null)}
+                </div>
+                <p className={styles.kpiHint}>
+                  {data?.kpis.mttc
+                    ? [
+                        data.kpis.mttc.accident?.medianMin != null ? `accidents median ${data.kpis.mttc.accident.medianMin} · p90 ${data.kpis.mttc.accident.p90Min}` : "",
+                        data.kpis.mttc.breakdown?.medianMin != null ? `breakdowns median ${data.kpis.mttc.breakdown.medianMin} · p90 ${data.kpis.mttc.breakdown.p90Min}` : "",
+                        data.kpis.mttc.coverage.pctValid != null ? `${data.kpis.mttc.coverage.pctValid}% have times` : "",
+                      ].filter(Boolean).join(" min · ") || "No clearance times in this Range"
+                    : pendingHint}
                 </p>
               </article>
               <article className={styles.kpiTile}>
@@ -1163,13 +1235,13 @@ export default function IncidentPage() {
                 <span className={styles.kpiIcon} aria-hidden="true"><CloudRain size={15} /></span>
                 <h3>
                   Crash Rate in Rain
-                  {kpiInfo("Accidents (crashes) per day during rainy hours vs. dry hours, normalized for how often each occurs. Above 1× means rain sees more crashes per hour of exposure. Always compares both weathers, so the Weather filter does not change it.")}
+                  {kpiInfo("Crashes in rainy hours against what those same hours of the day usually see when dry. Each wet hour is compared with the dry crash rate of that hour of the day, because rain falls mostly in the busy afternoon. Above 1× means rain adds crashes beyond the time of day. Always compares both weathers, so the Weather filter does not change it.")}
                 </h3>
                 <div className={styles.kpiValue}>{kpiValue(derived?.rainMultiplier != null ? `${derived.rainMultiplier.toFixed(2)}×` : null)}</div>
                 <p className={styles.kpiHint}>
                   {derived
                     ? derived.rainMultiplier != null
-                      ? `${derived.wetRate.toFixed(1)} vs ${derived.dryRate.toFixed(1)} crashes/day, wet vs dry${weather !== "all" ? " · always both weathers" : ""}`
+                      ? `${derived.wetRate.toFixed(1)} vs ${derived.dryRate.toFixed(1)} crashes/day, wet vs dry${derived.rainLo != null && derived.rainHi != null ? ` · 95% CI ${derived.rainLo.toFixed(2)}–${derived.rainHi.toFixed(2)}×` : ""}${derived.rainSameHour ? " · same hours compared" : ""}${weather !== "all" ? " · always both weathers" : ""}`
                       : derived.rainEmptyReason
                     : pendingHint}
                 </p>

@@ -155,18 +155,21 @@ export async function getForecastModelInfo(): Promise<{
   horizons: number;
   minHorizon: number | null;
   maxHorizon: number | null;
+  /** When the forecast was made. Hour N is baseTs + N, not now + N: the run can be hours old. */
+  baseTs: string | null;
 } | null> {
   if (!db) return null;
   try {
     // Prefer the table only this pipeline writes; see forecast-source.
     const src = await forecastTable(db);
-    const [{ rows: model }, { rows: variance }] = await Promise.all([
+    const [{ rows: model }, { rows: variance }, { rows: base }] = await Promise.all([
       db.query(
         `SELECT model_name, r2, updated_at,
                 (SELECT COUNT(*) FROM gold.ml_model_metrics
                   WHERE target = 'Congestion' AND NOT accepted)::int AS rejected
            FROM gold.ml_model_metrics
-          WHERE target = 'Congestion' AND accepted
+          -- rank 0 = the exit-hour profile, served when no model is accepted (train_congestion_horizon.py, A4)
+          WHERE target = 'Congestion' AND (accepted OR rank = 0)
           ORDER BY rank NULLS LAST
           LIMIT 1`,
       ),
@@ -185,6 +188,8 @@ export async function getForecastModelInfo(): Promise<{
               GROUP BY segment_name
            ) per_segment`,
       ),
+      // base_ts is Manila wall time with no zone; say so, or a server in UTC would read it 8 h off.
+      db.query(`SELECT to_char(MAX(base_ts), 'YYYY-MM-DD"T"HH24:MI:SS') || '+08:00' AS base_ts FROM ${src}`),
     ]);
 
     const m = model[0];
@@ -198,6 +203,7 @@ export async function getForecastModelInfo(): Promise<{
       horizons: Number(v?.horizons ?? 0),
       minHorizon: v?.min_h == null ? null : Number(v.min_h),
       maxHorizon: v?.max_h == null ? null : Number(v.max_h),
+      baseTs: base[0]?.base_ts ?? null,
     };
   } catch (error) {
     console.error("Database query failed for forecast model info:", error);
@@ -276,16 +282,10 @@ export async function getForecastCongestionFromDb(hoursAhead: number) {
         corridor_segment: r.corridor_segment,
         horizon: `${r.hours_ahead}h`,
         hours_ahead: r.hours_ahead,
-        /* The state the dashboard SHOWS: a jam when the chance of one (heavy +
-           severe) is 50% or more, severity by the likelier of the two. The
-           model's own label is the likeliest of three, which called 244 cells
-           of one run "Low" at a 50-60% chance of a jam; above 50% the chance is
-           calibrated (said 55% -> 51% happened). Same rule as the congestion
-           card, so the map, its list and the card agree. */
-        congestion_state:
-          r.p_med != null && r.p_high != null
-            ? (r.p_med + r.p_high >= 0.5 ? (r.p_high >= r.p_med ? "High" : "Med") : "Low")
-            : r.congestion_state,
+        /* The state the model stored, from its own severe-weighted decision rule: the state the mobile app shows
+           and the accuracy is measured on. The map repainted it as a jam whenever heavy + severe reached 50%, a
+           different forecast from the app's (fix list A25, 2 Nov 2026). Same rule as the congestion card. */
+        congestion_state: r.congestion_state,
         model_state: r.congestion_state,
         probability: r.probability,
         p_congested: r.p_congested,
@@ -336,28 +336,28 @@ export async function getForecastCongestionFromDb(hoursAhead: number) {
  * the picture that made it the peak.
  */
 export async function getForecastDailyPeaksFromDb(): Promise<
-  { day: string; hoursAhead: number; at: string; congested: number; confidence: number }[] | null
+  { day: string; hoursAhead: number; at: string; congested: number; slow: number; confidence: number }[] | null
 > {
   if (!db) return null;
   try {
     // Prefer the table only this pipeline writes; see forecast-source.
     const src = await forecastTable(db);
     const { rows } = await db.query(
-      /* "Congested" is the rule the map draws by: a jam when the chance of one
-         (heavy + severe) is 50% or more. This counted only exits the model
-         LABELLED severe, so the week list said "1 congested" for days the map
-         drew with a dozen predicted queues. Confidence is the average chance
-         of a jam across the corridor at that hour. */
+      /* Counted from the state the map draws, the model's stored state (A25): "congested" = High (red), "slow" =
+         Med (amber), the live map's words. Confidence is the average chance of a jam (heavy + severe) at that hour. */
       `WITH per_hour AS (
          SELECT hours_ahead,
                 MAX(base_ts) AS base_ts,
-                COUNT(*) FILTER (WHERE COALESCE(p_med, 0) + COALESCE(p_high, 0) >= 0.5)::int AS congested,
+                -- The stored state, as the map now draws it (A25): High = red, Med = amber.
+                COUNT(*) FILTER (WHERE congestion_state = 'High')::int AS congested,
+                COUNT(*) FILTER (WHERE congestion_state = 'Med')::int AS slow,
                 AVG(COALESCE(p_med, 0) + COALESCE(p_high, 0))::float                      AS confidence
            FROM ${src}
           GROUP BY hours_ahead
        ), stamped AS (
          SELECT hours_ahead,
                 congested,
+                slow,
                 confidence,
                 base_ts + make_interval(hours => hours_ahead) AS at
            FROM per_hour
@@ -369,9 +369,10 @@ export async function getForecastDailyPeaksFromDb(): Promise<
        -- labelled 2026-09-18. Formatting it in Postgres keeps the calendar
        -- day the grouping actually used.
        SELECT DISTINCT ON (at::date)
-              to_char(at, 'YYYY-MM-DD') AS day, hours_ahead, at, congested, confidence
+              to_char(at, 'YYYY-MM-DD') AS day, hours_ahead,
+              to_char(at, 'YYYY-MM-DD"T"HH24:MI:SS') || '+08:00' AS at, congested, slow, confidence
          FROM stamped
-        ORDER BY at::date, congested DESC, confidence DESC, hours_ahead
+        ORDER BY at::date, congested DESC, slow DESC, confidence DESC, hours_ahead
       `,
     );
 
@@ -380,6 +381,7 @@ export async function getForecastDailyPeaksFromDb(): Promise<
       hoursAhead: Number(r.hours_ahead),
       at: new Date(r.at).toISOString(),
       congested: Number(r.congested),
+      slow: Number(r.slow),
       confidence: Number(r.confidence),
     }));
   } catch (error) {

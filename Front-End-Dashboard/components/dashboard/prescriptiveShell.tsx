@@ -140,3 +140,59 @@ export function ActionCard({
     </section>
   );
 }
+
+/* ── Where a recommendation comes from (2 Nov 2026) ──────────────────────────
+   Every prescriptive card names its source in one glance, so "is this from the
+   forecast?" never needs a paragraph to answer:
+     forecast  built on a predictive model's output
+     history   built on measured history in the selected Range
+     whatif    decided by assumptions the data does not supply (labelled as such)
+   `detail` is the one-line why, shown on hover and to screen readers. */
+export type SourceKind = "forecast" | "history" | "whatif";
+const SOURCE_LABEL: Record<SourceKind, string> = { forecast: "From forecast", history: "From history", whatif: "What-if" };
+
+export function SourceBadge({ kind, detail }: { kind: SourceKind; detail?: string }) {
+  return (
+    <span className={`rx-source is-${kind}`} title={detail} aria-label={detail ? `${SOURCE_LABEL[kind]}: ${detail}` : SOURCE_LABEL[kind]}>
+      <i aria-hidden="true" />
+      {SOURCE_LABEL[kind]}
+    </span>
+  );
+}
+
+/* The assumptions a card rests on, as chips under its headline instead of a
+   paragraph. A chip with `onEdit` is a setting the reader can change (it moves
+   focus to the control); `note` is the hover text saying where the value comes
+   from. */
+export type Assumption = { label: string; value: ReactNode; note?: string; onEdit?: () => void };
+
+export function AssumptionChips({ items, lead = "Assumes" }: { items: Assumption[]; lead?: string }) {
+  if (items.length === 0) return null;
+  return (
+    <div className="rx-assume" role="list" aria-label={lead}>
+      <span className="rx-assume-lead">{lead}</span>
+      {items.map((a) =>
+        a.onEdit ? (
+          <button key={a.label} type="button" role="listitem" className="rx-chip is-edit" title={a.note ? `${a.note} (click to change)` : "Click to change"} onClick={a.onEdit}>
+            <span>{a.label}</span> <b>{a.value}</b> <em aria-hidden="true">✎</em>
+          </button>
+        ) : (
+          <span key={a.label} role="listitem" className="rx-chip" title={a.note}>
+            <span>{a.label}</span> <b>{a.value}</b>
+          </span>
+        ),
+      )}
+    </div>
+  );
+}
+
+/* When the forecast behind a card was made, and whether it has gone stale.
+   `at` is the forecast's own time as text the card already has. */
+export function ForecastAge({ at, stale }: { at: string; stale?: boolean }) {
+  return (
+    <span className={`rx-age${stale ? " is-stale" : ""}`} role={stale ? "status" : undefined}>
+      {stale ? "Stale forecast: " : "Forecast: "}
+      {at}
+    </span>
+  );
+}

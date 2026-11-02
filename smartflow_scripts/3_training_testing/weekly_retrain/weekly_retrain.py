@@ -103,6 +103,7 @@ INPUTS = {
     "motorcycle_crashes": ("public.nlex_motorcycle_crashes", "date", None),
     "stalled": ("public.nlex_stalled_vehicles", "date", None),
     "waze_jams": ("silver.fact_waze_jams", "date_day", "speed_kmh"),
+    "arena_events": ("silver.philippine_arena_events_clean", "event_date", None),
 }
 CONGESTION = ROOT.parent / "All_Scripts" / "Predictive_Modeling"
 HOURLY_48H = WORK / "cache" / "traffic_hourly_48h"
@@ -251,9 +252,12 @@ GROUPS = [
     ),
     Group(
         "event_surge", "Event surge",
-        inputs=["traffic_hourly"],
-        steps=[Step(TT / "event_surge", ["build_event_surge.py"]),
-               Step(TT / "event_surge", ["eval_event_surge.py"])],
+        # The calendar-based build in All_Scripts (Kia, 17 Sep 2026), which also scores itself into ml_model_metrics.
+        # This ran smartflow_scripts/.../event_surge/ until 2 Nov 2026: the old build and eval pick "event days" as days
+        # the CDV exit ran 1.45x its norm, which selects busy days and inflated the uplift (1.15x became 1.59x); the
+        # 1 Nov cloud batch overwrote the table with it.
+        inputs=["traffic_hourly", "arena_events"],
+        steps=[Step(CONGESTION, ["build_event_surge.py"])],
         tables=[("gold.ml_event_surge_forecast", None),
                 ("gold.ml_model_metrics", "target = 'Event Surge'")],
         evaluation="domain = 'Event surge'",
@@ -1193,6 +1197,25 @@ def main() -> int:
 
     log_path = LOG_DIR / f"weekly_retrain_{datetime.now():%Y%m%d_%H%M%S}.log"
     _log = open(log_path, "a", encoding="utf-8")
+    # The cloud workflow (.github/workflows/weekly-retrain.yml) is the weekly batch since it first ran on 1 Nov 2026.
+    # This PC's Sunday task is the fallback: both retrained everything that week, the PC's run died part-way (the PC
+    # slept) and the cloud restored what it had left half-written. A scheduled run here does nothing while the cloud
+    # has finished a batch within 8 days, and takes over by itself if the cloud stops running.
+    if args.scheduled and not os.environ.get("GITHUB_ACTIONS"):
+        c = connect()
+        try:
+            with c.cursor() as cur:
+                cur.execute("SELECT id, host, finished_at FROM gold.ml_batch_runs WHERE trigger = 'scheduled' "
+                            "AND host IS DISTINCT FROM %s AND status IN ('retrained', 'no new data', 'needs attention') "
+                            "AND finished_at > now() - interval '8 days' ORDER BY id DESC LIMIT 1",
+                            (socket.gethostname(),))
+                recent = cur.fetchone()
+        finally:
+            c.close()
+        if recent:
+            say(f"the cloud ran this week's batch (#{recent[0]} on {recent[1]}, finished {recent[2]}); "
+                "this PC's scheduled run is only a fallback, so nothing to do")
+            return 0
     lock = connect()
     lock.autocommit = True
     try:

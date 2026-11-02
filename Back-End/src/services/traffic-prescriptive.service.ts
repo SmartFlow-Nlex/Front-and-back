@@ -1,91 +1,74 @@
 import { db } from "../config/db.js";
 import { exitKmValuesSql, kmKeySql } from "../lib/km-post.js";
 import { getMLPredictiveCongestion } from "./traffic.service.js";
-import {
-  OSM_TOLL_PLAZAS, OSM_TOLL_PLAZAS_AWAY, OSM_TOLL_PLAZAS_READ, type OsmTollPlaza,
-} from "../data/nlex-toll-plazas.js";
 
 /* ══════════════════════════════════════════════════════════════════════════════
-   PRESCRIPTIVE TRAFFIC — booth staffing and congestion response
+   PRESCRIPTIVE TRAFFIC: staffing priority and congestion response
 
-   The two models already existed, but they ran in the browser
-   (prescriptiveTraffic.shared.ts) on props the descriptive tab happened to
-   have loaded. That had three costs: the recommendation depended on which
-   range the operator had selected elsewhere on the page, nothing else could
-   ask for it, and the staffing plan only ever covered each plaza's single
-   busiest hour — so it could not answer "how many booths at 10am".
+   Redesigned 2 Nov 2026 so that every recommendation rests on measured data,
+   with no operator-set constants ("I really dont want any assumptions across
+   the prescriptive analytics"). The previous version planned booths from an
+   OpenStreetMap booth count and a 350 vehicles-a-booth-hour slider, and ranked
+   congestion with hand-set fuzzy memberships; none of those were measured.
+   The pre-redesign files are in SmartFlow_backups/prescriptive_before_redesign_2026-11-02.
 
-   Both now run here, against the warehouse.
+   STAFFING PRIORITY BY FORECAST DEMAND
 
-   BOOTH STAFFING
+     forecast(plaza, hour, day) = corridorForecast(day)
+                                x plazaShare(plaza) x hourShare(plaza, hour, weekday|weekend)
 
-     demand(plaza, hour, day) = corridorForecast(day)
-                              x plazaShare(plaza)
-                              x hourShare(plaza, hour, weekday|weekend)
-
-   Every factor except booth throughput is MEASURED:
      corridorForecast   gold.ml_predictive_volume, the champion's future rows
-     plazaShare         gold.fact_traffic_hourly, that plaza's share of corridor
-     hourShare          the same table, that plaza's own profile across the day
+     shares             gold.fact_traffic_hourly, the latest 12 months on record
 
-   Throughput is the one thing the warehouse does not hold and the operator
-   does, so it stays a parameter rather than being invented here.
+   Each plaza-hour is compared with that plaza's OWN usual level for the same
+   hour and day type over the same 12 months: the median day (usual) and the
+   90th-percentile day (usual peak, exceeded on 1 comparable day in 10). The
+   recommendation is relative, so it needs no booth count or throughput: a
+   plaza-hour forecast above its usual peak needs more than the plaza usually
+   staffs at that hour.
 
-   The profiles are split weekday/weekend because they are genuinely different
-   shapes, and because a staffing plan that ignores that is wrong two days in
-   seven. They are also per plaza: Bocaue Barrier peaks at 07:00 and Balintawak
-   at 19:00, so a single corridor-wide peak hour would over-staff one and
-   under-staff the other at every hour of the day.
+   How sure is measured, not assumed. The whole chain above (champion forecast
+   x shares) is replayed on the champion's held-out days, and the ratio
+   actual / predicted is collected per plaza, plaza-hours of 200 vehicles or
+   more. Its quantiles give
+     - an 80% band:  forecast x [q10, q90]
+     - the chance the actual exceeds the usual peak: 1 - F(usualPeak / forecast)
+   On 2 Nov 2026 that chain's held-out WMAPE was about 17% per plaza-hour,
+   against 6.49% for the corridor-day forecast alone: splitting the corridor
+   into plaza-hours is most of the error, so the corridor figure would have
+   overstated the certainty about 2.6 times.
 
-   THE ALLOCATION
-
-   Given a finite pool of booth-hours, which plaza-hours get them? Stated as a
-   linear program:
-
-     minimise    sum over (p,h) of unmet(p,h)
-     subject to  unmet(p,h) >= demand(p,h) - staffed(p,h) x throughput
-                 unmet(p,h) >= 0
-                 sum staffed(p,h) <= pool
-                 staffed(p,h) <= need(p,h)
-
-   Each booth retires exactly `throughput` vehicles of unmet demand until that
-   cell reaches zero, so the constraint matrix is an interval matrix and the
-   greedy assignment — next booth to whichever cell still has the most unmet —
-   attains the LP optimum exactly. No simplex library, and not an
-   approximation either.
-
-   BOOTHS THAT EXIST
-
-   need = ceil(demand / throughput) had no ceiling: at 50 vehicles a booth-hour
-   it planned 98 booths at Balintawak, which has 25. A plan nobody can carry
-   out is not a plan. So each plaza is capped at the booth lanes OpenStreetMap
-   maps for the movement that takes its payments (data/nlex-toll-plazas.ts):
-   its exit booths where the warehouse records exits, its entry booths where
-   it records paid entries, its barrier where it stands on the carriageway.
-   Per carriageway wherever both the warehouse and the map say which, because
-   a northbound booth cannot serve a southbound car; pooled where either
-   cannot tell. The cap enters the program above as one more bound,
-
-                 staffed(p,h) <= booths(p)
-
-   which leaves the greedy exact. Demand beyond what every booth clears is
-   reported as UNSERVED: it queues however the plaza is staffed, so it calls
-   for diversion or an advisory, and the answer says that instead of asking
-   for booths that are not there.
+     above   chance >= 90%: even the band's low end exceeds the usual peak
+     likely  chance >= 50%
+     normal  otherwise
 
    CONGESTION RESPONSE
 
-   A Mamdani controller over "how likely" and "how soon". Crisp thresholds are
-   the wrong tool: 0.61 and 0.59 describe the same road, and an alert that
-   fires at one and not the other is how operators learn to ignore alerts.
-   Triangular memberships overlap, so a segment near a boundary reads as near
-   a boundary instead of flipping.
+   The congestion forecast's chance of High (p_high, hours 1-12) is compared
+   with one cut-off. The cut-off is not chosen by hand: every archived forecast
+   (gold.ml_congestion_forecast_log) is joined to what the road then did
+   (gold.v_congestion_forecast_score, Waze jam speed per exit-hour), the cut-off
+   that maximises F1 is picked on all but the last 7 days, and its precision and
+   recall are reported on those last 7 days, which it never saw. A segment at or
+   above it within 12 hours is Act; the rest Monitor. No separate Prepare tier:
+   no higher cut-off in the archive buys a precision worth a second action (it
+   tops out near 40% while recall falls below 10%). With too few scored
+   forecasts the panel says so and labels nothing.
 ══════════════════════════════════════════════════════════════════════════════ */
 
-/** What one booth clears in an hour. The operator's number, not the warehouse's. */
-const DEFAULT_THROUGHPUT = 350;
 /** How many future days the week-ahead view covers. */
 const WEEK_DAYS = 7;
+/** The usual level is measured over this many days back from the last day on record. */
+const WINDOW_DAYS = 365;
+/** Usual peak: the day-of-type percentile exceeded on 1 comparable day in 10. */
+const USUAL_PEAK_PCT = 0.9;
+/** The backtest measures error only on plaza-hours this busy; below it no chance is claimed. */
+const MIN_CELL = 200;
+/** Chance at or above which the band's low end exceeds the usual peak. */
+const CERTAIN = 0.9;
+const LIKELY = 0.5;
+/** Quantile levels kept from the backtest: 0.01 .. 0.99. */
+const LEVELS = Array.from({ length: 99 }, (_, i) => (i + 1) / 100);
 
 const MODEL_COLUMN: Record<string, string> = {
   Prophet: "pred_prophet",
@@ -100,112 +83,115 @@ const MODEL_COLUMN: Record<string, string> = {
   HoltsLinear: "pred_holts_linear",
 };
 
-export type BoothHour = {
+export type StaffingLevel = "above" | "likely" | "normal";
+
+export type StaffingHour = {
   hour: number;
-  /** Vehicles expected at this plaza in this hour. */
-  demand: number;
-  /** Booths that would clear them all, whether or not the plaza has that many. */
-  need: number;
-  /** Booths to open: need, limited by the booths the plaza has and, when one
-   *  is given, by the pool. */
-  staffed: number;
-  /** Vehicles left queuing after `staffed` booths. */
-  unmet: number;
+  /** Vehicles forecast at this plaza in this hour. */
+  forecast: number;
+  /** 80% band from the measured held-out error; null where none is measured. */
+  low: number | null;
+  high: number | null;
+  /** The plaza's median for this hour and day type over the latest 12 months. */
+  usual: number | null;
+  /** ...and its 90th percentile: exceeded on 1 comparable day in 10. */
+  usualPeak: number | null;
+  /** forecast / usual. 1 = a usual day. */
+  load: number | null;
+  /** Measured chance the actual exceeds the usual peak; null below MIN_CELL or with no band. */
+  chance: number | null;
+  level: StaffingLevel;
 };
 
-export type BoothPlazaDay = {
+export type StaffingPlazaDay = {
   plaza: string;
   sharePct: number;
+  /** The hour with the most vehicles forecast. */
   peakHour: number;
-  /** Booths that would clear the peak hour. */
-  peakNeed: number;
-  /** Booths to open at the peak hour: peakNeed, limited to what the plaza has. */
-  peakStaffed: number;
-  /** Booth lanes the plaza has for the movement that pays there. Null where
-   *  OpenStreetMap maps none: then nothing is capped. */
-  booths: number | null;
-  /** Which booths those are, e.g. "NB exit 3 + SB exit 3". */
-  boothBasis: string;
-  /** What a typical day of the same type needs at that hour, for comparison. */
-  typicalPeakNeed: number;
-  /** ...and what it can open there. */
-  typicalPeakStaffed: number;
-  /** Vehicles over the day that the staffed booths leave queuing. */
-  unmetVehicles: number;
-  /** The hour that leaves the most; null when none leaves any. */
-  worstUnmet: {
-    hour: number;
-    vehicles: number;
-    need: number;
-    staffed: number;
-    /** Which booths leave it ("SB exit"). A plaza can have booths to spare on
-     *  one carriageway while the other is full. */
-    where: string | null;
-  } | null;
-  hours: BoothHour[];
+  /** The hour most likely to exceed its usual peak (then the highest load). */
+  top: StaffingHour | null;
+  aboveHours: number;
+  likelyHours: number;
+  /** All 24 hours on the first day only; empty on the others. */
+  hours: StaffingHour[];
 };
 
-export type BoothDay = {
+export type StaffingDay = {
   date: string;
   dayType: "weekday" | "weekend";
   corridorForecast: number;
-  /** Booths to open across the corridor, each plaza at its own peak. */
-  totalPeakBooths: number;
-  /** Vehicles the staffed booths cannot clear that day, corridor-wide. */
-  unmetVehicles: number;
-  plazas: BoothPlazaDay[];
+  aboveCells: number;
+  likelyCells: number;
+  plazas: StaffingPlazaDay[];
 };
 
-/** A plaza-day whose demand outruns every booth of one of its booth sets. */
-export type OverCapacity = {
-  date: string;
-  plaza: string;
-  /** Which booths: "NB exit", "SB barrier", "entry, both directions". */
-  where: string;
-  /** The hour that leaves the most queuing that day. */
-  hour: number;
-  /** Vehicles an hour that queue with every one of those booths open. */
-  vehicles: number;
-  /** Booths that hour would need, and booths there are. */
-  need: number;
-  booths: number;
-};
+/** One plaza-hour of the week forecast above its usual peak, most certain first. */
+export type StaffingPriority = StaffingHour & { date: string; dayType: "weekday" | "weekend"; plaza: string };
 
 export type CongestionAdvice = {
   segment: string;
   km: number | null;
-  /** Probability of HIGH congestion. A "low" forecast row is reported as its
-   *  complement, so this always reads the same way round. */
+  /** The highest chance of High in hours 1-12 (the forecast's p_high). */
   probability: number;
+  /** The hour of that highest chance. */
   hoursAhead: number;
-  urgency: number;
-  label: "Monitor" | "Prepare" | "Act";
+  /** The first hour at or above the calibrated cut-off; null when none is. */
+  firstAct: number | null;
+  label: "Act" | "Monitor";
   action: string;
+  /** Of archived forecasts at or above this probability, the share that High followed, and how many there were. */
+  hitRate: number | null;
+  hitN: number;
+};
+
+export type CongestionCalibration = {
+  ok: boolean;
+  /** Why no cut-off is given, when ok is false. */
+  reason: string | null;
+  /** The p_high cut-off, picked by F1 on the fit period. */
+  threshold: number | null;
+  /** Measured on the last 7 days, which the cut-off never saw. */
+  precision: number | null;
+  recall: number | null;
+  f1: number | null;
+  /** Share of held-out forecast-hours that were High at all: what precision compares with. */
+  baseRate: number | null;
+  fitF1: number | null;
+  scored: number;
+  scoredHigh: number;
+  runs: number;
+  fitFrom: string | null;
+  fitTo: string | null;
+  testFrom: string | null;
+  testTo: string | null;
+  testRows: number;
 };
 
 export type TrafficPrescriptive = {
   champion: { model: string | null; wmapePct: number | null; accepted: boolean };
-  assumptions: string[];
   basis: {
-    profileFrom: string | null;
-    profileTo: string | null;
+    /** The 12 months the shares and usual levels are measured over. */
+    usualFrom: string | null;
+    usualTo: string | null;
+    usualWeekdays: number;
+    usualWeekends: number;
+    usualPeakPercentile: number;
     plazasProfiled: number;
     forecastFrom: string | null;
     forecastTo: string | null;
-    throughputPerBoothHour: number;
-    poolBoothHours: number | null;
-    /** Where the booth counts come from. */
-    boothsFrom: string;
-    /** Plazas with traffic but no booths mapped, so not capped. */
-    plazasWithoutBooths: string[];
+    /** The held-out replay the band and chances come from; null when it could not be measured. */
+    band: { from: string; to: string; days: number; cells: number; wmapePct: number } | null;
+    minCellVehicles: number;
   };
-  /** Hour by hour for the first forecast day: the shift plan. */
-  shiftPlan: BoothDay | null;
-  /** Peak hour only, for the week ahead. */
-  week: BoothDay[];
-  /** Every plaza-day in the week whose demand outruns all its booths, worst first. */
-  overCapacity: OverCapacity[];
+  /** Hour by hour for the first forecast day. */
+  shiftPlan: StaffingDay | null;
+  week: StaffingDay[];
+  /** The week's plaza-hours most likely to exceed their usual peak (above or likely), most certain first. */
+  priorities: StaffingPriority[];
+  /** Plazas with traffic but no measured error band (too few held-out plaza-hours). */
+  plazasWithoutBand: string[];
   congestion: CongestionAdvice[];
+  congestionCalibration: CongestionCalibration | null;
   /** Segments on the exit list with no congestion forecast at all. They are
    *  named, not dropped: an empty row and a quiet road look the same. */
   congestionMissing: string[];
@@ -215,174 +201,123 @@ export type TrafficPrescriptive = {
   /** The Manila wall-clock hour the congestion forecast counts from ("YYYY-MM-DD HH:MM"), so
    *  "+2h" can be said as a clock time. Null when there are no rows. */
   congestionBaseTs: string | null;
+  /** Each segment's chance of High congestion for hours 1-12, for the advisory's timelines. */
+  congestionTimeline: { segment: string; hours: { h: number; pHigh: number }[] }[];
 };
 
-/* ── fuzzy controller ─────────────────────────────────────────────────────── */
+/* ── the measured decision rules ─────────────────────────────────────────── */
 
-const tri = (x: number, a: number, b: number, c: number): number => {
-  if (x <= a || x >= c) return 0;
-  if (x === b) return 1;
-  return x < b ? (x - a) / (b - a) : (c - x) / (c - b);
-};
-
-/* Ported verbatim from prescriptiveTraffic.shared.ts, memberships, rule base
- * and defuzzification alike.
- *
- * My first attempt at moving this rewrote it — different horizon memberships
- * and three collapsed rules instead of nine — which would have quietly changed
- * every advisory the panel has ever given while the commit claimed only to
- * have moved it server-side. Moving a model and retuning it are separate
- * changes and must not be made in the same breath. */
-function fuzzyUrgency(probability: number, hoursAhead: number): { score: number; label: CongestionAdvice["label"] } {
-  // Likelihood memberships
-  const pLow = tri(probability, -1, 0.15, 0.5);
-  const pMed = tri(probability, 0.3, 0.55, 0.8);
-  const pHigh = tri(probability, 0.6, 0.9, 2);
-
-  // Proximity memberships, over a 12-hour horizon
-  const tSoon = tri(hoursAhead, -6, 1, 5);
-  const tMid = tri(hoursAhead, 2, 6, 10);
-  const tFar = tri(hoursAhead, 7, 12, 18);
-
-  // Rule base. Consequent singletons on a 0..1 urgency axis; the closer and
-  // the likelier, the higher.
-  const rules: [number, number][] = [
-    [Math.min(pHigh, tSoon), 1.0],
-    [Math.min(pHigh, tMid), 0.8],
-    [Math.min(pHigh, tFar), 0.6],
-    [Math.min(pMed, tSoon), 0.65],
-    [Math.min(pMed, tMid), 0.45],
-    [Math.min(pMed, tFar), 0.3],
-    [Math.min(pLow, tSoon), 0.2],
-    [Math.min(pLow, tMid), 0.1],
-    [Math.min(pLow, tFar), 0.05],
-  ];
-
-  // Centroid defuzzification over the firing strengths.
-  let numr = 0;
-  let den = 0;
-  for (const [w, v] of rules) {
-    numr += w * v;
-    den += w;
-  }
-  const score = den > 0 ? numr / den : 0;
-  const label: CongestionAdvice["label"] = score >= 0.7 ? "Act" : score >= 0.4 ? "Prepare" : "Monitor";
-  return { score, label };
+/** The value at quantile `level` of an ascending quantile list at LEVELS. */
+function quantileAt(q: number[], level: number): number {
+  const i = Math.round(level * 100) - 1;
+  return q[Math.max(0, Math.min(q.length - 1, i))];
 }
+
+/** P(ratio > x) from ascending quantiles at levels 0.01..0.99, linear between them;
+ *  clamped to 1%..99%, the resolution the quantiles carry. */
+function exceedChance(q: number[], x: number): number {
+  const n = q.length;
+  if (!(n > 0) || !Number.isFinite(x)) return 0;
+  if (x <= q[0]) return 1 - 1 / (n + 1);
+  if (x >= q[n - 1]) return 1 / (n + 1);
+  let i = 0;
+  while (i < n - 2 && q[i + 1] <= x) i++;
+  const span = q[i + 1] - q[i];
+  const f = (i + 1 + (span > 0 ? (x - q[i]) / span : 1)) / (n + 1);
+  return 1 - f;
+}
+
+/** One plaza-hour against its usual level. `q` is the plaza's held-out ratio quantiles. */
+function staffingCell(
+  hour: number,
+  forecast: number,
+  usual: { median: number; peak: number } | null,
+  q: number[] | null,
+): StaffingHour {
+  const band = q != null && q.length > 0 && forecast >= MIN_CELL ? q : null;
+  const chance = band && usual && usual.peak > 0 ? exceedChance(band, usual.peak / forecast) : null;
+  return {
+    hour,
+    forecast: Math.round(forecast),
+    low: band ? Math.round(forecast * quantileAt(band, 0.1)) : null,
+    high: band ? Math.round(forecast * quantileAt(band, 0.9)) : null,
+    usual: usual ? Math.round(usual.median) : null,
+    usualPeak: usual ? Math.round(usual.peak) : null,
+    load: usual && usual.median > 0 ? Math.round((forecast / usual.median) * 1000) / 1000 : null,
+    chance: chance == null ? null : Math.round(chance * 1000) / 1000,
+    level: chance == null ? "normal" : chance >= CERTAIN ? "above" : chance >= LIKELY ? "likely" : "normal",
+  };
+}
+
+/** One histogram bin of archived forecasts: p_high in [b/100, (b+1)/100), outcome High or not. */
+type CalBin = { test: boolean; b: number; pos: boolean; n: number };
+type CurvePoint = { t: number; tp: number; fp: number; fn: number; n: number };
+
+/** Confusion counts at every cut-off 0.01..0.95 for the bins given ("p_high >= t" means bin >= t). */
+function sweep(bins: CalBin[]): CurvePoint[] {
+  const out: CurvePoint[] = [];
+  const n = bins.reduce((s, x) => s + x.n, 0);
+  const pos = bins.reduce((s, x) => s + (x.pos ? x.n : 0), 0);
+  for (let t = 1; t <= 95; t++) {
+    let tp = 0;
+    let fp = 0;
+    for (const x of bins) if (x.b >= t) x.pos ? (tp += x.n) : (fp += x.n);
+    out.push({ t: t / 100, tp, fp, fn: pos - tp, n });
+  }
+  return out;
+}
+
+const f1Of = (c: CurvePoint) => (2 * c.tp + c.fp + c.fn > 0 ? (2 * c.tp) / (2 * c.tp + c.fp + c.fn) : 0);
+
+/** The cut-off with the highest F1 on the fit bins; ties go to the higher (more precise) cut-off. */
+function pickThreshold(fit: CurvePoint[]): CurvePoint | null {
+  let best: CurvePoint | null = null;
+  for (const c of fit) if (c.tp > 0 && (!best || f1Of(c) >= f1Of(best))) best = c;
+  return best;
+}
+
+/** Fewer than this many High outcomes to fit on, or to test on, and no cut-off is claimed. */
+const MIN_FIT_HIGH = 100;
+const MIN_TEST_HIGH = 30;
+/** A probability's hit rate is quoted only when at least this many archived forecasts reached it. */
+const MIN_HIT_N = 50;
 
 const ACTION: Record<CongestionAdvice["label"], string> = {
-  Act: "Deploy counter-flow and post VMS advisories before the first High hour.",
-  Prepare: "Stage units nearby; hold the advisory until probability firms up.",
+  // No VMS: the system cannot drive message signs and the manuscript does not propose them (2 Nov 2026).
+  Act: "Deploy counter-flow, publish a Mobile App advisory and alert the TCC before the first High hour.",
   Monitor: "No action; re-check next cycle.",
 };
-
-/* ── booths per plaza ─────────────────────────────────────────────────────── */
-
-type Dir = "NB" | "SB";
-/** A warehouse direction: one carriageway, or not said ("NB/SB", or none). */
-type Side = Dir | "both";
-
-/** One plaza's recorded volume for one movement, side, hour and day type,
- *  summed over the history. */
-type ProfileRow = { plaza: string; role: string; side: Side; hour: number; weekend: boolean; v: number };
-
-/** One set of booths at a plaza, and the recorded payments that go through it. */
-type BoothGroup = {
-  /** "SB exit"; just "entry" where one pool serves both carriageways. */
-  label: string;
-  pooled: boolean;
-  /** Booth lanes; null where none are mapped. */
-  booths: number | null;
-  /** Volume by [weekday, weekend][hour], summed over the history. */
-  v: [number[], number[]];
-};
-
-type PlazaBooths = {
-  plaza: string;
-  groups: BoothGroup[];
-  /** All its booths; null when any group has none mapped. */
-  booths: number | null;
-  basis: string;
-};
-
-const MAPPED: OsmTollPlaza[] = [...OSM_TOLL_PLAZAS, ...OSM_TOLL_PLAZAS_AWAY];
-
-const sideOf = (direction: string | null): Side =>
-  direction === "NB" || direction === "SB" ? direction : "both";
-
-function volumes(rows: ProfileRow[]): [number[], number[]] {
-  const v: [number[], number[]] = [new Array(24).fill(0), new Array(24).fill(0)];
-  for (const r of rows) if (r.hour >= 0 && r.hour < 24) v[r.weekend ? 1 : 0][r.hour] += r.v;
-  return v;
-}
-
-const laneSum = (ms: OsmTollPlaza[]): number | null =>
-  ms.length === 0 || ms.some((m) => m.lanes == null) ? null : ms.reduce((s, m) => s + (m.lanes ?? 0), 0);
-
-/* Which booths take a plaza's payments.
- *
- * The warehouse keeps each trip where it paid: on entry in the open system, on
- * exit in the closed one, and at the barrier at Balintawak, Bocaue and Sta.
- * Ines, whose booths stand across the carriageway itself. So a recorded payment
- * is matched to the mapped booths of the same movement, or to the barrier where
- * the plaza has none of that movement mapped. Names match ignoring case: the
- * map spells it "Cdv/Ph Arena", the warehouse "CDV/PH Arena".
- *
- * Per carriageway only when both sides can say which: every warehouse row of
- * the movement carries NB or SB, and every mapped plaza road serves exactly one.
- * NLEX Harbor Link's plazas serve both carriageways and most of its trips have
- * no direction recorded, so its 14 booths are one pool for all of them. */
-function boothGroups(plaza: string, rows: ProfileRow[]): BoothGroup[] {
-  const mapped = MAPPED.filter((m) => m.exit.toLowerCase() === plaza.toLowerCase());
-  const groups: BoothGroup[] = [];
-  for (const role of [...new Set(rows.map((r) => r.role))].sort()) {
-    const paid = rows.filter((r) => r.role === role);
-    let movement: OsmTollPlaza["movement"] = role === "Entry" ? "entry" : "exit";
-    let booths = mapped.filter((m) => m.movement === movement);
-    const barrier = mapped.filter((m) => m.movement === "barrier");
-    if (booths.length === 0 && barrier.length > 0) {
-      movement = "barrier";
-      booths = barrier;
-    }
-    const sides = [...new Set(paid.map((r) => r.side))].sort();
-    const perSide = !sides.includes("both") && booths.every((m) => m.directions.length === 1);
-    if (perSide) {
-      for (const side of sides) {
-        groups.push({
-          label: `${side} ${movement}`,
-          pooled: false,
-          booths: laneSum(booths.filter((m) => m.directions[0] === side)),
-          v: volumes(paid.filter((r) => r.side === side)),
-        });
-      }
-    } else {
-      groups.push({ label: movement, pooled: true, booths: laneSum(booths), v: volumes(paid) });
-    }
-  }
-  return groups;
-}
 
 /* ── what the plan is computed from ──────────────────────────────────────── */
 
 type CongestionRow = { segment: string; km?: number | null; hours: number; state: string; probability: number | string; pHigh?: number | string | null; baseTs?: string | null };
 
+type Usual = { median: number; peak: number };
+type PlazaProfile = {
+  plaza: string;
+  /** Volume by [weekday, weekend][hour], summed over the window: the shares. */
+  v: [number[], number[]];
+  usual: [(Usual | null)[], (Usual | null)[]];
+};
+
 type Inputs = {
   champion: { model_name: string; wmape: string | null; accepted: boolean };
   future: { date: string; dow: number; v: number }[];
-  plazas: PlazaBooths[];
-  /** Corridor volume by day type [weekday, weekend], summed over the history. */
+  plazas: PlazaProfile[];
+  /** Corridor volume by day type [weekday, weekend], summed over the window. */
   corridor: [number, number];
-  profileFrom: string | null;
-  profileTo: string | null;
-  typicalDaily: number;
+  usualFrom: string | null;
+  usualTo: string | null;
+  usualDays: [number, number];
+  /** Held-out ratio quantiles per plaza. */
+  band: Map<string, number[]>;
+  bandBasis: TrafficPrescriptive["basis"]["band"];
   /** The exit list, for naming segments the congestion forecast lacks. */
   segments: string[];
 };
 
-/* Read once per split and kept. None of it depends on the operator's two
-   dials, yet every notch of the throughput slider used to re-run all of it:
-   7 to 46 s a notch on a cold database. Now a notch is arithmetic. One read at
-   a time per split, so panels asking together share it. */
+/* Read once per split and kept: the inputs change when the warehouse is reloaded or the models retrain,
+   not between requests. One read at a time per split, so panels asking together share it. */
 const INPUT_TTL_MS = 10 * 60 * 1000;
 /* No champion row (a retrain mid-write) is kept only briefly, so the next request asks again. */
 const INCOMPLETE_INPUT_TTL_MS = 20 * 1000;
@@ -405,19 +340,12 @@ function loadInputs(split: string): Promise<Inputs | null> {
   return read;
 }
 
-/* The congestion forecast, read and kept apart from the booth inputs (TR-12, 19 Oct 2026).
+/* The congestion forecast, read and kept apart from the staffing inputs (TR-12, 19 Oct 2026).
  *
- * It used to be one of the five reads inside readInputs, and getMLPredictiveCongestion answers a
- * failure with null rather than throwing. Right after a backend start the warmer has the pool of ten
- * full of cold queries; this read then waited out the 45 s connect timeout, came back null, and the
- * whole input set -- congestion missing -- was cached with the booth plan. The route answered 200
- * with no segments, and before the noStore guard the route cache kept that for three hours and kept
- * serving it stale (its empty-payload check looks at `data` arrays, and this `data` is an object),
- * so the Congestion Response panel stayed empty until the backend was restarted.
- *
- * Kept separately, a failed or empty read is never cached: the next request reads again, and the
- * booth plan's ten-minute inputs do not have to be thrown away with it. A good read is kept for five
- * minutes -- the table is rewritten hourly and the read is ~2 s, so this is about bursts, not freshness. */
+ * getMLPredictiveCongestion answers a failure with null rather than throwing. Right after a backend start
+ * that read can wait out the connect timeout; cached with the staffing inputs, the panel stayed empty until
+ * a restart. Kept separately, a failed or empty read is never cached: the next request reads again. A good
+ * read is kept for five minutes -- the table is rewritten hourly, so this is about bursts, not freshness. */
 const CONGESTION_TTL_MS = 5 * 60 * 1000;
 let congestionCache: { at: number; rows: CongestionRow[] } | null = null;
 let congestionRead: Promise<CongestionRow[] | null> | null = null;
@@ -433,47 +361,193 @@ function loadCongestion(): Promise<CongestionRow[] | null> {
   return congestionRead;
 }
 
+/* The congestion cut-off's evidence: archived forecasts against what followed, as a histogram of p_high
+   (hundredths) x outcome x fit/test. About 20 s on 63,000 scored forecast-hours (the score view derives
+   the outcome from Waze jams), so it is kept for six hours -- the archive grows by one run an hour, which
+   moves a cut-off picked on tens of thousands of rows very little. A failed read is not kept. */
+const CALIBRATION_TTL_MS = 6 * 60 * 60 * 1000;
+type CalibrationEvidence = { bins: CalBin[]; fitFrom: string | null; fitTo: string | null; testFrom: string | null; testTo: string | null; runs: number };
+let calibrationCache: { at: number; data: CalibrationEvidence } | null = null;
+let calibrationRead: Promise<CalibrationEvidence | null> | null = null;
+
+function loadCalibration(): Promise<CalibrationEvidence | null> {
+  if (calibrationCache && Date.now() - calibrationCache.at < CALIBRATION_TTL_MS) return Promise.resolve(calibrationCache.data);
+  calibrationRead ??= readCalibration()
+    .then((data) => {
+      if (data) calibrationCache = { at: Date.now(), data };
+      return data;
+    })
+    .catch((e) => {
+      console.warn("[traffic-prescriptive] congestion calibration unavailable:", e?.message ?? e);
+      return null;
+    })
+    .finally(() => { calibrationRead = null; });
+  return calibrationRead;
+}
+
+async function readCalibration(): Promise<CalibrationEvidence | null> {
+  if (!db) return null;
+  const { rows } = await db.query<{ test: boolean; b: number; pos: boolean; n: number; t_from: string; t_to: string; runs: number }>(
+    `WITH j AS (
+       SELECT LEAST(99, FLOOR(l.p_high * 100))::int AS b, (s.actual_state = 'High') AS pos, s.target_ts, l.base_ts
+         FROM gold.ml_congestion_forecast_log l
+         JOIN gold.v_congestion_forecast_score s
+           ON s.base_ts = l.base_ts AND s.segment_name = l.segment_name AND s.hours_ahead = l.hours_ahead
+        WHERE l.hours_ahead BETWEEN 1 AND 12 AND s.actual_state IS NOT NULL AND l.p_high IS NOT NULL
+     ), cut AS (SELECT MAX(target_ts) - interval '7 days' AS at FROM j),
+     k AS (SELECT j.*, (j.target_ts > cut.at) AS test FROM j, cut)
+     SELECT k.test, k.b, k.pos, COUNT(*)::int AS n,
+            MIN(MIN(k.target_ts)) OVER (PARTITION BY k.test)::text AS t_from,
+            MAX(MAX(k.target_ts)) OVER (PARTITION BY k.test)::text AS t_to,
+            (SELECT COUNT(DISTINCT base_ts) FROM j)::int AS runs
+       FROM k GROUP BY k.test, k.b, k.pos`,
+  );
+  if (rows.length === 0) return { bins: [], fitFrom: null, fitTo: null, testFrom: null, testTo: null, runs: 0 };
+  const fit = rows.find((r) => !r.test);
+  const test = rows.find((r) => r.test);
+  return {
+    bins: rows.map((r) => ({ test: r.test, b: Number(r.b), pos: r.pos, n: Number(r.n) })),
+    fitFrom: fit?.t_from ?? null,
+    fitTo: fit?.t_to ?? null,
+    testFrom: test?.t_from ?? null,
+    testTo: test?.t_to ?? null,
+    runs: Number(rows[0].runs),
+  };
+}
+
+const r3 = (x: number) => Math.round(x * 1000) / 1000;
+
+function calibrate(ev: CalibrationEvidence | null): { cal: CongestionCalibration; all: CurvePoint[] } {
+  const empty: CongestionCalibration = {
+    ok: false, reason: null, threshold: null, precision: null, recall: null, f1: null, baseRate: null, fitF1: null,
+    scored: 0, scoredHigh: 0, runs: 0, fitFrom: null, fitTo: null, testFrom: null, testTo: null, testRows: 0,
+  };
+  if (!ev) return { cal: { ...empty, reason: "The forecast archive could not be read." }, all: [] };
+  const fitBins = ev.bins.filter((x) => !x.test);
+  const testBins = ev.bins.filter((x) => x.test);
+  const highOf = (bs: CalBin[]) => bs.reduce((s, x) => s + (x.pos ? x.n : 0), 0);
+  const all = sweep(ev.bins);
+  const base: CongestionCalibration = {
+    ...empty,
+    scored: ev.bins.reduce((s, x) => s + x.n, 0),
+    scoredHigh: highOf(ev.bins),
+    runs: ev.runs,
+    fitFrom: ev.fitFrom, fitTo: ev.fitTo, testFrom: ev.testFrom, testTo: ev.testTo,
+    testRows: testBins.reduce((s, x) => s + x.n, 0),
+  };
+  if (highOf(fitBins) < MIN_FIT_HIGH || highOf(testBins) < MIN_TEST_HIGH) {
+    return {
+      cal: {
+        ...base,
+        reason: `Too few scored forecasts to set an Act line: ${highOf(fitBins)} High hours to fit on and ${highOf(testBins)} to test on ` +
+          `(needs ${MIN_FIT_HIGH} and ${MIN_TEST_HIGH}).`,
+      },
+      all,
+    };
+  }
+  const best = pickThreshold(sweep(fitBins));
+  if (!best) return { cal: { ...base, reason: "No cut-off in the archive ever caught a High hour." }, all };
+  const held = sweep(testBins).find((c) => c.t === best.t)!;
+  return {
+    cal: {
+      ...base,
+      ok: true,
+      threshold: best.t,
+      precision: held.tp + held.fp > 0 ? r3(held.tp / (held.tp + held.fp)) : null,
+      recall: held.tp + held.fn > 0 ? r3(held.tp / (held.tp + held.fn)) : null,
+      f1: r3(f1Of(held)),
+      baseRate: held.n > 0 ? r3((held.tp + held.fn) / held.n) : null,
+      fitF1: r3(f1Of(best)),
+    },
+    all,
+  };
+}
+
+/* The usual level: per plaza, hour and day type, its daily totals over the window. Also the shares. */
+const windowSql = `win AS (SELECT MAX(date) - ${WINDOW_DAYS - 1} AS lo, MAX(date) AS hi FROM gold.fact_traffic_hourly WHERE total IS NOT NULL),
+  cell AS (
+    SELECT f.exit_canonical AS plaza, f.date, f.hour::int AS hour,
+           (EXTRACT(dow FROM f.date)::int IN (0, 6)) AS weekend, SUM(f.total)::float8 AS v
+      FROM gold.fact_traffic_hourly f, win
+     WHERE f.total IS NOT NULL AND f.date BETWEEN win.lo AND win.hi
+     GROUP BY 1, 2, 3, 4)`;
+
 async function readInputs(split: string): Promise<Inputs | null> {
-  /* The champion. `accepted` is reported rather than required: the volume
-     models currently all fail the MASE gate, and refusing to staff a toll
-     plaza because the forecast is imperfect is not the operator's choice to
-     have made for them. The flag travels with the answer instead. */
+  /* The champion: the best accepted volume model. When none is accepted the plan falls back to the seasonal
+     naive (below) rather than refusing to plan; the flag travels with the answer. */
   const champQ = await db!.query<{ model_name: string; wmape: string | null; accepted: boolean }>(
     `SELECT model_name, wmape, accepted FROM gold.ml_model_metrics
       WHERE target = 'Total Traffic' AND split_label = $1
       ORDER BY accepted DESC, rank ASC NULLS LAST LIMIT 1`,
     [split],
   );
-  const champion = champQ.rows[0];
-  const col = champion ? MODEL_COLUMN[champion.model_name] : undefined;
-  if (!champion || !col) return null;
+  let champion = champQ.rows[0];
+  if (!champion) return null;
+  /* No model passed the acceptance test: plan with the benchmark they failed to beat, the same weekday of the last
+     recorded week (fix list A5, 2 Nov 2026). Its error band is replayed the same way, from last week's actuals. */
+  const naive = !champion.accepted;
+  const col = naive ? undefined : MODEL_COLUMN[champion.model_name];
+  if (!naive && !col) return null;
+  if (naive) champion = { model_name: "Seasonal naive (last week repeated)", wmape: null, accepted: false };
 
-  const [futureQ, profileQ, typicalQ, segmentQ] = await Promise.all([
-    db!.query<{ d: string; v: string | null; dow: number }>(
-      `SELECT forecast_date::text AS d, ${col}::text AS v, EXTRACT(dow FROM forecast_date)::int AS dow
-         FROM gold.ml_predictive_volume
-        WHERE split_label = $1 AND is_future AND ${col} IS NOT NULL
-        ORDER BY forecast_date ASC LIMIT $2`,
-      [split, WEEK_DAYS],
+  const predSql = naive
+    ? `SELECT p.forecast_date AS d, w.actual_volume::float8 AS f
+         FROM gold.ml_predictive_volume p
+         JOIN gold.ml_predictive_volume w ON w.split_label = p.split_label AND w.forecast_date = p.forecast_date - 7
+        WHERE p.split_label = $1 AND NOT p.is_future AND p.actual_volume IS NOT NULL AND w.actual_volume IS NOT NULL`
+    : `SELECT p.forecast_date AS d, p.${col}::float8 AS f
+         FROM gold.ml_predictive_volume p
+        WHERE p.split_label = $1 AND p.is_holdout AND NOT p.is_future AND p.${col} IS NOT NULL AND p.actual_volume IS NOT NULL`;
+
+  const [futureQ, usualQ, bandQ, segmentQ] = await Promise.all([
+    naive
+      ? db!.query<{ d: string; v: string | null; dow: number }>(
+          `WITH last_week AS (
+             SELECT forecast_date AS d, actual_volume AS v FROM gold.ml_predictive_volume
+              WHERE split_label = $1 AND actual_volume IS NOT NULL ORDER BY forecast_date DESC LIMIT 7
+           ), ahead AS (
+             SELECT forecast_date AS d FROM gold.ml_predictive_volume
+              WHERE split_label = $1 AND is_future ORDER BY forecast_date ASC LIMIT $2
+           )
+           SELECT a.d::text AS d, w.v::text AS v, EXTRACT(dow FROM a.d)::int AS dow
+             FROM ahead a JOIN last_week w ON EXTRACT(dow FROM w.d) = EXTRACT(dow FROM a.d)
+            ORDER BY a.d`,
+          [split, WEEK_DAYS],
+        )
+      : db!.query<{ d: string; v: string | null; dow: number }>(
+          `SELECT forecast_date::text AS d, ${col}::text AS v, EXTRACT(dow FROM forecast_date)::int AS dow
+             FROM gold.ml_predictive_volume
+            WHERE split_label = $1 AND is_future AND ${col} IS NOT NULL
+            ORDER BY forecast_date ASC LIMIT $2`,
+          [split, WEEK_DAYS],
+        ),
+    db!.query<{ plaza: string; weekend: boolean; hour: number; v: number; days: number; usual: number; peak: number; lo: string; hi: string }>(
+      `WITH ${windowSql}
+       SELECT plaza, weekend, hour, SUM(v) AS v, COUNT(*)::int AS days,
+              percentile_cont(0.5) WITHIN GROUP (ORDER BY v) AS usual,
+              percentile_cont(${USUAL_PEAK_PCT}) WITHIN GROUP (ORDER BY v) AS peak,
+              (SELECT lo::text FROM win) AS lo, (SELECT hi::text FROM win) AS hi
+         FROM cell GROUP BY 1, 2, 3`,
     ),
-    /* Plaza volume by movement, carriageway, hour and day type in one pass:
-       the shares the demand formula multiplies by, and which of the plaza's
-       booths each part of it goes through. Shares are computed WITHIN each
-       day type so they sum to 1 for a weekday and again for a weekend. */
-    db!.query<{ plaza: string; role: string | null; direction: string | null; hour: number; weekend: boolean; v: string }>(
-      `SELECT exit_canonical AS plaza, role, direction,
-              hour::int      AS hour,
-              (EXTRACT(dow FROM date)::int IN (0, 6)) AS weekend,
-              SUM(total)::text AS v
-         FROM gold.fact_traffic_hourly
-        WHERE total IS NOT NULL
-        GROUP BY 1, 2, 3, 4, 5`,
-    ),
-    db!.query<{ lo: string; hi: string; typical: string }>(
-      `SELECT MIN(date)::text AS lo, MAX(date)::text AS hi,
-              (SUM(total) / NULLIF(COUNT(DISTINCT date), 0))::text AS typical
-         FROM gold.fact_traffic_hourly WHERE total IS NOT NULL`,
-    ),
+    /* The held-out replay: the champion's own held-out days, apportioned exactly as the plan apportions the
+       future, against what each plaza-hour then carried. */
+    db!.query<{ plaza: string; n: number; days: number; lo: string; hi: string; abs_err: number; vol: number; q: number[] }>(
+      `WITH ${windowSql},
+       shr AS (SELECT plaza, weekend, hour, SUM(v) / SUM(SUM(v)) OVER (PARTITION BY weekend) AS s FROM cell GROUP BY 1, 2, 3),
+       pred AS (${predSql}),
+       j AS (
+         SELECT c.plaza, c.date, c.v, pred.f * shr.s AS yhat
+           FROM cell c JOIN pred ON pred.d = c.date
+           JOIN shr ON shr.plaza = c.plaza AND shr.weekend = c.weekend AND shr.hour = c.hour)
+       SELECT plaza, COUNT(*)::int AS n, COUNT(DISTINCT date)::int AS days, MIN(date)::text AS lo, MAX(date)::text AS hi,
+              SUM(ABS(v - yhat)) AS abs_err, SUM(v) AS vol,
+              percentile_cont(ARRAY[${LEVELS.join(",")}]::float8[]) WITHIN GROUP (ORDER BY v / yhat) AS q
+         FROM j WHERE yhat >= $2 GROUP BY plaza`,
+      [split, MIN_CELL],
+    ).catch((e) => {
+      console.warn("[traffic-prescriptive] error band unavailable:", e?.message ?? e);
+      return { rows: [] as { plaza: string; n: number; days: number; lo: string; hi: string; abs_err: number; vol: number; q: number[] }[] };
+    }),
     // Corridor order from the official exit list (lib/km-post.ts), not gold.exit_km_post's hand-entered posts.
     db!.query<{ name: string }>(
       `SELECT x.exit_name AS name FROM nlex_exits x
@@ -483,241 +557,178 @@ async function readInputs(split: string): Promise<Inputs | null> {
       .catch(() => ({ rows: [] as { name: string }[] })),
   ]);
 
-  const profile: ProfileRow[] = profileQ.rows.map((r) => ({
-    plaza: r.plaza, role: String(r.role ?? ""), side: sideOf(r.direction),
-    hour: Number(r.hour), weekend: r.weekend, v: Number(r.v),
-  }));
   const corridor: [number, number] = [0, 0];
-  const byPlaza = new Map<string, ProfileRow[]>();
-  for (const r of profile) {
-    if (!(r.v > 0)) continue;
-    corridor[r.weekend ? 1 : 0] += r.v;
-    byPlaza.set(r.plaza, [...(byPlaza.get(r.plaza) ?? []), r]);
+  const usualDays: [number, number] = [0, 0];
+  const byPlaza = new Map<string, PlazaProfile>();
+  for (const r of usualQ.rows) {
+    const v = Number(r.v);
+    const h = Number(r.hour);
+    if (!(v > 0) || !(h >= 0 && h < 24)) continue;
+    const wk = r.weekend ? 1 : 0;
+    corridor[wk] += v;
+    usualDays[wk] = Math.max(usualDays[wk], Number(r.days));
+    let p = byPlaza.get(r.plaza);
+    if (!p) {
+      p = {
+        plaza: r.plaza,
+        v: [new Array(24).fill(0), new Array(24).fill(0)],
+        usual: [new Array(24).fill(null), new Array(24).fill(null)],
+      };
+      byPlaza.set(r.plaza, p);
+    }
+    p.v[wk][h] += v;
+    p.usual[wk][h] = { median: Number(r.usual), peak: Number(r.peak) };
   }
-  const plazas: PlazaBooths[] = [...byPlaza.entries()].map(([plaza, rows]) => {
-    const groups = boothGroups(plaza, rows);
-    return {
-      plaza,
-      groups,
-      booths: groups.every((g) => g.booths != null) ? groups.reduce((s, g) => s + (g.booths ?? 0), 0) : null,
-      basis: groups.map((g) => `${g.label} ${g.booths ?? "(none mapped)"}${g.pooled ? " (both directions)" : ""}`).join(" + "),
-    };
-  });
+
+  const band = new Map<string, number[]>();
+  let cells = 0;
+  let absErr = 0;
+  let vol = 0;
+  let bandDays = 0;
+  let bandFrom: string | null = null;
+  let bandTo: string | null = null;
+  for (const r of bandQ.rows) {
+    const q = (r.q ?? []).map(Number);
+    if (q.length !== LEVELS.length || q.some((x) => !Number.isFinite(x))) continue;
+    band.set(r.plaza, q);
+    cells += Number(r.n);
+    absErr += Number(r.abs_err);
+    vol += Number(r.vol);
+    bandDays = Math.max(bandDays, Number(r.days));
+    if (!bandFrom || r.lo < bandFrom) bandFrom = r.lo;
+    if (!bandTo || r.hi > bandTo) bandTo = r.hi;
+  }
 
   return {
     champion,
     future: futureQ.rows
       .map((r) => ({ date: r.d, dow: Number(r.dow), v: Number(r.v) }))
       .filter((r) => Number.isFinite(r.v) && r.v > 0),
-    plazas,
+    plazas: [...byPlaza.values()],
     corridor,
-    profileFrom: typicalQ.rows[0]?.lo ?? null,
-    profileTo: typicalQ.rows[0]?.hi ?? null,
-    typicalDaily: Number(typicalQ.rows[0]?.typical ?? 0),
+    usualFrom: usualQ.rows[0]?.lo ?? null,
+    usualTo: usualQ.rows[0]?.hi ?? null,
+    usualDays,
+    band,
+    bandBasis: bandFrom && bandTo && vol > 0
+      ? { from: bandFrom, to: bandTo, days: bandDays, cells, wmapePct: Math.round((absErr / vol) * 10000) / 100 }
+      : null,
     segments: segmentQ.rows.map((r) => r.name),
   };
 }
 
 /* ── the endpoint ─────────────────────────────────────────────────────────── */
 
-/** One set of booths in one hour. `max` is Infinity where none are mapped. */
-type Part = { demand: number; need: number; max: number; staffed: number; unmet: number };
+/** Most certain first, then the furthest above usual. */
+const byCertainty = (a: StaffingHour, b: StaffingHour) =>
+  (b.chance ?? -1) - (a.chance ?? -1) || (b.load ?? 0) - (a.load ?? 0);
 
-const fmtList = (xs: string[]) =>
-  xs.length <= 1 ? xs.join("") : `${xs.slice(0, -1).join(", ")} and ${xs[xs.length - 1]}`;
-
-export async function getTrafficPrescriptive(opts: {
-  throughput?: number;
-  /** Booth-hours available across the corridor for the shift plan. Null = unlimited. */
-  pool?: number | null;
-  split?: string;
-}): Promise<TrafficPrescriptive | null> {
+export async function getTrafficPrescriptive(opts: { split?: string }): Promise<TrafficPrescriptive | null> {
   if (!db) return null;
-
-  const throughput = Math.max(1, opts.throughput ?? DEFAULT_THROUGHPUT);
-  const pool = opts.pool ?? null;
   const split = opts.split ?? "80_20";
 
-  // In parallel: the congestion read is independent of the booth inputs and much cheaper.
-  const [inputs, congestionRows] = await Promise.all([loadInputs(split), loadCongestion()]);
+  // In parallel: the congestion reads are independent of the staffing inputs.
+  const [inputs, congestionRows, evidence] = await Promise.all([loadInputs(split), loadCongestion(), loadCalibration()]);
   if (!inputs) return null;
-  const { champion, future, corridor, typicalDaily } = inputs;
+  const { champion, future, corridor } = inputs;
 
-  /** One plaza-hour, booth set by booth set: each needs a booth open while
-   *  anyone uses it, and none can open more booths than it has. */
-  const partsAt = (p: PlazaBooths, wk: 0 | 1, h: number, scale: number): Part[] =>
-    p.groups.map((g) => {
-      const demand = scale * g.v[wk][h];
-      const need = demand > 0 ? Math.max(1, Math.ceil(demand / throughput)) : 0;
-      const max = g.booths ?? Infinity;
-      const staffed = Math.min(need, max);
-      return { demand, need, max, staffed, unmet: Math.max(0, demand - staffed * throughput) };
-    });
-  const sumParts = (hour: number, parts: Part[]): BoothHour => ({
-    hour,
-    demand: Math.round(parts.reduce((s, x) => s + x.demand, 0)),
-    need: parts.reduce((s, x) => s + x.need, 0),
-    staffed: parts.reduce((s, x) => s + x.staffed, 0),
-    unmet: Math.round(parts.reduce((s, x) => s + x.unmet, 0)),
-  });
-  /** A plaza's peak staffing and what it leaves queuing, from its hours.
-   *  `whereAt` names the booth sets still leaving vehicles in an hour. */
-  const settle = (p: BoothPlazaDay, hours: BoothHour[], whereAt: (hour: number) => string | null) => {
-    p.peakStaffed = hours[p.peakHour]?.staffed ?? 0;
-    p.unmetVehicles = hours.reduce((s, h) => s + h.unmet, 0);
-    const worst = hours.reduce<BoothHour | null>((w, h) => (h.unmet > (w?.unmet ?? 0) ? h : w), null);
-    p.worstUnmet = worst
-      ? { hour: worst.hour, vehicles: worst.unmet, need: worst.need, staffed: worst.staffed, where: whereAt(worst.hour) }
-      : null;
-  };
-  const totals = (d: BoothDay) => {
-    d.totalPeakBooths = d.plazas.reduce((s, p) => s + p.peakStaffed, 0);
-    d.unmetVehicles = d.plazas.reduce((s, p) => s + p.unmetVehicles, 0);
-  };
+  const priorities: StaffingPriority[] = [];
 
-  /** One day's plan. `hourly` false keeps only each plaza's summary; the
-   *  parts come back for the allocator, and the over-capacity hours for the
-   *  operator. */
-  const buildDay = (date: string, dow: number, forecast: number, hourly: boolean) => {
+  /** One day's comparison. `hourly` false keeps only each plaza's summary. */
+  const buildDay = (date: string, dow: number, forecast: number, hourly: boolean): StaffingDay => {
     const weekend = dow === 0 || dow === 6;
     const wk: 0 | 1 = weekend ? 1 : 0;
+    const dayType = weekend ? "weekend" : "weekday";
     const denom = corridor[wk] || 1;
-    const cells: { hour: BoothHour; parts: Part[] }[] = [];
-    const over: OverCapacity[] = [];
-    const whereOf = new Map<BoothPlazaDay, (hour: number) => string | null>();
-
-    const plazas: BoothPlazaDay[] = [];
+    const plazas: StaffingPlazaDay[] = [];
     for (const p of inputs.plazas) {
-      const share = p.groups.reduce((s, g) => s + g.v[wk].reduce((a, x) => a + x, 0), 0) / denom;
+      const share = p.v[wk].reduce((a, x) => a + x, 0) / denom;
       if (!(share > 0)) continue;
-
-      const hours: BoothHour[] = [];
-      const partsByHour: Part[][] = [];
-      const worstByGroup = new Map<number, OverCapacity>();
-      let peakHour = 0;
-      for (let h = 0; h < 24; h++) {
-        const parts = partsAt(p, wk, h, forecast / denom);
-        const hour = sumParts(h, parts);
-        hours.push(hour);
-        partsByHour.push(parts);
-        if (hourly) cells.push({ hour, parts });
-        const best = hours[peakHour];
-        if (hour.need > best.need || (hour.need === best.need && hour.demand > best.demand)) peakHour = h;
-        parts.forEach((x, gi) => {
-          if (x.need > x.max && Math.round(x.unmet) > (worstByGroup.get(gi)?.vehicles ?? 0)) {
-            worstByGroup.set(gi, {
-              date, plaza: p.plaza, where: p.groups[gi].label, hour: h,
-              vehicles: Math.round(x.unmet), need: x.need, booths: x.max,
-            });
-          }
-        });
-      }
-      over.push(...worstByGroup.values());
-
-      const typical = partsAt(p, wk, peakHour, typicalDaily / denom);
-      const day: BoothPlazaDay = {
+      const q = inputs.band.get(p.plaza) ?? null;
+      const hours = p.v[wk].map((v, h) => staffingCell(h, (forecast * v) / denom, p.usual[wk][h], q));
+      const peakHour = hours.reduce((m, x) => (x.forecast > hours[m].forecast ? x.hour : m), 0);
+      const top = [...hours].filter((x) => x.chance != null).sort(byCertainty)[0] ?? null;
+      for (const x of hours) if (x.level !== "normal") priorities.push({ ...x, date, dayType, plaza: p.plaza });
+      plazas.push({
         plaza: p.plaza,
         sharePct: Math.round(share * 10000) / 100,
         peakHour,
-        peakNeed: hours[peakHour].need,
-        peakStaffed: 0,
-        booths: p.booths,
-        boothBasis: p.basis,
-        typicalPeakNeed: typical.reduce((s, x) => s + x.need, 0),
-        typicalPeakStaffed: typical.reduce((s, x) => s + x.staffed, 0),
-        unmetVehicles: 0,
-        worstUnmet: null,
+        top,
+        aboveHours: hours.filter((x) => x.level === "above").length,
+        likelyHours: hours.filter((x) => x.level === "likely").length,
         hours: hourly ? hours : [],
-      };
-      // Reads the parts live, so it still answers after the allocator has reworked them.
-      const whereAt = (h: number) =>
-        partsByHour[h]?.map((x, gi) => (x.unmet >= 1 ? p.groups[gi].label : null)).filter(Boolean).join(" and ") || null;
-      whereOf.set(day, whereAt);
-      settle(day, hours, whereAt);
-      plazas.push(day);
+      });
     }
-
-    plazas.sort((a, b) => b.peakNeed - a.peakNeed);
-    const day: BoothDay = {
+    plazas.sort((a, b) => (a.top && b.top ? byCertainty(a.top, b.top) : a.top ? -1 : b.top ? 1 : b.sharePct - a.sharePct));
+    return {
       date,
-      dayType: weekend ? "weekend" : "weekday",
+      dayType,
       corridorForecast: Math.round(forecast),
-      totalPeakBooths: 0,
-      unmetVehicles: 0,
+      aboveCells: plazas.reduce((s, x) => s + x.aboveHours, 0),
+      likelyCells: plazas.reduce((s, x) => s + x.likelyHours, 0),
       plazas,
     };
-    totals(day);
-    return { day, cells, over, whereOf };
   };
 
-  const weekBuilt = future.map((r) => buildDay(r.date, r.dow, r.v, false));
-  const week = weekBuilt.map((b) => b.day);
-  const first = future.length > 0 ? buildDay(future[0].date, future[0].dow, future[0].v, true) : null;
-  const shiftPlan = first?.day ?? null;
-
-  /* The allocation. Only meaningful when the pool is scarce; with no pool
-     every cell is staffed to need, or to every booth it has, and what is left
-     unmet is what no staffing could clear. */
-  if (first && pool !== null && pool >= 0) {
-    const parts = first.cells.flatMap((c) => c.parts);
-    for (const x of parts) {
-      x.staffed = 0;
-      x.unmet = x.demand;
-    }
-    let left = pool;
-    while (left > 0) {
-      let best: Part | null = null;
-      for (const x of parts) {
-        if (x.staffed >= Math.min(x.need, x.max)) continue;
-        if (!best || x.unmet > best.unmet) best = x;
-      }
-      if (!best || best.unmet <= 0) break;
-      best.staffed += 1;
-      best.unmet = Math.max(0, best.unmet - throughput);
-      left -= 1;
-    }
-    for (const c of first.cells) Object.assign(c.hour, sumParts(c.hour.hour, c.parts));
-    for (const p of first.day.plazas) settle(p, p.hours, first.whereOf.get(p) ?? (() => null));
-    totals(first.day);
-  }
-
-  /* Where demand outruns every booth a plaza has. Read from the week, which no
-     pool limits, so what is left there is the plaza's own ceiling. */
-  const overCapacity = weekBuilt.flatMap((b) => b.over).sort((a, b) => b.vehicles - a.vehicles);
-  const withoutBooths = inputs.plazas.filter((p) => p.booths == null).map((p) => p.plaza);
+  const built = future.map((r, i) => buildDay(r.date, r.dow, r.v, i === 0));
+  // The hourly detail rides on the first day only (shiftPlan); the week rows are summaries, so it is not sent twice.
+  const shiftPlan = built[0] ?? null;
+  const week = built.map((d, i) => (i === 0 ? { ...d, plazas: d.plazas.map((p) => ({ ...p, hours: [] })) } : d));
+  priorities.sort(byCertainty);
 
   /* ── congestion ─────────────────────────────────────────────────────────── */
-  const bySeg = new Map<string, CongestionAdvice>();
+  const { cal, all } = calibrate(evidence);
+  const cutoff = cal.ok && cal.threshold != null ? Math.round(cal.threshold * 100) : null;
+  /** Of archived forecasts at or above p, the share High followed. */
+  const hitAt = (p: number) => {
+    const c = all[Math.max(0, Math.min(94, Math.floor(p * 100 + 1e-9) - 1))];
+    const n = c ? c.tp + c.fp : 0;
+    return { hitRate: c && n >= MIN_HIT_N && p >= 0.01 ? r3(c.tp / n) : null, hitN: n };
+  };
+
+  type SegAgg = { segment: string; km: number | null; peak: number; peakH: number; firstAct: number | null };
+  const bySeg = new Map<string, SegAgg>();
+  const timeline = new Map<string, { h: number; pHigh: number }[]>();
   for (const c of congestionRows ?? []) {
+    // The 1-12 h horizon the panel names (fix list A3, 2 Nov 2026).
+    const hrs = Number(c.hours);
+    if (!(hrs >= 1 && hrs <= 12)) continue;
     const p = Number(c.probability);
     if (!Number.isFinite(p)) continue;
     const high = String(c.state).toLowerCase() === "high";
-    /* `probability` is always the chance of High, and that is the forecast's own p_high. It used to be 1 - p for
-       any row not labelled High, which only holds with two states: with Low, Med and High the remainder also holds
-       Med, so a Low row at 48% read as a 52% chance of High when the model gave 7%, and half the segments at
-       Prepare did not belong there (31 Oct 2026). The complement stays only for a row with no p_high. */
+    /* `probability` is always the chance of High, the forecast's own p_high. The complement stays only for a row
+       with no p_high: with Low, Med and High, 1 - p of a Low row also holds Med (31 Oct 2026). */
     const stored = Number(c.pHigh);
     const pHigh = c.pHigh != null && Number.isFinite(stored) ? stored : high ? p : 1 - p;
-    const { score, label } = fuzzyUrgency(pHigh, Number(c.hours));
-    const cur = bySeg.get(c.segment);
-    if (!cur || score > cur.urgency) {
-      bySeg.set(c.segment, {
-        segment: c.segment,
-        km: c.km ?? null,
-        probability: Math.round(pHigh * 1000) / 1000,
-        hoursAhead: Number(c.hours),
-        urgency: Math.round(score * 1000) / 1000,
-        label,
-        action: ACTION[label],
-      });
+    const tl = timeline.get(c.segment) ?? [];
+    tl.push({ h: hrs, pHigh: r3(pHigh) });
+    timeline.set(c.segment, tl);
+    const cur = bySeg.get(c.segment) ?? { segment: c.segment, km: c.km ?? null, peak: -1, peakH: hrs, firstAct: null };
+    if (pHigh > cur.peak || (pHigh === cur.peak && hrs < cur.peakH)) {
+      cur.peak = pHigh;
+      cur.peakH = hrs;
     }
+    // Compared in ten-thousandths, as stored, so 0.16 is at a 0.16 cut-off and not a rounding error below it.
+    if (cutoff != null && Math.round(pHigh * 10000) >= cutoff * 100 && (cur.firstAct == null || hrs < cur.firstAct)) cur.firstAct = hrs;
+    bySeg.set(c.segment, cur);
   }
-  const congestion = [...bySeg.values()].sort((a, b) => b.urgency - a.urgency);
+  const congestion: CongestionAdvice[] = [...bySeg.values()]
+    .map((s) => {
+      const label: CongestionAdvice["label"] = s.firstAct != null ? "Act" : "Monitor";
+      return {
+        segment: s.segment,
+        km: s.km,
+        probability: r3(Math.max(0, s.peak)),
+        hoursAhead: s.peakH,
+        firstAct: s.firstAct,
+        label,
+        action: cal.ok ? ACTION[label] : "No Act line until enough past forecasts are scored; read the chance directly.",
+        ...hitAt(Math.max(0, s.peak)),
+      };
+    })
+    .sort((a, b) => (a.label === b.label ? 0 : a.label === "Act" ? -1 : 1) || b.probability - a.probability || (a.firstAct ?? 99) - (b.firstAct ?? 99));
   const forecastSegments = new Set((congestionRows ?? []).map((c) => c.segment));
   const congestionMissing = inputs.segments.filter((s) => !forecastSegments.has(s));
-
-  const worst = overCapacity[0];
-  const overDays = new Set(overCapacity.map((o) => `${o.date}|${o.plaza}`)).size;
 
   return {
     champion: {
@@ -725,43 +736,27 @@ export async function getTrafficPrescriptive(opts: {
       wmapePct: champion.wmape == null ? null : Math.round(Number(champion.wmape) * 100) / 100,
       accepted: Boolean(champion.accepted),
     },
-    assumptions: [
-      `One booth clears ${throughput} vehicles an hour. This is the only figure not measured from the warehouse — it is the operator's to set.`,
-      `Booth counts are OpenStreetMap's (© OpenStreetMap contributors, read ${OSM_TOLL_PLAZAS_READ}); the warehouse holds none. ` +
-        "Each plaza is capped at the booths of the movement that pays there, per carriageway where that is known. " +
-        "Demand beyond them is reported as unserved rather than given booths that do not exist.",
-      ...(withoutBooths.length
-        ? [`${fmtList(withoutBooths)} ${withoutBooths.length === 1 ? "has" : "have"} no toll booths mapped, so ${withoutBooths.length === 1 ? "its plan is" : "their plans are"} not capped.`]
-        : []),
-      ...(worst
-        ? [`On ${overDays} plaza-day${overDays === 1 ? "" : "s"} this week demand outruns every booth. The worst: ${worst.plaza} (its ${worst.where} booths) at ${String(worst.hour).padStart(2, "0")}:00 on ${worst.date} needs ${worst.need} booths and has ${worst.booths}, so about ${worst.vehicles.toLocaleString("en-US")} vehicles an hour queue with all of them open. That calls for diversion or an advisory, not more staff.`]
-        : []),
-      "Plaza shares and hourly profiles are measured per plaza and split weekday/weekend: Bocaue Barrier peaks in the morning and Balintawak in the evening, so one corridor-wide peak hour would mis-staff both.",
-      "Demand is the corridor forecast apportioned by those shares, not a separate forecast per plaza. A plaza's own error is therefore not represented.",
-      pool === null
-        ? "No staffing limit applied: every plaza-hour is staffed to its need, or to every booth it has."
-        : `A pool of ${pool} booth-hours is allocated to the plaza-hours with the most unmet demand, which is the optimum for this constraint shape.`,
-      champion.accepted
-        ? "The forecast model passed its acceptance gate."
-        : "The forecast model did NOT pass its acceptance gate (it does not beat the seasonal baseline on MASE). The staffing shape is still driven by measured profiles; the level it is scaled to is less certain.",
-    ],
     basis: {
-      profileFrom: inputs.profileFrom,
-      profileTo: inputs.profileTo,
+      usualFrom: inputs.usualFrom,
+      usualTo: inputs.usualTo,
+      usualWeekdays: inputs.usualDays[0],
+      usualWeekends: inputs.usualDays[1],
+      usualPeakPercentile: Math.round(USUAL_PEAK_PCT * 100),
       plazasProfiled: inputs.plazas.length,
       forecastFrom: future[0]?.date ?? null,
       forecastTo: future[future.length - 1]?.date ?? null,
-      throughputPerBoothHour: throughput,
-      poolBoothHours: pool,
-      boothsFrom: `OpenStreetMap (© OpenStreetMap contributors), read ${OSM_TOLL_PLAZAS_READ}`,
-      plazasWithoutBooths: withoutBooths,
+      band: inputs.bandBasis,
+      minCellVehicles: MIN_CELL,
     },
     shiftPlan,
     week,
-    overCapacity,
+    priorities: priorities.slice(0, 12),
+    plazasWithoutBand: inputs.plazas.filter((p) => !inputs.band.has(p.plaza)).map((p) => p.plaza),
     congestion,
+    congestionCalibration: cal,
     congestionMissing,
     congestionUnavailable: congestionRows == null,
     congestionBaseTs: congestionRows?.find((c) => c.baseTs)?.baseTs ?? null,
+    congestionTimeline: [...timeline.entries()].map(([segment, hours]) => ({ segment, hours: hours.sort((a, b) => a.h - b.h) })),
   };
 }

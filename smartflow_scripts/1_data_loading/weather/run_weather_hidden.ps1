@@ -1,6 +1,6 @@
 # Runs fetch_weather_open_meteo.py --write with no visible window, for the Scheduled Task "SmartFlow weather hourly".
 #
-# Same reasons as the congestion refresh's launcher (3_training_testing/congestion/refresh_congestion_hidden.ps1):
+# Same reasons as the congestion refresh's launcher (All_Scripts/Predictive_Modeling/refresh_congestion_hidden.ps1):
 # an interactive task flashes a console every hour, and Task Scheduler does not retry a process that started and
 # exited non-zero, so the retry lives here. A run takes a few seconds; the failures seen on this laptop's hotspot
 # are transient (connection reset, host name not resolved), so three tries two minutes apart cover them. A lost

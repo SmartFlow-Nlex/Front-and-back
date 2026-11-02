@@ -3,8 +3,8 @@
 ================================================================================
 
   Daily speed forecast — holdout comparison
-    XGBoost    MAE=3.570  RMSE=4.515  R2=0.260  n=90  [SELECTED]
-    SARIMAX    MAE=3.990  RMSE=4.864  R2=0.141  n=90  
+    XGBoost    MAE=3.779  RMSE=4.766  R2=0.175  n=90  [SELECTED]
+    SARIMAX    MAE=3.994  RMSE=4.865  R2=0.141  n=90  
     LSTM       MAE=4.170  RMSE=5.400  R2=-0.059  n=90  
     GRU        MAE=4.220  RMSE=5.489  R2=-0.094  n=90  
     naive (predict training mean) MAE = 4.229
@@ -12,33 +12,33 @@
   Road closure probability — logistic regression
     AUC = 0.897
     base rate = 3.3%  n=90
-    top driver = is_holiday (effect size 5.166)  |  rain_mm significant at p<0.05: False (p=0.069)
-      rain=   0mm -> P(closure) = 0.009
-      rain=  10mm -> P(closure) = 0.009
-      rain=  30mm -> P(closure) = 0.009
-      rain=  60mm -> P(closure) = 0.010
-      rain= 100mm -> P(closure) = 0.010
-      volume= 273,123 -> P(closure) = 0.003
-      volume= 315,057 -> P(closure) = 0.007
-      volume= 340,264 -> P(closure) = 0.012
-      volume= 363,351 -> P(closure) = 0.019
-      volume= 391,591 -> P(closure) = 0.031
+    top driver = is_holiday (effect size 2.485)  |  rain_mm significant at p<0.05: False (p=0.066)
+      rain=   0mm -> P(closure) = 0.017
+      rain=  10mm -> P(closure) = 0.017
+      rain=  30mm -> P(closure) = 0.018
+      rain=  60mm -> P(closure) = 0.018
+      rain= 100mm -> P(closure) = 0.019
+      volume= 275,354 -> P(closure) = 0.005
+      volume= 316,880 -> P(closure) = 0.014
+      volume= 345,158 -> P(closure) = 0.024
+      volume= 367,413 -> P(closure) = 0.036
+      volume= 392,778 -> P(closure) = 0.054
 
   Weather incident risk — logistic regression
-    AUC = 0.666
+    AUC = 0.670
     base rate = 46.7%  n=90
-    top driver = log_volume (effect size 1.197)  |  rain_mm significant at p<0.05: True (p=0.014)
-      rain=   0mm -> P(high-incident day) = 0.265
-      rain=  10mm -> P(high-incident day) = 0.263
-      rain=  30mm -> P(high-incident day) = 0.259
-      rain=  60mm -> P(high-incident day) = 0.253
-      rain= 100mm -> P(high-incident day) = 0.245
-      volume= 273,123 -> P(high-incident day) = 0.066
-      volume= 315,057 -> P(high-incident day) = 0.174
-      volume= 340,264 -> P(high-incident day) = 0.276
-      volume= 363,351 -> P(high-incident day) = 0.387
-      volume= 391,591 -> P(high-incident day) = 0.529
+    top driver = log_volume (effect size 1.164)  |  rain_mm significant at p<0.05: True (p=0.015)
+      rain=   0mm -> P(high-incident day) = 0.267
+      rain=  10mm -> P(high-incident day) = 0.265
+      rain=  30mm -> P(high-incident day) = 0.261
+      rain=  60mm -> P(high-incident day) = 0.255
+      rain= 100mm -> P(high-incident day) = 0.247
+      volume= 275,354 -> P(high-incident day) = 0.069
+      volume= 316,880 -> P(high-incident day) = 0.174
+      volume= 345,158 -> P(high-incident day) = 0.284
+      volume= 367,413 -> P(high-incident day) = 0.386
+      volume= 392,778 -> P(high-incident day) = 0.508
 
   Contour (exit x hour) — XGBoost holdout
-    MAE=10.588  R2=0.237  n=13397
+    MAE=10.553  R2=0.238  n=13397
 ================================================================================

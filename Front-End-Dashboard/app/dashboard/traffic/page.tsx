@@ -77,7 +77,8 @@ const fmtInt = (n: number) => Math.round(n).toLocaleString("en-US");
 const fmtCompact = (n: number) =>
   Math.abs(n) >= 1_000_000 ? `${(n / 1_000_000).toFixed(1)}M` : Math.abs(n) >= 10_000 ? `${(n / 1_000).toFixed(0)}K` : fmtInt(n);
 const fmtHour = (h: number) => (h === 0 ? "12 AM" : h < 12 ? `${h} AM` : h === 12 ? "12 PM" : `${h - 12} PM`);
-const fmtPct = (p: number) => `${p >= 0 ? "+" : ""}${p.toFixed(1)}%`;
+// null = nothing to compare against (the previous period had no traffic): no percentage, not a made-up 0.0%.
+const fmtPct = (p: number | null) => (p == null ? "no earlier data" : `${p >= 0 ? "+" : ""}${p.toFixed(1)}%`);
 
 function movingAverage(values: number[], window: number): (number | null)[] {
   return values.map((_, i) => {
@@ -238,7 +239,7 @@ export default function TrafficPage() {
 
     const curAdt = kpis.days > 0 ? kpis.totalVolume / kpis.days : 0;
     const prevAdt = kpis.prevDays > 0 ? kpis.prevTotalVolume / kpis.prevDays : 0;
-    const volumeDeltaPct = prevAdt > 0 ? ((curAdt - prevAdt) / prevAdt) * 100 : 0;
+    const volumeDeltaPct: number | null = prevAdt > 0 ? ((curAdt - prevAdt) / prevAdt) * 100 : null;
 
     const weekdayByHour = new Map<number, { sum: number; n: number }>();
     for (const r of hourDow) {
@@ -941,7 +942,7 @@ export default function TrafficPage() {
                 </div>
                 <p className={styles.kpiHint}>
                   {derived ? (
-                    <span className={derived.volumeDeltaPct >= 0 ? styles.deltaUp : styles.deltaDown}>{fmtPct(derived.volumeDeltaPct)}</span>
+                    <span className={derived.volumeDeltaPct == null ? undefined : derived.volumeDeltaPct >= 0 ? styles.deltaUp : styles.deltaDown}>{fmtPct(derived.volumeDeltaPct)}</span>
                   ) : "—"}{" "}
                   vs previous period
                 </p>
@@ -971,7 +972,7 @@ export default function TrafficPage() {
               </article>
               <article className={styles.kpiTile}>
                 <span className={styles.kpiIcon} aria-hidden="true"><Gauge size={15} /></span>
-                <h3>Congestion Index<InfoTooltip text="Average Waze jam severity on the corridor, 0 (free flow) to 5 (standstill), over the Range." /></h3>
+                <h3>Congestion Index<InfoTooltip text="How bad the jams were: the average Waze level of the jams reported on the corridor over the Range, from 1 (light) to 5 (blocked road). Waze reports only jams, never free flow, so this measures how severe congestion is when it happens, not how often it happens; it stays near the middle and moves little with weather." /></h3>
                 <div className={styles.kpiValue}>{kpiValue(data?.kpis.congestionIndex != null ? `${data.kpis.congestionIndex.toFixed(2)} / 5` : null)}</div>
                 <p className={styles.kpiHint}>
                   {derived?.congestionDelta != null ? (

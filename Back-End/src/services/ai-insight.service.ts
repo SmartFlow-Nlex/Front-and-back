@@ -89,7 +89,7 @@ OUTPUT SHAPE
 }
 
 HOW TO READ THE METRICS
-- WMAPE is percentage error. Lower is better. Under 10% is strong, 10-20% usable, over 20% weak.
+- WMAPE is percentage error. Lower is better. Do not call a WMAPE strong or weak by a fixed cut: judge it against the benchmark label below and, where the quantity has one, the project's design target (traffic volume: WMAPE 12% or less; corridor CO2: 15% or less). Say whether the target is met; for any other quantity, rely on the benchmark label alone.
 - MASE compares against simply repeating last week. Do not interpret the raw number yourself — each model is labelled BEATS-BENCHMARK, FAILS-BENCHMARK or LEVEL-WITH-BENCHMARK, and that label is authoritative.
 - R2 near 1 is good, near 0 means the model explains little, and negative means it is worse than predicting the average.
 - MAE and RMSE are in the quantity's own units. RMSE far above MAE means a few large misses rather than steady drift.
@@ -537,7 +537,7 @@ WHAT IS BEING ESTIMATED
 Not a time series. For each NLEX exit, how much MORE traffic it takes on a Philippine Arena event day than on a matched normal day — the same weekday in the same month. That extra traffic is the "uplift". The estimate is fitted on earlier event days and scored on later event days it never saw.
 
 HOW TO READ THE NUMBERS
-- WMAPE is percentage error on those held-out event days. Lower is better. Under 10% is strong for an event estimate, 10-20% usable, over 20% weak.
+- WMAPE is percentage error on those held-out event days. Lower is better. Do not call it strong or weak by a fixed cut: judge it against the baseline it is compared with in the input.
 - "Ignoring the event" is the do-nothing benchmark: predict the ordinary day and make no allowance for the event at all. Beating it is the whole point. If the estimate does not beat it, the event adjustment is not earning its place, whatever its own error looks like.
 - The number of event days behind the estimate matters more than usual here: these are dozens of days, not thousands, so a small count is a real limit on confidence.
 

@@ -51,7 +51,8 @@ test("TC-UT-05c: previous 0 -> no error (no division by zero)", () => {
   const r = tileText(500_000, 0);
   console.log(`  tile="${r.text}" pct=${r.pct}`);
   assert.equal(r.error, null);
-  assert.ok(Number.isFinite(r.pct));
+  // No division by zero: no Infinity or NaN. null means "nothing to compare", which the next test checks is shown so.
+  assert.ok(r.pct === null || Number.isFinite(r.pct));
 });
 
 test("TC-UT-05c: previous 0 -> no percentage shown", () => {

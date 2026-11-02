@@ -429,7 +429,11 @@ export async function getIncidentAnalyticsFromDb(filters: IncidentAnalyticsFilte
         `WITH ${WXALL_CTE}
          SELECT COUNT(*)::int AS total,
                 COUNT(*) FILTER (WHERE clearance_min IS NOT NULL AND clearance_min >= 0)::int AS valid_n,
-                ROUND(AVG(clearance_min) FILTER (WHERE clearance_min IS NOT NULL AND clearance_min >= 0)::numeric, 1)::float AS avg_min
+                ROUND(AVG(clearance_min) FILTER (WHERE clearance_min IS NOT NULL AND clearance_min >= 0)::numeric, 1)::float AS avg_min,
+                -- Median and 90th percentile beside the mean (fix list A15, 2 Nov 2026): a few very long clearances
+                -- pull the mean well above what a typical incident takes.
+                ROUND((percentile_cont(0.5) WITHIN GROUP (ORDER BY clearance_min) FILTER (WHERE clearance_min IS NOT NULL AND clearance_min >= 0))::numeric, 1)::float AS median_min,
+                ROUND((percentile_cont(0.9) WITHIN GROUP (ORDER BY clearance_min) FILTER (WHERE clearance_min IS NOT NULL AND clearance_min >= 0))::numeric, 1)::float AS p90_min
          FROM silver.nlex_accident_events_clean e
          WHERE e.event_start_date::date BETWEEN $1 AND $2
            AND ($3::text IS NULL OR $3 = 'accident')
@@ -468,8 +472,12 @@ export async function getIncidentAnalyticsFromDb(filters: IncidentAnalyticsFilte
            (SELECT COUNT(*) FROM scoped)::int AS total,
            COUNT(*) FILTER (WHERE resp_min IS NOT NULL)::int AS response_valid_n,
            ROUND(AVG(resp_min) FILTER (WHERE resp_min IS NOT NULL)::numeric, 1)::float AS avg_response_min,
+           ROUND((percentile_cont(0.5) WITHIN GROUP (ORDER BY resp_min) FILTER (WHERE resp_min IS NOT NULL))::numeric, 1)::float AS median_response_min,
+           ROUND((percentile_cont(0.9) WITHIN GROUP (ORDER BY resp_min) FILTER (WHERE resp_min IS NOT NULL))::numeric, 1)::float AS p90_response_min,
            COUNT(*) FILTER (WHERE mttc_min IS NOT NULL)::int AS mttc_valid_n,
-           ROUND(AVG(mttc_min) FILTER (WHERE mttc_min IS NOT NULL)::numeric, 1)::float AS avg_mttc_min
+           ROUND(AVG(mttc_min) FILTER (WHERE mttc_min IS NOT NULL)::numeric, 1)::float AS avg_mttc_min,
+           ROUND((percentile_cont(0.5) WITHIN GROUP (ORDER BY mttc_min) FILTER (WHERE mttc_min IS NOT NULL))::numeric, 1)::float AS median_mttc_min,
+           ROUND((percentile_cont(0.9) WITHIN GROUP (ORDER BY mttc_min) FILTER (WHERE mttc_min IS NOT NULL))::numeric, 1)::float AS p90_mttc_min
          FROM (
            SELECT
              (CASE WHEN first_response_min BETWEEN 0 AND 1440 THEN first_response_min END) AS resp_min,
@@ -523,6 +531,8 @@ export async function getIncidentAnalyticsFromDb(filters: IncidentAnalyticsFilte
         // value.
         avgTimeToFirstResponder: {
           min: bd.avg_response_min,
+          medianMin: bd.median_response_min ?? null,
+          p90Min: bd.p90_response_min ?? null,
           n: bd.response_valid_n ?? 0,
           totalBreakdowns: breakdownTotal,
         },
@@ -530,6 +540,8 @@ export async function getIncidentAnalyticsFromDb(filters: IncidentAnalyticsFilte
           overallMin: overallMttcMin,
           accidentMin: ac.avg_min,
           breakdownMin: bd.avg_mttc_min,
+          accident: { meanMin: ac.avg_min, medianMin: ac.median_min ?? null, p90Min: ac.p90_min ?? null },
+          breakdown: { meanMin: bd.avg_mttc_min, medianMin: bd.median_mttc_min ?? null, p90Min: bd.p90_mttc_min ?? null },
           coverage: {
             accidents: { total: accidentTotal, valid: accidentValid },
             breakdowns: { total: breakdownTotal, valid: breakdownValid },
@@ -1050,7 +1062,9 @@ const DAILY_WET_SQL = `
   )
   SELECT d::text AS date,
          (AVG(avg_rain) > 0.3) AS is_wet,
-         SUM(avg_rain) AS rainfall_mm
+         SUM(avg_rain) AS rainfall_mm,
+         -- The day's wettest hour, so the chart can name the rain with PAGASA's HOURLY classes (fix list A8, 2 Nov 2026).
+         MAX(avg_rain) AS peak_hour_mm
   FROM hourly
   GROUP BY d
 `;
@@ -2240,7 +2254,11 @@ export async function getIncidentPredictiveFromDb(
       horizonAccuracy,
       volumeForecastByDate
     );
-    return { ...response, accidentSplit, corridorShareWindow: { from: shareFrom, to: shareTo } };
+    const peakByDate = new Map(
+      wetRes.rows.filter((r: any) => r.peak_hour_mm != null).map((r: any) => [r.date, Math.round(Number(r.peak_hour_mm) * 100) / 100])
+    );
+    const daily = (response as any).daily?.map((d: any) => ({ ...d, rainfallPeakHourMm: peakByDate.get(d.date) ?? null }));
+    return { ...response, ...(daily ? { daily } : {}), accidentSplit, corridorShareWindow: { from: shareFrom, to: shareTo } };
   } catch (error) {
     console.error("ML incident forecast: query threw (connectivity or SQL error):", error);
     return null;

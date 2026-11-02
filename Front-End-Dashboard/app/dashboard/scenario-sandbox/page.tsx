@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { displayExitName, useNlexExits, type NlexExit } from "../../../lib/nlex-exits";
+import { apiFetch } from "../../../lib/api";
 import { lanesForSegment, laneSources } from "../../../lib/nlex-lanes";
 import { fmtKm, fmtKmRange, kmMeasured, kmPost } from "../../../lib/km-post";
 import { Car } from "lucide-react";
@@ -2247,7 +2248,8 @@ export default function AiSandboxPage() {
     const limit = setTimeout(() => abort.abort("timeout"), COMMAND_TIMEOUT_MS);
 
     try {
-      const res = await fetch(`${BACKEND}/api/ai-sandbox/command`, {
+      // Signed-in only: each command costs GLM tokens (2 Nov 2026). apiFetch adds the session token.
+      const res = await apiFetch(`${BACKEND}/api/ai-sandbox/command`, {
         method: "POST",
         signal: abort.signal,
         headers: { "Content-Type": "application/json" },
@@ -4181,8 +4183,10 @@ function KmInput({
     if (draft == null) return;
     const n = Number.parseFloat(draft);
     setDraft(null);
-    // An unparseable or empty entry reverts rather than silently becoming zero.
-    if (Number.isFinite(n)) onCommit(kmMeasured(n));
+    // An unparseable or empty entry reverts rather than silently becoming zero. So does a km outside the field's
+    // range: it used to be taken and then clamped, so Km 11.9 quietly became Km 12 (TC-UT-23, 2 Nov 2026).
+    const km = Number.isFinite(n) ? kmMeasured(n) : NaN;
+    if (Number.isFinite(km) && km >= min - 1e-6 && km <= max + 1e-6) onCommit(km);
   };
 
   return (

@@ -27,3 +27,16 @@ test("TC-UT-08: wet 30 incidents over 10 days, dry 100 over 100 days -> 3.0/day,
   assert.equal(r.rainMultiplier, 3.0);
   assert.equal(r.rainEmptyReason, null);
 });
+
+test("TC-UT-08b: rain only in the busy hour -> the same-hour comparison reads 1.0x where the plain ratio read 5.3x", () => {
+  // 03:00 is dry and quiet (9 crashes in 900 h); 15:00 crashes at 0.1/h wet or dry, and all the rain falls then.
+  const cells = [
+    { dow: 1, hour: 3, wetHours: 0, dryHours: 900, wetAccident: 0, wetBreakdown: 0, dryAccident: 9, dryBreakdown: 0 },
+    { dow: 1, hour: 15, wetHours: 100, dryHours: 100, wetAccident: 10, wetBreakdown: 0, dryAccident: 10, dryBreakdown: 0 },
+  ];
+  const wx = { wetHours: 100, dryHours: 1000, incidents: { wet: { accident: 10 }, dry: { accident: 19 } }, cells };
+  const r = rain(wx, "all");
+  console.log(`  plain ${(r.wetRate / r.dryRate).toFixed(2)}x, same hour ${r.rainMultiplier.toFixed(2)}x`);
+  assert.ok(Math.abs(r.wetRate / r.dryRate - 5.263) < 0.01);
+  assert.equal(r.rainMultiplier, 1.0);
+});

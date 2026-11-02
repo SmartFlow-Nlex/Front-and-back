@@ -9,6 +9,8 @@ import { env } from "./config/env.js";
 import { errorHandler, notFoundHandler } from "./middleware/error.middleware.js";
 
 export const app = express();
+// Real client addresses behind a hosting proxy (see TRUST_PROXY in config/env.ts). Off unless configured.
+if (env.TRUST_PROXY) app.set("trust proxy", env.TRUST_PROXY);
 
 // Rate limiting middleware to throttle request bursts
 const apiLimiter = rateLimit({

@@ -834,8 +834,16 @@ res = pd.DataFrame(rows).sort_values("accuracy", ascending=False).reset_index(dr
 # is the state anyone acts on and the one a model that never says "severe" fails silently (XGBoost caught 10%).
 # Decided on 2026-10-25 before it was applied; with no candidate inside the tie it is simply the most accurate.
 CHAMP_TIE = 0.005
-_tied = res[res.accuracy >= res.accuracy.iloc[0] - CHAMP_TIE]
+# Only ACCEPTED candidates (beat majority class, persistence and the exit-hour profile) can be served (fix list
+# A4/A24, 2 Nov 2026): the rule picked among all candidates, so a model that lost to "what this exit usually does at
+# this hour" could reach the map. With none accepted the map serves that profile itself (SERVE_PROFILE below).
+_pool = res[res.accuracy > best_base]
+SERVE_PROFILE = _pool.empty
+_tied = (_pool if not SERVE_PROFILE else res)
+_tied = _tied[_tied.accuracy >= _tied.accuracy.max() - CHAMP_TIE]
 _champ_i = _tied.severe_recall.idxmax()
+if SERVE_PROFILE:
+    print(f"  no candidate beats the best baseline ({best_base_name} {best_base:.4f}): the map serves the exit-hour profile")
 if _champ_i != 0:
     print(f"  champion rule: {res.loc[_champ_i, 'model']} (acc {res.loc[_champ_i, 'accuracy']:.4f}, severe recall "
           f"{res.loc[_champ_i, 'severe_recall']:.3f}) over {res.loc[0, 'model']} (acc {res.loc[0, 'accuracy']:.4f}, "
@@ -945,9 +953,24 @@ for hz in HORIZONS:
 # Serve the champion's genuine per-horizon forecast from the newest window. Built before the
 # write step so a --dry-run exercises it too (it used to run only when publishing).
 champ = res.iloc[0]
-print(f"  champion: {champ.model} (acc {champ.accuracy:.4f})")
+print(f"  champion: {'exit-hour profile (no model accepted)' if SERVE_PROFILE else champ.model} (acc {champ.accuracy:.4f})")
 out = []
-if champ.model in DUALPATH_KINDS and dp_panel is not None:
+if SERVE_PROFILE:
+    # What each exit usually does at that hour on that kind of day, from training hours only: the modal state and the
+    # observed share of each state, the same profile the acceptance test measured.
+    _tr = df[df.ts < cut]
+    _freq = (_tr.groupby(["exit_name", "h", "is_weekend"]).y.value_counts(normalize=True)
+             .unstack(fill_value=0.0).reindex(columns=[0.0, 1.0, 2.0], fill_value=0.0))
+    _overall = _tr.y.value_counts(normalize=True).reindex([0.0, 1.0, 2.0], fill_value=0.0).to_numpy(float)
+    _last = df.ts.max()
+    for ex in exits:
+        for hz in SERVE_HORIZONS:
+            t_ = _last + pd.Timedelta(hours=hz)
+            key = (ex, t_.hour, int(t_.dayofweek >= 5))   # df.is_weekend is 0/1
+            p_ = _freq.loc[key].to_numpy(float) if key in _freq.index else _overall
+            kk = int(np.argmax(p_))
+            out.append((ex, hz, STATES[kk], float(p_[kk]), float(p_[0]), float(p_[1]), float(p_[2])))
+elif champ.model in DUALPATH_KINDS and dp_panel is not None:
     _latest = df[df.ts == df.ts.max()].set_index("exit_name").reindex(dp_panel.exits)
 
     def _feats_at(hz):
@@ -1019,10 +1042,13 @@ for r in res.itertuples():
         (r.model, float(r.accuracy), float(r.log_loss), int(r.rank), bool(r.accepted), reason,
          "accuracy is averaged over horizons 1-168h; see gold.ml_congestion_horizon_accuracy"))
 for k, v in baselines.items():
+    # With no model accepted the profile is what the map serves, so it takes rank 0 and readers name it (A4).
+    _served = SERVE_PROFILE and k == "Exit-hour profile"
     cur.execute("""INSERT INTO gold.ml_model_metrics
         (model_name,target,r2,rank,accepted,rejected_reason,uses_weather,updated_at)
-        VALUES (%s,'Congestion',%s,NULL,false,'baseline, not a candidate',false,now())""",
-        (k, float(accuracy_score(yte, v))))
+        VALUES (%s,'Congestion',%s,%s,false,%s,false,now())""",
+        (k, float(accuracy_score(yte, v)), 0 if _served else None,
+         "served: no candidate beat the baselines" if _served else "baseline, not a candidate"))
 
 cur.execute("""
   CREATE TABLE IF NOT EXISTS gold.ml_congestion_horizon_accuracy (

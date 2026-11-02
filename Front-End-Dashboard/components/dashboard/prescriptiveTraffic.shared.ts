@@ -159,308 +159,200 @@ export function loadForecast(): Promise<ForecastPayload> {
 
 /* ------------------------------------------------------ server-side ----
  *
- * The booth-staffing and congestion models now run in the backend against the
- * warehouse (traffic-prescriptive.service.ts). The LP and the fuzzy controller
- * below are kept because the sandbox and the tests still call them directly,
- * but the PANELS read these types instead: the recommendation should not
- * depend on which date range the operator happens to have selected on the
- * descriptive tab, and an hour-by-hour plan needs the full hourly profile,
- * which the page never loaded.
+ * Staffing priority and congestion response run in the backend against the
+ * warehouse (traffic-prescriptive.service.ts); these types mirror its answer.
+ * Since 2 Nov 2026 every figure in it is measured: no booth counts, no
+ * throughput dial, no hand-set fuzzy thresholds.
  */
-export type BoothHour = {
+export type StaffingLevel = "above" | "likely" | "normal";
+export type StaffingHour = {
   hour: number;
-  demand: number;
-  /** Booths that would clear the hour, whether or not the plaza has that many. */
-  need: number;
-  /** Booths to open: need, limited to the booths the plaza has. */
-  staffed: number;
-  /** Vehicles left queuing with `staffed` open. */
-  unmet: number;
+  /** Vehicles forecast at this plaza in this hour. */
+  forecast: number;
+  /** 80% band from the measured held-out error; null where none is measured. */
+  low: number | null;
+  high: number | null;
+  /** The plaza's median for this hour and day type over the latest 12 months, and its 90th percentile. */
+  usual: number | null;
+  usualPeak: number | null;
+  /** forecast / usual; 1 = a usual day. */
+  load: number | null;
+  /** Measured chance the actual exceeds the usual peak. */
+  chance: number | null;
+  level: StaffingLevel;
 };
-export type BoothPlazaDay = {
+export type StaffingPlazaDay = {
   plaza: string;
   sharePct: number;
   peakHour: number;
-  peakNeed: number;
-  peakStaffed: number;
-  /** Booth lanes for the movement that pays there (OpenStreetMap); null where none are mapped. */
-  booths: number | null;
-  boothBasis: string;
-  typicalPeakNeed: number;
-  typicalPeakStaffed: number;
-  unmetVehicles: number;
-  /** The hour leaving the most vehicles, and which booths ("SB exit") leave them. */
-  worstUnmet: { hour: number; vehicles: number; need: number; staffed: number; where: string | null } | null;
-  hours: BoothHour[];
+  /** The hour most likely to exceed its usual peak. */
+  top: StaffingHour | null;
+  aboveHours: number;
+  likelyHours: number;
+  /** All 24 hours on the first day only. */
+  hours: StaffingHour[];
 };
-export type BoothDay = {
+export type StaffingDay = {
   date: string;
   dayType: "weekday" | "weekend";
   corridorForecast: number;
-  totalPeakBooths: number;
-  unmetVehicles: number;
-  plazas: BoothPlazaDay[];
+  aboveCells: number;
+  likelyCells: number;
+  plazas: StaffingPlazaDay[];
 };
-/** A plaza-day whose demand outruns every booth of one of its booth sets. */
-export type OverCapacity = {
-  date: string;
-  plaza: string;
-  where: string;
-  hour: number;
-  vehicles: number;
-  need: number;
-  booths: number;
-};
+export type StaffingPriority = StaffingHour & { date: string; dayType: "weekday" | "weekend"; plaza: string };
 export type CongestionAdvice = {
   segment: string;
   /** Measured km (Balintawak = 12); show it through fmtKm, never raw. */
   km: number | null;
+  /** Highest chance of High in hours 1-12, and its hour. */
   probability: number;
   hoursAhead: number;
-  urgency: number;
-  label: "Monitor" | "Prepare" | "Act";
+  /** First hour at or above the calibrated cut-off. */
+  firstAct: number | null;
+  label: "Act" | "Monitor";
   action: string;
+  /** Of archived forecasts at or above this probability, the share High followed, and how many. */
+  hitRate: number | null;
+  hitN: number;
+};
+export type CongestionCalibration = {
+  ok: boolean;
+  reason: string | null;
+  threshold: number | null;
+  /** Held out: the last 7 days, which the cut-off never saw. */
+  precision: number | null;
+  recall: number | null;
+  f1: number | null;
+  baseRate: number | null;
+  fitF1: number | null;
+  scored: number;
+  scoredHigh: number;
+  runs: number;
+  fitFrom: string | null;
+  fitTo: string | null;
+  testFrom: string | null;
+  testTo: string | null;
+  testRows: number;
 };
 export type TrafficPrescriptive = {
   champion: { model: string | null; wmapePct: number | null; accepted: boolean };
-  assumptions: string[];
   basis: {
-    profileFrom: string | null;
-    profileTo: string | null;
+    usualFrom: string | null;
+    usualTo: string | null;
+    usualWeekdays: number;
+    usualWeekends: number;
+    usualPeakPercentile: number;
     plazasProfiled: number;
     forecastFrom: string | null;
     forecastTo: string | null;
-    throughputPerBoothHour: number;
-    poolBoothHours: number | null;
-    boothsFrom: string;
-    plazasWithoutBooths: string[];
+    band: { from: string; to: string; days: number; cells: number; wmapePct: number } | null;
+    minCellVehicles: number;
   };
-  shiftPlan: BoothDay | null;
-  week: BoothDay[];
-  overCapacity: OverCapacity[];
+  shiftPlan: StaffingDay | null;
+  week: StaffingDay[];
+  priorities: StaffingPriority[];
+  plazasWithoutBand: string[];
   congestion: CongestionAdvice[];
+  congestionCalibration: CongestionCalibration | null;
   /** Segments on the exit list with no congestion forecast. */
   congestionMissing: string[];
   /** The congestion forecast could not be read at all (as opposed to read and empty). */
   congestionUnavailable?: boolean;
   /** Manila wall-clock hour the congestion forecast counts from, "YYYY-MM-DD HH:MM". */
   congestionBaseTs?: string | null;
+  /** Each segment's chance of High congestion for hours 1-12 (the advisory's timelines). */
+  congestionTimeline?: { segment: string; hours: { h: number; pHigh: number }[] }[];
 };
 
-/* Keyed by throughput: changing the dial is a different question, not a
-   refresh, and each answer is worth keeping while the operator compares. */
-const prescriptiveCache = new Map<string, Promise<TrafficPrescriptive>>();
+/* One answer for both panels: there are no dials, so nothing to key a cache on. */
+let prescriptiveCache: Promise<TrafficPrescriptive> | null = null;
 
-export function loadPrescriptive(throughput: number): Promise<TrafficPrescriptive> {
-  const key = String(throughput);
-  const hit = prescriptiveCache.get(key);
-  if (hit) return hit;
-  const req = fetchJsonWithRetry(`${BACKEND}/api/traffic/prescriptive?throughput=${throughput}`, "prescriptive")
+export function loadPrescriptive(): Promise<TrafficPrescriptive> {
+  if (prescriptiveCache) return prescriptiveCache;
+  const req = fetchJsonWithRetry(`${BACKEND}/api/traffic/prescriptive`, "prescriptive")
     .then((j) => {
       if (!j?.success) throw new Error(j?.message ?? "request failed");
       const data = j.data as TrafficPrescriptive;
       /* An answer without congestion rows (the read failed while the server was starting, or the
          hourly model was rewriting its table) is used once but not kept, so the Congestion Response
          panel's retry asks the server again instead of being handed this copy (TR-12). */
-      if (!Array.isArray(data?.congestion) || data.congestion.length === 0) prescriptiveCache.delete(key);
+      if (!Array.isArray(data?.congestion) || data.congestion.length === 0) prescriptiveCache = null;
       return data;
     })
     .catch((e) => {
       // A failed fetch must not be cached, or every later mount replays it.
-      prescriptiveCache.delete(key);
+      prescriptiveCache = null;
       throw e;
     });
-  prescriptiveCache.set(key, req);
+  prescriptiveCache = req;
   return req;
 }
 
-/* ------------------------------------------------------------------ LP ----
+/* ------------------------------------------------------ event ranking ----
  *
- * Staffing allocation, as a linear program:
+ * Which exits get event resources first, by the extra vehicles each is SURE
+ * to carry: the lower end of the uplift's 95% interval, times the exit's
+ * no-event baseline (2 Nov 2026). This replaced a TOPSIS score whose four
+ * weights (0.40 / 0.25 / 0.20 / 0.15) were set by hand. Ranking on the lower
+ * bound needs no weights and already penalises a loose estimate: a wide
+ * interval has a low floor.
  *
- *   minimise    sum_d  u_d                                (unmet peak demand)
- *   subject to  u_d >= demand_d - (base + x_d) * rate     for each day d
- *               u_d >= 0
- *               sum_d x_d <= pool                         (staff available)
- *               0 <= x_d <= maxExtra                      (lanes per plaza)
- *
- * Every extra lane retires exactly `rate` vehicles of unmet demand until that
- * day's unmet reaches zero, so the constraint matrix is an interval matrix and
- * the greedy assignment -- give the next lane to whichever day still has the
- * most unmet demand -- reaches the LP optimum exactly. That is what runs here:
- * no simplex library, but not an approximation either.
+ * Only exits with a MATERIAL effect are ranked: the lower bound of the uplift
+ * above 1. An exit whose interval reaches 1 has no established event effect.
  */
-export type StaffDay = {
-  date: string;
-  forecast: number;
-  peakDemand: number;
-  lanes: number;      // extra lanes assigned
-  unmetBefore: number;
-  unmetAfter: number;
-};
-
-export function allocateStaff(
-  days: { date: string; forecast: number }[],
-  opts: { peakShare: number; baseLanes: number; rate: number; pool: number; maxExtra: number },
-): { schedule: StaffDay[]; unmetBefore: number; unmetAfter: number } {
-  const { peakShare, baseLanes, rate, pool, maxExtra } = opts;
-  const rows: StaffDay[] = days.map((d) => {
-    const peakDemand = d.forecast * peakShare;
-    const unmet = Math.max(0, peakDemand - baseLanes * rate);
-    return { date: d.date, forecast: d.forecast, peakDemand, lanes: 0, unmetBefore: unmet, unmetAfter: unmet };
-  });
-
-  let left = pool;
-  while (left > 0) {
-    let best = -1;
-    let bestUnmet = 0;
-    for (let i = 0; i < rows.length; i++) {
-      if (rows[i].lanes >= maxExtra) continue;
-      if (rows[i].unmetAfter > bestUnmet) {
-        bestUnmet = rows[i].unmetAfter;
-        best = i;
-      }
-    }
-    if (best < 0) break; // nothing left that a lane would help
-    rows[best].lanes += 1;
-    rows[best].unmetAfter = Math.max(0, rows[best].unmetAfter - rate);
-    left -= 1;
-  }
-
-  return {
-    schedule: rows,
-    unmetBefore: rows.reduce((s, r) => s + r.unmetBefore, 0),
-    unmetAfter: rows.reduce((s, r) => s + r.unmetAfter, 0),
-  };
-}
-
-/* --------------------------------------------------------------- fuzzy ----
- *
- * A Mamdani controller over two inputs -- how likely congestion is, and how
- * soon -- producing one urgency score.
- *
- * Crisp thresholds are the wrong tool here: 0.61 and 0.59 probability describe
- * the same road, and a rule that fires an operator alert at one and stays
- * silent at the other invites exactly the mistrust that makes people stop
- * reading alerts. Triangular memberships overlap, so urgency moves smoothly
- * and a segment sitting near a boundary reads as "near a boundary".
- */
-const tri = (x: number, a: number, b: number, c: number): number => {
-  if (x <= a || x >= c) return 0;
-  if (x === b) return 1;
-  return x < b ? (x - a) / (b - a) : (c - x) / (c - b);
-};
-
-export type Urgency = { score: number; label: "Monitor" | "Prepare" | "Act" };
-
-export function fuzzyUrgency(probability: number, hoursAhead: number): Urgency {
-  // Likelihood memberships
-  const pLow = tri(probability, -1, 0.15, 0.5);
-  const pMed = tri(probability, 0.3, 0.55, 0.8);
-  const pHigh = tri(probability, 0.6, 0.9, 2);
-
-  // Proximity memberships, over a 12-hour horizon
-  const tSoon = tri(hoursAhead, -6, 1, 5);
-  const tMid = tri(hoursAhead, 2, 6, 10);
-  const tFar = tri(hoursAhead, 7, 12, 18);
-
-  // Rule base. Consequent singletons on a 0..1 urgency axis; the closer and
-  // the likelier, the higher.
-  const rules: [number, number][] = [
-    [Math.min(pHigh, tSoon), 1.0],
-    [Math.min(pHigh, tMid), 0.8],
-    [Math.min(pHigh, tFar), 0.6],
-    [Math.min(pMed, tSoon), 0.65],
-    [Math.min(pMed, tMid), 0.45],
-    [Math.min(pMed, tFar), 0.3],
-    [Math.min(pLow, tSoon), 0.2],
-    [Math.min(pLow, tMid), 0.1],
-    [Math.min(pLow, tFar), 0.05],
-  ];
-
-  // Centroid defuzzification over the firing strengths.
-  let numr = 0;
-  let den = 0;
-  for (const [w, v] of rules) {
-    numr += w * v;
-    den += w;
-  }
-  const score = den > 0 ? numr / den : 0;
-  const label = score >= 0.7 ? "Act" : score >= 0.4 ? "Prepare" : "Monitor";
-  return { score, label };
-}
-
-/* -------------------------------------------------------------- TOPSIS ----
- *
- * Ranks exits for event-day intervention by their distance to an ideal option.
- *
- *   1. build the decision matrix, one row per exit
- *   2. normalise each criterion by its vector norm
- *   3. weight the columns
- *   4. find the ideal best and ideal worst per criterion
- *   5. score each option by  d- / (d+ + d-)
- *
- * Criteria and their direction:
- *   extraVehicles  benefit  - the vehicles an intervention would actually move
- *   uplift         benefit  - how far above baseline the exit runs
- *   evidence       benefit  - events observed, so a big uplift seen twice does
- *                             not outrank a smaller one seen fifty times
- *   uncertainty    cost     - width of the uplift interval; a wide band means
- *                             the number it is built on is not settled
- */
-export type TopsisRow = {
+export type ExitImpact = {
   exit: string;
-  extraVehicles: number;
+  /** Extra vehicles over the baseline at the uplift's 95% lower bound, estimate and upper bound. */
+  extraLo: number;
+  extra: number;
+  extraHi: number;
   uplift: number;
-  evidence: number;
-  uncertainty: number;
-  closeness: number;
-  rank: number;
+  upliftLo: number;
+  upliftHi: number;
+  nEvents: number;
 };
+export type RankedExit = ExitImpact & { rank: number };
 
-export function topsisRank(events: EventRow[], weights = [0.4, 0.25, 0.2, 0.15]): TopsisRow[] {
-  const rows = events
-    .map((e) => {
-      const uplift = num(e.uplift) ?? 0;
-      const lo = num(e.upliftLo) ?? uplift;
-      const hi = num(e.upliftHi) ?? uplift;
-      return {
-        exit: e.exit,
-        extraVehicles: Math.max(0, (e.surge ?? 0) - (e.baseline ?? 0)),
-        uplift,
-        evidence: e.nEvents ?? 0,
-        uncertainty: Math.max(0, hi - lo),
-      };
-    })
-    .filter((r) => r.extraVehicles > 0 || r.uplift > 1);
-
-  if (rows.length === 0) return [];
-
-  const cols: (keyof Omit<TopsisRow, "exit" | "closeness" | "rank">)[] = [
-    "extraVehicles", "uplift", "evidence", "uncertainty",
-  ];
-  const benefit = [true, true, true, false];
-
-  // Vector normalisation, then weights.
-  const norms = cols.map((c) => Math.sqrt(rows.reduce((s, r) => s + r[c] ** 2, 0)) || 1);
-  const matrix = rows.map((r) => cols.map((c, j) => (r[c] / norms[j]) * weights[j]));
-
-  const best = cols.map((_, j) => {
-    const vals = matrix.map((m) => m[j]);
-    return benefit[j] ? Math.max(...vals) : Math.min(...vals);
+/** The typical event day, from the event-surge model's per-exit rows. */
+export function exitsFromEvents(events: EventRow[]): ExitImpact[] {
+  return events.map((e) => {
+    const uplift = num(e.uplift) ?? 0;
+    const lo = num(e.upliftLo) ?? uplift;
+    const hi = num(e.upliftHi) ?? uplift;
+    const base = e.baseline ?? 0;
+    return {
+      exit: e.exit,
+      extraLo: Math.round(base * (lo - 1)),
+      extra: Math.round((e.surge ?? 0) - base),
+      extraHi: Math.round(base * (hi - 1)),
+      uplift, upliftLo: lo, upliftHi: hi,
+      nEvents: e.nEvents ?? 0,
+    };
   });
-  const worst = cols.map((_, j) => {
-    const vals = matrix.map((m) => m[j]);
-    return benefit[j] ? Math.min(...vals) : Math.max(...vals);
-  });
+}
 
-  const scored = rows.map((r, i) => {
-    const dPlus = Math.sqrt(matrix[i].reduce((s, v, j) => s + (v - best[j]) ** 2, 0));
-    const dMinus = Math.sqrt(matrix[i].reduce((s, v, j) => s + (v - worst[j]) ** 2, 0));
-    return { ...r, closeness: dPlus + dMinus === 0 ? 0 : dMinus / (dPlus + dMinus), rank: 0 };
+/** One upcoming event: the same uplift applied to that date's weekday-in-month baseline. */
+export function exitsFromUpcoming(ev: UpcomingEvent): ExitImpact[] {
+  return ev.exits.map((x) => {
+    const base = x.baseline || 0;
+    return {
+      exit: x.exit,
+      extraLo: Math.round(x.surgeLo - base),
+      extra: Math.round(x.surge - base),
+      extraHi: Math.round(x.surgeHi - base),
+      uplift: x.uplift,
+      upliftLo: base > 0 ? x.surgeLo / base : 0,
+      upliftHi: base > 0 ? x.surgeHi / base : 0,
+      nEvents: x.nEvents,
+    };
   });
+}
 
-  scored.sort((a, b) => b.closeness - a.closeness);
-  scored.forEach((r, i) => (r.rank = i + 1));
-  return scored;
+/** Material exits, most extra vehicles at the lower bound first; ties by the estimate, then name. */
+export function rankByLowerBound(rows: ExitImpact[]): RankedExit[] {
+  return rows
+    .filter((r) => r.upliftLo > 1 && r.extraLo > 0)
+    .sort((a, b) => b.extraLo - a.extraLo || b.extra - a.extra || a.exit.localeCompare(b.exit))
+    .map((r, i) => ({ ...r, rank: i + 1 }));
 }

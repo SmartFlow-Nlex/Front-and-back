@@ -5,10 +5,13 @@ Replaces the three hardcoded bars in `app/dashboard/sustainability/page.tsx`
 with strategies computed from warehouse data.
 
 Written 2026-09-29. **Revised 2026-10-02:** one CO₂ source for the whole
-Emissions tab, per-incident idling, Monte Carlo ranges, and a delay-induced
+Emissions tab, per-incident idling, bootstrap ranges, and a delay-induced
 carbon KPI. Verified against the live database, not assumed.
 **Revised 2026-11-01:** the emissions record was rebuilt on cited factors and real
 trip distances. All 2025 figures below are from the rebuilt record.
+**Revised 2026-11-02:** measured recommendations only. Strategy A (the Class 3 share
+shift), Strategy C (busiest-hours responder deployment) and the TOPSIS ranking were
+removed as not data-backed; see sections 3, 5 and the diagram additions.
 
 ---
 
@@ -136,11 +139,12 @@ mix — heavy vehicles are a far larger share at night — not congestion.
 
 Do not build a "shift demand off-peak" strategy (dynamic tolling, truck time
 windows). It would report a saving the model cannot produce. The peak *does*
-matter, but only through Strategy C.
+matter, but only through idling: a minute of blockage at a busy hour traps more
+vehicles (Strategy B's λ).
 
 ---
 
-## 2. The idling sub-model (delay-induced carbon; Strategies B and C)
+## 2. The idling sub-model (delay-induced carbon; Strategy B)
 
 Idling sits *outside* the linear model. A queue builds behind an incident while
 it is live and drains as it clears, so the vehicle-minutes lost are the area of
@@ -188,28 +192,15 @@ Climatiq live. Nothing called it; it is removed.
 
 ---
 
-## 3. Strategy A — Heavy-vehicle share
+## 3. Strategy A — Heavy-vehicle share (removed 2026-11-02)
 
-Class 3 is 8.42% of trips, 9.23% of vehicle-km and 23.11% of CO₂. Moving a truck to
-Class 2 saves only the gap between the two factors (798 − 689 g/km).
-
-| | |
-|---|---|
-| **Decision variable** | `δ` — percentage points of Class-3 vehicle-km reassigned to Class 2 |
-| **Objective** | minimise `CO₂_total`; saving = `δ/100 × Σ(V·L) × (F₃ − F₂)` |
-| **Constraints** | `0 ≤ δ ≤ heavy share in the Range` (no more heavy vehicle-km can move than exist). `δ` is a **stated policy target**, default 1 pp. Total vehicle-km conserved: a composition shift, not traffic removal. |
-| **Data** | `gold.fact_emissions_hourly` (`vkm_1`, `vkm_2`, `vkm_3`), `nlex_emission_factors` |
-
-### This one is a sensitivity, not an optimisation — label it as such
-
-The heavy share of vehicle-km does move: 7.73% (Dec 2025) to 11.12%
-(Jan 2022) across 54 months. But the **lowest months are all Decembers**
-(2025, 2024, 2023), when holiday car traffic dilutes the trucks rather than
-fewer trucks running. So the record shows the share *can read* lower, not that
-anything NLEX controls can make it lower. The bar is drawn hollow, marked a
-policy target, and carries that sentence (computed from the record, not
-hardcoded). It has no Monte Carlo range: nothing in it is uncertain but the
-target chosen.
+Removed as not data-backed. Its size was a chosen policy target (`δ`, default 1 pp of
+Class-3 vehicle-km moved to Class 2), not an observed change: the record's lowest
+Class 3 months are holiday Decembers, when car traffic dilutes the trucks, so nothing
+shows the share can be pushed down. Class 3 now appears only through measured
+outputs: the CO2 per class-km table (Class 3 is 9.2% of the distance and 23.1% of the
+CO2 in 2025), the Class 3 window advisory and the tolling recommendation. The API
+still accepts `heavyShiftPp` for old links and ignores it.
 
 ---
 
@@ -219,73 +210,73 @@ target chosen.
 |---|---|
 | **Decision variable** | `τ_b,h` — target blockage minutes for each band `b` and start hour `h` |
 | **Objective** | minimise `Σ_i idle_CO₂(λ_h(i), min(T_i, τ_b(i),h(i)))` over the Range's lane-blocking accidents |
-| **Constraints** | `τ_b,h = floor_b,h`, the **10th percentile actually achieved** in that band and hour — you cannot beat your own best observed response. An incident already faster than its floor keeps its own time. |
+| **Constraints** | `τ_b,h = floor_b,h`, the **10th percentile actually achieved** in that band and hour — you cannot beat your own best observed response. An incident already faster than its floor keeps its own time. Since 2 Nov 2026 a band-hour group with fewer than 10 blockages, and the 60–180 and over-180 bands always, use the band's 10th percentile over all hours: a lone long blockage was its own "fastest 10%" and saved nothing (2025: 168 blockages of 1–3 h, 26 over 3 h). A band with fewer than 10 gets no floor. |
 | **Data** | `silver.nlex_accident_events_clean` (`blockage_cleared`, `event_start_date`, `direction`, `km_value`), λ from `gold.fact_emissions_hourly` |
 
 Bands: under 15 min, 15–60, 60–180, over 180. Blockage is heavily
 right-skewed (median 4 min, p90 about 33), so one floor for all would be meaningless.
 
-Each incident strategy also reports **where and when** its saving is: the three
+The strategy also reports **where and when** its saving is: the three
 10-km stretches (per carriageway) and the hours that hold most of it, the share
 from blockages of an hour or more, and a warning when a single incident is 20%
 or more of the figure (2025: Southbound Km 50–60 near San Simon holds 49%).
 
 ---
 
-## 5. Strategy C — When to put the responders
+## 5. Strategy C — When to put the responders (removed 2026-11-02)
 
-The same minute saved is worth far more at some hours than others, because λ
-scales with the volume at that hour — nearly 10× between 17:00 and 02:00. This
-is the *only* legitimate way the peak enters an emissions strategy.
-
-| | |
-|---|---|
-| **Decision variable** | `a_h` — share of a fixed response capacity assigned to hour `h` |
-| **Objective** | maximise CO₂ avoided = Strategy B's saving, counted only in the hours the capacity is sent to |
-| **Constraints** | `Σ_h a_h = A` (capacity fixed — allocation, not hiring), sent to the 12 hours with the most vehicles exposed; same observed floors as B |
-| **Data** | as Strategy B |
-
-Always at most Strategy B's saving: B and C must not be added together.
+Removed as not data-backed. It assumed that moving existing response capacity into the
+12 busiest hours would reach the blockage floors there, and the record holds no
+responder capacity, shift or roster data to support that. Its "when" is already on
+Strategy B, which reports the hours holding most of its saving.
 
 ---
 
-## 6. Monte Carlo ranges (B and C)
+## 6. Bootstrap range (B)
 
-B and C depend on *which* incidents happen in a Range — and, being quadratic,
-on how many long ones. One figure overstates how well that is known. The
-Range's incidents are resampled with replacement 400 times (a seeded bootstrap,
-so the same Range gives the same range), both savings recomputed against the
-same observed floors, and the **5th–95th percentile** reported. 2025: shorter
-blockages 758 t, likely 332–1,432 t; busiest-hours deployment 614 t, likely 190–1,298 t.
+B depends on *which* incidents happen in a Range — and, being quadratic, on how
+many long ones. One figure overstates how well that is known. The Range's
+incidents are resampled with replacement 400 times (seeded, so the same Range
+gives the same range), the saving recomputed against the same observed floors,
+and the **5th–95th percentile** reported. 2025: shorter blockages 993.5 t,
+likely 491.9–1,776.3 t (758 t before the floors were pooled, 2 Nov 2026).
+
+This figure looks BACK over the Range. Since 2 Nov 2026 it also gives a projection ("Ahead"): the saving per
+Range incident times the incident forecast over the days its accuracy test passes (today days 8–14 ahead,
+8–14 Jul 2026, 795 incidents): 18.6 t. The per-incident saving is the Range's own, so it carries the Range's
+mix of incidents, blockage lengths and hours.
 
 ---
 
 ## 7. Output contract
 
-`GET /api/emissions/prescriptive` returns, per strategy:
+`GET /api/emissions/prescriptive` returns one strategy (since 2 Nov 2026):
 
 ```ts
 {
-  key: "fleet_mix" | "clearance" | "deployment",
-  label: string,              // no more "Strategy X"
+  key: "clearance",
+  label: string,              // "Shorter lane blockages"
   reductionPct: number,       // vs the same period's actual CO₂
   reductionTonnes: number,
-  range: { lowTonnes, highTonnes, lowPct, highPct, runs } | null,   // Monte Carlo, B and C
+  range: { lowTonnes, highTonnes, lowPct, highPct, runs } | null,   // bootstrap
   lever: string,              // the decision variable's chosen value, in words
-  evidenceBounded: boolean,   // false for A: a policy scenario
-  evidenceNote?: string,      // for A: what the record does show
-  assumptions: string[],      // every bound, and where it came from
+  where: string, when: string, focus?: string,
+  evidenceBounded: true,
+  floorNote: string,
+  projection: { tonnes, from, to, days, forecastIncidents, basis } | null,
+  projectionNote?: string,
+  assumptions: string[],      // how it is computed, each step from the record or a cited source
 }
 ```
 
-plus `basis` (the Range, the actual CO₂, the incident window and count) and
-`unavailable` (strategies a Range cannot support, left out rather than drawn at
-0%). `reductionPct` is **relative to the actual CO₂ of the same window**, so the
-bars are comparable to each other and to the Descriptive tab.
+plus `classKm`, `corridorGPerVkm`, `heavyWindow`, `tolling`, `basis` (the Range,
+the actual CO₂, the incident window and count) and `unavailable` (left out rather
+than drawn at 0%). There is no `ranking`. `reductionPct` is **relative to the
+actual CO₂ of the same window**, so it is comparable to the Descriptive tab.
 
 ## 8. Done when
 
-- The bars change when the date Range changes. ✓
+- The figures change when the date Range changes. ✓
 - The **Illustrative** chip is gone. ✓
 - Every number traces to a query, and each strategy states its own bound and
   where that bound came from. ✓
@@ -297,19 +288,20 @@ bars are comparable to each other and to the Descriptive tab.
 ## Additions from the modelling diagram (2026-10-14)
 
 The diagram's Recommendations/Strategies boxes for emissions name TOPSIS, CO2 per class-km, a dynamic tolling
-recommendation, and a heavy-vehicle window restriction advisory (KPI: Class 3 peak share reduction). All four are
-now returned by `GET /api/emissions/prescriptive` and shown on the Prescriptive tab, as tables, not charts.
+recommendation, and a heavy-vehicle window restriction advisory (KPI: Class 3 peak share reduction). The last three
+are returned by `GET /api/emissions/prescriptive` and shown on the Prescriptive tab; TOPSIS was removed on
+2 Nov 2026 (below).
 
 - **CO2 per class-km** (`classKm`, `corridorGPerVkm`): 196 / 689 / 798 g per km for classes 1 / 2 / 3, against
   each class's share of vehicle-km and of CO2. 2025: Class 3 is 9.2% of the distance and 23.1% of the CO2.
-- **TOPSIS** (`ranking`): the CO2 strategies ranked on four criteria the record can measure: expected saving as
-  the record supports it (a policy target counts 0: its figure is whatever target is chosen), the 5th-percentile
-  saving, whether the bound has been achieved on NLEX, and the Monte Carlo width (unknown = the widest seen).
-  Weights 0.35 / 0.25 / 0.25 / 0.15, a stated choice. 2025: shorter blockages 1.00, busiest-hours deployment
-  0.74, heavy share 0.00. The first two overlap, so they are alternatives, not savings to add.
-- **Heavy-vehicle window** (`heavyWindow`): the peak is the hours within 10% of the busiest hour's vehicle-km
-  (2025: 13:00-18:00); the moved Class-3 vehicle-km go to the quietest hours that stay under the peak's lowest
-  hour. KPI: Class 3 share in the window (2025: 6.8% against 9.2% all day; trucks already avoid it). No CO2
-  saving is claimed: the model has no congestion term.
-- **Dynamic tolling** (`tolling`): the exits with the most Class-3 CO2 in the window (2025: San Fernando 21.5%).
-  No toll elasticity is in the record, so the tonnes are what is at stake, not a saving.
+- **TOPSIS** (removed 2026-11-02): it ranked the strategies on weights that were the team's choice (no source),
+  and with one measured strategy left there is nothing to rank.
+- **Class 3 window advisory** (`heavyWindow`): a recommendation, from the congestion forecast since 2 Nov 2026.
+  The window is the hours the forecast expects High congestion most over the next 7 days (within 10% of its
+  highest hour's average chance of High; the Range's busiest hours only when no forecast exists). KPI: Class 3's
+  share of vehicle-km there, to 0% if followed; the quietest hours are checked for room. 2 Nov 2026: 23:00-01:00,
+  where Class 3 is 20.3% of vehicle-km against 9.3% over the day (possibly daytime truck restrictions, which are
+  not in the record). No CO2 saving is claimed: the model has no congestion term.
+- **Tolling recommendation** (`tolling`): where a Class-3 surcharge for that window would apply, the fewest exits
+  (at most five) carrying 80% of Class 3's CO2 in those hours (2 Nov 2026: Bocaue Barrier, San Fernando, NLEX
+  Harbor Link, Sta. Ines, Balagtas, 70%). Where, not how much: no toll price, elasticity or diversion data.

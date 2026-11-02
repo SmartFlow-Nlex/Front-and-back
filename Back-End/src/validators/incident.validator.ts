@@ -293,7 +293,7 @@ export type IncidentPredictiveResult = z.infer<typeof IncidentPredictiveResponse
 
 export const ClearanceProtocolQuerySchema = z.object({
   type: z.enum(["accident", "breakdown"]).optional().default("accident"),
-  // PDO-dominated pooled curves are misleading for a dispatch decision, so
+  // PDO-dominated pooled curves are misleading for an escalation decision, so
   // this defaults to "injury" rather than "all" — see the panel's own hint.
   // Ignored entirely when type=breakdown (no severity column on that table).
   severity: z.enum(["all", "pdo", "injury", "fatal"]).optional().default("injury"),
@@ -301,75 +301,44 @@ export const ClearanceProtocolQuerySchema = z.object({
   months: IncidentPredictiveMonthsSchema.optional().default("12"),
   from: isoDate.optional(),
   to: isoDate.optional(),
-  maxUnits: z.coerce.number().int().min(1).max(6).optional().default(4),
-  unitCostPerHour: z.coerce.number().positive().optional().default(1500),
-  delayCostPerVehHour: z.coerce.number().positive().optional().default(300),
-  unitEffect: z.coerce.number().min(0).max(1).optional().default(0.25),
-  demandLevel: z.enum(["offpeak", "normal", "peak"]).optional().default("normal"),
-  // Extra travel/response time a NEW incident sees when the nearest unit is
-  // already committed here -- the input the derived coverage-opportunity
-  // cost is built from (see clearance-protocol.service.ts). Not itself
-  // tunable to produce a particular answer; it's a stated assumption like
-  // beta, exposed the same way.
-  deltaResponseMin: z.coerce.number().positive().optional().default(15),
+  // Data only since 2 Nov 2026: maxUnits, unitCostPerHour, delayCostPerVehHour, unitEffect, demandLevel and
+  // deltaResponseMin were the MILP's assumed inputs and are gone. An old link that still sends them is not
+  // rejected; zod drops unknown keys.
 });
 export type ClearanceProtocolQuery = z.infer<typeof ClearanceProtocolQuerySchema>;
 
-const ScenarioLabelSchema = z.enum(["fast", "typical", "slow", "extreme"]);
+const ChanceSchema = z.object({ p: z.number(), lo: z.number(), hi: z.number() });
 
 export const ClearanceProtocolResponseSchema = z.discriminatedUnion("status", [
   z.object({
     status: z.literal("ok"),
-    recommendation: z.object({
-      unitsAtDispatch: z.number().int(),
-      escalateAtMinute: z.number(),
-      escalationUnitsByScenario: z.record(ScenarioLabelSchema, z.number().int()),
-      action: z.string(),
-      when: z.string(),
-      effect: z.string(),
-      confidence: z.string(),
+    rule: z.object({
+      checkAtMinute: z.number(),
+      pastMinute: z.number(),
+      chance: ChanceSchema,
+      openAtCheck: z.number().int(),
+      text: z.string(),
     }),
-    survivalCurve: z.array(z.object({ minute: z.number(), survival: z.number(), atRisk: z.number().int() })),
-    quantiles: z.object({ p50: z.number(), p80: z.number(), p95: z.number() }),
-    scenarios: z.array(
+    checkpoints: z.array(
       z.object({
-        label: ScenarioLabelSchema,
-        probability: z.number(),
-        durationMin: z.number(),
-        delayVehHours: z.number(),
-        recourseUnits: z.number().int(),
-        effectiveDurationMin: z.number(),
+        label: z.enum(["P25", "P50", "P80"]),
+        minute: z.number(),
+        stillOpen: z.number(),
+        openCount: z.number().int(),
+        medianRemainingMin: z.number().nullable(),
+        pastP95: ChanceSchema,
       }),
     ),
+    survivalCurve: z.array(z.object({ minute: z.number(), survival: z.number(), atRisk: z.number().int() })),
+    quantiles: z.object({ p50: z.number(), p80: z.number(), p95: z.number() }),
     kpi: z.object({
-      projectedMttr: z.number(),
       baselineMttr: z.number(),
       rag: z.enum(["green", "amber", "red"]),
       targets: z.object({ greenMax: z.number(), amberMax: z.number() }),
       metricLabel: z.string(),
       indicative: z.boolean(),
     }),
-    evpi: z.number(),
-    vss: z.number(),
-    // False: the forecast behind the coverage cost was unavailable; served, never cached (19 Oct 2026).
-    coverageCostApplied: z.boolean(),
-    assumptions: z.array(z.string()),
-    sensitivity: z.array(
-      z.object({
-        beta: z.number(),
-        delayCostMultiplier: z.number(),
-        unitsAtDispatch: z.number().int(),
-        maxEscalation: z.number().int(),
-      }),
-    ),
-    deltaSensitivity: z.array(
-      z.object({
-        deltaResponseMin: z.number(),
-        unitsAtDispatch: z.number().int(),
-        maxEscalation: z.number().int(),
-        derivedCostPerUncoveredIncident: z.number(),
-      }),
-    ),
+    method: z.array(z.string()),
     scoringWindow: z.object({ from: z.string(), to: z.string() }),
     sampleSize: z.number().int(),
     censoredCount: z.number().int(),

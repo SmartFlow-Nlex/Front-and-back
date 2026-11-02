@@ -235,11 +235,9 @@ export const getIncidentBreakdownResponse = async (req: Request, res: Response) 
 };
 
 // GET /api/incident/clearance-protocol — the Prescriptive tab's Clearance
-// Response Protocol: a Kaplan-Meier clearance-time curve cut into scenarios,
-// fed into a two-stage stochastic covering-location-style MILP (YALPS) that
-// recommends how many units to dispatch now and whether to escalate at the
-// set's own median clearance time. See clearance-protocol.service.ts's own
-// module doc comment for the full method and every assumption involved.
+// Response Protocol: a Kaplan-Meier clearance-time curve and the escalation
+// rule read off it (still open at P50 -> chance of running past P80). Data
+// only; see clearance-protocol.service.ts's module doc comment.
 export const getClearanceProtocol = async (req: Request, res: Response) => {
   const parsed = ClearanceProtocolQuerySchema.safeParse(req.query);
   if (!parsed.success) {
@@ -255,9 +253,6 @@ export const getClearanceProtocol = async (req: Request, res: Response) => {
   }
 
   const validated = ClearanceProtocolResponseSchema.parse(data);
-  // Degraded (no coverage cost): answer it, but keep it out of the 3-hour route cache so a transient
-  // forecast miss is not what every later reader of this control combination is handed.
-  if (validated.status === "ok" && !validated.coverageCostApplied) res.locals.noStore = true;
   res.json({ success: true, source: "database", data: validated });
 };
 

@@ -1025,3 +1025,6 @@ html[data-effects="off"] .ss-fx { display: none; }
 }
 .si-steps li > span { flex: 1; min-width: 0; }
 
+
+/* A sign-in carried on at the code step after the tab was closed (app/page.tsx, 3 Nov 2026). */
+.mfa-resumed b { font-weight: 650; overflow-wrap: anywhere; }

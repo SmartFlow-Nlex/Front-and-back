@@ -67,9 +67,11 @@ export async function verifiedFactorId(): Promise<string | null> {
 /**
  * End a session that only ever passed the password step.
  *
- * Such a session is never resumed: the code step always follows a password
- * typed in the same visit, so a half-finished sign-in left on a shared PC
- * cannot be picked up by the next person. "local" ends this browser's session
+ * Such a session is not resumed unless "Remember me" was ticked for it
+ * (app/page.tsx, 3 Nov 2026: it reopens at the code step, which still asks for
+ * the code). Otherwise the code step follows a password typed in the same
+ * visit, so a half-finished sign-in left on a shared PC cannot be picked up by
+ * the next person. "local" ends this browser's session
  * only; the operator's other devices stay signed in.
  *
  * Deferred a tick, for the same listener reason as above.

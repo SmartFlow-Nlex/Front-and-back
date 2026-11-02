@@ -1,12 +1,11 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { solve } from "yalps";
 import { fmtInt } from "./incidentPredictive.shared";
 import { Truck } from "lucide-react";
-import { Shell, Empty, ActionCard } from "./prescriptiveShell";
+import { Shell, Empty, ActionCard, SourceBadge } from "./prescriptiveShell";
 // km arrives MEASURED (exits and segment midpoints); shown as the official km post.
-import { fmtKm } from "../../lib/km-post";
+import { fmtKm, kmMeasured, KM_POST_END, KM_POST_START } from "../../lib/km-post";
 
 const BACKEND = process.env.NEXT_PUBLIC_BACKEND_URL ?? "http://localhost:4000";
 
@@ -25,85 +24,88 @@ type PredictiveSlice = {
   kmSegmentForecast: KmSegmentForecastPoint[] | null;
   corridorForecastModel: string | null;
   corridorForecastDays: number;
+  /** The champion's daily forecast for the Future days, oldest first, to sum over the validated window. */
+  futureDaily: { date: string; predicted: number | null }[];
+  /** The rolling-origin study: which forecast ranges beat the benchmark. */
+  horizonAccuracy: { hLo: number; hHi: number; usable: boolean; mase: number | null }[];
 };
 
 /** An official km-post span, from measured ends: "Km 25–30". */
 const kmSpan = (lo: number, hi: number) => (Math.abs(hi - lo) < 0.05 ? `Km ${fmtKm(lo)}` : `Km ${fmtKm(lo)}–${fmtKm(hi)}`);
 
-/* Density is counted over the same fixed length of road everywhere: predicted incidents within 2.5 km either
-   side of a site, per km of corridor in that window (19 Oct 2026, testers IN-13). It used to divide by the
-   gap to the neighbouring exits, so two exits 0.6 km apart (the Bocaue pair) or a 0.4 km segment ranked
-   hottest from the small denominator alone -- still used by the evidence table's "Per km" column below. */
-const DENSITY_WINDOW_KM = 5;
-
-// The optimization: a Maximal Covering Location Problem (MCLP), a classic
-// 0/1 integer linear program —
-//   maximize   sum_i w_i * x_i
-//   subject to sum_{j in N(i)} y_j >= x_i   for every demand zone i
-//              sum_j y_j <= K
-//              x_i, y_j in {0,1}
-// where w_i is zone i's predicted-incidents weight (straight from the
-// ranking above), y_j = 1 means a patrol unit is stationed at zone j,
-// x_i = 1 means zone i ends up covered, K is the fleet size, and N(i) is the
-// set of zones within `radiusKm` of zone i measured along the corridor
-// (|km_i - km_j|, not straight-line distance — this is a roadway, not open
-// terrain). Solved as an actual Mixed-Integer Linear Program — simplex on
-// the LP relaxation plus branch-and-cut for the binary variables, via YALPS
-// (https://github.com/IanManske/YALPS) — rather than enumerating every
-// C(n, K) site combination by hand. Still exact (branch-and-cut proves
-// optimality, it doesn't approximate it), but it's the solver doing linear
-// programming now, not a bespoke search.
 /** km, lo and hi are MEASURED. An exit is a point (lo = hi = km); a segment spans lo to hi, km its middle. */
-type Row = { key: string; label: string; km: number; lo: number; hi: number; predictedIncidents: number; ratePerKm: number };
+type Row = { key: string; label: string; km: number; lo: number; hi: number; predictedIncidents: number };
+type Placed = Row & { order: number; cumShare: number };
 
-/** Predicted incidents per km over the DENSITY_WINDOW_KM of corridor centred on `centre`. Segment totals are
-    spread evenly along their length; the window is clipped to the corridor so an end site is not diluted. */
-function windowDensity(centre: number, all: Row[], corridorLo: number, corridorHi: number): number {
-  const lo = Math.max(centre - DENSITY_WINDOW_KM / 2, corridorLo);
-  const hi = Math.min(centre + DENSITY_WINDOW_KM / 2, corridorHi);
-  const len = hi - lo;
-  if (len <= 0) return 0;
-  let mass = 0;
-  for (const r of all) {
-    if (r.hi - r.lo < 1e-9) {
-      if (r.km >= lo && r.km <= hi) mass += r.predictedIncidents;
-    } else {
-      mass += (r.predictedIncidents * Math.max(0, Math.min(hi, r.hi) - Math.max(lo, r.lo))) / (r.hi - r.lo);
-    }
-  }
-  return mass / len;
+/* The placement order (2 Nov 2026, "no assumptions"). It replaced a Maximal Covering solve whose answer depended on a
+   fleet size and a coverage radius the operator had to make up: no NLEX patrol or tow fleet data exists, and no
+   radius is measured. Now each forecast incident counts at its own exit (or km segment), as the Predictive tab's
+   ranking already splits it, and units are placed busiest first: unit 1 where most forecast incidents are, unit 2 at
+   the next, and so on. After each unit, `cumShare` is the share of all forecast incidents at the sites staffed so
+   far, so the operator reads off their own fleet: "3 units -> 31%". Every number is the forecast's. */
+function placementOrder(rows: Row[]): Placed[] {
+  const total = rows.reduce((t, r) => t + r.predictedIncidents, 0);
+  let run = 0;
+  return rows
+    .slice()
+    .sort((a, b) => b.predictedIncidents - a.predictedIncidents)
+    .map((r, i) => {
+      run += r.predictedIncidents;
+      return { ...r, order: i + 1, cumShare: total > 0 ? run / total : 0 };
+    });
 }
 
-function solveMclp(weights: number[], covers: number[][], k: number): { chosen: number[]; coveredWeight: number } {
-  const n = weights.length;
-
-  // One binary y_j per candidate site (staffed or not) and one binary x_i
-  // per demand zone (covered or not) — the MCLP above, translated directly
-  // into YALPS's { constraints, variables } form. "fleet" caps sum(y_j) at
-  // K; each zone's own "cov{i}" constraint enforces x_i <= sum of y_j over
-  // the sites that can reach it (covers[j] already lists, from radiusKm,
-  // which zones site j reaches).
-  const constraints: Record<string, { min?: number; max?: number }> = { fleet: { max: k } };
-  for (let i = 0; i < n; i++) constraints[`cov${i}`] = { min: 0 };
-
-  const variables: Record<string, Record<string, number>> = {};
-  for (let j = 0; j < n; j++) {
-    const coeffs: Record<string, number> = { fleet: 1 };
-    for (const i of covers[j]) coeffs[`cov${i}`] = 1;
-    variables[`y${j}`] = coeffs;
-  }
-  for (let i = 0; i < n; i++) variables[`x${i}`] = { coverage: weights[i], [`cov${i}`]: -1 };
-
-  const solution = solve({ direction: "maximize", objective: "coverage", constraints, variables, binaries: true });
-  const chosen = solution.variables.filter(([key, v]) => key[0] === "y" && v > 0.5).map(([key]) => Number(key.slice(1)));
-  // solution.result IS the covered weight (x_i's objective coefficients are
-  // exactly the zone weights) — only recomputed if the solver ever returns a
-  // non-"optimal" status, so the UI never shows an impossible number.
-  const coveredWeight =
-    solution.status === "optimal"
-      ? solution.result
-      : Array.from(new Set(chosen.flatMap((j) => covers[j]))).reduce((s, i) => s + weights[i], 0);
-  return { chosen, coveredWeight };
+/* The plan on one line of road: the corridor from the first to the last km post, a bar at each exit or segment for
+   its forecast incidents, and the first `marked` places as numbered markers. Positions are MEASURED km; the ticks are
+   labelled with the official posts. */
+function CorridorStrip({ rows, placed, marked }: { rows: Row[]; placed: Placed[]; marked: number }) {
+  const W = 1000;
+  const H = 128;
+  const padX = 18;
+  const base = 92;
+  const lo = Math.min(kmMeasured(KM_POST_START), ...rows.map((r) => r.lo));
+  const hi = Math.max(kmMeasured(KM_POST_END), ...rows.map((r) => r.hi));
+  const x = (km: number) => padX + ((km - lo) / Math.max(hi - lo, 1)) * (W - 2 * padX);
+  const top = Math.max(1, ...rows.map((r) => r.predictedIncidents));
+  const ticks: number[] = [];
+  for (let post = Math.ceil(KM_POST_START / 10) * 10; post <= KM_POST_END; post += 10) ticks.push(kmMeasured(post));
+  const first = placed.slice(0, marked);
+  const firstKeys = new Set(first.map((p) => p.key));
+  // Left to right, so neighbouring labels alternate rows instead of overlapping.
+  const byKm = first.slice().sort((a, b) => a.km - b.km);
+  return (
+    <figure className="inc-strip">
+      <svg viewBox={`0 0 ${W} ${H}`} role="img" aria-label={`Placement order: ${first.map((p) => `${p.order}. ${p.label}`).join(", ")}`}>
+        <line className="inc-strip-road" x1={x(lo)} x2={x(hi)} y1={base} y2={base} />
+        {rows.map((r) => {
+          const h = Math.max(2, (r.predictedIncidents / top) * 50);
+          const w = r.hi - r.lo > 0.05 ? Math.max(3, x(r.hi) - x(r.lo) - 1) : 4;
+          return (
+            <rect key={r.key} className={`inc-strip-bar${firstKeys.has(r.key) ? " is-staffed" : ""}`} x={r.hi - r.lo > 0.05 ? x(r.lo) : x(r.km) - 2} y={base - h} width={w} height={h}>
+              <title>{`${r.label} · ${kmSpan(r.lo, r.hi)} · ${Math.round(r.predictedIncidents).toLocaleString()} forecast incidents`}</title>
+            </rect>
+          );
+        })}
+        {byKm.map((p, i) => (
+          <g key={`unit-${p.key}`} className="inc-strip-unit">
+            <circle cx={x(p.km)} cy={base} r={9} />
+            <text className="inc-strip-order" x={x(p.km)} y={base + 4} textAnchor="middle">{p.order}</text>
+            <text x={x(p.km)} y={i % 2 === 0 ? 12 : 30} textAnchor="middle">{p.label}</text>
+          </g>
+        ))}
+        {ticks.map((t) => (
+          <g key={`t-${t}`} className="inc-strip-tick">
+            <line x1={x(t)} x2={x(t)} y1={base + 4} y2={base + 9} />
+            <text x={x(t)} y={base + 24} textAnchor="middle">Km {fmtKm(t, 0)}</text>
+          </g>
+        ))}
+      </svg>
+      <figcaption className="inc-strip-key">
+        <span><i className="is-unit" aria-hidden="true" />Placement order (first {marked})</span>
+        <span><i className="is-bar" aria-hidden="true" />Forecast incidents</span>
+      </figcaption>
+    </figure>
+  );
 }
 
 type Props = {
@@ -111,9 +113,8 @@ type Props = {
   // PredictiveIncidentChart takes it — corridorForecast's apportionment
   // shares are computed from incidents within this window (verified: the
   // per-exit split shifts a few points between 3mo/12mo/all, even though the
-  // published total forecast itself doesn't), so which exits this panel
-  // recommends staffing genuinely can move with Range. Defaults to 12mo,
-  // this panel's original fixed window, when unset.
+  // published total forecast itself doesn't), so the placement order can move
+  // with Range. Defaults to 12mo, this panel's original fixed window, when unset.
   months?: "3" | "12" | "all";
   from?: string;
   to?: string;
@@ -121,8 +122,6 @@ type Props = {
 
 export default function PrescriptiveDeploymentPanel({ months = "12", from, to }: Props) {
   const [view, setView] = useState<"exit" | "km">("exit");
-  const [fleetSize, setFleetSize] = useState(4);
-  const [radiusKm, setRadiusKm] = useState(8);
   const [predictive, setPredictive] = useState<PredictiveSlice | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -149,6 +148,11 @@ export default function PrescriptiveDeploymentPanel({ months = "12", from, to }:
           kmSegmentForecast: json.data.kmSegmentForecast,
           corridorForecastModel: json.data.corridorForecastModel,
           corridorForecastDays: json.data.corridorForecastDays,
+          futureDaily: (json.data.daily ?? [])
+            .filter((d: { predictionType?: string | null }) => d.predictionType === "future")
+            .map((d: { date: string; predicted: number | null }) => ({ date: d.date, predicted: d.predicted }))
+            .sort((a: { date: string }, b: { date: string }) => a.date.localeCompare(b.date)),
+          horizonAccuracy: json.data.horizonAccuracy ?? [],
         });
         setError(null);
       })
@@ -164,7 +168,7 @@ export default function PrescriptiveDeploymentPanel({ months = "12", from, to }:
   }, [months, from, to]);
 
   const hint =
-    "A solution for the Predictive tab's own Predicted Incidents Ranking: an exact linear program (Maximal Covering Location solve) that recommends exactly where to pre-position patrol and tow-truck units — which exits or km segments to station them at — to cover as much predicted incident risk as possible, cutting response time during high-risk windows. Fleet size and coverage radius are yours to set — nothing in the warehouse records NLEX's actual patrol fleet.";
+    "Where to place patrol and tow-truck units, in order: the first unit where the incident forecast expects the most incidents, the next at the second, and so on. Each line gives the share of all forecast incidents covered by the units placed so far, so you read off your own fleet size. Incidents count at their own exit (or km segment), split by each one's share of past incidents in the Range; the total is the forecast over the days where it beats repeating last week.";
 
   if (loading && predictive === null) {
     return (
@@ -174,23 +178,34 @@ export default function PrescriptiveDeploymentPanel({ months = "12", from, to }:
     );
   }
 
+  /* The forecast window that passes its accuracy test. The counts used to be the whole 90-day forecast, most of which
+     loses to the benchmark (gold horizon study: days 15-90 fail). The first run of horizon buckets that pass is used
+     instead; each exit keeps its share and the total becomes the forecast's sum over those days, so the rescaling is
+     exact. With no passing bucket the full horizon stays, labelled as beyond the validated range. */
+  const buckets = (predictive?.horizonAccuracy ?? []).slice().sort((a, b) => a.hLo - b.hLo);
+  const firstOk = buckets.findIndex((b) => b.usable);
+  let win: { lo: number; hi: number; mase: number | null } | null = null;
+  if (firstOk >= 0) {
+    let hi = buckets[firstOk].hHi;
+    for (let i = firstOk + 1; i < buckets.length && buckets[i].usable && buckets[i].hLo === hi + 1; i++) hi = buckets[i].hHi;
+    win = { lo: buckets[firstOk].hLo, hi, mase: buckets[firstOk].mase };
+  }
+  const future = predictive?.futureDaily ?? [];
+  const sumDays = (lo: number, hi: number) => future.slice(lo - 1, hi).reduce((t, d) => t + (d.predicted ?? 0), 0);
+  const allFuture = sumDays(1, future.length);
+  const scale = win && allFuture > 0 && future.length >= win.hi ? sumDays(win.lo, win.hi) / allFuture : 1;
+  const validated = win != null && scale !== 1;
+  const winLabel = validated ? `days ${win!.lo}–${win!.hi} ahead` : `the ${predictive?.corridorForecastDays ?? future.length}-day forecast`;
+
   const useKmView = view === "km" && predictive?.kmSegmentForecast != null && predictive.kmSegmentForecast.length > 0;
-  const exitRows: Row[] = (predictive?.corridorForecast ?? [])
-    .slice()
-    .sort((a, b) => a.km - b.km)
-    .map((x) => ({
-      key: `exit-${x.exitId}`, label: x.exitName, km: x.km, lo: x.km, hi: x.km, predictedIncidents: x.predictedIncidents, ratePerKm: 0,
-    }));
+  const exitRows: Row[] = (predictive?.corridorForecast ?? []).map((x) => ({
+    key: `exit-${x.exitId}`, label: x.exitName, km: x.km, lo: x.km, hi: x.km, predictedIncidents: x.predictedIncidents * scale,
+  }));
   const kmRows: Row[] = (predictive?.kmSegmentForecast ?? []).map((x) => ({
     key: `seg-${x.segmentStart}`, label: x.label, km: (x.segmentStart + x.segmentEnd) / 2, lo: x.segmentStart, hi: x.segmentEnd,
-    predictedIncidents: x.predictedIncidents, ratePerKm: 0,
+    predictedIncidents: x.predictedIncidents * scale,
   }));
-  const baseRows = useKmView ? kmRows : exitRows;
-  const corridorLo = Math.min(...baseRows.map((r) => r.lo));
-  const corridorHi = Math.max(...baseRows.map((r) => r.hi));
-  const rows: Row[] = baseRows.map((r) => ({ ...r, ratePerKm: windowDensity(r.km, baseRows, corridorLo, corridorHi) }));
-  /** Where a row is, as the operator reads it: an exit's post, or a segment's span of posts. */
-  const placeOf = (r: Row) => kmSpan(r.lo, r.hi);
+  const rows: Row[] = useKmView ? kmRows : exitRows;
 
   // Only reachable with no successful load yet -- predictive === null -- or a
   // genuinely empty ranking, so there is nothing stale to fall back to; a
@@ -204,40 +219,14 @@ export default function PrescriptiveDeploymentPanel({ months = "12", from, to }:
     );
   }
 
-  const clampedFleet = Math.max(1, Math.min(fleetSize, rows.length));
-  const covers = rows.map((site) => rows.map((z, i) => ({ i, d: Math.abs(site.km - z.km) })).filter((x) => x.d <= radiusKm).map((x) => x.i));
-  const weights = rows.map((r) => r.predictedIncidents);
-  const { chosen, coveredWeight } = solveMclp(weights, covers, clampedFleet);
-  const chosenSet = new Set(chosen);
-  const totalWeight = weights.reduce((s, w) => s + w, 0);
-  const coverageShare = totalWeight > 0 ? coveredWeight / totalWeight : 0;
-  const staffedCount = chosen.length;
-
-  // Busiest-first for the table, same framing Booth Staffing Plan uses
-  // ("show the N busiest"); `idx` keeps each row's position in `rows` so the
-  // LP's own chosen-site indices still resolve correctly after sorting.
-  const displayRows = rows
-    .map((r, idx) => ({ ...r, idx, staffed: chosenSet.has(idx) }))
-    .sort((a, b) => b.predictedIncidents - a.predictedIncidents);
-  const visible = showAll ? displayRows : displayRows.slice(0, 8);
-
-  const slider = (label: string, value: number, min: number, max: number, step: number, onChange: (v: number) => void, suffix: string) => (
-    <label className="inc-slider">
-      <span className="inc-slider-top">
-        <span>{label}</span>
-        <b>{value}{suffix}</b>
-      </span>
-      <input type="range" min={min} max={max} step={step} value={value} onChange={(e) => onChange(Number(e.target.value))} />
-    </label>
-  );
-
-  const unitWord = useKmView ? "segments" : "exits";
-  // The staffed sites, busiest first: the order the table ranks them in.
-  const staffedRows = displayRows.filter((r) => r.staffed);
-  const reachesMost = coverageShare >= 0.8;
-  const verdict = reachesMost
-    ? "this fleet size/radius combination reaches most of the ranking's predicted risk."
-    : "a larger fleet or wider radius would be needed to cover most of the ranking's predicted risk.";
+  const placed = placementOrder(rows);
+  const total = rows.reduce((t, r) => t + r.predictedIncidents, 0);
+  const at = (n: number) => placed[Math.min(n, placed.length) - 1];
+  // Milestones for the headline: how many units reach a quarter, half and three quarters of the forecast incidents.
+  const unitsFor = (share: number) => (placed.find((p) => p.cumShare >= share - 1e-9)?.order ?? placed.length);
+  const TOP_ROWS = 5;
+  const visible = showAll ? placed : placed.slice(0, TOP_ROWS);
+  const unitWord = useKmView ? "segment" : "exit";
   const modelName = predictive.corridorForecastModel ? `${predictive.corridorForecastModel} ` : "";
 
   return (
@@ -260,8 +249,6 @@ export default function PrescriptiveDeploymentPanel({ months = "12", from, to }:
               </button>
             ))}
           </div>
-          {slider("Fleet size", fleetSize, 1, Math.min(12, rows.length), 1, setFleetSize, " units")}
-          {slider("Coverage radius", radiusKm, 1, 40, 1, setRadiusKm, " km")}
         </div>
       }
     >
@@ -270,102 +257,77 @@ export default function PrescriptiveDeploymentPanel({ months = "12", from, to }:
           Couldn&apos;t refresh with the current Range ({error}) — showing the last loaded result.
         </div>
       )}
-      {/* The fleet disclaimer stays visible, beside the controls it qualifies. */}
-      <p className="inc-caption" style={{ marginTop: -6 }}>
-        Fleet size and radius are yours to set — nothing in the warehouse records NLEX&apos;s actual patrol fleet.
-      </p>
 
-      {/* The recommended action, as labelled rows; the reasoning behind Details. */}
       <ActionCard
         lead
         icon={Truck}
-        title={`Stage units at ${staffedCount} ${unitWord}`}
-        tag={<span className={`inc-pill${reachesMost ? " is-on" : ""}`}><i aria-hidden="true" />{reachesMost ? "Reaches most risk" : "Larger fleet or radius needed"}</span>}
+        title={`Place units in this order: ${placed.slice(0, 3).map((p) => p.label).join(", ")}${placed.length > 3 ? "…" : ""}`}
+        tag={<SourceBadge kind="forecast" detail={`The ${modelName}incident forecast for ${winLabel}, split by each ${unitWord}'s share of past incidents`} />}
         facts={[
-          { label: "Action", value: "Pre-position patrol and tow-truck units" },
-          {
-            label: "Where",
-            value: (
-              <ol className="inc-sites">
-                {staffedRows.map((r, i) => (
-                  <li key={r.key}>
-                    <em>{i + 1}</em>
-                    <b>{r.label}</b>
-                    <span>
-                      {placeOf(r)} · {fmtInt(r.predictedIncidents)} predicted
-                    </span>
-                  </li>
-                ))}
-              </ol>
-            ),
-          },
-          { label: "When", value: <>The <b>{predictive.corridorForecastDays}-day</b> forecast window</> },
           {
             label: "Effect",
             value: (
               <>
-                <b>{(coverageShare * 100).toFixed(0)}%</b> of {fmtInt(totalWeight)} predicted incidents within {radiusKm} km ({fmtInt(coveredWeight)} covered)
+                3 units: <b>{(at(3).cumShare * 100).toFixed(0)}%</b> · 5 units: <b>{(at(5).cumShare * 100).toFixed(0)}%</b> of {fmtInt(total)} forecast incidents
               </>
             ),
           },
-          { label: "Basis", value: <>Exact covering solve over the {modelName}{predictive.corridorForecastDays}-day ranking</> },
-          { label: "Confidence", value: "Forecast apportioned by historical share, not modelled per site" },
+          { label: "Half of them", value: <>needs <b>{unitsFor(0.5)}</b> {unitWord}s staffed</> },
+          {
+            label: "When",
+            value: validated
+              ? <>Days {win!.lo}–{win!.hi} ahead, where the forecast beats repeating last week{win!.mase != null ? ` (MASE ${win!.mase.toFixed(2)})` : ""}</>
+              : <>The full forecast: no stretch of it beats repeating last week</>,
+          },
         ]}
         details={
-          <>
-            <p style={{ margin: 0 }}>
-              <strong>Recommended staging: {chosen.map((j) => rows[j].label).join(", ")}.</strong> Pre-position patrol
-              and tow-truck units at these {staffedCount} {unitWord} — a {radiusKm}km radius from
-              each covers <strong>{(coverageShare * 100).toFixed(0)}%</strong> of the ranking&apos;s{" "}
-              {fmtInt(totalWeight)}-incident forecast ({fmtInt(coveredWeight)} of {fmtInt(totalWeight)}) — {verdict}
-            </p>
-            <p style={{ margin: "8px 0 0" }}>
-              Method: a Maximal Covering Location Problem solved as an integer linear program (YALPS, branch-and-cut). Each candidate{" "}
-              {useKmView ? "segment" : "exit"} covers every zone within the coverage radius, measured along the corridor (|km_i − km_j|),
-              weighted by that zone&apos;s predicted incidents from the Predictive tab&apos;s ranking.
-            </p>
-            <p style={{ margin: "8px 0 0" }}>
-              Built from the {modelName}
-              {predictive.corridorForecastDays}-day forecast, apportioned the same way as the ranking above. Fleet size and
-              coverage radius are yours to set — nothing in the warehouse records NLEX&apos;s actual patrol fleet.
-            </p>
-          </>
+          <p style={{ margin: 0 }}>
+            Incidents count at their own {unitWord}: the {modelName}forecast for {winLabel}, split by each {unitWord}&apos;s share of
+            incidents in the Range. Units go busiest first, and each line&apos;s cumulative share is the forecast incidents at the{" "}
+            {unitWord}s staffed so far. Nothing here is set by hand: no fleet size or coverage distance is assumed, so the
+            order holds for any fleet.
+          </p>
         }
       />
 
-      {/* Evidence: every candidate site, busiest first. */}
+      <CorridorStrip rows={rows} placed={placed} marked={Math.min(5, placed.length)} />
+
       <div className="inc-table-wrap">
-        <table className="inc-table">
+        <table className="inc-table inc-place">
           <thead>
             <tr>
+              <th>Unit</th>
               <th>{useKmView ? "Segment" : "Exit"}</th>
               <th>Km post</th>
-              <th>Predicted incidents</th>
-              <th title={`Predicted incidents per km over the ${DENSITY_WINDOW_KM} km centred on this site`}>Per km ({DENSITY_WINDOW_KM} km window)</th>
-              <th>Status</th>
+              <th>Forecast incidents</th>
+              <th>Covered with units 1–n</th>
             </tr>
           </thead>
           <tbody>
-            {visible.map((r) => (
-              <tr key={r.key} className={r.staffed ? "is-staffed" : undefined}>
-                <td style={{ whiteSpace: "nowrap" }}>{r.label}</td>
-                {/* Official km post (lib/km-post.ts); this printed the measured km raw before (19 Oct 2026, testers IN-5). */}
-                <td className="is-muted" style={{ whiteSpace: "nowrap" }}>{placeOf(r).replace("Km ", "")}</td>
-                <td style={{ fontWeight: 600 }}>{fmtInt(r.predictedIncidents)}</td>
-                <td className="is-muted">{r.ratePerKm.toFixed(1)}</td>
-                <td>{r.staffed ? <span className="inc-staffed">Staffed</span> : <span style={{ color: "var(--text-muted)" }}>—</span>}</td>
+            {visible.map((p) => (
+              <tr key={p.key} className={p.order <= 3 ? "is-staffed" : undefined}>
+                <td className="inc-place-order">{p.order}</td>
+                <td style={{ whiteSpace: "nowrap" }}>{p.label}</td>
+                {/* Official km post (lib/km-post.ts). */}
+                <td className="is-muted" style={{ whiteSpace: "nowrap" }}>{kmSpan(p.lo, p.hi).replace("Km ", "")}</td>
+                <td style={{ fontWeight: 600 }}>{fmtInt(p.predictedIncidents)}</td>
+                <td>
+                  <span className="inc-place-cum">
+                    <span className="inc-place-bar" aria-hidden="true"><i style={{ width: `${(p.cumShare * 100).toFixed(1)}%` }} /></span>
+                    <b>{(p.cumShare * 100).toFixed(0)}%</b>
+                  </span>
+                </td>
               </tr>
             ))}
           </tbody>
         </table>
       </div>
 
-      {displayRows.length > 8 && (
-        <button onClick={() => setShowAll((v) => !v)} className="inc-ghost-btn">
-          {showAll ? "Show the 8 busiest" : `Show all ${displayRows.length} ${useKmView ? "segments" : "exits"}`}
+      {placed.length > TOP_ROWS && (
+        <button onClick={() => setShowAll((v) => !v)} className="inc-ghost-btn" aria-expanded={showAll}>
+          {showAll ? `Show the first ${TOP_ROWS}` : `Show all ${placed.length} ${useKmView ? "segments" : "exits"}`}
         </button>
       )}
     </Shell>
   );
 }
-

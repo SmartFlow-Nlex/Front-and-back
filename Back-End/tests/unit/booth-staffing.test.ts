@@ -1,11 +1,15 @@
-/* TC-UT-06  Traffic / Booth Staffing Plan capping
- * src/services/traffic-prescriptive.service.ts: the `partsAt` closure inside
- * getTrafficPrescriptive() computes, per plaza booth group and hour,
- * need = ceil(demand / throughput), staffed = min(need, booths),
- * unmet = demand - staffed * throughput. It closes over `throughput`, which is
- * injected here. Throughput bounds: the API schema in
- * src/controllers/traffic.controller.ts (PrescriptiveTrafficQuerySchema) and
- * the slider in Front-End-Dashboard/components/dashboard/PrescriptiveTrafficPanels.tsx. */
+/* TC-UT-06  Traffic / Staffing priority and the congestion Act line
+ * (redesigned 2 Nov 2026: the booth plan, its throughput slider and booth caps were removed because none of
+ * them were measured; the pre-redesign version of this test is in
+ * SmartFlow_backups/prescriptive_before_redesign_2026-11-02).
+ *
+ * src/services/traffic-prescriptive.service.ts:
+ *   staffingCell(hour, forecast, usual, q) rates one plaza-hour against the plaza's usual peak, where q is the
+ *     plaza's measured held-out ratio (actual / forecast) at quantiles 0.01..0.99. Near-certain ("above") when
+ *     the chance of passing the usual peak is 90% or more, i.e. the 80% band's low end passes it; "likely" at
+ *     50% or more; not rated under MIN_CELL vehicles.
+ *   sweep + pickThreshold choose the congestion Act line: the p_high cut-off with the highest F1.
+ * src/controllers/traffic.controller.ts: PrescriptiveTrafficQuerySchema takes no operator dials any more. */
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { z } from "zod";
@@ -13,44 +17,66 @@ import { readSource, declaration, evaluate } from "../support/source-extract.js"
 
 const service = readSource("Back-End/src/services/traffic-prescriptive.service.ts");
 const controller = readSource("Back-End/src/controllers/traffic.controller.ts");
-const panel = readSource("Front-End-Dashboard/components/dashboard/PrescriptiveTrafficPanels.tsx");
 
-const partsAtFor = (throughput: number) =>
-  evaluate<any>([declaration(service, "partsAt")], ["partsAt"], { throughput }).partsAt;
+const { staffingCell } = evaluate<any>(
+  ["MIN_CELL", "CERTAIN", "LIKELY", "quantileAt", "exceedChance", "staffingCell"].map((n) => declaration(service, n)),
+  ["staffingCell"],
+);
+const { sweep, pickThreshold, f1Of } = evaluate<any>(
+  ["sweep", "f1Of", "pickThreshold"].map((n) => declaration(service, n)),
+  ["sweep", "pickThreshold", "f1Of"],
+);
 
-/** One plaza with one booth group holding `demand` veh/h at weekday hour 0. */
-const plaza = (demand: number, booths: number) => ({ groups: [{ v: [[demand], [demand]], booths }] });
+/** A plaza whose held-out ratio is spread evenly from 0.8 to 1.2: q10 = 0.84, q90 = 1.16. */
+const even = Array.from({ length: 99 }, (_, i) => 0.8 + (0.4 * (i + 1)) / 100);
 
-test("TC-UT-06a: 2,000 veh/h at 400 veh/h/booth, 6 booths -> 5 booths, no overflow", () => {
-  const [part] = partsAtFor(400)(plaza(2000, 6), 0, 0, 1);
-  console.log(`  ${JSON.stringify(part)}`);
-  assert.equal(part.staffed, 5);
-  assert.equal(part.unmet, 0);
+test("TC-UT-06a: forecast 5,000 vehicles, usual peak 4,100, band low end 4,200 -> near-certain (staff above normal)", () => {
+  const c = staffingCell(8, 5000, { median: 4000, peak: 4100 }, even);
+  console.log(`  ${JSON.stringify(c)}`);
+  assert.equal(c.low, 4200);
+  assert.equal(c.high, 5800);
+  assert.equal(c.load, 1.25);
+  assert.ok(c.chance >= 0.9, `chance ${c.chance}`);
+  assert.equal(c.level, "above");
 });
 
-test("TC-UT-06b: same demand, 4 booths -> capped at 4, 400 veh/h overflow", () => {
-  const [part] = partsAtFor(400)(plaza(2000, 4), 0, 0, 1);
-  console.log(`  ${JSON.stringify(part)}`);
-  assert.equal(part.staffed, 4);
-  assert.equal(part.need, 5);
-  assert.equal(part.unmet, 400);
+test("TC-UT-06b: forecast 4,300 just over a usual peak of 4,200 -> likely, not near-certain", () => {
+  const c = staffingCell(8, 4300, { median: 4000, peak: 4200 }, even);
+  console.log(`  ${JSON.stringify(c)}`);
+  assert.ok(c.chance >= 0.5 && c.chance < 0.9, `chance ${c.chance}`);
+  assert.equal(c.level, "likely");
 });
 
-test("TC-UT-06c (UI): throughput slider cannot go below 150 veh/h", () => {
-  const slider = /<input type="range" min=\{(\d+)\} max=\{(\d+)\}[^>]*value=\{rate\}/.exec(panel);
-  assert.ok(slider, "throughput slider not found");
-  console.log(`  slider min=${slider[1]} max=${slider[2]}`);
-  assert.equal(Number(slider[1]), 150);
+test("TC-UT-06c: a plaza-hour under 200 vehicles is outside the measured range -> not rated", () => {
+  const c = staffingCell(3, 150, { median: 100, peak: 120 }, even);
+  console.log(`  ${JSON.stringify(c)}`);
+  assert.equal(c.chance, null);
+  assert.equal(c.low, null);
+  assert.equal(c.level, "normal");
 });
 
-test("TC-UT-06c (API): throughput 100 veh/h is rejected or clamped to 150", () => {
+test("TC-UT-06d: Act line = the p_high cut-off with the highest F1 (ties to the more precise one)", () => {
+  // 10 High hours forecast at 0.30; 50 non-High at 0.10 and 5 at 0.35.
+  const bins = [
+    { test: false, b: 30, pos: true, n: 10 },
+    { test: false, b: 10, pos: false, n: 50 },
+    { test: false, b: 35, pos: false, n: 5 },
+  ];
+  const best = pickThreshold(sweep(bins));
+  console.log(`  threshold=${best.t} tp=${best.tp} fp=${best.fp} fn=${best.fn} f1=${f1Of(best).toFixed(3)}`);
+  assert.equal(best.t, 0.3);
+  assert.deepEqual([best.tp, best.fp, best.fn], [10, 5, 0]);
+  assert.equal(Math.round(f1Of(best) * 1000) / 1000, 0.8);
+});
+
+test("TC-UT-06e (API): the prescriptive query takes no throughput or pool; an old ?throughput= is ignored", () => {
   const { PrescriptiveTrafficQuerySchema } = evaluate<any>(
     [declaration(controller, "PrescriptiveTrafficQuerySchema")],
     ["PrescriptiveTrafficQuerySchema"],
     { z },
   );
-  const r = PrescriptiveTrafficQuerySchema.safeParse({ throughput: "100" });
-  const used = r.success ? Math.max(1, r.data.throughput) : null; // the service's own clamp is max(1, throughput)
-  console.log(`  schema success=${r.success} throughput used by service=${used}`);
-  assert.ok(!r.success || used === 150, `API accepted throughput=100 and the service plans with ${used} veh/h/booth`);
+  const r = PrescriptiveTrafficQuerySchema.safeParse({ throughput: "100", pool: "5", split: "80_20" });
+  console.log(`  success=${r.success} data=${JSON.stringify(r.success ? r.data : null)}`);
+  assert.ok(r.success);
+  assert.deepEqual(r.data, { split: "80_20" });
 });

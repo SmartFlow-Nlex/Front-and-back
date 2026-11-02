@@ -80,7 +80,8 @@ function startCacheWarmer(): void {
        request were still cold, at 73-78 s (traffic forecast and booth plan), 34 s (incident forecast) and
        5-15 s (emissions prescriptive, fleet mix). Query strings exactly as the pages build them. */
     ["/traffic/forecast?months=12&split=80_20", 9 * 60_000],
-    ["/traffic/prescriptive?throughput=350", 9 * 60_000],
+    // No throughput parameter since the data-only redesign (2 Nov 2026): the page asks for the bare URL.
+    ["/traffic/prescriptive", 9 * 60_000],
     ["/incident/predictive?months=12&weather=all", 9 * 60_000],
     ["/emissions/prescriptive?months=12", 9 * 60_000],
     ["/emissions/fleet-mix?days=180", 9 * 60_000],
@@ -98,7 +99,8 @@ function startCacheWarmer(): void {
        deadline, so a first click on either timed out. Query strings exactly as the page builds them. */
     ["/incident/analytics?months=12&weather=dry", 9 * 60_000],
     ["/incident/analytics?months=12&weather=wet", 9 * 60_000],
-    ["/incident/clearance-protocol?type=accident&severity=injury&weather=all&demandLevel=normal&maxUnits=4&unitEffect=0.25&deltaResponseMin=15&months=12", 9 * 60_000],
+    // The escalation rule's default view, as ClearanceResponsePanel builds it since the data-only redesign (2 Nov 2026).
+    ["/incident/clearance-protocol?type=accident&severity=injury&weather=all&months=12", 9 * 60_000],
   ];
   /* The sandbox's first load (7 Oct 2026): 20-30 s of reads, every visit,
      because they were never warmed. Each is seconds of full-table scans and
@@ -115,8 +117,6 @@ function startCacheWarmer(): void {
     "/ai-sandbox/demand-profile?exit=Balintawak&direction=NB",
     "/traffic/analytics?months=12&direction=NB",
     "/traffic/analytics?months=12&direction=SB",
-    // The Traffic Prescriptive tab's booth plan and congestion advice: 7-46 s on a cold database.
-    "/traffic/prescriptive?throughput=350",
     /* The Emissions Prescriptive tab's other two Range presets (17 Oct 2026, testers EM-11.1): 3 s and
        11 s cold, six queries each, so they wait their turn here; 12 months is warmed in the list above. */
     "/emissions/prescriptive?months=3",

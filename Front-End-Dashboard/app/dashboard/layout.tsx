@@ -35,7 +35,7 @@ import SectionProgress from "../../components/stage/SectionProgress";
 import Mascot from "../../components/stage/Mascot";
 import LoadingGate from "../../components/dashboard/LoadingGate";
 import IdleGuard from "../../components/dashboard/IdleGuard";
-import { displayNameOf, idleMinutesOf, DEFAULT_IDLE_MINUTES } from "../../lib/account-device";
+import { displayNameOf, idleMinutesOf, DEFAULT_IDLE_MINUTES, rememberedEmail } from "../../lib/account-device";
 import NlexEnvironment from "../../components/environment/NlexEnvironment";
 
 // The Night Corridor stage: one WebGL canvas behind the shell, client-only, and
@@ -94,8 +94,11 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
       // the shell goes back to the login screen rather than opening on half a
       // credential. The backend refuses such a token as well; this only keeps
       // the interface from showing a dashboard whose panels would never fill.
+      // A sign-in with "Remember me" ticked is kept, though: the sign-in page carries it on at the
+      // code step (app/page.tsx, 3 Nov 2026).
       if (session?.user && !isFullySignedIn(session)) {
-        dropPasswordOnlySession();
+        const email = (session.user.email ?? "").trim().toLowerCase();
+        if (!email || rememberedEmail() !== email) dropPasswordOnlySession();
         session = null;
       }
       if (session?.user) {

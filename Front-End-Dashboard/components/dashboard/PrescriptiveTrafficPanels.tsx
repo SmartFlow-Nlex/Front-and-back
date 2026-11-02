@@ -14,9 +14,10 @@ import SignalGlyph from "./SignalGlyph";
 import { fmtKm } from "../../lib/km-post";
 import InfoTooltip from "./InfoTooltip";
 import StateNote from "../stage/StateNote";
+import { SourceBadge, ForecastAge } from "./prescriptiveShell";
 import {
-  loadForecast, championValue, topsisRank, manilaDate, loadPrescriptive,
-  type ForecastPayload, type TrafficPrescriptive, type BoothHour,
+  loadForecast, loadPrescriptive, rankByLowerBound, exitsFromEvents, exitsFromUpcoming,
+  type ForecastPayload, type TrafficPrescriptive, type StaffingHour, type StaffingLevel, type RankedExit,
 } from "./prescriptiveTraffic.shared";
 
 const fmtInt = (n: number) => Math.round(n).toLocaleString("en-US");
@@ -36,17 +37,12 @@ function useSlow(waiting: boolean, afterMs = 6000) {
   return slow;
 }
 
-/* What Firm / Fair / Loose mean (17 Oct 2026, testers TR-13: "add a tooltip explaining the estimates and how
-   they are measured"). The words read the width of the uplift interval, the same cut-offs as the footnote. */
-/* Second pass (19 Oct 2026): says what the uplift itself is and how its interval is drawn, as
-   build_event_surge.py computes it (median event-day ratio to the exit's no-event, no-holiday
-   weekday-and-month median; bootstrap 95% interval over the past Arena event days). */
+/* What the event ranking's "how sure" rests on (2 Nov 2026). The Firm / Fair / Loose words it replaced cut the
+   interval width at 0.05 and 0.12, which were set by hand; the interval itself is shown instead. */
 const ESTIMATE_HINT =
-  "How settled the exit's event-day uplift is. Uplift is the median ratio of the exit's entries on past Philippine Arena " +
-  "event days to a normal day (the median of days with no event and no holiday, on the same weekday and month). Its 95% " +
-  "interval comes from resampling those event days (a bootstrap). Firm: the interval is narrower than 0.05× in all, about " +
-  "±0.025× (1.20× is really 1.18–1.22×). Fair: narrower than 0.12×, about ±0.06×. Loose: wider than that; past event days " +
-  "disagreed, so treat the number as rough. The ± figure beside each word is half the interval's width.";
+  "Uplift is the median ratio of the exit's entries on past Philippine Arena event days to a normal day (the median of " +
+  "days with no event and no holiday, on the same weekday and month). Its 95% interval comes from resampling those event " +
+  "days (a bootstrap). The ranking uses the interval's lower end: the rise the past event days support even at their weakest.";
 
 function useForecast() {
   const [data, setData] = useState<ForecastPayload | null>(null);
@@ -67,15 +63,20 @@ function useForecast() {
 /* Night Corridor chrome for the three panels: a near-opaque card with a
    hairline, a 20 px headline with its method behind (i), and the panel's
    own controls on the same line. */
-function Shell({ title, hint, children, right }: {
+function Shell({ title, hint, children, right, meta }: {
   title: string; hint: string; right?: React.ReactNode; children: React.ReactNode;
+  /** Where the card's advice comes from (SourceBadge) and how fresh it is (ForecastAge), under the title. */
+  meta?: React.ReactNode;
 }) {
   return (
     <article className="chart-card wide nct-card">
       <div className="nct-card-head-split">
-        <h3 className="nct-title">
-          {title} <InfoTooltip text={hint} />
-        </h3>
+        <div className="nct-head-text">
+          <h3 className="nct-title">
+            {title} <InfoTooltip text={hint} />
+          </h3>
+          {meta && <div className="rx-head-meta">{meta}</div>}
+        </div>
         {right}
       </div>
       {children}
@@ -160,23 +161,16 @@ function ActionCard({ rank, signal, tag, tone = "info", action, lead, facts, det
 }
 
 /* ==================================================================== 1 ====
- * Booth staffing plan, per plaza, per hour.
+ * Staffing priority by forecast demand (2 Nov 2026).
  *
- * The model moved to the backend (traffic-prescriptive.service.ts). Two things
- * were wrong with computing it here:
- *
- *   - it ran on props the DESCRIPTIVE tab happened to have loaded, so the
- *     recommendation changed when the operator moved a date range that has
- *     nothing to do with next week's staffing, and
- *   - it only ever covered each plaza's single busiest hour, because that is
- *     all the page had. "How many booths at 10am" had no answer.
- *
- * The server returns the full 24-hour profile per plaza, split weekday from
- * weekend, so the shift plan below is real. Throughput is still the operator's
- * dial; everything else is measured.
+ * Replaced the Booth Staffing Plan, which planned booths from OpenStreetMap
+ * booth counts and a booth-throughput slider: neither is measured anywhere in
+ * the warehouse. This compares each plaza-hour's forecast with that plaza's
+ * own usual level for the hour and day type, and says how sure it is from the
+ * forecast chain's measured held-out error (traffic-prescriptive.service.ts).
  */
 
-function usePrescriptive(throughput: number) {
+function usePrescriptive() {
   const [data, setData] = useState<TrafficPrescriptive | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [attempt, setAttempt] = useState(0);
@@ -184,48 +178,39 @@ function usePrescriptive(throughput: number) {
     let off = false;
     setData(null);
     setError(null);
-    loadPrescriptive(throughput)
+    loadPrescriptive()
       .then((d) => { if (!off) setData(d); })
       .catch((e) => { if (!off) setError(e instanceof Error ? e.message : String(e)); });
     return () => { off = true; };
-  }, [throughput, attempt]);
+  }, [attempt]);
   const slow = useSlow(!data && !error);
   return { data, error, slow, retry: () => setAttempt((n) => n + 1) };
 }
 
-/** A 24-cell strip: one block per hour, height by booths needed. Where that
- *  is more than the plaza can open, the excess is hatched red on top: needed,
- *  but there is no booth for it. */
-function HourStrip({ hours, peakHour, max }: { hours: BoothHour[]; peakHour: number; max: number }) {
+const pct = (x: number) => `${Math.round(x * 100)}%`;
+/** "93%" -- or "99% or more" / "1% or less", the resolution the measured quantiles carry. */
+const chanceText = (c: number) => (c >= 0.99 ? "99% or more" : c <= 0.01 ? "1% or less" : pct(c));
+const LEVEL_WORD: Record<StaffingLevel, string> = { above: "Near-certain", likely: "Likely", normal: "Normal" };
+
+/** One plaza's day as 24 cells, shaded by the forecast against its usual level for that hour (load), with the
+ *  hours likely or near-certain to pass its usual peak marked. */
+function HourHeat({ hours, peakHour }: { hours: StaffingHour[]; peakHour: number }) {
   return (
-    <div className="nct-hourstrip">
-      {hours.map((h) => {
-        const frac = max > 0 ? h.need / max : 0;
-        const short = h.need - h.staffed;
-        const isPeak = h.hour === peakHour;
-        return (
-          <div
-            key={h.hour}
-            title={
-              `${fmtHour(h.hour)} — ${h.need} booth${h.need === 1 ? "" : "s"} for ${fmtInt(h.demand)} vehicles` +
-              (short > 0 ? `; ${h.staffed} can open, so about ${fmtInt(h.unmet)} vehicles queue` : "")
-            }
-            style={{
-              height: `${Math.max(8, frac * 100)}%`,
-              display: "flex", flexDirection: "column",
-              borderRadius: "2px 2px 0 0", overflow: "hidden",
-            }}
-          >
-            {short > 0 && (
-              <div style={{ flex: short, background: "repeating-linear-gradient(135deg, var(--color-danger) 0 2px, transparent 2px 4px)" }} />
-            )}
-            <div style={{
-              flex: Math.max(1, h.staffed),
-              background: isPeak ? "var(--page-accent)" : "color-mix(in srgb, var(--page-accent) 45%, transparent)",
-            }} />
-          </div>
-        );
-      })}
+    <div className="nct-heat" role="img" aria-label={`Forecast against the usual level by hour; busiest at ${fmtHour(peakHour)}`}>
+      {hours.map((h) => (
+        <span
+          key={h.hour}
+          className={`nct-heat-cell${h.level === "likely" ? " is-tight" : ""}${h.level === "above" ? " is-over" : ""}${h.hour === peakHour ? " is-peak" : ""}`}
+          style={{ ["--lvl" as string]: Math.max(0, Math.min(1, ((h.load ?? 0) - 0.6) / 0.6)).toFixed(3) }}
+          title={
+            `${fmtHour(h.hour)}: ${fmtInt(h.forecast)} vehicles forecast` +
+            (h.low != null && h.high != null ? ` (80% band ${fmtInt(h.low)}–${fmtInt(h.high)})` : "") +
+            (h.usual != null ? `; usual ${fmtInt(h.usual)}` : "") +
+            (h.usualPeak != null ? `, usual peak ${fmtInt(h.usualPeak)}` : "") +
+            (h.chance != null ? `; ${chanceText(h.chance)} chance of passing the usual peak` : "; not rated (under the measured range)")
+          }
+        />
+      ))}
     </div>
   );
 }
@@ -234,49 +219,39 @@ const listOf = (xs: string[]) =>
   xs.length <= 1 ? xs.join("") : `${xs.slice(0, -1).join(", ")} and ${xs[xs.length - 1]}`;
 
 export function BoothStaffingPanel() {
-  const [rate, setRate] = useState(350);
   const [view, setView] = useState<"week" | "hour">("week");
   const [showAll, setShowAll] = useState(false);
-  const { data, error, slow, retry } = usePrescriptive(rate);
+  const { data, error, slow, retry } = usePrescriptive();
 
   if (error) return <Empty msg={`Prescriptive traffic unavailable: ${error}`} onRetry={retry} />;
-  if (!data) return <Empty msg="Computing the staffing plan…" slow={slow} />;
+  if (!data) return <Empty msg="Comparing the forecast with each plaza's usual level…" slow={slow} />;
   if (data.week.length === 0 || !data.shiftPlan) return <Empty msg="No future days in the volume forecast." />;
   if (data.shiftPlan.plazas.length === 0) return <Empty msg="No plaza volumes are recorded to apportion the forecast with." />;
 
   const days = data.week;
   const plan = data.shiftPlan;
-  const first = days[0];
+  const b = data.basis;
+  const lead = data.priorities[0] ?? null;
+  const more = data.priorities.slice(1, 6);
+  const above = days.reduce((s, d) => s + d.aboveCells, 0);
+  const likely = days.reduce((s, d) => s + d.likelyCells, 0);
 
-  // Week table: booths to open at each plaza's peak, per day, ordered by the
-  // busiest. "To open", not "needed": a plaza cannot open booths it does not
-  // have, and where it would need more, the cell says so.
-  const plazaNames = plan.plazas.map((p) => p.plaza);
-  const byDay = new Map(days.map((d) => [d.date, new Map(d.plazas.map((p) => [p.plaza, p]))] as const));
-  const rows = plazaNames.map((name) => {
-    const p = plan.plazas.find((x) => x.plaza === name)!;
-    const each = days.map((d) => byDay.get(d.date)!.get(name) ?? null);
-    return {
-      plaza: name,
-      peakHour: p.peakHour,
-      typical: p.typicalPeakStaffed,
-      booths: p.booths,
-      boothBasis: p.boothBasis,
-      need: each.map((x) => x?.peakStaffed ?? 0),
-      short: each.map((x) => x?.worstUnmet ?? null),
-    };
-  });
+  // Week table: each plaza-day's hour most likely to pass its usual peak; plazas in order of their week's highest chance.
+  const byDay = days.map((d) => new Map(d.plazas.map((p) => [p.plaza, p] as const)));
+  const rows = plan.plazas
+    .map((p) => {
+      const each = byDay.map((m) => m.get(p.plaza) ?? null);
+      const best = Math.max(-1, ...each.map((x) => x?.top?.chance ?? -1));
+      return { plaza: p.plaza, sharePct: p.sharePct, each, best };
+    })
+    .sort((x, y) => y.best - x.best);
   const visible = showAll ? rows : rows.slice(0, 8);
-
-  const corridorTypical = rows.reduce((s, r) => s + r.typical, 0);
-  const biggest = [...rows].sort((a, b) => (b.need[0] - b.typical) - (a.need[0] - a.typical))[0];
-  const daysUp = days.filter((_, i) => rows.some((r) => r.need[i] > r.typical)).length;
-  const hourMax = Math.max(1, ...plan.plazas.flatMap((p) => p.hours.map((h) => h.need)));
-  // Demand that every booth open would still not clear: worst first, and how
-  // many other plaza-days run past their booths too.
-  const worst = data.overCapacity[0] ?? null;
-  const overDays = new Set(data.overCapacity.map((o) => `${o.date}|${o.plaza}`)).size;
-  const noBooths = data.basis.plazasWithoutBooths;
+  // Without priorities: the closest any plaza-hour comes, so "normal" says how close.
+  const closest = lead ?? days
+    .flatMap((d) => d.plazas.map((p) => (p.top ? { ...p.top, date: d.date, dayType: d.dayType, plaza: p.plaza } : null)))
+    .filter((x): x is NonNullable<typeof x> => x != null)
+    .sort((x, y) => (y.chance ?? -1) - (x.chance ?? -1))[0] ?? null;
+  const past = b.forecastFrom && b.usualTo && b.forecastFrom <= b.usualTo;
 
   const Toggle = (
     <div className="nct-pills" role="group" aria-label="Plan view">
@@ -295,94 +270,104 @@ export function BoothStaffingPanel() {
 
   return (
     <Shell
-      title="Booth Staffing Plan"
-      hint="Corridor forecast apportioned to each plaza by its measured share of volume, then across the day by that plaza's own hourly profile, split weekday from weekend. Divided by what one booth serves, and capped at the booths each plaza has (OpenStreetMap): demand beyond them is shown as queuing, not as booths that do not exist. Throughput is the one figure you set; the rest is measured."
-      right={
-        <div className="nct-panel-controls">
-          {Toggle}
-          <label className="nct-range">
-            <span className="nct-range-head">
-              <span>One booth serves</span><b>{rate} veh/hr</b>
-            </span>
-            <input type="range" min={150} max={800} step={25} value={rate}
-              onChange={(e) => setRate(Number(e.target.value))} />
-          </label>
-        </div>
-      }
+      title="Staffing Priority"
+      hint={`Each plaza-hour's forecast against that plaza's own usual level for the same hour and day type (median of the latest 12 months; usual peak = its ${b.usualPeakPercentile}th percentile, passed on 1 comparable day in 10). Staff above normal where the forecast is likely to pass the usual peak. How sure comes from the forecast's measured error on held-out days.`}
+      meta={<SourceBadge kind="forecast" detail={`${data.champion.model ?? "Champion"} volume forecast against each plaza's measured usual level`} />}
+      right={<div className="nct-panel-controls">{Toggle}</div>}
     >
       <ActionCard
         rank={1}
-        tag={<span className="nct-action-kicker">Staffing</span>}
-        action={<>Open {first.totalPeakBooths} booths across the corridor at the peak</>}
+        tone={lead?.level === "above" ? "alert" : lead ? "prepare" : "info"}
+        tag={
+          <span className="nct-action-kicker">
+            {lead ? <>{LEVEL_WORD[lead.level]} · {chanceText(lead.chance ?? 0)}</> : "Staffing priority"}
+          </span>
+        }
+        action={
+          lead ? (
+            <>Staff {lead.plaza} above normal on {shortDay(lead.date)} at {fmtHour(lead.hour)}</>
+          ) : (
+            <>Normal staffing at every plaza, {shortDay(days[0].date)} to {shortDay(days[days.length - 1].date)}</>
+          )
+        }
         facts={[
-          { k: "When", v: shortDay(first.date) },
-          ...(first.totalPeakBooths !== corridorTypical
-            ? [{ k: "Change", v: <>{first.totalPeakBooths > corridorTypical ? "+" : "\u2212"}{Math.abs(first.totalPeakBooths - corridorTypical)} versus a typical day</> }]
-            : []),
-          ...(biggest && biggest.need[0] !== biggest.typical
-            ? [{ k: "Largest change", v: <><b>{biggest.plaza}</b> ({biggest.typical} → {biggest.need[0]}, peak {fmtHour(biggest.peakHour)})</> }]
+          ...(closest
+            ? [
+                ...(lead ? [] : [{ k: "Closest", v: <><b>{closest.plaza}</b>, {shortDay(closest.date)} at {fmtHour(closest.hour)}</> }]),
+                {
+                  k: "Forecast",
+                  v: <><b>{fmtInt(closest.forecast)} vehicles</b>{closest.low != null && closest.high != null && <span className="nct-dim"> (80% band {fmtInt(closest.low)}–{fmtInt(closest.high)})</span>}</>,
+                },
+                {
+                  k: "Usual",
+                  v: <>{closest.usual != null ? fmtInt(closest.usual) : "—"} on a usual {closest.dayType}{closest.usualPeak != null && <> · usual peak {fmtInt(closest.usualPeak)} (passed 1 day in 10)</>}</>,
+                },
+                {
+                  k: "How sure",
+                  v: closest.chance != null
+                    ? <><b>{chanceText(closest.chance)}</b> chance of passing the usual peak</>
+                    : <>Not rated</>,
+                },
+              ]
             : []),
           {
-            k: "Week ahead",
-            v: daysUp > 0
-              ? <>{daysUp} of the next {days.length} days need more than typical staffing somewhere on the corridor.</>
-              : <>No day in the next {days.length} exceeds typical staffing anywhere.</>,
+            k: "This week",
+            v: <>{above} plaza-hour{above === 1 ? "" : "s"} near-certain, {likely} likely to pass the usual peak</>,
           },
         ]}
       />
 
-      {worst && (
-        <ActionCard
-          tone="alert"
-          tag={<span className="nct-action-kicker nct-bad">Not enough booths</span>}
-          action={<>Divert traffic or post an advisory at {worst.plaza}</>}
-          facts={[
-            { k: "When", v: <>{shortDay(worst.date)} at {fmtHour(worst.hour)}</> },
-            { k: "Where", v: <><b>{worst.plaza}</b>&apos;s {worst.where} booths</> },
-            { k: "Effect", v: <>About <b>{fmtInt(worst.vehicles)} vehicles an hour</b> queue with every one of them open</> },
-            { k: "Basis", v: <>Would need {worst.need} booths; there are {worst.booths}. Staffing cannot clear that.</> },
-            ...(overDays > 1
-              ? [{ k: "This week", v: <>{overDays - 1} more plaza-day{overDays - 1 === 1 ? "" : "s"} run past their booths too, marked <b className="nct-bad">!</b> below</> }]
-              : []),
-          ]}
-        />
+      {more.length > 0 && (
+        <div className="nct-inline-list nct-rx-list">
+          <p className="nct-kv-k">Also above normal</p>
+          <ul>
+            {more.map((p) => (
+              <li key={`${p.date}|${p.plaza}|${p.hour}`}>
+                <b className={p.level === "above" ? "nct-bad" : "nct-warn"}>{chanceText(p.chance ?? 0)}</b>
+                <span className="nct-inline-seg">{p.plaza}</span>
+                <span className="nct-dim">{shortDay(p.date)}, {fmtHour(p.hour)}</span>
+                <span className="nct-dim">{fmtInt(p.forecast)} vs peak {p.usualPeak != null ? fmtInt(p.usualPeak) : "—"}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
       )}
 
       {view === "hour" ? (
         <>
           <div className="nct-panel-intro nct-hour-head">
             <span>
-              Booths needed hour by hour on <b>{shortDay(plan.date)}</b> ({plan.dayType})
-              <InfoTooltip text={`Plazas do not peak together — the tallest bar is each plaza's own busiest hour.${plan.plazas.some((p) => p.unmetVehicles > 0) ? " Red hatching is need beyond the booths the plaza has." : ""}`} />
+              Forecast against the usual level, hour by hour, on <b>{shortDay(plan.date)}</b> ({plan.dayType})
+              <InfoTooltip text="Darker = busier than usual for that hour. Amber: likely to pass the usual peak. Hatched: near-certain (even the band's low end passes it). Hover a cell for the numbers." />
             </span>
             <span className="nct-key">
-              <span className="nct-key-item"><i style={{ background: "var(--page-accent)" }} />Peak hour</span>
-              <span className="nct-key-item"><i style={{ background: "color-mix(in srgb, var(--page-accent) 45%, transparent)" }} />Other hours</span>
-              {plan.plazas.some((p) => p.unmetVehicles > 0) && (
-                <span className="nct-key-item"><i className="nct-hatch" />Need beyond booths</span>
-              )}
+              <span className="nct-key-item"><i className="nct-heat-swatch" style={{ ["--lvl" as string]: "0.25" }} />Below usual</span>
+              <span className="nct-key-item"><i className="nct-heat-swatch" style={{ ["--lvl" as string]: "0.85" }} />Above usual</span>
+              <span className="nct-key-item"><i className="nct-heat-swatch is-tight" />Likely past peak</span>
+              <span className="nct-key-item"><i className="nct-hatch" />Near-certain</span>
             </span>
           </div>
           <div className="nct-hour-rows">
+            <div className="nct-hour-row nct-heat-axis" aria-hidden="true">
+              <div />
+              <div className="nct-heat">
+                {Array.from({ length: 24 }, (_, h) => (
+                  <span key={h} className="nct-heat-tick">{h % 6 === 0 ? fmtHour(h).replace(" ", "") : ""}</span>
+                ))}
+              </div>
+              <div />
+            </div>
             {(showAll ? plan.plazas : plan.plazas.slice(0, 8)).map((p) => (
               <div key={p.plaza} className="nct-hour-row">
                 <div className="nct-hour-name">
                   {p.plaza}
                   <span>{p.sharePct}% of corridor</span>
                 </div>
-                <HourStrip hours={p.hours} peakHour={p.peakHour} max={hourMax} />
-                <div className="nct-hour-peak" title={p.boothBasis}>
-                  peak <b>{p.peakStaffed}</b>
-                  {p.booths != null && <> of {p.booths}</>} at {fmtHour(p.peakHour)}
-                  {p.worstUnmet && (
-                    <span className="nct-hour-queue">
-                      {fmtInt(p.worstUnmet.vehicles)}/h queue at {fmtHour(p.worstUnmet.hour)}
-                      {/* Which booths: a plaza can have spare booths on one side while the other is full. */}
-                      {p.worstUnmet.where && (
-                        <span>{p.worstUnmet.where} full</span>
-                      )}
-                    </span>
-                  )}
+                <HourHeat hours={p.hours} peakHour={p.peakHour} />
+                <div className="nct-hour-peak">
+                  {p.top?.load != null ? <><b>{pct(p.top.load)}</b> of usual</> : "—"}
+                  {p.top && <> at {fmtHour(p.top.hour)}</>}
+                  {p.top?.chance != null && <span className="nct-hour-queue">{chanceText(p.top.chance)} past peak</span>}
                 </div>
               </div>
             ))}
@@ -390,13 +375,14 @@ export function BoothStaffingPanel() {
         </>
       ) : (
         <div className="nct-table-wrap">
+          <p className="nct-table-key">
+            Each day: the plaza&apos;s hour most likely to pass its usual peak, as % of its usual level.{" "}
+            <b className="nct-warn">▲</b> likely, <b className="nct-bad">!</b> near-certain.
+          </p>
           <table className="nct-table nct-booth-table">
             <thead>
               <tr>
                 <th>Plaza</th>
-                <th>Peak hour</th>
-                <th className="num">Booths</th>
-                <th className="num">Typical</th>
                 {days.map((d) => (
                   <th key={d.date} className="num">
                     {new Date(`${d.date}T00:00:00`).toLocaleDateString("en-US", { weekday: "short" })}
@@ -411,23 +397,21 @@ export function BoothStaffingPanel() {
               {visible.map((r) => (
                 <tr key={r.plaza}>
                   <td className="strong" style={{ whiteSpace: "nowrap" }}>{r.plaza}</td>
-                  <td className="dim" style={{ whiteSpace: "nowrap" }}>{fmtHour(r.peakHour)}</td>
-                  <td
-                    title={r.booths != null ? r.boothBasis : "No toll booths mapped in OpenStreetMap: not capped"}
-                    className="num nct-dim"
-                  >
-                    {r.booths ?? "—"}
-                  </td>
-                  <td className="num dim">{r.typical}</td>
-                  {r.need.map((n, i) => {
-                    const delta = n - r.typical;
-                    const short = r.short[i];
+                  {r.each.map((p, i) => {
+                    const t = p?.top ?? null;
                     return (
                       <td key={days[i].date}
-                        title={short ? `At ${fmtHour(short.hour)} the ${short.where ?? "plaza's"} booths are full: about ${fmtInt(short.vehicles)} vehicles an hour queue with every one of them open.` : undefined}
-                        className={`num${delta !== 0 ? " strong" : ""}${delta > 0 ? " nct-bad" : delta < 0 ? " nct-ok" : ""}${delta > 0 || short ? " nct-cell-hot" : ""}`}>
-                        {n}{delta !== 0 && <span className="nct-cell-delta">{delta > 0 ? `+${delta}` : delta}</span>}
-                        {short && <b className="nct-bad nct-cell-flag">!</b>}
+                        title={t
+                          ? `${fmtHour(t.hour)}: ${fmtInt(t.forecast)} vehicles forecast` +
+                            (t.low != null && t.high != null ? ` (80% band ${fmtInt(t.low)}–${fmtInt(t.high)})` : "") +
+                            `; usual ${t.usual != null ? fmtInt(t.usual) : "—"}, usual peak ${t.usualPeak != null ? fmtInt(t.usualPeak) : "—"}` +
+                            (t.chance != null ? `; ${chanceText(t.chance)} chance of passing it` : "")
+                          : "Not rated"}
+                        style={t?.load != null ? { ["--used" as string]: Math.max(0, Math.min(1, (t.load - 0.6) / 0.6)).toFixed(3) } : undefined}
+                        className={`num nct-used${t?.level === "likely" ? " is-tight" : ""}${t?.level === "above" ? " is-over strong nct-bad" : ""}`}>
+                        {t?.load != null ? pct(t.load) : "—"}
+                        {t && <span className="nct-cell-delta">{fmtHour(t.hour)}</span>}
+                        {t?.level === "above" ? <b className="nct-bad nct-cell-flag">!</b> : t?.level === "likely" ? <b className="nct-warn nct-cell-flag" aria-label="Likely to pass the usual peak">▲</b> : null}
                       </td>
                     );
                   })}
@@ -440,46 +424,41 @@ export function BoothStaffingPanel() {
 
       {rows.length > 8 && (
         <button type="button" onClick={() => setShowAll((v) => !v)} className="btn-muted" style={{ alignSelf: "flex-start" }}>
-          {showAll ? "Show the 8 busiest" : `Show all ${rows.length} plazas`}
+          {showAll ? "Show the first 8" : `Show all ${rows.length} plazas`}
         </button>
       )}
 
-      <div className="nct-basis">
-        <span className="nct-kv-k">Basis</span>
-        <span>
-          {data.champion.model ?? "champion"} forecast
-          {data.champion.wmapePct != null && <> · WMAPE {data.champion.wmapePct}%</>}
-        </span>
-        {!data.champion.accepted && (
-          <span className="pill amber">Failed its acceptance gate · level less certain</span>
-        )}
-      </div>
-      {data.basis.forecastFrom && data.basis.profileTo && data.basis.forecastFrom <= data.basis.profileTo && (
+      {!data.champion.accepted && (
         <Banner tone="alert">
-          <b>Its first day, {data.basis.forecastFrom}, is already inside the record, which now runs to {data.basis.profileTo}:</b>{" "}
+          <b>No volume model passed its acceptance gate:</b> the forecast is last week repeated, and the band is that method&apos;s own measured error.
+        </Banner>
+      )}
+      {past && (
+        <Banner tone="alert">
+          <b>Its first day, {b.forecastFrom}, is already inside the record, which now runs to {b.usualTo}:</b>{" "}
           this plan is for days already past. Retrain the volume models to plan the coming week.
         </Banner>
       )}
       <details className="nc-details">
         <summary>How this is measured</summary>
         <div>
-      <Foot>
-        Volume is the {data.champion.model ?? "champion"} forecast
-        {data.champion.wmapePct != null && <> (WMAPE {data.champion.wmapePct}%)</>}
-        {!data.champion.accepted && <>, which did <b>not</b> pass its acceptance gate — the staffing SHAPE comes from measured profiles, the level it is scaled to is less certain</>}.
-        {data.basis.forecastFrom && data.basis.profileTo && data.basis.forecastFrom <= data.basis.profileTo ? (
-          // Traffic was loaded after the model was trained: the "week ahead" is then a stretch the record already holds.
-          <> <b>Its first day, {data.basis.forecastFrom}, is already inside the record, which now runs to {data.basis.profileTo}:
-          the model was trained before the latest traffic was loaded, so this plan is for days already past. Retrain the volume models to plan the coming week.</b>{" "}</>
-        ) : (
-          <> Its first day, {data.basis.forecastFrom}, follows the last recorded day.{" "}</>
-        )}
-        Profiles measured over {data.basis.profileFrom} to {data.basis.profileTo} across {data.basis.plazasProfiled} plazas.
-        Booth counts are from {data.basis.boothsFrom}, since the warehouse holds none: each plaza&apos;s booths for the movement
-        that pays there, per carriageway where known
-        {noBooths.length > 0 && <>; {listOf(noBooths)} {noBooths.length === 1 ? "has" : "have"} none mapped, so {noBooths.length === 1 ? "it is" : "they are"} not capped</>}.
-        Booth throughput is the one figure that is yours to set.
-      </Foot>
+          <Foot>
+            Forecast: the {data.champion.model ?? "champion"} corridor forecast (WMAPE {data.champion.wmapePct ?? "—"}% per day) times each
+            plaza&apos;s share and hourly profile, weekday and weekend apart, over {b.usualFrom} to {b.usualTo}. Usual: the plaza&apos;s
+            median for that hour and day type over the same 12 months ({b.usualWeekdays} weekdays, {b.usualWeekends} weekend days); usual
+            peak: its {b.usualPeakPercentile}th percentile.{" "}
+            {b.band ? (
+              <>
+                How sure: this whole chain replayed on the model&apos;s {b.band.days} held-out days ({b.band.from} to {b.band.to}),
+                {" "}{fmtInt(b.band.cells)} plaza-hours, missed by {b.band.wmapePct}% per plaza-hour. The 80% band and each chance are that
+                plaza&apos;s measured spread of actual ÷ forecast. Near-certain = 90% or more (the band&apos;s low end passes the usual peak);
+                likely = 50% or more. Hours under {b.minCellVehicles} vehicles were not in the replay, so they are not rated.
+              </>
+            ) : (
+              <>No held-out error could be measured, so no hour is rated.</>
+            )}
+            {data.plazasWithoutBand.length > 0 && <> {listOf(data.plazasWithoutBand)}: too few held-out hours to rate.</>}
+          </Foot>
         </div>
       </details>
     </Shell>
@@ -489,37 +468,44 @@ export function BoothStaffingPanel() {
 /* ==================================================================== 2 ====
  * Congestion response advisory.
  */
+
+/** A segment's chance of High congestion for the next 12 forecast hours, one bar each, with the calibrated Act
+ *  line marked: when it builds and how long it stays (2 Nov 2026). */
+function HighTimeline({ hours, cut, compact = false }: { hours: { h: number; pHigh: number }[]; cut: number | null; compact?: boolean }) {
+  if (hours.length === 0) return null;
+  const peak = hours.reduce((a, b) => (b.pHigh > a.pHigh ? b : a));
+  return (
+    <span className={`nct-tl${compact ? " is-compact" : ""}`} role="img"
+      aria-label={`Chance of High congestion over the next 12 hours; highest ${Math.round(peak.pHigh * 100)}% at +${peak.h}h`}>
+      <span className="nct-tl-bars">
+        {Array.from({ length: 12 }, (_, i) => {
+          const pt = hours.find((x) => x.h === i + 1);
+          const v = pt?.pHigh ?? 0;
+          return (
+            <span key={i}
+              className={`nct-tl-bar${cut != null && v >= cut ? " is-high" : ""}`}
+              style={{ height: `${Math.max(6, v * 100)}%` }}
+              title={pt ? `+${i + 1}h: ${Math.round(v * 100)}% chance of High` : `+${i + 1}h: no forecast`} />
+          );
+        })}
+        {cut != null && <span className="nct-tl-half" style={{ bottom: `${cut * 100}%` }} aria-hidden="true" />}
+      </span>
+      {!compact && <span className="nct-tl-axis" aria-hidden="true"><span>+1h</span><span>+12h</span></span>}
+    </span>
+  );
+}
 const CONGESTION_AUTO_RETRIES = 6;
 const CONGESTION_RETRY_MS = 15_000;
 export function CongestionResponsePanel() {
-  /* The fuzzy controller runs server-side now (traffic-prescriptive.service.ts)
-     against the same forecast rows this panel used to read. Same memberships,
-     same nine rules, same centroid defuzzification — verified against an
-     independent reimplementation on all 20 segments before this was switched
-     over, because moving a model is only safe if it still gives the same
-     answer. Throughput is irrelevant to this half, so the default is fine. */
-  const [showRest, setShowRest] = useState(false);
-  const { data, error, slow, retry } = usePrescriptive(350);
+  const [showMonitor, setShowMonitor] = useState(false);
+  const [copied, setCopied] = useState(false);
+  const { data, error, slow, retry } = usePrescriptive();
 
-  const rows = useMemo(() => {
-    if (!data) return [];
-    return data.congestion.map((c) => ({
-      segment: c.segment,
-      km: c.km ?? 0,
-      // The server reports the hour its winning row came from, and always as
-      // the probability of HIGH, so these read the same way round as before.
-      first: c.hoursAhead,
-      peak: c.probability,
-      peakHour: c.hoursAhead,
-      urgency: c.urgency,
-      label: c.label,
-    }));
-  }, [data]);
+  const rows = useMemo(() => data?.congestion ?? [], [data]);
 
   /* No segments is not an answer to sit on (TR-12, 19 Oct 2026). It means the forecast read failed
      while the server was starting, or the hourly model was rewriting its table; both clear within a
-     minute or two, so the panel asks again on its own, and after that offers the button. The server
-     and loadPrescriptive keep neither kind of empty answer, so each retry is a real read. */
+     minute or two, so the panel asks again on its own, and after that offers the button. */
   const noRows = !!data && rows.length === 0;
   const [autoTries, setAutoTries] = useState(0);
   useEffect(() => {
@@ -541,100 +527,147 @@ export function CongestionResponsePanel() {
       : <Empty msg={`Congestion forecast unavailable. ${why}`} onRetry={() => { setAutoTries(0); retry(); }} />;
   }
 
+  const cal = data.congestionCalibration;
+  const calibrated = !!cal?.ok && cal.threshold != null;
+  const cut = calibrated ? cal!.threshold : null;
   const act = rows.filter((r) => r.label === "Act");
-  const prepare = rows.filter((r) => r.label === "Prepare");
-  const top = act.slice(0, 3);
-  const rest = rows.filter((r) => !top.includes(r) && r.label !== "Monitor");
-  const lead = top.length ? Math.min(...top.map((r) => r.first ?? 99)) : null;
-  // A segment with no forecast rows is not a quiet segment. It is named, and
-  // "corridor clear" is not said while any is missing.
+  const monitor = rows.filter((r) => r.label === "Monitor");
+  // The cards: the Act segments most likely to turn High, or with none at Act the three closest to the line.
+  const cards = (act.length ? act : rows).slice(0, 3);
+  const inline = act.slice(3);
+  const timelineOf = (segment: string) => data.congestionTimeline?.find((t) => t.segment === segment)?.hours ?? [];
+  // A segment with no forecast rows is not a quiet segment. It is named, and "corridor clear" is not said while any is missing.
   const missing = data.congestionMissing ?? [];
+  const lead = act.length ? Math.min(...act.map((r) => r.firstAct ?? 99)) : null;
 
-  const ACTION: Record<string, string> = {
-    Act: "Deploy counter-flow and post VMS advisories before the first High hour.",
-    Prepare: "Stage units nearby; hold the advisory until probability firms up.",
-    Monitor: "No action; re-check next cycle.",
-  };
-  const tone = (l: string) => (l === "Act" ? "var(--color-danger)" : l === "Prepare" ? "var(--color-warning)" : "var(--text-muted)");
-  // Measured km as served, printed as the official post (null stays unknown).
-  const kmOf = (segment: string) => data.congestion.find((c) => c.segment === segment)?.km ?? null;
-  const urgencyOf = (segment: string) => data.congestion.find((c) => c.segment === segment)?.urgency ?? null;
   // Manila wall-clock text ("2026-10-19 14:00"), split rather than parsed so no browser zone shifts it.
   const [baseD, baseT] = (data.congestionBaseTs ?? "").split(" ");
   const baseH = baseT ? Number(baseT.slice(0, 2)) : NaN;
   const baseHour = baseD && Number.isFinite(baseH) ? `${fmtHour(baseH)} ${shortDay(baseD)}` : null;
+  const baseMs = baseD && baseT ? new Date(`${baseD}T${baseT}:00+08:00`).getTime() : NaN;
+  // The hourly job can lag (it runs every 3-7 h in the cloud), so past six hours the age is flagged.
+  const stale = Number.isFinite(baseMs) && Date.now() - baseMs > 6 * 3_600_000;
+  // The clock hour forecast hour +h lands on, in Manila time, for the advisory text.
+  const clockAt = (h: number) => (Number.isFinite(baseMs) ? fmtHour((new Date(baseMs + h * 3_600_000).getUTCHours() + 8) % 24) : `+${h}h`);
+  /* Advisory text for the Mobile App, from the Act cards. The system publishes advisories only through the
+     Mobile App Control Centre (it cannot drive message signs), so the panel copies the text and links there.
+     "Possible", not "expected": the measured precision at the Act line is well under one in two. */
+  const advised = act.slice(0, 3);
+  const advisoryText = advised.length
+    ? `Heavy congestion possible on NLEX at ${listOf(advised.map((r) => r.segment))}` +
+      (advised[0].firstAct != null ? `, from around ${clockAt(advised[0].firstAct)}` : "") +
+      ". Expect delays; travel earlier or later if you can."
+    : "";
+  const copyAdvisory = () => {
+    navigator.clipboard?.writeText(advisoryText).then(() => {
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 2500);
+    }).catch(() => setCopied(false));
+  };
+  const span = (a: string | null, z: string | null) => (a && z ? `${shortDay(a.slice(0, 10))} to ${shortDay(z.slice(0, 10))}` : "");
 
   return (
     <Shell
       title="Congestion Response Advisory"
-      hint="Ranks segments by how likely High congestion is and how soon, through a fuzzy controller so a segment near a threshold reads as near a threshold rather than flipping an alert on and off. Counter-flow is disruptive and scarce, so the advisory goes to the three most urgent; the rest are listed, not alerted."
+      hint="Act = a segment's chance of High congestion reaches the Act line within 12 hours. The line is not set by hand: it is the cut-off that best balanced High hours caught against false alarms (F1) on the archived forecasts, then checked on the last 7 days, which it never saw."
+      meta={
+        <>
+          <SourceBadge kind="forecast" detail="The congestion forecast's chance of High congestion, 1 to 12 hours ahead" />
+          {baseHour && <ForecastAge at={baseHour} stale={stale} />}
+        </>
+      }
     >
       <Banner tone={act.length ? "alert" : "info"}>
-        {top.length > 0 ? (
+        {!calibrated ? (
+          <><b>No Act line yet.</b> {cal?.reason ?? "The forecast archive could not be read."} Segments are listed by their chance of High.</>
+        ) : act.length > 0 ? (
           <>
-            <b className="nct-bad">Operator alert:</b> severe congestion predicted
-            {lead != null && lead < 99 && <> within <b>{lead}h</b></>} — counter-flow advisory for{" "}
-            <b>{top.map((r) => r.segment).join(", ")}</b>.
-            {rest.length > 0 && <> {rest.length} more segment{rest.length === 1 ? "" : "s"} elevated but not advised.</>}
+            <b className="nct-bad">Act:</b> {act.length} segment{act.length === 1 ? "" : "s"} reach the {pct(cut!)} line
+            {lead != null && lead < 99 && <> from <b>+{lead}h</b></>}: <b>{listOf(act.slice(0, 3).map((r) => r.segment))}</b>
+            {act.length > 3 && <> and {act.length - 3} more</>}.
           </>
-        ) : prepare.length > 0 ? (
-          <><b>No segment reaches Act.</b> {prepare.length} at Prepare — stage, don&apos;t intervene.</>
         ) : missing.length > 0 ? (
-          <><b>No forecast segment crosses Prepare</b> inside the 12-hour horizon, but {missing.length} segment{missing.length === 1 ? " has" : "s have"} no forecast at all.</>
+          <><b>No segment reaches the {pct(cut!)} line</b> in the next 12 hours, but {missing.length} segment{missing.length === 1 ? " has" : "s have"} no forecast at all.</>
         ) : (
-          <><b>Corridor clear.</b> No segment crosses Prepare inside the 12-hour horizon.</>
+          <><b>Corridor clear.</b> No segment reaches the {pct(cut!)} line in the next 12 hours.</>
         )}
-        {/* "+2h" counts from the forecast's base hour, so the banner names it (testers asked for the
-            forecast time in plain words). baseTs is Manila wall-clock text; read as such, not as UTC. */}
         {baseHour && <> <span className="nct-dim">Hours count from the {baseHour} forecast.</span></>}
       </Banner>
 
-      {/* Ranked action cards: the action, where, when, how sure; the basis
-          behind Details. */}
+      {calibrated && cal && cal.precision != null && cal.recall != null && (
+        <div className="nct-calib" role="group" aria-label="How the Act line performed on held-out days">
+          <span><span className="nct-kv-k">Act line</span> <b>{pct(cut!)}</b> chance of High</span>
+          <span>When it said Act, High followed <b>{pct(cal.precision)}</b>{cal.baseRate != null && <span className="nct-dim"> (vs {pct(cal.baseRate)} of all hours)</span>}</span>
+          <span>It caught <b>{pct(cal.recall)}</b> of High hours</span>
+          <InfoTooltip text={`Picked on ${span(cal.fitFrom, cal.fitTo)} (F1 ${cal.fitF1?.toFixed(2)}), then measured on ${span(cal.testFrom, cal.testTo)}: ${fmtInt(cal.testRows)} forecast-hours it never saw (F1 ${cal.f1?.toFixed(2)}). In all, ${fmtInt(cal.scored)} forecast-hours from ${cal.runs} runs scored against Waze jam speeds, ${fmtInt(cal.scoredHigh)} of them High.`} />
+        </div>
+      )}
+
+      {advisoryText && (
+        <div className="nct-publish" role="group" aria-label="Advisory for the Mobile App">
+          <p className="nct-publish-text"><span className="nct-kv-k">Advisory</span> {advisoryText}</p>
+          <div className="nct-publish-actions">
+            <button type="button" className="nct-pill-btn" onClick={copyAdvisory} aria-live="polite">
+              {copied ? "Copied" : "Copy advisory"}
+            </button>
+            <a className="nct-pill-btn is-on" href="/dashboard/mobile">Publish in Mobile App</a>
+          </div>
+        </div>
+      )}
+
       <div className="nct-actions nct-actions-3">
-        {(top.length ? top : rows.slice(0, 3)).map((r, i) => {
-          const km = kmOf(r.segment);
-          const urgency = urgencyOf(r.segment);
+        {cards.map((r, i) => {
+          const tl = timelineOf(r.segment);
+          const isAct = r.label === "Act";
           return (
             <ActionCard
               key={r.segment}
               rank={i + 1}
-              tone={r.label === "Act" ? "act" : r.label === "Prepare" ? "prepare" : "info"}
-              signal={r.label === "Act" ? "congested" : r.label === "Prepare" ? "slow" : "none"}
-              tag={<span className="nct-action-label" style={{ color: tone(r.label) }}>{r.label}</span>}
-              action={ACTION[r.label]}
+              tone={isAct ? "act" : "info"}
+              signal={isAct ? "congested" : "none"}
+              tag={<span className="nct-action-label" style={{ color: isAct ? "var(--color-danger)" : "var(--text-muted)" }}>{calibrated ? r.label : "Unrated"}</span>}
+              action={r.action}
               facts={[
-                { k: "Where", v: <><b>{r.segment}</b>{km != null && <span className="nct-dim"> · km {fmtKm(km)}</span>}</> },
-                ...(r.first != null
-                  ? [
-                      { k: "When", v: <>Most urgent hour <b>+{r.first}h</b></> },
-                      { k: "Confidence", v: <><b>{Math.round(r.peak * 100)}%</b> chance of High at +{r.peakHour}h</> },
-                    ]
-                  : [{ k: "When", v: <span style={{ fontStyle: "italic" }}>Never reaches High inside the horizon</span> }]),
+                { k: "Where", v: <><b>{r.segment}</b>{r.km != null && <span className="nct-dim"> · km {fmtKm(r.km)}</span>}</> },
+                ...(r.firstAct != null
+                  ? [{ k: "When", v: <>From <b>+{r.firstAct}h</b>{Number.isFinite(baseMs) && <span className="nct-dim"> (around {clockAt(r.firstAct)})</span>}</> }]
+                  : []),
+                { k: "Peak", v: <><b>{pct(r.probability)}</b> chance of High at +{r.hoursAhead}h</> },
+                ...(r.hitRate != null
+                  ? [{ k: "How sure", v: <>High followed <b>{pct(r.hitRate)}</b> of {fmtInt(r.hitN)} past forecasts at {pct(r.probability)} or more</> }]
+                  : []),
+                ...(tl.length > 0 ? [{ k: "Next 12 h", v: <HighTimeline hours={tl} cut={cut} /> }] : []),
               ]}
-              details={
-                <>
-                  Ranked by the fuzzy controller from how likely High congestion is and how soon
-                  {urgency != null && <> (urgency <b>{urgency.toFixed(2)}</b>)</>}, from the congestion forecast on the
-                  Predictive tab. Counter-flow goes to the three most urgent segments only.
-                </>
-              }
             />
           );
         })}
       </div>
 
-      {rest.length > 0 && (
+      {inline.length > 0 && (
+        <div className="nct-inline-list">
+          <p className="nct-kv-k">Also at Act</p>
+          <ul>
+            {inline.map((r) => (
+              <li key={r.segment}>
+                <b style={{ color: "var(--color-danger)" }}>Act</b>
+                <span className="nct-inline-seg">{r.segment}</span>
+                <span className="nct-dim">{r.firstAct != null ? `from +${r.firstAct}h · peak ${pct(r.probability)}` : ""}</span>
+                <HighTimeline hours={timelineOf(r.segment)} cut={cut} compact />
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+
+      {monitor.length > 0 && act.length > 0 && (
         <div className="nct-panel-intro">
-          <button type="button" onClick={() => setShowRest((v) => !v)} className="nct-link-btn" aria-expanded={showRest}>
-            {showRest ? "Hide" : "Show"} the {rest.length} elevated segment{rest.length === 1 ? "" : "s"} not advised
+          <button type="button" onClick={() => setShowMonitor((v) => !v)} className="nct-link-btn" aria-expanded={showMonitor}>
+            {showMonitor ? "Hide" : "Show"} the {monitor.length} segment{monitor.length === 1 ? "" : "s"} at Monitor
           </button>
-          {showRest && (
+          {showMonitor && (
             <div className="nct-chip-row" style={{ marginTop: 10 }}>
-              {rest.map((r) => (
-                <span key={r.segment} className="nct-mini-chip">
-                  <b style={{ color: tone(r.label) }}>{r.label}</b> · {r.segment}{r.first != null && <> · +{r.first}h</>}
-                </span>
+              {monitor.map((r) => (
+                <span key={r.segment} className="nct-mini-chip">{r.segment} · {pct(r.probability)}</span>
               ))}
             </div>
           )}
@@ -652,8 +685,10 @@ export function CongestionResponsePanel() {
         <summary>How this is measured</summary>
         <div>
           <Foot>
-            A volume-to-capacity ratio is not shown: it needs lane capacity, and no capacity or lane-count column exists anywhere in
-            the warehouse. The predicted congestion state is what the data supports.
+            Every archived forecast is matched with what the road then did (High = the Waze jam speed for that exit-hour). The Act
+            line is the cut-off with the best F1 on all but the last 7 days; the precision and recall shown are on those 7 days.
+            There is one line, not two: no higher cut-off in the archive buys a precision worth a second tier. A volume-to-capacity
+            ratio is not shown: no capacity or lane-count column exists anywhere in the warehouse.
           </Foot>
         </div>
       </details>
@@ -664,89 +699,141 @@ export function CongestionResponsePanel() {
 /* ==================================================================== 3 ====
  * Event intervention ranking.
  */
+
+/** Extra vehicles on an event day per ranked exit: solid to the 95% lower bound (what the rank rests on), lighter
+ *  to the estimate, and the interval as a whisker (2 Nov 2026). */
+function ExtraBars({ rows }: { rows: RankedExit[] }) {
+  if (rows.length === 0) return null;
+  const max = Math.max(1, ...rows.map((r) => r.extraHi));
+  const pctOf = (v: number) => `${Math.max(0, Math.min(100, (v / max) * 100))}%`;
+  return (
+    <div className="nct-evbars" role="list" aria-label="Extra vehicles on an event day: at least, estimate, and the 95% interval">
+      {rows.map((r) => (
+        <div key={r.exit} className={`nct-evbar${r.rank <= 3 ? " is-top" : ""}`} role="listitem"
+          aria-label={`${r.rank}. ${r.exit}: at least ${fmtInt(r.extraLo)} extra vehicles, estimate ${fmtInt(r.extra)}, up to ${fmtInt(r.extraHi)}`}>
+          <span className="nct-evbar-name"><b>{r.rank}</b> {r.exit}</span>
+          <span className="nct-evbar-track" aria-hidden="true">
+            <span className="nct-evbar-est" style={{ width: pctOf(r.extra) }} />
+            <span className="nct-evbar-fill" style={{ width: pctOf(r.extraLo) }} />
+            <span className="nct-evbar-whisker" style={{ left: pctOf(r.extraLo), width: `calc(${pctOf(r.extraHi)} - ${pctOf(r.extraLo)})` }} />
+          </span>
+          <span className="nct-evbar-val">≥ {fmtInt(r.extraLo)} <span className="nct-dim">(est. {fmtInt(r.extra)})</span></span>
+        </div>
+      ))}
+    </div>
+  );
+}
 export function EventInterventionPanel() {
   const { data, error, slow, retry } = useForecast();
-  const ranked = useMemo(() => (data ? topsisRank(data.events) : []), [data]);
+  // "" = a typical event day; otherwise an upcoming event's date. Defaults to the next one.
+  const [pick, setPick] = useState<string | null>(null);
+  const upcoming = useMemo(() => data?.upcomingEvents ?? [], [data]);
+  const chosenDate = pick ?? upcoming[0]?.date ?? "";
+  const chosen = upcoming.find((e) => e.date === chosenDate) ?? null;
+  const ranked = useMemo(
+    () => (data ? rankByLowerBound(chosen ? exitsFromUpcoming(chosen) : exitsFromEvents(data.events)) : []),
+    [data, chosen],
+  );
 
   if (error) return <Empty msg={`Forecast unavailable: ${error}`} onRetry={retry} />;
   if (!data) return <Empty msg="Loading forecast…" slow={slow} />;
-  if (ranked.length === 0) return <Empty msg="No event surge forecast available." />;
-
-  // The next scheduled Arena day, named so the plan can say what it is for.
-  // The per-exit forecast for it lives on the Predictive tab's Event Surge
-  // card, where a prediction belongs; this panel is the action on it.
-  const next = (data.upcomingEvents ?? [])[0] ?? null;
 
   const top = ranked.slice(0, 3);
-  const totalExtra = top.reduce((s, r) => s + r.extraVehicles, 0);
+  const atLeast = top.reduce((s, r) => s + r.extraLo, 0);
+  const estimate = top.reduce((s, r) => s + r.extra, 0);
   const anchor = data.events.find((e) => e.material)?.anchorExit ?? null;
-  const confidence = (w: number) => (w < 0.05 ? "firm" : w < 0.12 ? "fair" : "loose");
+  const longDay = (iso: string) =>
+    new Date(`${iso}T00:00:00`).toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric" });
+
+  const Picker = upcoming.length > 0 && (
+    <label className="nct-pick">
+      <span className="nct-kv-k">Plan for</span>
+      <select className="nct-select" value={chosenDate} onChange={(e) => setPick(e.target.value)} aria-label="Event to plan for">
+        {upcoming.map((e) => (
+          <option key={e.date} value={e.date}>{shortDay(e.date)} · {e.title.split(" - ")[0]}{e.isDerived ? " (inferred)" : ""}</option>
+        ))}
+        <option value="">A typical event day</option>
+      </select>
+    </label>
+  );
 
   return (
     <Shell
       title="Event Intervention Ranking"
-      hint="Ranks exits for event-day intervention by closeness to an ideal option across four criteria: vehicles moved, uplift over baseline, how many events the estimate rests on, and the width of its confidence interval as a penalty (TOPSIS)."
+      hint="Exits ranked by the extra vehicles each is sure to carry on the event day: the lower end of its uplift's 95% interval times its normal-day baseline. Only exits whose whole interval sits above a normal day are ranked. No weights: a loose estimate already has a low floor."
+      meta={<SourceBadge kind="forecast" detail="The event-surge model (uplift measured on past Arena event days) applied to the upcoming Arena calendar" />}
+      right={Picker || undefined}
     >
-      <ActionCard
-        rank={1}
-        tag={<span className="nct-action-kicker">Event plan</span>}
-        action={<>Event traffic management plan: {top.map((r) => r.exit).join(", ")}.</>}
-        lead={<>Deploy patrol and advisory resources here first{anchor ? <> — the surge is anchored on {anchor}</> : null}.</>}
-        facts={[
-          { k: "Expected load", v: <>On an event day these three exits carry <b>{fmtInt(totalExtra)}</b> extra vehicles between them.</> },
-          ...(next
-            ? [{
-                k: "Next up",
-                v: <><b>{next.title.split(" - ")[0]}</b> on{" "}
-                  <b>{new Date(`${next.date}T00:00:00`).toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric" })}</b>
-                  {next.isDerived ? " (recurring, inferred)" : ""}.</>,
-              }]
-            : []),
-          { k: "Estimate", v: <>{top.map((r) => `${r.exit}: ${confidence(r.uncertainty)}`).join(" · ")}<InfoTooltip text={ESTIMATE_HINT} /></> },
-        ]}
-      />
+      {ranked.length === 0 ? (
+        <Banner>
+          <b>No exit shows a rise that is clearly above normal</b> {chosen ? <>for {chosen.title.split(" - ")[0]}</> : <>on an event day</>}: every uplift interval reaches a normal day.
+        </Banner>
+      ) : (
+        <>
+          <ActionCard
+            rank={1}
+            tag={<span className="nct-action-kicker">Event plan</span>}
+            action={<>Deploy patrol and advisory resources first at {listOf(top.map((r) => r.exit))}</>}
+            lead={anchor ? <>The surge is anchored on {anchor}.</> : undefined}
+            facts={[
+              ...(chosen
+                ? [{ k: "When", v: <><b>{chosen.title.split(" - ")[0]}</b>, {longDay(chosen.date)}{chosen.isDerived ? " (recurring, inferred)" : ""}</> }]
+                : [{ k: "When", v: <>Any Arena event day</> }]),
+              {
+                k: "At least",
+                v: <><b>{fmtInt(atLeast)} extra vehicles</b> at these three <span className="nct-dim">(estimate {fmtInt(estimate)})</span></>,
+              },
+              {
+                k: "How sure",
+                v: <>95% lower bounds, from {top[0]?.nEvents ?? 0} past event days<InfoTooltip text={ESTIMATE_HINT} /></>,
+              },
+            ]}
+          />
 
-      <div className="nct-table-wrap">
-        <table className="nct-table">
-          <thead>
-            <tr>
-              <th>#</th>
-              <th>Exit</th>
-              <th className="num">Extra vehicles</th>
-              <th className="num">Uplift</th>
-              <th className="num">Events seen</th>
-              <th>Estimate<InfoTooltip text={ESTIMATE_HINT} /></th>
-              <th className="num">Score</th>
-            </tr>
-          </thead>
-          <tbody>
-            {ranked.slice(0, 10).map((r) => (
-              <tr key={r.exit} className={r.rank <= 3 ? "nct-row-top" : undefined}>
-                <td className={`strong${r.rank <= 3 ? " nct-accent" : " nct-dim"}`}>{r.rank}</td>
-                <td className="strong">{r.exit}</td>
-                <td className="num">{fmtInt(r.extraVehicles)}</td>
-                <td className="num">{r.uplift.toFixed(2)}×</td>
-                <td className="num">{r.evidence}</td>
-                <td className="dim" title={`Uplift ${r.uplift.toFixed(2)}× give or take ${(r.uncertainty / 2).toFixed(2)}`}>{confidence(r.uncertainty)} <span className="nct-dim">(±{(r.uncertainty / 2).toFixed(2)})</span></td>
-                <td className="num strong">{r.closeness.toFixed(2)}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
+          <ExtraBars rows={ranked.slice(0, 10)} />
 
-      {/* Dated forecasts for the next Arena events. The ranking above says which
-          exits matter on an event day in general; this says what to expect on a
-          specific date -- the measured uplift applied to that weekday-in-that-
-          month's baseline, the same construction the Predictive tab uses when
-          given a date. */}
+          <details className="nc-details">
+            <summary>All ranked exits</summary>
+            <div className="nct-table-wrap">
+              <table className="nct-table">
+                <thead>
+                  <tr>
+                    <th>#</th>
+                    <th>Exit</th>
+                    <th className="num">At least</th>
+                    <th className="num">Estimate</th>
+                    <th className="num">Up to</th>
+                    <th className="num">Uplift (95% interval)</th>
+                    <th className="num">Event days</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {ranked.map((r) => (
+                    <tr key={r.exit} className={r.rank <= 3 ? "nct-row-top" : undefined}>
+                      <td className={`strong${r.rank <= 3 ? " nct-accent" : " nct-dim"}`}>{r.rank}</td>
+                      <td className="strong">{r.exit}</td>
+                      <td className="num strong">{fmtInt(r.extraLo)}</td>
+                      <td className="num">{fmtInt(r.extra)}</td>
+                      <td className="num dim">{fmtInt(r.extraHi)}</td>
+                      <td className="num">{r.uplift.toFixed(2)}× <span className="nct-dim">({r.upliftLo.toFixed(2)}–{r.upliftHi.toFixed(2)})</span></td>
+                      <td className="num">{r.nEvents}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </details>
+        </>
+      )}
+
       <details className="nc-details">
         <summary>How this is measured</summary>
         <div>
           <Foot>
-            Criteria weighted 0.40 vehicles / 0.25 uplift / 0.20 evidence / 0.15 interval width. &ldquo;Estimate&rdquo; reads the
-            uplift interval: firm under ±0.025, fair under ±0.06. The per-exit forecast for each upcoming Arena date is on the
-            Predictive tab&apos;s Event Surge card; this ranking is the deployment order for whichever date is chosen there.
+            Extra vehicles = the exit&apos;s normal-day baseline {chosen ? "for that weekday and month" : ""} times (uplift − 1). The rank
+            uses the lower end of the uplift&apos;s 95% interval, so an exit with a loose estimate ranks on what it is sure to add.
+            Exits whose interval reaches 1 are left out. The per-exit forecast for each date is also on the Predictive tab&apos;s Event
+            Surge card.
           </Foot>
         </div>
       </details>

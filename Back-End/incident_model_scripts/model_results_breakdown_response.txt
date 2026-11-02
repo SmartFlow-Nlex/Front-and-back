@@ -10,13 +10,13 @@
     [SELECTED]
 
   XGBoost regression — response-time
-    MAE (minutes) = 17.99
-    R^2           = 0.048
+    MAE (minutes) = 17.66
+    R^2           = 0.050
     n (holdout)   = 10724
     
 
   Actual vs Predicted median response (min), by cause
-    Engine                       actual=19.0  predicted=21.0  n=5076
+    Engine                       actual=19.0  predicted=20.0  n=5076
     Mechanical                   actual=22.0  predicted=23.0  n=2256
     Tire                         actual=13.0  predicted=18.0  n=2028
     Others                       actual=17.0  predicted=20.0  n=820

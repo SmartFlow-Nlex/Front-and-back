@@ -1,36 +1,29 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import type { EChartsOption } from "echarts";
-import DashboardChart from "./DashboardChart";
 import InfoTooltip from "./InfoTooltip";
 import StateNote from "../stage/StateNote";
-import { Empty } from "./prescriptiveShell";
+import { Empty, ForecastAge, SourceBadge } from "./prescriptiveShell";
 import { fetchJsonWithRetry } from "./prescriptiveTraffic.shared";
 import { Term } from "./emissionsTerms";
-import { useChartTheme, seriesRamp } from "../../lib/chart-theme";
-import {
-  AlertTriangle, CalendarRange, ChevronDown, Clock, Flag, Gauge, MapPin, ShieldCheck, Target, TrendingDown,
-  type LucideIcon,
-} from "lucide-react";
+import { Clock, Flag, MapPin } from "lucide-react";
 
 const BACKEND = process.env.NEXT_PUBLIC_BACKEND_URL ?? "http://localhost:4000";
 
 /**
- * Projected CO2 reduction by strategy — computed, replacing the three literals
- * ("Strategy X/Y/Z" at 8/14/22) this card used to carry behind an
- * "Illustrative" chip. Reads /api/emissions/prescriptive; the derivations and
- * the one negative result are in docs/emissions-optimiser-spec.md.
+ * Projected CO2 reduction — computed, replacing the three literals ("Strategy X/Y/Z" at 8/14/22) this card
+ * used to carry behind an "Illustrative" chip. Reads /api/emissions/prescriptive; the derivations are in
+ * docs/emissions-optimiser-spec.md.
  *
- * The one thing this component must get right visually: two of the three bars
- * are bounded by what the corridor has ALREADY achieved, and one is a policy
- * target nothing in the record supports. Drawing all three the same colour
- * would quietly equate them, so the unbounded one is drawn hollow and says so
- * in its own line. That distinction is the whole reason the old chip existed.
+ * Measured recommendations only (2 Nov 2026): shorter lane blockages, bounded by blockage times comparable
+ * ones on NLEX already achieved, looked back over the Range and carried over the incident forecast's
+ * validated days; the Class 3 window advisory from the congestion forecast; and where a Class 3 surcharge
+ * would apply. The Class 3 share shift, busiest-hours deployment and the TOPSIS ranking were removed as not
+ * data-backed.
  */
 
 type Strategy = {
-  key: "fleet_mix" | "clearance" | "deployment";
+  key: "clearance";
   label: string;
   reductionPct: number;
   reductionTonnes: number;
@@ -41,21 +34,19 @@ type Strategy = {
   /** What the saving is concentrated in, in one sentence. */
   focus?: string;
   evidenceBounded: boolean;
-  /** For a scenario: what the record does show, in one sentence. */
-  evidenceNote?: string;
-  /** Monte Carlo 5th–95th percentile, where the saving depends on which incidents happen. */
+  /** Bootstrap 5th–95th percentile over resamples of the Range's incidents. */
   range?: { lowTonnes: number; highTonnes: number; lowPct: number; highPct: number; runs: number } | null;
   assumptions: string[];
+  /** How the blockage floors were set and how many incidents stand behind them. */
+  floorNote?: string;
+  /** The saving carried forward over the incident forecast's validated days; null with a reason otherwise. */
+  projection?: { tonnes: number; from: string; to: string; days: number; forecastIncidents: number; basis: string } | null;
+  projectionNote?: string;
 };
 
-/* The modelling diagram's prescriptive box for emissions: TOPSIS intervention ranking (KPI: CO2 per class-km)
-   and the agent-based fleet-mix box (heavy-vehicle window restriction advisory, KPI: Class 3 peak share
-   reduction), with the dynamic tolling recommendation as a system output. All computed by the service. */
-type Ranking = {
-  criteria: { key: string; label: string; weight: number; kind: "benefit" | "cost"; why: string }[];
-  rows: { key: Strategy["key"]; label: string; closeness: number; rank: number; values: Record<string, number> }[];
-  note: string;
-};
+/* The modelling diagram's prescriptive box for emissions (KPI: CO2 per class-km) and the fleet-mix box
+   (Class 3 window advisory, KPI: Class 3 peak share), with the dynamic tolling recommendation as a system
+   output. All computed by the service. */
 type ClassKm = { cls: 1 | 2 | 3; label: string; gPerKm: number; vkmSharePct: number; co2SharePct: number };
 type HeavyWindow = {
   peakHours: string;
@@ -67,12 +58,23 @@ type HeavyWindow = {
   fitsOffPeak: boolean;
   capacityNote: string;
   co2Note: string;
+  action?: string;
+  source?: "forecast" | "history";
+  basis?: string;
+  /** Set, with no action, when the window would be over half the day. */
+  noWindow?: string;
 };
-type Tolling = { hours: string; exits: { name: string; class3Tonnes: number; sharePct: number }[]; atStakeTonnes: number; note: string };
+type Tolling = {
+  hours: string;
+  exits: { name: string; class3Tonnes: number; sharePct: number }[];
+  atStakeTonnes: number;
+  note: string;
+  action?: string;
+  coveredPct?: number;
+};
 
 type Payload = {
   strategies: Strategy[];
-  ranking?: Ranking | null;
   classKm?: ClassKm[];
   corridorGPerVkm?: number;
   heavyWindow?: HeavyWindow | null;
@@ -109,51 +111,24 @@ function explainFailure(e: unknown): string {
   return msg || "Request failed.";
 }
 
-/** The first `n` characters of `text`, cut at a word boundary. */
-function shorten(text: string, n = 48): string {
-  const t = text.trim();
-  if (t.length <= n) return t;
-  const cut = t.slice(0, n);
-  return `${cut.slice(0, Math.max(cut.lastIndexOf(" "), n - 12)).replace(/[,;:·—–\s]+$/, "")}…`;
-}
-
 const MONTH = (iso: string) =>
   new Date(`${iso}T00:00:00Z`).toLocaleDateString("en-US", { month: "short", year: "numeric", timeZone: "UTC" });
 
 /* What to do, as a headline per strategy; the service's full lever sits behind the Action box. Shared by
    the answer strip and the cards so the two never word the same action differently. */
 const ACTION_HEAD: Record<Strategy["key"], string> = {
-  clearance: "Clear blockages as fast as your best 10%",
-  deployment: "Put response capacity on the 12 busiest hours",
-  fleet_mix: "Shift Class 3 truck travel to Class 2 vehicles",
+  clearance: "Clear blockages as fast as the fastest 10% of comparable ones",
 };
 
-/* One field of an action card as a small box: its label and a one-line headline, the full text only when
-   the box is opened. The card used to print every field in full, which made each one a wall of prose; the
-   headline is enough to scan, and the detail is one click away. Opened boxes span the row so long text
-   stays readable. */
-function InfoTile({ label, summary, children, tone, icon: Icon, compact }: {
-  label: string; summary: React.ReactNode; children?: React.ReactNode; tone?: "note"; icon: LucideIcon; compact?: boolean;
-}) {
-  const [open, setOpen] = useState(false);
-  const expandable = children != null;
-  return (
-    <div className={`nc-em-tile${compact ? " is-compact" : ""}${open ? " is-open" : ""}${tone === "note" ? " is-note" : ""}`}>
-      <button
-        type="button"
-        className="nc-em-tile-head"
-        onClick={() => expandable && setOpen((v) => !v)}
-        aria-expanded={expandable ? open : undefined}
-        disabled={!expandable}
-      >
-        <span className="nc-em-tile-icon" aria-hidden="true"><Icon size={compact ? 14 : 16} strokeWidth={2} /></span>
-        <span className="nc-em-tile-label">{label}</span>
-        <span className="nc-em-tile-summary">{summary}</span>
-        {expandable && <ChevronDown className="nc-em-tile-chev" size={16} strokeWidth={2} aria-hidden="true" />}
-      </button>
-      {open && expandable && <div className="nc-em-tile-body">{children}</div>}
-    </div>
-  );
+/* "2026-07-08", "2026-07-14" -> "8–14 Jul 2026" (or "28 Jun – 4 Jul 2026" across a month). */
+function dayRange(from: string, to: string): string {
+  const d = (iso: string) => new Date(`${iso}T00:00:00Z`);
+  const a = d(from), b = d(to);
+  if (Number.isNaN(a.getTime()) || Number.isNaN(b.getTime())) return `${from} to ${to}`;
+  const fmt = (x: Date, o: Intl.DateTimeFormatOptions) => x.toLocaleDateString("en-GB", { ...o, timeZone: "UTC" });
+  if (a.getUTCMonth() === b.getUTCMonth() && a.getUTCFullYear() === b.getUTCFullYear())
+    return `${a.getUTCDate()}–${fmt(b, { day: "numeric", month: "short", year: "numeric" })}`;
+  return `${fmt(a, { day: "numeric", month: "short" })} – ${fmt(b, { day: "numeric", month: "short", year: "numeric" })}`;
 }
 
 /* The tonnes are over the Range, not per year. "A year" was printed whatever
@@ -166,6 +141,15 @@ function over(from: string, to: string): string {
   return `over these ${days} days`;
 }
 
+/* "02 Nov 2026 19:00" out of the window advisory's basis, and whether that forecast is over a day old (the
+   congestion forecast refreshes hourly; a day-old one no longer describes the week ahead). */
+function forecastStamp(basis?: string): { at: string; stale: boolean } | null {
+  const m = /forecast of (\d{2}) (\w{3}) (\d{4}) (\d{2}:\d{2})/.exec(basis ?? "");
+  if (!m) return null;
+  const t = Date.parse(`${m[2]} ${m[1]}, ${m[3]} ${m[4]} GMT+0800`);
+  return { at: `${m[1]} ${m[2]} ${m[3]}, ${m[4]}`, stale: Number.isFinite(t) && Date.now() - t > 24 * 3_600_000 };
+}
+
 export default function PrescriptiveEmissionsPanel({
   months,
   from,
@@ -175,26 +159,13 @@ export default function PrescriptiveEmissionsPanel({
   from?: string;
   to?: string;
 }) {
-  const T = useChartTheme();
   const [data, setData] = useState<Payload | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
-  /* Shorter page (2026-10-15): #1 and #2 open side by side; the policy scenario (#3) folds to one line. */
-  const [openCards, setOpenCards] = useState<Set<number>>(() => new Set([1, 2]));
-  const toggleCard = (rank: number) =>
-    setOpenCards((cur) => {
-      const next = new Set(cur);
-      if (next.has(rank)) next.delete(rank);
-      else next.add(rank);
-      return next;
-    });
-  /* The four analyses below the chart share one card, one tab at a time, instead of four stacked cards. */
-  const [moreTab, setMoreTab] = useState<"ranking" | "classkm" | "window" | "tolling">("ranking");
-
   /* Load reliably (17 Oct 2026, testers EM-11.1: "failed to load" for one tester, stuck for another).
      The panel made one bare fetch: a single slow handshake or a 503 while the shared database woke left
      it on an error with no way back but a reload, and nothing on screen said a cold Range takes 3 to 11
-     seconds (six queries plus a 400-run Monte Carlo). Now transient failures are retried (3 tries, 3 s
+     seconds (six queries plus a 400-run bootstrap). Now transient failures are retried (3 tries, 3 s
      then 8 s apart), a slow load says why, and an error carries Try again. */
   const [attempt, setAttempt] = useState(0);
   const [slow, setSlow] = useState(false);
@@ -253,12 +224,13 @@ export default function PrescriptiveEmissionsPanel({
   const evidenceHead = (
     <div className="nc-em-card-head">
       <h3>
-        Projected % Emission Reduction by Strategy
-        <InfoTooltip text="Computed from our own records over the selected Range. Shorter lane blockages and busiest-hours response are limited to blockage times NLEX has already achieved. The Class 3 bar is a what-if (drawn hollow): our records have never shown NLEX lowering truck traffic. Moving trips to other hours is not offered, because in this model a vehicle gives off the same CO2 at any hour." />
+        Projected Emission Reduction
+        <InfoTooltip text="Computed from our own records over the selected Range. Each lane blockage is shortened only to a blockage time comparable ones on NLEX already achieved; idling uses the cited Argonne and EPA idle rates. Moving trips to other hours is not offered, because in this model a vehicle gives off the same CO2 at any hour." />
         {updatingBadge}
       </h3>
       <p className="nc-em-context">
-        <Term t="CO₂" /> avoided per strategy, as a share of what the corridor actually emitted over the Range.
+        <Term t="CO₂" /> avoided by shorter lane blockages: looking back over the Range, and ahead over the incident
+        forecast&apos;s validated days.
       </p>
     </div>
   );
@@ -311,671 +283,311 @@ export default function PrescriptiveEmissionsPanel({
   }
   const unavailable = data.unavailable ?? [];
 
-  // Largest first: the ranking is the finding, so it should not depend on the
-  // order the service happens to return.
-  const rows = [...data.strategies].sort((a, b) => b.reductionPct - a.reductionPct);
-
-  /* Same teal step as before (the emissions ramp's middle step, per theme),
-     read from the ramp rather than retyped. */
-  const BAR = seriesRamp("emissions", T)[1];
-
-  /* Ranked bars, drawn horizontally: the strategy names read on one line
-     beside their bar instead of wrapping under it. Same bars, same order,
-     same tooltip. */
-  const option: EChartsOption = {
-    grid: { left: 8, right: 56, top: 8, bottom: 34, containLabel: true },
-    yAxis: {
-      type: "category",
-      inverse: true,
-      data: rows.map((s) => s.label),
-      axisTick: { show: false },
-      axisLabel: { color: T.ink, fontSize: 12, interval: 0, width: 120, overflow: "break", lineHeight: 15 },
-    },
-    xAxis: {
-      type: "value",
-      name: "% of corridor CO₂",
-      nameLocation: "middle",
-      nameGap: 26,
-      nameTextStyle: { color: T.text, fontSize: 12 },
-      splitNumber: 4,
-      axisLabel: { color: T.text, hideOverlap: true, formatter: (v: number) => `${v}%` },
-      splitLine: { lineStyle: { color: T.split } },
-    },
-    tooltip: {
-      trigger: "axis",
-      confine: true,
-      axisPointer: { type: "shadow" },
-      formatter: (params: unknown) => {
-        const p = (params as { dataIndex: number }[])[0];
-        const s = rows[p.dataIndex];
-        if (!s) return "";
-        return (
-          `<b>${s.label}</b><br/>` +
-          `${s.reductionPct.toFixed(2)}% of corridor CO₂ &middot; ${fmtT(s.reductionTonnes)} t avoided<br/>` +
-          (s.range
-            ? `<span style="opacity:.8">Monte Carlo range (5th–95th of ${s.range.runs} runs): ${fmtT(s.range.lowTonnes)}–${fmtT(s.range.highTonnes)} t</span><br/>`
-            : "") +
-          `<span style="opacity:.8">${s.lever}</span><br/><br/>` +
-          (s.evidenceBounded
-            ? `<span style="opacity:.8">Bounded by what this corridor has already achieved.</span>`
-            : `<b>What-if only: our records have never shown this happening on NLEX.</b>`)
-        );
-      },
-    },
-    series: [
-      {
-        type: "bar",
-        barMaxWidth: 26,
-        data: rows.map((s) => ({
-          value: s.reductionPct,
-          itemStyle: s.evidenceBounded
-            ? { color: BAR, borderRadius: [0, 4, 4, 0] }
-            : // Hollow, so a scenario cannot be mistaken for a measured result.
-              {
-                color: "transparent",
-                borderColor: BAR,
-                borderWidth: 2,
-                borderType: "dashed",
-                borderRadius: [0, 4, 4, 0],
-              },
-        })),
-        label: {
-          show: true,
-          position: "right",
-          color: T.ink,
-          fontSize: 12,
-          fontFamily: T.fontFamily,
-          formatter: (p: { value?: unknown }) => `${Number(p.value ?? 0).toFixed(2)}%`,
-        },
-      },
-    ],
-  };
-
-  const scenario = rows.find((s) => !s.evidenceBounded);
-  /* THE RECOMMENDATION.
+  /* THE RECOMMENDATION (2 Nov 2026: measured strategies only).
    *
-   * Three bars and a percentage is analysis, not advice — the tab is called
-   * Prescriptive and was not prescribing anything. What an operator needs is
-   * one named action, what it is worth, and what NOT to do.
+   * One strategy is left, and it is evidence-bounded: shorter lane blockages, each cut only to a blockage time
+   * comparable ones on NLEX already achieved. The Class 3 share shift (its size was a chosen target),
+   * busiest-hours deployment (no responder data) and the TOPSIS ranking (chosen weights) were removed as not
+   * data-backed.
    *
-   * The pick is the largest EVIDENCE-BOUNDED strategy, deliberately not the
-   * largest bar: the heavy-vehicle scenario is far bigger, but nothing in the
-   * record ties a lower heavy share to anything NLEX controls (its lowest
-   * months are holiday months), so leading with it would be recommending a
-   * number rather than an action. */
-  const doable = rows.filter((s) => s.evidenceBounded);
-  const lead = doable[0] ?? null;
-  const second = doable[1] ?? null;
-
+   * One card (2 Nov 2026, user: "look at the UI, improve and fix"). It used to be a strip ("Do this", "Saves")
+   * over a card that said the same again in a headline, an Action box and three fact boxes, with the evidence
+   * card repeating the two numbers a third time. Now: the action as the title, three numbers, then where, when
+   * and what to start with, each read straight off the service's fields. */
+  const lead = data.strategies.find((s) => s.evidenceBounded) ?? null;
   const period = over(data.basis.from, data.basis.to);
-  const maxPct = Math.max(...rows.map((s) => s.reductionPct), 0.0001);
 
-  /* Ranked action cards. Each answers first (tonnes avoided), then reads as
-     labelled rows: Action, Where, When, Effect, Basis, Confidence. The full
-     sentence each card replaced, and the service's own assumptions, sit
-     behind Details on the same card. The order is the recommendation's: the
-     lead, then the second, then the policy scenario. */
-  type Tone = "lead" | "then" | "scenario";
-  /** One sentence an operator can act on, read off the card's own fields. */
-  const takeaway = (s: Strategy): string => {
-    if (!s.evidenceBounded) return "A lever for MPTC policy, not for operations: no change in the record shows it can be reached.";
-    const place = (s.where ?? "").split(" · ")[0].split(" (")[0];
-    const hit = /^(\d+)% of this saving comes from ([\d,]+) incident/.exec(s.focus ?? "");
-    if (place && hit) return `Start at ${place}: ${hit[2]} long blockages hold ${hit[1]}% of this saving.`;
-    return place ? `Start at ${place}.` : "";
-  };
-  const ActionCard = ({
-    s, rank, tone, tag, note, noteSummary, details,
-  }: {
-    s: Strategy; rank: number; tone: Tone; tag: string; note?: React.ReactNode; noteSummary?: string; details: React.ReactNode;
-  }) => openCards.has(rank) ? (
-    <li className="chart-card nc-em-acard" data-tone={tone}>
-      <div className="nc-em-acard-answer">
+  const recommendation = (s: Strategy) => {
+    /* "Southbound Km 50–60 near San Simon (21%, 10 blockages of an hour or more)" -> name, share, count. */
+    const places = (s.where ?? "").split(" · ").filter(Boolean).map((p) => {
+      const m = /^(.*?) \((\d+)%(?:, ([\d,]+) blockages?)?/.exec(p);
+      return m ? { name: m[1], pct: Number(m[2]), long: m[3] ?? null, full: p } : { name: p, pct: null, long: null, full: p };
+    });
+    const [whenHours = "", whenShare] = (s.when ?? "").split(" — ");
+    const windows = whenHours ? whenHours.split(", ") : [];
+    const longHit = /^(\d+)% of this saving comes from ([\d,]+) incident/.exec(s.focus ?? "");
+    return (
+      <section className="chart-card nc-em-span nc-em-hero nc-em-rx-busy" aria-label="Recommendation" {...busy}>
         <div className="nc-em-acard-top">
-          <span className="nc-em-acard-rank" aria-hidden="true">{rank}</span>
-          <span className="nc-em-action-tag">{tag}</span>
-          {s.evidenceBounded
-            ? <span className="pill green">Evidence-bounded</span>
-            : <span className="pill nc-em-pill-hollow">What-if only</span>}
+          <span className="nc-em-action-tag">Recommendation · {shownRange}</span>
+          <SourceBadge kind="history" detail="A look back over the Range's incidents, bounded by blockage times comparable ones achieved" />
+          {s.projection && <SourceBadge kind="forecast" detail="Carried over the incident forecast's validated days" />}
+          {updatingBadge}
+          <InfoTooltip text={`${s.lever}. ${s.floorNote ?? ""}`} />
         </div>
-        <h3>{s.label}</h3>
-        <p className="nc-em-answer">
-          <b>{fmtT(s.reductionTonnes)} t</b>
-          <span>CO₂ avoided {period}</span>
-        </p>
-        {takeaway(s) && <p className="nc-em-takeaway">{takeaway(s)}</p>}
-      </div>
-      <div className="nc-em-acard-body">
-        {(() => {
-          /* Headlines for the boxes, from the same strings the full text is. */
-          const longHit = /^(\d+)% of this saving comes from ([\d,]+) incident/.exec(s.focus ?? "");
-          const startHead = longHit ? `${longHit[2]} long blockages hold ${longHit[1]}%` : shorten((s.focus ?? "").split(" — ")[0], 44);
-          const places = (s.where ?? "Corridor-wide").split(" · ");
-          const firstPlace = /\(\d+%/.test(places[0])
-            ? places[0].replace(/^(.*?) \((\d+%).*$/, "$1 · $2")
-            : places[0].split(":")[0];
-          const whenText = s.when ?? "Any hour";
-          const [whenHours, whenShare] = whenText.split(" — ");
-          const windows = whenHours.split(", ").length;
-          return (
-            <>
-              {/* What to do: the four boxes an operator acts on. */}
-              <div className="nc-em-tiles">
-                <InfoTile label="Action" icon={Target} summary={ACTION_HEAD[s.key] ?? shorten(s.lever)}>
-                  <p className="nc-em-cap">{s.lever}.</p>
-                </InfoTile>
-                <InfoTile
-                  label="Where"
-                  icon={MapPin}
-                  summary={<>{firstPlace}{places.length > 1 && <span className="nc-em-tile-more">+{places.length - 1} more</span>}</>}
-                >
-                  {places.length > 1 || places[0] !== firstPlace ? <ul>{places.map((p) => <li key={p}>{p}</li>)}</ul> : undefined}
-                </InfoTile>
-                <InfoTile
-                  label="When"
-                  icon={Clock}
-                  summary={windows > 2 ? <>{windows} time windows{whenShare ? <span className="nc-em-tile-more">{whenShare.replace(" of the saving", "")} of it</span> : null}</> : whenText}
-                >
-                  {windows > 2 || whenShare ? <ul>{whenHours.split(", ").map((h) => <li key={h}>{h}</li>)}{whenShare && <li>{whenShare}</li>}</ul> : undefined}
-                </InfoTile>
-                {s.focus && (
-                  <InfoTile label="Start with" icon={Flag} summary={startHead}>
-                    <p>{s.focus}</p>
-                  </InfoTile>
-                )}
-              </div>
-              {/* The facts behind it: smaller, in one row. */}
-              <div className="nc-em-tiles is-facts">
-                <InfoTile
-                  compact
-                  label="Effect"
-                  icon={TrendingDown}
-                  summary={
-                    <>
-                      <span className="nc-em-inline-bar" aria-hidden="true">
-                        <i
-                          className={s.evidenceBounded ? "" : "is-hollow"}
-                          style={{ width: `${Math.max(2, (s.reductionPct / maxPct) * 100)}%`, ["--bar-c" as string]: BAR }}
-                        />
-                      </span>
-                      {s.reductionPct.toFixed(2)}% of CO₂
-                    </>
-                  }
-                >
-                  <p>{fmtT(s.reductionTonnes)} t avoided, {s.reductionPct.toFixed(2)}% of what the corridor emitted over the period.</p>
-                </InfoTile>
-                <InfoTile
-                  compact
-                  label="Confidence"
-                  icon={Gauge}
-                  summary={s.range ? `${fmtT(s.range.lowTonnes)}–${fmtT(s.range.highTonnes)} t likely` : "No range"}
-                >
-                  <p>
-                    {s.range
-                      ? <>The 5th to 95th percentile of {s.range.runs} Monte Carlo runs: likely {fmtT(s.range.lowTonnes)}–{fmtT(s.range.highTonnes)} t.</>
-                      : "No Monte Carlo range: nothing in this figure is uncertain except the target chosen."}
-                  </p>
-                </InfoTile>
-                <InfoTile compact label="Period" icon={CalendarRange} summary={`${MONTH(data.basis.from)} – ${MONTH(data.basis.to)}`}>
-                  <p>Estimated over {data.basis.from} to {data.basis.to}.</p>
-                </InfoTile>
-                <InfoTile compact label="Basis" icon={ShieldCheck} summary={s.evidenceBounded ? "Achieved on NLEX" : "What-if only"}>
-                  <p>
-                    {s.evidenceBounded
-                      ? "Bounded by lane-blockage times this corridor has already achieved."
-                      : "A what-if: our records have never shown this happening on NLEX."}
-                  </p>
-                </InfoTile>
-                {note && (
-                  <InfoTile compact label="Note" tone="note" icon={AlertTriangle} summary={noteSummary ?? (typeof note === "string" ? shorten(note, 40) : "Read before acting")}>
-                    <p>{note}</p>
-                  </InfoTile>
-                )}
-              </div>
-            </>
-          );
-        })()}
-        <div className="nc-em-acard-foot">
-          <details className="nc-details">
-            <summary>Details</summary>
-            {details}
-            {s.assumptions?.length ? (
-              <ul className="nc-em-action-assumptions">
-                {s.assumptions.map((a, i) => (
-                  <li key={i}>{a}</li>
+        <h3 className="nc-em-hero-title">{ACTION_HEAD[s.key] ?? s.label}</h3>
+
+        <div className="nc-em-hero-nums" role="group" aria-label="CO₂ avoided">
+          <div className="nc-em-hero-num is-lead">
+            <span className="nc-em-hero-num-label">Looking back</span>
+            <b>{fmtT(s.reductionTonnes)} <small>tonnes <Term t="CO₂" /></small></b>
+            <span>
+              avoided {period}
+              {s.range && <>, likely {fmtT(s.range.lowTonnes)}–{fmtT(s.range.highTonnes)}</>}
+            </span>
+          </div>
+          <div className="nc-em-hero-num">
+            <span className="nc-em-hero-num-label">Ahead</span>
+            {s.projection ? (
+              <>
+                <b>~{fmtT(s.projection.tonnes)} <small>tonnes</small></b>
+                <span title={s.projection.basis}>
+                  {dayRange(s.projection.from, s.projection.to)} · {s.projection.forecastIncidents.toLocaleString()} incidents forecast
+                </span>
+              </>
+            ) : (
+              <>
+                <b className="is-none">—</b>
+                <span>{s.projectionNote ?? "No forward figure"}</span>
+              </>
+            )}
+          </div>
+          <div className="nc-em-hero-num">
+            <span className="nc-em-hero-num-label">Share of corridor CO₂</span>
+            <b>{s.reductionPct.toFixed(2)}<small>%</small></b>
+            <span>of {fmtT(data.basis.actualCo2Tonnes)} tonnes emitted</span>
+          </div>
+        </div>
+
+        <div className="nc-em-hero-grid">
+          {places.length > 0 && (
+            <div className="nc-em-hero-block">
+              <span className="nc-em-hero-label"><MapPin size={14} strokeWidth={2} aria-hidden="true" /> Where</span>
+              <ul className="nc-em-rcard-exits nc-em-hero-places">
+                {places.map((p) => (
+                  <li key={p.full} title={p.full}>
+                    <span>{p.name}</span>
+                    {p.pct != null && (
+                      <>
+                        <span className="nc-em-rcard-bar" aria-hidden="true">
+                          <i style={{ width: `${Math.max(3, Math.min(100, p.pct))}%` }} />
+                        </span>
+                        <b>{p.pct}%</b>
+                      </>
+                    )}
+                  </li>
                 ))}
               </ul>
-            ) : null}
-          </details>
-          {rank !== 1 && (
-            <button type="button" className="nc-em-fold-btn" onClick={() => toggleCard(rank)} aria-expanded="true">
-              Fold <ChevronDown size={14} strokeWidth={2} aria-hidden="true" style={{ transform: "rotate(180deg)" }} />
-            </button>
+              <span className="nc-em-hero-foot">Share of the saving</span>
+            </div>
+          )}
+          {windows.length > 0 && (
+            <div className="nc-em-hero-block">
+              <span className="nc-em-hero-label"><Clock size={14} strokeWidth={2} aria-hidden="true" /> When</span>
+              <ul className="nc-em-hero-hours">
+                {windows.map((h) => <li key={h}>{h}</li>)}
+              </ul>
+              {whenShare && <span className="nc-em-hero-foot">These hours hold {whenShare.replace(/ of the saving$/, "")} of the saving</span>}
+            </div>
+          )}
+          {s.focus && (
+            <div className="nc-em-hero-block">
+              <span className="nc-em-hero-label"><Flag size={14} strokeWidth={2} aria-hidden="true" /> Start with</span>
+              {longHit ? (
+                <p className="nc-em-hero-start">
+                  <b>{longHit[2]}</b> blockages of an hour or more hold <b>{longHit[1]}%</b> of the saving
+                </p>
+              ) : (
+                <p className="nc-em-hero-start">{s.focus}</p>
+              )}
+            </div>
           )}
         </div>
-      </div>
-    </li>
-  ) : (
-    /* Folded: one line, the answer and a way in. */
-    <li className="chart-card nc-em-acard is-folded" data-tone={tone}>
-      <button type="button" className="nc-em-fold-row" onClick={() => toggleCard(rank)} aria-expanded="false">
-        <span className="nc-em-acard-rank" aria-hidden="true">{rank}</span>
-        <span className="nc-em-action-tag">{tag}</span>
-        <span className="nc-em-fold-title">{s.label}</span>
-        <span className="nc-em-fold-value"><b>{fmtT(s.reductionTonnes)} t</b> CO₂</span>
-        {s.evidenceBounded
-          ? <span className="pill green">Evidence-bounded</span>
-          : <span className="pill nc-em-pill-hollow">What-if only</span>}
-        <span className="nc-em-fold-cta">Show details <ChevronDown size={15} strokeWidth={2} aria-hidden="true" /></span>
-      </button>
-    </li>
-  );
-
-  let rank = 0;
-
-  return (
-    <>
-      {/* The answer in four rows (19 Oct 2026, testers EM-11: "check the output answers the test question").
-          The cards held it, but spread over a headline and eight boxes; a tester asking "what should we do,
-          and what does it save?" had to assemble it. Read off the same lead strategy as card #1. */}
-      {statusLine}
-      {lead && (
-        <section className="chart-card nc-em-span nc-em-rx-answer nc-em-rx-busy" aria-label="Recommendation" {...busy}>
-          <span className="nc-em-action-tag">Recommendation · {shownRange}{updatingBadge}</span>
-          <dl className="nc-em-rows">
+        {/* The basis, folded under the action it supports (2 Nov 2026, user: "are these recommendations?"; they
+            were their own card, which read as a finding on a tab meant for actions only). */}
+        <details className="nc-details nc-em-hero-how">
+          <summary>How it is measured</summary>
+          <dl className="nc-em-rows nc-em-basis-rows">
             <div>
-              <dt>Do this</dt>
-              <dd><b>{ACTION_HEAD[lead.key] ?? lead.label}.</b> {takeaway(lead)}</dd>
+              <dt>Emitted</dt>
+              <dd>{fmtT(data.basis.actualCo2Tonnes)} tonnes over the Range ({shownRange})</dd>
             </div>
             <div>
-              <dt>Expected</dt>
-              <dd>
-                <b>{fmtT(lead.reductionTonnes)} t <Term t="CO₂" /></b> avoided {period}, {lead.reductionPct.toFixed(2)}% of the{" "}
-                {fmtT(data.basis.actualCo2Tonnes)} t the corridor emitted
-                {lead.range && <>; likely {fmtT(lead.range.lowTonnes)}–{fmtT(lead.range.highTonnes)} t</>}
-              </dd>
+              <dt>Incidents</dt>
+              <dd>{data.basis.incidentsCounted.toLocaleString()} that blocked a lane, each for as long as it stayed blocked</dd>
             </div>
             <div>
-              <dt>Basis</dt>
-              <dd>
-                {data.basis.incidentsCounted.toLocaleString()} lane-blocking incidents in the Range, each shortened only to
-                a blockage time NLEX has already achieved
-              </dd>
+              <dt>Target</dt>
+              <dd title={s.floorNote}>The fastest 10% of comparable blockages (same length, same hour) on this corridor</dd>
             </div>
-            {scenario && (
-              <div className="is-note">
-                <dt>Not this</dt>
-                <dd>
-                  The Class 3 figure ({fmtT(scenario.reductionTonnes)} t) is larger but is a what-if needing a policy
-                  decision, not an operations action
+            {s.range && (
+              <div>
+                <dt>Likely range</dt>
+                <dd>5th to 95th percentile of {s.range.runs} resamples of those incidents</dd>
+              </div>
+            )}
+            {s.projection && (
+              <div>
+                <dt>Ahead</dt>
+                <dd title={s.projection.basis}>
+                  Saving per incident × {s.projection.forecastIncidents.toLocaleString()} incidents forecast on the{" "}
+                  {s.projection.days} days the forecast&apos;s accuracy study passes
                 </dd>
               </div>
             )}
+            <div>
+              <dt>Idling</dt>
+              <dd>Argonne idle fuel rates × EPA kg CO₂ per gallon (gasoline Class 1, diesel Classes 2–3)</dd>
+            </div>
           </dl>
+        </details>
+      </section>
+    );
+  };
+
+  return (
+    <>
+      {statusLine}
+      {lead ? (
+        recommendation(lead)
+      ) : (
+        <section className="chart-card nc-em-span nc-em-hero nc-em-rx-busy" aria-label="Recommendation" {...busy}>
+          <div className="nc-em-acard-top">
+            <span className="nc-em-action-tag is-none">Nothing to do yet · {shownRange}</span>
+            {updatingBadge}
+          </div>
+          <p className="nc-em-context">No evidence-bounded strategy can be computed for this Range. {unavailable[0]?.reason}</p>
         </section>
       )}
 
-      {(lead || scenario) && (
-        <ol className="nc-em-span nc-em-acards nc-em-rx-busy" aria-label="Recommended actions, ranked" {...busy}>
-          {lead ? (
-            <ActionCard
-              s={lead}
-              rank={++rank}
-              tone="lead"
-              tag="Do this"
-              details={
-                <p>
-                  <b>{lead.label}.</b> {lead.lever}.{" "}
-                  Worth <b>{fmtT(lead.reductionTonnes)} t</b> of CO₂ {period}
-                  {lead.range && <> (likely {fmtT(lead.range.lowTonnes)}–{fmtT(lead.range.highTonnes)} t)</>}:{" "}
-                  {lead.reductionPct.toFixed(2)}% of what the corridor emitted. Bounded by blockage times this corridor has{" "}
-                  <b>already delivered</b>, so it asks for no capability it does not have.
-                </p>
-              }
-            />
-          ) : (
-            <li className="chart-card nc-em-acard" data-tone="none">
-              <div className="nc-em-acard-answer">
-                <div className="nc-em-acard-top">
-                  <span className="nc-em-acard-rank" aria-hidden="true">—</span>
-                  <span className="nc-em-action-tag">Nothing to do yet</span>
-                </div>
-              </div>
-              <div className="nc-em-acard-body">
-                <p className="nc-em-action-text">
-                  No evidence-bounded strategy can be computed for this Range. {unavailable[0]?.reason}
-                </p>
-              </div>
-            </li>
-          )}
-
-          {second && (
-            <ActionCard
-              s={second}
-              rank={++rank}
-              tone="then"
-              tag="Then"
-              note={<><b>Do not add these two together.</b> It is a subset of #1, not an addition.</>}
-              noteSummary="Part of #1, do not add them"
-              details={
-                <p>
-                  <b>{second.label}</b> — {second.lever} — worth {fmtT(second.reductionTonnes)} t.{" "}
-                  <b>Do not add these two together.</b> This one applies the same blockage floor to fewer hours, so it
-                  is a subset of the first, not an addition to it.
-                </p>
-              }
-            />
-          )}
-
-          {/* The policy scenario as one line, not a card (2026-10-15): its boxes said almost nothing
-              ("Corridor-wide", "Every day", "No range"), and it already appears as the hollow bar in the chart and
-              as rank 3 in the TOPSIS table. What a reader needs from it is one fact: the biggest number on the
-              page is a policy target, not something operations can do. */}
-          {scenario && (
-            <li className="chart-card nc-em-acard nc-em-scenario-line" data-tone="scenario">
-              <span className="nc-em-acard-rank" aria-hidden="true">{++rank}</span>
-              <span className="pill nc-em-pill-hollow">What-if only</span>
-              <span className="nc-em-scenario-text">
-                <b>Fewer big trucks</b> on NLEX would cut <b>{fmtT(scenario.reductionTonnes)} t</b> of CO₂ — but that would take a
-                company policy decision (MPTC, NLEX&rsquo;s parent company), such as truck tolls or rules, not something the control room can do.
-              </span>
-              <details className="nc-em-scenario-why">
-                <summary>Why</summary>
-                <ul>
-                  <li>
-                    A large truck (Class 3) gives off about 8 times the CO₂ of a car for every kilometre. If 1 out of every
-                    100 kilometres driven on NLEX moved from large trucks to smaller vehicles, CO₂ would drop by
-                    {" "}{fmtT(scenario.reductionTonnes)} t.
-                  </li>
-                  <li>
-                    But our records have never shown NLEX lowering truck traffic. The months with the fewest trucks are
-                    all Decembers, when holiday cars fill the road; the trucks did not actually go away.
-                  </li>
-                  <li>
-                    So this is a <b>what-if</b> to show how much trucks matter, not a plan. That is why it is drawn hollow in
-                    the chart and scores 0 in the ranking.
-                  </li>
-                </ul>
-              </details>
-            </li>
-          )}
-        </ol>
-      )}
-
-      {/* The chart and the analyses side by side on a wide screen, stacked on a narrow one (2026-10-15). */}
-      <div className="nc-em-span nc-em-pair nc-em-rx-busy" {...busy}>
-      <article className="chart-card nc-em-span nc-em-rx-evidence">
-        {evidenceHead}
-        <figure className="nc-em-rx-chart">
-          <figcaption className="nc-em-rx-chart-head">
-            <span>Ranked by size</span>
-            <span className="nc-em-rx-key">
-              <span><i className="is-solid" style={{ background: BAR }} />Evidence-bounded</span>
-              <span><i className="is-hollow" style={{ borderColor: BAR }} />What-if only (hollow)</span>
-            </span>
-          </figcaption>
-          <DashboardChart option={option} height={Math.max(180, rows.length * 62 + 50)} />
-        </figure>
-
-        {/* The basis, as labelled rows rather than a paragraph. */}
-        <dl className="nc-em-rows nc-em-basis-rows">
-          <div>
-            <dt>Actually emitted</dt>
-            <dd>{fmtT(data.basis.actualCo2Tonnes)} t over {data.basis.from} to {data.basis.to}</dd>
-          </div>
-          {unavailable.length > 0 ? (
-            <div className="is-note">
-              <dt>Not computed</dt>
-              <dd>
-                <b>Not computed for this Range:</b> {unavailable.map((u) => u.label).join(" and ")}. {unavailable[0].reason}
-              </dd>
-            </div>
-          ) : (
-            <div>
-              <dt>Incidents</dt>
-              <dd>{data.basis.incidentsCounted.toLocaleString()} lane-blocking incidents in the same window</dd>
-            </div>
-          )}
-        </dl>
-        <details className="nc-details">
-          <summary>How this is measured</summary>
-          <p>
-            Against {fmtT(data.basis.actualCo2Tonnes)} t actually emitted over {data.basis.from} to {data.basis.to}.
-            {unavailable.length === 0 && (
-              <>
-                {" "}Incident-based strategies use {data.basis.incidentsCounted.toLocaleString()} incidents that blocked
-                a lane in the same window, each for as long as the lane stayed blocked.
-              </>
-            )}
-          </p>
-          {scenario && (
-            <p>
-              <b>{scenario.label}</b> is drawn hollow because it is a what-if, not something our records show NLEX can do. The
-              other two are bounded by lane-blockage times already achieved on this corridor, and their ranges come from a
-              Monte Carlo resampling of the incidents.
-            </p>
-          )}
-        </details>
-      </article>
-
-      {(() => {
-        const tabs = [
-          { key: "ranking" as const, label: "Ranking (TOPSIS)", on: !!data.ranking && data.ranking.rows.length > 0 },
-          { key: "classkm" as const, label: "CO₂ per class-km", on: !!data.classKm && data.classKm.length > 0 },
-          { key: "window" as const, label: "Truck window", on: !!data.heavyWindow },
-          { key: "tolling" as const, label: "Tolling", on: !!data.tolling },
-        ].filter((t) => t.on);
-        if (!tabs.length) return null;
+      {/* The Class 3 window advisory and the tolling recommendation, as recommendation cards (2 Nov 2026). They were
+          tabs inside "More analysis", where a reader had to go looking for the only two recommendations on this tab
+          that follow the congestion forecast. Same anatomy as the cards above: do this, where, when, expected
+          effect, basis, how sure. */}
+      {(data.heavyWindow?.action || data.heavyWindow?.noWindow || data.tolling?.action) && (() => {
+        const w = data.heavyWindow;
+        const tl = data.tolling;
+        const stamp = forecastStamp(w?.basis);
+        const fromForecast = w?.source === "forecast";
+        const concentrated = w?.allDayClass3SharePct != null && w.peakClass3SharePct > w.allDayClass3SharePct * 1.5;
+        const avoided = w?.allDayClass3SharePct != null && w.peakClass3SharePct < w.allDayClass3SharePct / 2;
         return (
-          <article className="chart-card nc-em-span nc-em-more">
-            <div className="nc-em-more-tabs" role="tablist" aria-label="More analysis">
-              {tabs.map((t) => (
-                <button
-                  key={t.key}
-                  type="button"
-                  role="tab"
-                  aria-selected={moreTab === t.key}
-                  className={moreTab === t.key ? "is-on" : ""}
-                  onClick={() => setMoreTab(t.key)}
-                >
-                  {t.label}
-                </button>
-              ))}
-            </div>
-          {moreTab === "ranking" && data.ranking && data.ranking.rows.length > 0 && (
-            <div className="nc-em-more-pane">
-              <div className="nc-em-card-head">
-                <h3>
-                  Intervention ranking (TOPSIS)
-                  <InfoTooltip text={data.ranking.note} />
-                </h3>
-                <p className="nc-em-context">
-                  The strategies above, ranked on what the record can measure. The score runs from 0 (worst on every
-                  criterion) to 1 (best on every criterion).
-                </p>
-              </div>
-              <div className="nc-em-table-wrap">
-                <table className="nc-em-table">
-                  <thead>
-                    <tr>
-                      <th>Rank</th>
-                      <th>Intervention</th>
-                      <th className="num">Score</th>
-                      <th className="num">Expected</th>
-                      <th className="num">Bad year</th>
-                      <th>On NLEX</th>
-                      <th className="num">Uncertainty</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {data.ranking.rows.map((r) => (
-                      <tr key={r.key}>
-                        <td className="nc-em-strong">{r.rank}</td>
-                        <td className={r.rank === 1 ? "nc-em-strong" : undefined}>{r.label}</td>
-                        <td className="num">{r.closeness.toFixed(2)}</td>
-                        <td className="num">{r.values.evidence ? fmtT(r.values.expected) : <span className="is-muted">target only</span>}</td>
-                        <td className="num">{fmtT(r.values.worst)}</td>
-                        <td className={r.values.evidence ? "is-ok" : "is-muted"}>{r.values.evidence ? "Yes" : "No"}</td>
-                        <td className="num">{r.values.evidence ? `±${Math.round((r.values.spread * 100) / 2)}%` : <span className="is-muted">not known</span>}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-              <details className="nc-details">
-                <summary>Criteria and weights</summary>
-                <ul className="nc-em-action-assumptions">
-                  {data.ranking.criteria.map((c) => (
-                    <li key={c.key}>
-                      <b>{c.label}</b> — weight {c.weight.toFixed(2)}, {c.kind === "benefit" ? "higher is better" : "lower is better"}. {c.why}
-                    </li>
-                  ))}
-                  <li>The weights are a stated choice and add up to 1. {data.ranking.note}</li>
-                </ul>
-              </details>
-            </div>
-          )}
-
-          {moreTab === "classkm" && data.classKm && data.classKm.length > 0 && (
-            <div className="nc-em-more-pane">
-              <div className="nc-em-card-head">
-                <h3>
-                  <Term t="CO₂" /> per class-km
-                  <InfoTooltip text="Grams of CO₂ per vehicle-kilometre for each toll class (the warehouse's emission factors), against each class's share of the distance driven and of the CO₂ over the Range." />
-                </h3>
-                <p className="nc-em-context">
-                  The corridor averaged {data.corridorGPerVkm ?? 0} g of CO₂ per vehicle-km over the Range.
-                </p>
-              </div>
-              <div className="nc-em-table-wrap">
-                <table className="nc-em-table">
-                  <thead>
-                    <tr>
-                      <th>Class</th>
-                      <th className="num">g CO₂ per km</th>
-                      <th className="num">Share of distance</th>
-                      <th className="num">Share of CO₂</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {data.classKm.map((c) => (
-                      <tr key={c.cls}>
-                        <td>{c.label}</td>
-                        <td className="num">{c.gPerKm.toLocaleString("en-US")}</td>
-                        <td className="num">{c.vkmSharePct.toFixed(1)}%</td>
-                        <td className={`num${c.co2SharePct > c.vkmSharePct * 2 ? " nc-em-strong" : ""}`}>{c.co2SharePct.toFixed(1)}%</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-              {(() => {
-                const h = data.classKm.find((c) => c.cls === 3);
-                return h ? (
-                  <p className="nc-em-context">
-                    Large trucks drive {h.vkmSharePct.toFixed(1)}% of the distance but emit {h.co2SharePct.toFixed(1)}% of
-                    the CO₂: each of their kilometres emits {(h.gPerKm / (data.classKm.find((c) => c.cls === 1)?.gPerKm ?? h.gPerKm)).toFixed(1)} times a car&apos;s.
-                  </p>
-                ) : null;
-              })()}
-            </div>
-          )}
-
-          {moreTab === "window" && data.heavyWindow && (
-            <div className="nc-em-more-pane">
-              <div className="nc-em-card-head">
-                <h3>
-                  Class 3 window restriction advisory
-                  <InfoTooltip text="From the modelling diagram's fleet-mix box. KPI: Class 3 peak share reduction. The peak hours are those within 10% of the busiest hour's vehicle-km over the Range." />
-                </h3>
-                <p className="nc-em-context">
-                  Keep Class 3 out of <b>{data.heavyWindow.peakHours}</b>, and route it to {data.heavyWindow.receivingHours}.
-                </p>
-              </div>
-              <dl className="nc-em-rows">
-                <div>
-                  <dt>Window</dt>
-                  <dd>{data.heavyWindow.peakHours} (the corridor&apos;s busiest hours in this Range)</dd>
+          <section className="nc-em-span nc-em-recs nc-em-rx-busy" aria-label="Class 3 recommendations" {...busy}>
+            {/* Why Class 3 (the diagram's KPI, CO2 per class-km): the reason for both cards, not a card of its own. */}
+            {(() => {
+              const h = data.classKm?.find((c) => c.cls === 3);
+              const car = data.classKm?.find((c) => c.cls === 1);
+              if (!h || !car) return null;
+              return (
+                <details className="nc-details nc-em-span nc-em-recs-why">
+                  <summary>
+                    <b>Why Class 3:</b> large trucks drive {h.vkmSharePct.toFixed(1)}% of the distance but emit{" "}
+                    {h.co2SharePct.toFixed(1)}% of the <Term t="CO₂" />, {(h.gPerKm / car.gPerKm).toFixed(1)}× a car per km
+                  </summary>
+                  <div className="nc-em-table-wrap">
+                    <table className="nc-em-table">
+                      <thead>
+                        <tr>
+                          <th>Class</th>
+                          <th className="num">g CO₂ per km</th>
+                          <th className="num">Share of distance</th>
+                          <th className="num">Share of CO₂</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {data.classKm!.map((c) => (
+                          <tr key={c.cls}>
+                            <td>{c.label}</td>
+                            <td className="num">{c.gPerKm.toFixed(1)}</td>
+                            <td className="num">{c.vkmSharePct.toFixed(1)}%</td>
+                            <td className="num">{c.co2SharePct.toFixed(1)}%</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </details>
+              );
+            })()}
+            {w?.noWindow && !w.action && (
+              <article className="chart-card nc-em-rcard nc-em-span">
+                <div className="nc-em-acard-top">
+                  <span className="nc-em-action-tag">Class 3 window advisory</span>
+                  {stamp && <ForecastAge at={stamp.at} stale={stamp.stale} />}
                 </div>
-                <div>
-                  <dt>Now</dt>
-                  <dd>
-                    {data.heavyWindow.peakClass3SharePct.toFixed(1)}% of vehicle-km in those hours
-                    {data.heavyWindow.allDayClass3SharePct != null && (
-                      <> against {data.heavyWindow.allDayClass3SharePct.toFixed(1)}% over the whole day</>
-                    )}
-                    ; {data.heavyWindow.class3InPeakPct.toFixed(1)}% of all Class-3 vehicle-km falls in the window.
-                  </dd>
+                <p className="nc-em-context">No advisory or surcharge this week. {w.noWindow}</p>
+              </article>
+            )}
+            {w?.action && (
+              <article className="chart-card nc-em-rcard">
+                <div className="nc-em-acard-top">
+                  <span className="nc-em-action-tag">Class 3 window advisory</span>
+                  <SourceBadge
+                    kind={fromForecast ? "forecast" : "history"}
+                    detail={fromForecast ? "Window from the congestion forecast's High-congestion hours" : "No forecast available: the Range's busiest hours"}
+                  />
+                  {stamp && <ForecastAge at={stamp.at} stale={stamp.stale} />}
+                  <InfoTooltip text={`${w.basis ?? ""} Effect measured on the diagram's KPI, Class 3's share of vehicle-km in the window; what the advisory would change on the road cannot be measured with this data. ${w.capacityNote} No CO2 change is claimed, and daytime truck restrictions are not in our data.`} />
                 </div>
-                <div>
-                  <dt>KPI</dt>
-                  <dd>
-                    Class 3 peak share down <b>{data.heavyWindow.shareReductionPp.toFixed(1)} percentage points</b> if the
-                    restriction is fully observed (half compliance, half that)
-                  </dd>
+                <h3 className="nc-em-rcard-title" title={w.action}>Advise Class 3 to avoid {w.peakHours}</h3>
+                <dl className="nc-em-rows">
+                  <div>
+                    <dt>Effect</dt>
+                    <dd>
+                      Class 3 share of the window <b>{w.peakClass3SharePct.toFixed(1)}% → 0%</b>
+                      {w.allDayClass3SharePct != null && <> ({w.allDayClass3SharePct.toFixed(1)}% all day)</>}
+                    </dd>
+                  </div>
+                  <div>
+                    <dt>Move to</dt>
+                    <dd title={w.capacityNote}>{w.receivingHours}{w.fitsOffPeak ? "" : " (not all of it fits)"}</dd>
+                  </div>
+                  {(concentrated || avoided) && (
+                    <div className="is-note">
+                      <dt>Check</dt>
+                      <dd>
+                        {concentrated
+                          ? "Trucks concentrate here; check daytime truck restrictions first."
+                          : "Trucks already avoid these hours."}
+                      </dd>
+                    </div>
+                  )}
+                </dl>
+              </article>
+            )}
+            {tl?.action && (
+              <article className="chart-card nc-em-rcard">
+                <div className="nc-em-acard-top">
+                  <span className="nc-em-action-tag">Tolling recommendation</span>
+                  <SourceBadge
+                    kind={fromForecast ? "forecast" : "history"}
+                    detail={fromForecast ? "Uses the Class 3 window, which comes from the congestion forecast" : "Uses the Range's busiest hours"}
+                  />
+                  {stamp && <ForecastAge at={stamp.at} stale={stamp.stale} />}
+                  <InfoTooltip text={tl.note} />
                 </div>
-                <div>
-                  <dt>Move to</dt>
-                  <dd>{data.heavyWindow.receivingHours}</dd>
-                </div>
-                <div className={data.heavyWindow.fitsOffPeak ? undefined : "is-note"}>
-                  <dt>Capacity</dt>
-                  <dd>{data.heavyWindow.capacityNote}</dd>
-                </div>
-                <div className="is-note">
-                  <dt>CO₂</dt>
-                  <dd>{data.heavyWindow.co2Note}</dd>
-                </div>
-              </dl>
-              {data.heavyWindow.allDayClass3SharePct != null &&
-                data.heavyWindow.peakClass3SharePct < data.heavyWindow.allDayClass3SharePct / 2 && (
-                  <p className="nc-em-context">
-                    Trucks already avoid this window: their share there is under half their share over the day. A
-                    restriction would formalise what drivers mostly do already, so expect a small effect on the peak.
-                  </p>
-                )}
-            </div>
-          )}
-
-          {moreTab === "tolling" && data.tolling && (
-            <div className="nc-em-more-pane">
-              <div className="nc-em-card-head">
-                <h3>
-                  Dynamic tolling recommendation
-                  <InfoTooltip text={data.tolling.note} />
-                </h3>
-                <p className="nc-em-context">
-                  A Class-3 surcharge during <b>{data.tolling.hours}</b> at the exits below, which carry the most Class-3
-                  CO₂ in those hours ({fmtT(data.tolling.atStakeTonnes)} t over the Range at all exits).
-                </p>
-              </div>
-              <div className="nc-em-table-wrap">
-                <table className="nc-em-table">
-                  <thead>
-                    <tr>
-                      <th>Exit</th>
-                      <th className="num">Class-3 CO₂ in the window (t)</th>
-                      <th className="num">Share</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {data.tolling.exits.map((e) => (
-                      <tr key={e.name}>
-                        <td>{e.name}</td>
-                        <td className="num">{fmtT(e.class3Tonnes)}</td>
-                        <td className="num">{e.sharePct.toFixed(1)}%</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-              <p className="nc-em-context">{data.tolling.note}</p>
-            </div>
-          )}
-          </article>
+                <h3 className="nc-em-rcard-title" title={tl.action}>Charge any Class 3 surcharge at these {tl.exits.length} exits, {tl.hours}</h3>
+                <dl className="nc-em-rows">
+                  <div>
+                    <dt>Where</dt>
+                    <dd>
+                      <ul className="nc-em-rcard-exits">
+                        {tl.exits.map((e) => (
+                          <li key={e.name}>
+                            <span>{e.name}</span>
+                            <span className="nc-em-rcard-bar" aria-hidden="true">
+                              <i style={{ width: `${Math.max(3, Math.min(100, e.sharePct))}%` }} />
+                            </span>
+                            <b>{e.sharePct.toFixed(1)}%</b>
+                            <span className="is-muted">{fmtT(e.class3Tonnes)} tonnes</span>
+                          </li>
+                        ))}
+                      </ul>
+                    </dd>
+                  </div>
+                  <div>
+                    <dt>Effect</dt>
+                    <dd title={`${fmtT(tl.atStakeTonnes)} tonnes of Class 3 CO2 in the window over the Range, at all exits`}>
+                      Together <b>{(tl.coveredPct ?? 0).toFixed(0)}%</b> of Class 3&apos;s CO₂ in those hours
+                    </dd>
+                  </div>
+                </dl>
+              </article>
+            )}
+          </section>
         );
       })()}
-      </div>
+
     </>
   );
 }

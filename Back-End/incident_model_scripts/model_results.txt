@@ -13,59 +13,59 @@
 
   [SELECTED] Negative Binomial GLM
   ------------------------------------------------------------
-    MAE              =      13.4143
-    MSE              =     326.2311
-    RMSE             =      18.0619
-    MAPE             =      11.3708 %
-    sMAPE            =      11.0536 %
-    WMAPE            =      10.5983 %
-    Poisson_Deviance =       2.7476
-    MASE             =       0.6798
-    RMSSE            =       0.6857
-    R2               =       0.3255
-    Adjusted_R2      =       0.2838
+    MAE              =      13.3771
+    MSE              =     324.8361
+    RMSE             =      18.0232
+    MAPE             =      11.3360 %
+    sMAPE            =      11.0213 %
+    WMAPE            =      10.5689 %
+    Poisson_Deviance =       2.7338
+    MASE             =       0.6779
+    RMSSE            =       0.6842
+    R2               =       0.3284
+    Adjusted_R2      =       0.2869
     --- Split R2 (Adviser Diagnostic) ---
-    Train R2         =       0.4820
-    Val R2           =       0.3255
-    Gap              =       0.1565
+    Train R2         =       0.4791
+    Val R2           =       0.3284
+    Gap              =       0.1507
     DIAGNOSIS        = OVERFITTING
 
   [RANK #2] Poisson GLM
   ------------------------------------------------------------
-    MAE              =      13.4229
-    MSE              =     326.9447
-    RMSE             =      18.0816
-    MAPE             =      11.3723 %
-    sMAPE            =      11.0630 %
-    WMAPE            =      10.6051 %
-    Poisson_Deviance =       2.7553
-    MASE             =       0.6802
-    RMSSE            =       0.6865
-    R2               =       0.3240
-    Adjusted_R2      =       0.2823
+    MAE              =      13.3829
+    MSE              =     325.3520
+    RMSE             =      18.0375
+    MAPE             =      11.3354 %
+    sMAPE            =      11.0283 %
+    WMAPE            =      10.5735 %
+    Poisson_Deviance =       2.7397
+    MASE             =       0.6782
+    RMSSE            =       0.6848
+    R2               =       0.3273
+    Adjusted_R2      =       0.2858
     --- Split R2 (Adviser Diagnostic) ---
-    Train R2         =       0.4825
-    Val R2           =       0.3240
-    Gap              =       0.1585
+    Train R2         =       0.4797
+    Val R2           =       0.3273
+    Gap              =       0.1523
     DIAGNOSIS        = OVERFITTING
 
   [RANK #3] Random Forest
   ------------------------------------------------------------
-    MAE              =      14.5097
-    MSE              =     369.2825
-    RMSE             =      19.2167
-    MAPE             =      12.2437 %
-    sMAPE            =      11.9473 %
-    WMAPE            =      11.4638 %
-    Poisson_Deviance =       3.0961
-    MASE             =       0.7353
-    RMSSE            =       0.7296
-    R2               =       0.2365
-    Adjusted_R2      =       0.1893
+    MAE              =      14.4492
+    MSE              =     367.5893
+    RMSE             =      19.1726
+    MAPE             =      12.1705 %
+    sMAPE            =      11.8940 %
+    WMAPE            =      11.4159 %
+    Poisson_Deviance =       3.0815
+    MASE             =       0.7322
+    RMSSE            =       0.7279
+    R2               =       0.2400
+    Adjusted_R2      =       0.1930
     --- Split R2 (Adviser Diagnostic) ---
-    Train R2         =       0.8184
-    Val R2           =       0.2365
-    Gap              =       0.5819
+    Train R2         =       0.8177
+    Val R2           =       0.2400
+    Gap              =       0.5776
     DIAGNOSIS        = OVERFITTING
 
   [RANK #4] LSTM
@@ -108,38 +108,38 @@
 
   [RANK #6] XGBoost
   ------------------------------------------------------------
-    MAE              =      17.5123
-    MSE              =     511.7363
-    RMSE             =      22.6216
-    MAPE             =      14.0910 %
-    sMAPE            =      14.5275 %
-    WMAPE            =      13.8361 %
-    Poisson_Deviance =       4.3497
-    MASE             =       0.8874
-    RMSSE            =       0.8588
-    R2               =      -0.0580
-    Adjusted_R2      =      -0.1234
+    MAE              =      17.0916
+    MSE              =     489.9366
+    RMSE             =      22.1345
+    MAPE             =      13.7397 %
+    sMAPE            =      14.1440 %
+    WMAPE            =      13.5037 %
+    Poisson_Deviance =       4.1464
+    MASE             =       0.8661
+    RMSSE            =       0.8403
+    R2               =      -0.0129
+    Adjusted_R2      =      -0.0756
     --- Split R2 (Adviser Diagnostic) ---
-    Train R2         =       0.8371
-    Val R2           =      -0.0580
-    Gap              =       0.8951
+    Train R2         =       0.8339
+    Val R2           =      -0.0129
+    Gap              =       0.8469
     DIAGNOSIS        = OVERFITTING
 
   [RANK #7] SARIMAX
   ------------------------------------------------------------
-    MAE              =      18.8733
-    MSE              =     573.3690
-    RMSE             =      23.9451
-    MAPE             =      15.1461 %
-    sMAPE            =      15.5410 %
-    WMAPE            =      14.9114 %
-    Poisson_Deviance =       4.7929
-    MASE             =       0.9564
-    RMSSE            =       0.9091
-    R2               =      -0.1854
-    Adjusted_R2      =      -0.2587
+    MAE              =      18.4362
+    MSE              =     552.0461
+    RMSE             =      23.4957
+    MAPE             =      14.8352 %
+    sMAPE            =      15.1379 %
+    WMAPE            =      14.5660 %
+    Poisson_Deviance =       4.5958
+    MASE             =       0.9342
+    RMSSE            =       0.8920
+    R2               =      -0.1413
+    Adjusted_R2      =      -0.2119
     --- Split R2 (Adviser Diagnostic) ---
-    Train R2         =       0.4129
-    Val R2           =      -0.1854
-    Gap              =       0.5983
+    Train R2         =       0.4127
+    Val R2           =      -0.1413
+    Gap              =       0.5540
     DIAGNOSIS        = OVERFITTING

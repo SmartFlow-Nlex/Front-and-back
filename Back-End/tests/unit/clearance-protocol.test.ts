@@ -1,11 +1,15 @@
 /* TC-UT-15  Incidents / Kaplan-Meier with censoring at 1440 min
  * TC-UT-16  Incidents / Clearance scenarios
- * TC-UT-17  Incidents / Clearance recommendation sanity
+ * TC-UT-17  Incidents / Clearance escalation rule
  *
  * src/services/clearance-protocol.service.ts exports the pure pipeline
  * toObservations -> kaplanMeier -> quantileFromCurve / buildScenarios ->
- * solveClearanceProtocol (two-stage MILP on YALPS). Run without a database:
- * the runner clears POSTGRES_URL so the module's db is null. */
+ * conditionalSurvival / escalationRule / checkpointAt. Run without a database:
+ * the runner clears POSTGRES_URL so the module's db is null.
+ * TC-UT-17 changed 2 Nov 2026 (the "no assumptions" redesign): it used to
+ * check the two-stage MILP's dispatch count and EVPI/VSS, which rested on an
+ * assumed unit effect, costs, capacity and demand. The MILP is gone; TC-UT-17
+ * now checks the data-only escalation rule read off the curve. */
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
@@ -14,12 +18,11 @@ import {
   survivalAt,
   quantileFromCurve,
   buildScenarios,
-  solveClearanceProtocol,
-  CAPACITY_VEH_HR,
-  REDUCED_CAPACITY_VEH_HR,
+  conditionalSurvival,
+  medianRemaining,
+  escalationRule,
+  checkpointAt,
 } from "../../src/services/clearance-protocol.service.js";
-import { ClearanceProtocolQuerySchema } from "../../src/validators/incident.validator.js";
-import { readSource, declaration, evaluate } from "../support/source-extract.js";
 
 const RAW = [10, 20, 30, 40, 2000];
 
@@ -72,10 +75,20 @@ test("TC-UT-16b: on a large smooth sample the bands come out at about 0.50 / 0.3
 });
 
 // ---- TC-UT-17 -------------------------------------------------------------
-const defaults = ClearanceProtocolQuerySchema.parse({});
-const service = readSource("Back-End/src/services/clearance-protocol.service.ts");
-const { DEMAND_VC_RATIO } = evaluate<any>([declaration(service, "DEMAND_VC_RATIO")], ["DEMAND_VC_RATIO"]);
-const cap = { q: CAPACITY_VEH_HR * DEMAND_VC_RATIO[defaults.demandLevel], c: CAPACITY_VEH_HR, cr: REDUCED_CAPACITY_VEH_HR };
+test("TC-UT-17a: sheet curve: open at P50 = 30 -> 50% run past P80 = 40 (95% 12.5-100%), 2 still open, 10 min median left", () => {
+  const obs = toObservations(RAW);
+  const curve = kaplanMeier(obs);
+  const p50 = quantileFromCurve(curve, 0.5);
+  const p80 = quantileFromCurve(curve, 0.8);
+  const r = escalationRule(curve, obs, p50, p80);
+  console.log(`  rule=${JSON.stringify(r)}`);
+  assert.deepEqual([r.checkAtMinute, r.pastMinute, r.openAtCheck], [30, 40, 2]);
+  // S(40) / S(30) = 0.2 / 0.4. Greenwood at t = 40 (n = 2, d = 1): var(log) = 1 / (2 x 1) = 0.5.
+  assert.ok(Math.abs(r.chance.p - 0.5) < 1e-12);
+  assert.ok(Math.abs(r.chance.lo - 0.5 * Math.exp(-1.96 * Math.sqrt(0.5))) < 1e-12);
+  assert.equal(r.chance.hi, 1);
+  assert.equal(medianRemaining(curve, 30), 10);
+});
 
 /** Deterministic right-skewed clearance sample (minutes), a few beyond 1440. */
 function syntheticSample(n: number): number[] {
@@ -88,27 +101,29 @@ function syntheticSample(n: number): number[] {
   });
 }
 
-const SAMPLES: Record<string, number[]> = { "sheet curve (TC-UT-15)": RAW, "synthetic n=300": syntheticSample(300) };
-
-for (const [name, raw] of Object.entries(SAMPLES)) {
-  for (const maxUnits of [defaults.maxUnits, 1, 2, 4, 6]) {
-    test(`TC-UT-17: ${name}, maxUnits=${maxUnits}: units <= maxUnits, EVPI >= 0, VSS >= 0`, () => {
-      const obs = toObservations(raw);
-      const curve = kaplanMeier(obs);
-      const { scenarios, p50 } = buildScenarios(curve, obs.filter((o) => !o.censored).map((o) => o.duration));
-      const sol = solveClearanceProtocol(scenarios, p50, maxUnits, defaults.unitEffect, defaults.unitCostPerHour, defaults.delayCostPerVehHour, cap);
-      const maxEsc = Math.max(0, ...Object.values(sol.escalationByScenario));
-      console.log(`  ${name} maxUnits=${maxUnits}: dispatch=${sol.unitsAtDispatch} maxEscalation=${maxEsc} rp=${sol.rp.toFixed(2)} evpi=${sol.evpi.toFixed(4)} vss=${sol.vss.toFixed(4)}`);
-      assert.ok(sol.unitsAtDispatch >= 1 && sol.unitsAtDispatch <= maxUnits);
-      assert.ok(sol.unitsAtDispatch + maxEsc <= maxUnits, "dispatch + escalation within maxUnits");
-      assert.ok(Number.isFinite(sol.rp), "solver returned an optimal solution");
-      // RP comes from the LP solver and EEV/WS from direct evaluation; at
-      // objective values ~1e5 they agree only to ~1e-14 relative, so "zero"
-      // can print as -3e-9. Compare relative to the objective's magnitude.
-      const tol = 1e-12 * Math.max(1, Math.abs(sol.rp));
-      console.log(`    raw evpi=${sol.evpi} raw vss=${sol.vss} tolerance=${tol.toExponential(1)}`);
-      assert.ok(sol.evpi >= -tol, `EVPI = ${sol.evpi}`);
-      assert.ok(sol.vss >= -tol, `VSS = ${sol.vss}`);
-    });
+test("TC-UT-17b: synthetic n=300: the chance is exactly S(P80) / S(P50), inside its own interval, interval within 0-1", () => {
+  const obs = toObservations(syntheticSample(300));
+  const curve = kaplanMeier(obs);
+  const p50 = quantileFromCurve(curve, 0.5), p80 = quantileFromCurve(curve, 0.8), p95 = quantileFromCurve(curve, 0.95);
+  const r = escalationRule(curve, obs, p50, p80);
+  const direct = survivalAt(curve, p80) / survivalAt(curve, p50);
+  console.log(`  P50=${p50} P80=${p80} P95=${p95} chance=${r.chance.p.toFixed(4)} (${r.chance.lo.toFixed(4)}-${r.chance.hi.toFixed(4)}) direct=${direct.toFixed(4)} open=${r.openAtCheck}`);
+  assert.ok(Math.abs(r.chance.p - direct) < 1e-12, "conditional survival equals the curve ratio");
+  assert.ok(r.chance.lo <= r.chance.p && r.chance.p <= r.chance.hi);
+  assert.ok(r.chance.lo >= 0 && r.chance.hi <= 1);
+  assert.equal(r.openAtCheck, obs.filter((o) => o.duration > p50).length);
+  // Checkpoints later in the clearance carry a higher chance of running past the P95, and rest on fewer events.
+  const cps = [0.25, 0.5, 0.8].map((q, i) => checkpointAt(curve, obs, (["P25", "P50", "P80"] as const)[i], quantileFromCurve(curve, q), p95));
+  console.log(`  checkpoints=${cps.map((c) => `${c.label}@${c.minute}: open ${(c.stillOpen * 100).toFixed(0)}% n=${c.openCount} left ${c.medianRemainingMin} pastP95 ${(c.pastP95.p * 100).toFixed(1)}%`).join(" | ")}`);
+  for (let i = 1; i < cps.length; i++) {
+    assert.ok(cps[i].pastP95.p >= cps[i - 1].pastP95.p);
+    assert.ok(cps[i].openCount <= cps[i - 1].openCount);
   }
-}
+});
+
+test("TC-UT-17c: an interval that starts after every clearance gives 0, and an empty interval gives certainty 1", () => {
+  const curve = kaplanMeier(toObservations([10, 20, 30]));
+  assert.deepEqual(conditionalSurvival(curve, 5, 30), { p: 0, lo: 0, hi: 0 });
+  const same = conditionalSurvival(curve, 20, 20);
+  assert.deepEqual(same, { p: 1, lo: 1, hi: 1 });
+});

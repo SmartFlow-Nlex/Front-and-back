@@ -16,15 +16,12 @@ const EmissionsDescriptiveQuerySchema = EmissionsAnalyticsQuerySchema.extend({
   vehicleClass: z.coerce.number().int().min(1).max(3).optional().transform((v) => v as 1 | 2 | 3 | undefined),
 });
 
-/* The Prescriptive tab takes the same Range as the Descriptive one, plus its
-   own policy input. heavyShiftPp is a TARGET the reader chooses, not an
-   observed change — capped at the corridor's entire Class-3 share, since
-   shifting more heavy traffic than exists is not a scenario. */
-const PrescriptiveQuerySchema = EmissionsAnalyticsQuerySchema.extend({
-  heavyShiftPp: z.coerce.number().min(0).max(4.2).optional(),
-});
+/* The Prescriptive tab takes the same Range as the Descriptive one. Its policy input (heavyShiftPp, a chosen
+   Class-3 target) went with the Class 3 shift on 2 Nov 2026: not data-backed. An old link that still sends it is
+   accepted and ignored. */
+const PrescriptiveQuerySchema = EmissionsAnalyticsQuerySchema;
 
-// GET /api/emissions/prescriptive — the three strategies, computed
+// GET /api/emissions/prescriptive — the data-backed recommendations, computed
 export const getEmissionsPrescriptive = async (req: Request, res: Response) => {
   const query = PrescriptiveQuerySchema.parse(req.query);
   const data = await getPrescriptiveStrategies(query);

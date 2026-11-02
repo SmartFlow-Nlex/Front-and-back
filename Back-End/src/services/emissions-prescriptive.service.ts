@@ -1,6 +1,7 @@
 import { db } from "../config/db.js";
 import { exitDisplayName, fmtKm, kmMeasured, kmPost, KM_POST_ANCHORS, KM_POST_START, nearestExitName } from "../lib/km-post.js";
 import { clearedIncidents, EMISSIONS_TABLE, exposureByHour, idleKg, IDLING_SOURCE, recordBounds } from "./emissions-source.js";
+import { forecastTable } from "./forecast-source.js";
 
 /* Exit names beside every km the Prescriptive tab prints (19 Oct 2026, testers: a bare "Southbound Km 50–60"
    meant nothing to a reader who knows the road by its exits), from lib/km-post.ts's one exit-name map, so the
@@ -25,7 +26,7 @@ function pointLabel(measured: number): string {
 }
 
 /* ══════════════════════════════════════════════════════════════════════════════
-   PRESCRIPTIVE EMISSIONS — three strategies, computed from the warehouse
+   PRESCRIPTIVE EMISSIONS — measured recommendations only, from the warehouse
 
    Replaces the three hardcoded bars ([8, 14, 22] under "Strategy X/Y/Z") that
    the sustainability tab carried behind an "Illustrative" chip. Spec, including
@@ -44,18 +45,22 @@ function pointLabel(measured: number): string {
    The model is exactly linear in volume and carries NO speed or congestion
    term. Moving a trip from 17:00 to 10:00 therefore changes its emissions by
    exactly zero. There is no "shift demand off-peak" strategy here, and there
-   must not be one: it would report a saving the model cannot produce. The peak
-   enters only through Strategy C, where it changes how much a saved MINUTE of
-   incident clearance is worth, not how much a vehicle emits.
+   must not be one: it would report a saving the model cannot produce.
 
-   WHAT IT LEAVES
+   WHAT IT LEAVES (2 Nov 2026: only what the record measures)
 
-     A  fleet mix        the largest lever, but a policy SENSITIVITY, not an
-                         optimisation — see the note on its bound below
-     B  clearance time   idling CO2 grows with delay SQUARED, and the observed
-                         p10 in each band shows how far it has actually been cut
-     C  when to respond  the same minute saved is worth ~10x more at 17:00 than
-                         at 02:00, because that is how many vehicles are trapped
+     Shorter lane blockages   idling CO2 grows with delay SQUARED, and the p10 of
+                              comparable blockages shows how far the corridor has
+                              itself already cut it. Looked back over the Range,
+                              and carried over the incident forecast's validated days.
+     Class 3 window           the congestion forecast's High hours and Class 3's
+                              measured share of vehicle-km in them (no CO2 claimed)
+     Tolling (where)          the exits carrying most of that window's Class 3 CO2
+
+   Removed on 2 Nov 2026 as not data-backed: the Class 3 share shift (its size was
+   a chosen target, not an observed change), busiest-hours responder deployment
+   (the record has no responder capacity data, and its "when" is already on the
+   blockage strategy), and the TOPSIS ranking (its weights were the team's choice).
 
    Everything returned carries the window it was computed over and the bound it
    respected, so a reader can see where each number came from.
@@ -65,20 +70,17 @@ export type PrescriptiveFilters = {
   months: "3" | "12" | "all";
   from?: string;
   to?: string;
-  /** Strategy A's policy target, in percentage points of Class-3 share.
-   *  A CHOICE, not an observed bound. Defaults to 1 pp so the bar is non-zero
-   *  and the elasticity is readable; the UI states that it is a target. */
+  /** Accepted for old links and ignored since 2 Nov 2026: the Class 3 share shift it set was removed as not data-backed. */
   heavyShiftPp?: number;
 };
 
 export type Strategy = {
-  key: "fleet_mix" | "clearance" | "deployment";
+  key: "clearance";
   label: string;
-  /** Reduction against the SAME window's actual CO2, so the three bars are
-   *  comparable to each other and to the Descriptive tab. */
+  /** Reduction against the SAME window's actual CO2, so it is comparable to the Descriptive tab. */
   reductionPct: number;
   reductionTonnes: number;
-  /** The Monte Carlo range (5th–95th percentile) where the saving depends on which incidents happen; null where it does not. */
+  /** The bootstrap range (5th–95th percentile of resampled incidents); null with no incidents to resample. */
   range: { lowTonnes: number; highTonnes: number; lowPct: number; highPct: number; runs: number } | null;
   /** The decision variable's chosen value, in words. */
   lever: string;
@@ -86,26 +88,22 @@ export type Strategy = {
    *  (the stretches and the hours that hold most of it), so the card names somewhere to act, not "corridor-wide". */
   where: string;
   when: string;
-  /** What the saving is concentrated in, as one sentence an operator can act on; absent for a policy scenario. */
+  /** What the saving is concentrated in, as one sentence an operator can act on. */
   focus?: string;
-  /** For a strategy that is not evidence-bounded: what the record does show, in one sentence. */
-  evidenceNote?: string;
-  /** True when the bound comes from something the corridor has actually
-   *  achieved. False marks a policy scenario — the UI must show the
-   *  difference rather than letting the two sit side by side unlabelled. */
+  /** Always true: the bound is a blockage time the corridor has already achieved. */
   evidenceBounded: boolean;
+  /** How the figure is computed, step by step, each from the record or a cited source. */
   assumptions: string[];
+  /** How the blockage floors were set and how many incidents stand behind them. */
+  floorNote?: string;
+  /** The same saving carried forward: the incident forecast's validated days x what each incident of the Range
+   *  would have saved. Null with a reason in `projectionNote` where the data cannot support one. */
+  projection?: { tonnes: number; from: string; to: string; days: number; forecastIncidents: number; basis: string } | null;
+  projectionNote?: string;
 };
 
 /** One class's emissions per kilometre (the diagram's "CO2 per class-km" KPI). */
 export type ClassKm = { cls: 1 | 2 | 3; label: string; gPerKm: number; vkmSharePct: number; co2SharePct: number };
-
-/** TOPSIS over the CO2 strategies (the diagram's "TOPSIS - emission intervention ranking"). */
-export type Ranking = {
-  criteria: { key: string; label: string; weight: number; kind: "benefit" | "cost"; why: string }[];
-  rows: { key: Strategy["key"]; label: string; closeness: number; rank: number; values: Record<string, number> }[];
-  note: string;
-};
 
 /** The heavy-vehicle window restriction advisory (the diagram's fleet-mix box, KPI: Class 3 peak share reduction). */
 export type HeavyWindow = {
@@ -123,6 +121,13 @@ export type HeavyWindow = {
   fitsOffPeak: boolean;
   capacityNote: string;
   co2Note: string;
+  /** The advice, in words. Absent when there is no distinct window (see noWindow). */
+  action?: string;
+  /** Where the window came from: the congestion forecast's High-congestion hours, or (no forecast) the busiest hours. */
+  source: "forecast" | "history";
+  basis: string;
+  /** Set, with no action, when the window is over half the day: there are then no distinct hours to avoid. */
+  noWindow?: string;
 };
 
 /** Where and when a Class-3 peak toll would act (the diagram's "Dynamic tolling recommendation"). */
@@ -131,11 +136,14 @@ export type Tolling = {
   exits: { name: string; class3Tonnes: number; sharePct: number }[];
   atStakeTonnes: number;
   note: string;
+  /** The advice, in words: where a Class-3 surcharge would apply if one is considered. */
+  action: string;
+  /** Share of the window's Class-3 CO2 the listed exits carry. */
+  coveredPct: number;
 };
 
 export type PrescriptiveResult = {
   strategies: Strategy[];
-  ranking: Ranking | null;
   classKm: ClassKm[];
   corridorGPerVkm: number;
   heavyWindow: HeavyWindow | null;
@@ -165,16 +173,16 @@ export type PrescriptiveResult = {
 const cache = new Map<string, { at: number; data: PrescriptiveResult }>();
 const TTL_MS = 10 * 60 * 1000;
 
-/* Monte Carlo for the two incident strategies. Their saving depends on WHICH
-   incidents happen in a Range — and because idling is quadratic, on how many
-   long ones — so one figure overstates how well it is known. The incidents are
-   resampled with replacement (a bootstrap) MC_RUNS times, each run recomputing
-   both savings against the same observed floors, and the 5th–95th percentiles
-   are reported as the range. Seeded, so the same Range gives the same range. */
+/* Bootstrap for the blockage strategy. Its saving depends on WHICH incidents
+   happen in a Range — and because idling is quadratic, on how many long ones —
+   so one figure overstates how well it is known. The Range's own incidents are
+   resampled with replacement MC_RUNS times, each run recomputing the saving
+   against the same observed floors, and the 5th–95th percentiles are reported
+   as the range. Seeded, so the same Range gives the same range. */
 const MC_RUNS = 400;
 const MC_SEED = 20261002;
 
-/** mulberry32: a small seeded generator, so the Monte Carlo is reproducible. */
+/** mulberry32: a small seeded generator, so the bootstrap is reproducible. */
 function rng(seed: number) {
   let a = seed >>> 0;
   return () => {
@@ -228,7 +236,6 @@ export async function getPrescriptiveStrategies(
   const { lo, hi, askedFrom, askedTo, recordFrom, recordTo } = await resolveWindow(filters);
   const nothing = (why: string): PrescriptiveResult => ({
     strategies: [],
-    ranking: null,
     classKm: [],
     corridorGPerVkm: 0,
     heavyWindow: null,
@@ -248,8 +255,8 @@ export async function getPrescriptiveStrategies(
     return data;
   }
 
-  const [totals, exposure, incidents, monthly, hourly, byExitHour, factorRows] = await Promise.all([
-    // The denominator every reduction is expressed against, and Strategy A's raw material.
+  const [totals, exposure, incidents, hourly, byExitHour, factorRows, rangeIncidents, ahead] = await Promise.all([
+    // The denominator every reduction is expressed against, and the class-km table's vehicle-km.
     db.query(
       `SELECT COALESCE(SUM(co2_tonnes), 0)                 AS co2_tonnes,
               COALESCE(SUM(vkm_1 + vkm_2 + vkm_3), 0)      AS all_vkm,
@@ -259,19 +266,12 @@ export async function getPrescriptiveStrategies(
          FROM ${EMISSIONS_TABLE} WHERE date BETWEEN $1 AND $2`,
       [lo, hi],
     ),
-    /* Strategy C's weight, and B's: how many vehicles an incident actually
-       exposes. An incident blocks ONE exit-segment in ONE direction, so it is
+    /* How many vehicles an incident actually exposes. An incident blocks ONE exit-segment in ONE direction, so it is
        the vehicles per hour on one segment of one carriageway (see
        exposureByHour), not the corridor's. */
     exposureByHour(lo, hi),
-    // Strategies B and C: every accident in the Range that blocked a lane, with its own blockage time.
+    // Every accident in the Range that blocked a lane, with its own blockage time.
     clearedIncidents(lo, hi),
-    // Strategy A's evidence: the heavy share of vehicle-km in every month of the record.
-    db.query(
-      `SELECT to_char(date_trunc('month', date), 'YYYY-MM') AS m,
-              (100 * SUM(vkm_3) / NULLIF(SUM(vkm_1 + vkm_2 + vkm_3), 0))::float AS share
-         FROM ${EMISSIONS_TABLE} GROUP BY 1 ORDER BY 2`,
-    ),
     // The window advisory's raw material: vehicle-km by hour of day, all classes and Class 3.
     db.query(
       `SELECT hour::int AS h, SUM(vkm_1 + vkm_2 + vkm_3)::float AS vkm, SUM(vkm_3)::float AS c3
@@ -284,8 +284,26 @@ export async function getPrescriptiveStrategies(
          FROM ${EMISSIONS_TABLE} WHERE date BETWEEN $1 AND $2 GROUP BY 1, 2`,
       [lo, hi],
     ),
-    // g CO2 per km by class, for what a displaced vehicle-km would emit in the class below it.
+    // g CO2 per km by class, for the class-km table and the tolling exits' Class 3 CO2.
     db.query(`SELECT vehicle_class AS c, co2_g_per_km::float AS g FROM nlex_emission_factors WHERE vehicle_class IN (1, 2, 3)`),
+    /* The projection's two inputs (2 Nov 2026). Every incident of the Range, accidents and breakdowns, because that
+       is what the incident forecast counts; and the forecast itself, only on the days its rolling-origin accuracy
+       study passes (ml_incident_horizon_accuracy.usable), since a projection on failing days would be no better
+       than repeating last week. Optional: missing tables leave the projection out with a reason. */
+    db.query(
+      `SELECT (SELECT COUNT(*) FROM silver.nlex_accident_events_clean WHERE event_start_date::date BETWEEN $1 AND $2)
+            + (SELECT COUNT(*) FROM silver.nlex_breakdown_events_clean WHERE event_encoded_date::date BETWEEN $1 AND $2) AS n`,
+      [lo, hi],
+    ).catch(() => ({ rows: [] as { n: number }[] })),
+    db.query(
+      `WITH f AS (
+         SELECT forecast_date, predicted_incident_count::float AS n, ROW_NUMBER() OVER (ORDER BY forecast_date) AS h
+           FROM public.ml_predictive_incidents WHERE prediction_type = 'future'
+       ), u AS (SELECT h_lo, h_hi FROM ml_incident_horizon_accuracy WHERE usable)
+       SELECT MIN(forecast_date)::text AS a, MAX(forecast_date)::text AS b, COUNT(*)::int AS days, SUM(n)::float AS n,
+              (SELECT string_agg(h_lo || '-' || h_hi, ', ' ORDER BY h_lo) FROM u) AS buckets
+         FROM f WHERE EXISTS (SELECT 1 FROM u WHERE f.h BETWEEN u.h_lo AND u.h_hi)`,
+    ).catch(() => ({ rows: [] as { a: string | null; b: string | null; days: number; n: number | null; buckets: string | null }[] })),
   ]);
   const factorOf = (c: number) => Number((factorRows.rows as { c: number; g: number }[]).find((r) => Number(r.c) === c)?.g ?? 0);
   const F_LIGHT = factorOf(1);
@@ -294,7 +312,6 @@ export async function getPrescriptiveStrategies(
 
   const actualTonnes = Number(totals.rows[0]?.co2_tonnes ?? 0);
   const heavyVkm = Number(totals.rows[0]?.heavy_vkm ?? 0);
-  const allVkm = Number(totals.rows[0]?.all_vkm ?? 0);
   // Inside the record's bounds but with nothing in it (a gap): the same answer.
   if (!(actualTonnes > 0)) {
     const data = nothing(
@@ -304,49 +321,55 @@ export async function getPrescriptiveStrategies(
     return data;
   }
 
-  /* ── A. Fleet mix ───────────────────────────────────────────────────────
-     Displacing one heavy vehicle-km does not delete the trip, it moves the
-     freight to the next class down, so the saving is the DIFFERENCE between
-     the factors, not the whole heavy factor. */
-  const heavySharePct = allVkm > 0 ? (heavyVkm / allVkm) * 100 : 0;
-  // A target, capped at the heavy share actually present: no more heavy vehicle-km can move than exist.
-  const deltaPp = Math.round(Math.max(0, Math.min(filters.heavyShiftPp ?? 1, heavySharePct)) * 100) / 100;
-  const shiftedVkm = allVkm * (deltaPp / 100);
-  const cappedShiftVkm = Math.min(shiftedVkm, heavyVkm); // cannot move more heavy than exists
-  const fleetTonnes = (cappedShiftVkm * (F_HEAVY - F_MEDIUM)) / 1e6;
-
-  /* ── B and C. Idling ────────────────────────────────────────────────────
+  /* ── Shorter lane blockages: idling ─────────────────────────────────────
      Each incident's idling is the area of its queue triangle at its OWN
      lane-blockage time (idleKg and clearedIncidents in emissions-source.ts):
      squaring each time, not a band's mean, which understated the tail. Bands
      are kept for the floors: blockage is heavily right-skewed (median 4 min,
      p90 about 33), so one floor for all would be meaningless. The floor in each band and hour is the p10 the
      corridor has itself achieved there: the target is a response time already
-     delivered, which is why B and C are evidence-bounded and A is not. An
-     incident already faster than its floor keeps its own time. */
+     delivered, which is why the figure is evidence-bounded. An incident
+     already faster than its floor keeps its own time. */
+  /* A "fastest 10%" needs enough blockages to have a 10th percentile (2 Nov 2026). Split by length band AND hour,
+     the long bands held 1-4 incidents a group, so their "floor" was simply the shortest of a handful, or the incident
+     itself. Now: the band-and-hour p10 where that group has MIN_FLOOR_N or more blockages; otherwise the band's p10
+     over all hours; and always the band's for blockages of an hour or more, whose groups are never that large. A band
+     with fewer than MIN_FLOOR_N blockages in the Range gets no floor: its incidents keep their own times. */
+  const MIN_FLOOR_N = 10;
+  const LONG_BANDS = new Set(["to180", "over180"]);
   const groups = new Map<string, number[]>();
+  const bandGroups = new Map<string, number[]>();
   for (const e of incidents) {
     const k = `${e.band}|${e.hr}`;
-    const list = groups.get(k) ?? [];
-    list.push(e.minutes);
-    groups.set(k, list);
+    if (!groups.has(k)) groups.set(k, []);
+    groups.get(k)!.push(e.minutes);
+    if (!bandGroups.has(e.band)) bandGroups.set(e.band, []);
+    bandGroups.get(e.band)!.push(e.minutes);
   }
-  const floorOf = new Map<string, number>();
-  for (const [k, list] of groups) floorOf.set(k, percentile([...list].sort((a, b) => a - b), 0.1));
+  const p10 = (list: number[]) => percentile([...list].sort((a, b) => a - b), 0.1);
+  const bandFloor = new Map<string, number>();
+  for (const [b, list] of bandGroups) if (list.length >= MIN_FLOOR_N) bandFloor.set(b, p10(list));
+  const floorOf = (band: string, hr: number): number | undefined => {
+    const g = groups.get(`${band}|${hr}`);
+    if (!LONG_BANDS.has(band) && g && g.length >= MIN_FLOOR_N) return p10(g);
+    return bandFloor.get(band);
+  };
+  const BAND_WORDS: Record<string, string> = { under15: "under 15 min", to60: "15-60 min", to180: "1-3 h", over180: "over 3 h" };
+  const longCounts = ["to180", "over180"].map((b) => `${(bandGroups.get(b)?.length ?? 0).toLocaleString("en-US")} blockages of ${BAND_WORDS[b]}`);
+  const unfloored = [...bandGroups.entries()].filter(([, l]) => l.length < MIN_FLOOR_N).map(([b]) => BAND_WORDS[b]);
+  const floorNote =
+    `Floors: the 10th percentile of this Range's blockages of the same length at the same hour where at least ${MIN_FLOOR_N} exist, ` +
+    `otherwise of that length at any hour; blockages of an hour or more always use their length band at any hour ` +
+    `(${longCounts.join(", ")}).` +
+    (unfloored.length ? ` Fewer than ${MIN_FLOOR_N} blockages of ${unfloored.join(", ")}: no floor, they keep their own times.` : "");
 
-  // Strategy C reallocates a fixed capacity, so it can only improve the hours
-  // it is pointed at. Pointed at the busiest half of the day — where a saved
-  // minute traps the most vehicles — and deliberately NOT at the rest.
-  const hoursByLoad = [...exposure.entries()].sort((a, b) => b[1].veh - a[1].veh);
-  const targetHours = new Set(hoursByLoad.slice(0, 12).map(([h]) => h));
-
-  /** Per incident: idling now, with B (every incident to its floor) and with C (only in the target hours). */
+  /** Per incident: idling now, and the kg saved with its blockage cut to its floor. */
   const perIncident = incidents.map((e) => {
     const x = exposure.get(e.hr);
-    const floor = Math.min(e.minutes, floorOf.get(`${e.band}|${e.hr}`) ?? e.minutes);
+    const floor = Math.min(e.minutes, floorOf(e.band, e.hr) ?? e.minutes);
     const now = idleKg(x, e.minutes);
     const b = idleKg(x, floor);
-    return { e, saveB: now - b, saveC: targetHours.has(e.hr) ? now - b : 0 };
+    return { e, saveB: now - b };
   });
 
   /* Where and when each saving is, from the incidents it is made of. A stretch is 10 km of one carriageway —
@@ -357,12 +380,19 @@ export async function getPrescriptiveStrategies(
   const hourRanges = (hours: number[]): string => {
     const hs = [...new Set(hours)].sort((a, b) => a - b);
     const out: string[] = [];
+    const runs: [number, number][] = [];
     for (let i = 0; i < hs.length; i++) {
       let j = i;
       while (j + 1 < hs.length && hs[j + 1] === hs[j] + 1) j++;
-      out.push(`${hh(hs[i])}–${hh((hs[j] + 1) % 24)}`);
+      runs.push([hs[i], hs[j]]);
       i = j;
     }
+    // A run ending at 23:00 and one starting at 00:00 are one window across midnight ("23:00–01:00", 2 Nov 2026).
+    if (runs.length > 1 && runs[0][0] === 0 && runs[runs.length - 1][1] === 23) {
+      const last = runs.pop()!;
+      runs[0] = [last[0], runs[0][1]];
+    }
+    for (const [a, z] of runs) out.push(`${hh(a)}–${hh((z + 1) % 24)}`);
     return out.join(", ");
   };
   const focusOf = (pick: (x: (typeof perIncident)[number]) => number) => {
@@ -411,29 +441,19 @@ export async function getPrescriptiveStrategies(
     };
   };
   const focusB = focusOf((x) => x.saveB);
-  const focusC = focusOf((x) => x.saveC);
   const sum = (xs: number[]) => xs.reduce((s, x) => s + x, 0);
   const clearanceTonnes = Math.max(0, sum(perIncident.map((x) => x.saveB)) / 1000);
-  const deploymentTonnes = Math.max(0, sum(perIncident.map((x) => x.saveC)) / 1000);
 
-  // The Monte Carlo: the same two savings over MC_RUNS resamples of the Range's incidents.
+  // The bootstrap: the same saving over MC_RUNS resamples of the Range's incidents.
   const runsB: number[] = [];
-  const runsC: number[] = [];
   if (perIncident.length > 0) {
     const random = rng(MC_SEED);
     for (let r = 0; r < MC_RUNS; r++) {
       let b = 0;
-      let c = 0;
-      for (let i = 0; i < perIncident.length; i++) {
-        const x = perIncident[Math.floor(random() * perIncident.length)];
-        b += x.saveB;
-        c += x.saveC;
-      }
+      for (let i = 0; i < perIncident.length; i++) b += perIncident[Math.floor(random() * perIncident.length)].saveB;
       runsB.push(b / 1000);
-      runsC.push(c / 1000);
     }
     runsB.sort((a, b) => a - b);
-    runsC.sort((a, b) => a - b);
   }
 
   const pct = (t: number) => (actualTonnes > 0 ? (t / actualTonnes) * 100 : 0);
@@ -445,25 +465,30 @@ export async function getPrescriptiveStrategies(
     return { lowTonnes: r2(low), highTonnes: r2(high), lowPct: r2(pct(low)), highPct: r2(pct(high)), runs: runs.length };
   };
 
-  /* Why A is a scenario, from the record itself. The heavy share does move month
-     to month, but its lowest months are holiday months, when car traffic swells
-     and dilutes the trucks — not months when fewer trucks ran — so they show the
-     share CAN read lower, not that anything NLEX controls can make it. */
-  const months = monthly.rows as { m: string; share: number }[];
-  const fmtMonth = (m: string) => new Date(`${m}-01T00:00:00Z`).toLocaleDateString("en-US", { month: "short", year: "numeric", timeZone: "UTC" });
-  const lowest = months.slice(0, 3);
-  const highest = months[months.length - 1];
-  const allDecember = lowest.length > 0 && lowest.every((x) => x.m.endsWith("-12"));
-  const fleetNote = lowest.length
-    ? `Class 3's monthly share of vehicle-km ran from ${lowest[0].share.toFixed(2)}% (${fmtMonth(lowest[0].m)}) to ${highest.share.toFixed(2)}% (${fmtMonth(highest.m)}) over ${months.length} months. ` +
-      (allDecember
-        ? `The lowest months are all Decembers (${lowest.map((x) => fmtMonth(x.m)).join(", ")}), when holiday car traffic dilutes the trucks rather than fewer trucks running, so nothing in the record shows the share can be pushed down by policy.`
-        : `The lowest were ${lowest.map((x) => `${fmtMonth(x.m)} (${x.share.toFixed(2)}%)`).join(", ")}; nothing in the record ties them to anything NLEX controls.`)
-    : "The record has no monthly Class 3 share to compare against.";
+  /* Carried forward (2 Nov 2026): what the Range's incidents would have saved, per incident, times the incidents the
+     forecast expects on its validated days, so it carries the Range's mix of incidents, blockage lengths and hours. */
+  const rangeIncidentN = Number((rangeIncidents.rows[0] as { n?: number } | undefined)?.n ?? 0);
+  const fc = ahead.rows[0] as { a: string | null; b: string | null; days: number; n: number | null; buckets: string | null } | undefined;
+  const projectionOf = (tonnes: number): { projection: Strategy["projection"]; projectionNote?: string } => {
+    if (!fc || fc.n == null || !fc.a || !fc.b || !(fc.days > 0))
+      return { projection: null, projectionNote: "No forward figure: the incident forecast has no days its accuracy study passes, so a projection would be no better than repeating last week." };
+    if (!(rangeIncidentN > 0)) return { projection: null, projectionNote: "No forward figure: the Range holds no incidents to take a per-incident saving from." };
+    const perIncident = tonnes / rangeIncidentN;
+    return {
+      projection: {
+        tonnes: r2(fc.n * perIncident),
+        from: fc.a,
+        to: fc.b,
+        days: fc.days,
+        forecastIncidents: Math.round(fc.n),
+        basis: `${Math.round(fc.n).toLocaleString("en-US")} incidents forecast for ${fc.a} to ${fc.b} (forecast days ${fc.buckets ?? "?"}, the only ones its accuracy study passes) x ${(perIncident * 1000).toFixed(1)} kg avoided per incident in the Range (${rangeIncidentN.toLocaleString("en-US")} incidents, ${incidents.length.toLocaleString("en-US")} of them lane-blocking). The per-incident saving is the Range's own, so it carries the Range's mix of incidents, blockage lengths and hours.`,
+      },
+    };
+  };
 
   const days = incidents.map((e) => e.day).sort();
   const span = { lo: days[0] ?? null, hi: days[days.length - 1] ?? null, n: incidents.length };
-  const mcNote =
+  const bootstrapNote =
     `Range: the 5th to 95th percentile of ${MC_RUNS} bootstrap resamples of this Range's incidents, with the floors held at the observed ones. Which incidents happen moves the figure, the rare long ones most of all.`;
 
   const strategies: Strategy[] = [
@@ -473,67 +498,33 @@ export async function getPrescriptiveStrategies(
       reductionPct: r2(pct(clearanceTonnes)),
       reductionTonnes: r2(clearanceTonnes),
       range: rangeOf(runsB),
-      lever: "every lane blockage shortened to the fastest 10% already achieved for blockages of its length, at that hour",
+      lever: "in this Range, each lane blockage shortened to the fastest 10% of comparable blockages the corridor already achieved (same length, same hour where at least 10 exist): what that would have avoided, looking back",
       where: focusB.where,
       when: focusB.when,
       focus: focusB.focus,
       evidenceBounded: true,
+      floorNote,
+      ...projectionOf(clearanceTonnes),
       assumptions: [
         "Queueing lasts as long as a lane is blocked (blockage cleared minus the start), not as long as the site takes to clear: an incident that never blocked a lane queues nobody and is not counted.",
         "Idling is the area of the queue triangle, lambda x T^2 / 2: vehicles join while the lane is blocked and drain as it clears. Still quadratic in delay, so the long tail dominates.",
         "One incident is taken to affect one exit-segment in one direction, not the whole corridor.",
-        "The floor per band is that band's observed 10th percentile, so the target is a response time this corridor has already delivered.",
+        floorNote,
         `Idling: ${IDLING_SOURCE} Weighted by each hour's class mix. US figures: none were found for the Philippine fleet.`,
         "Incident records end before the emissions record does; the window is stated in basis.",
-        mcNote,
-      ],
-    },
-    {
-      key: "deployment",
-      label: "Response capacity at the busiest hours",
-      reductionPct: r2(pct(deploymentTonnes)),
-      reductionTonnes: r2(deploymentTonnes),
-      range: rangeOf(runsC),
-      lever: `same total capacity, concentrated on the 12 busiest hours (${hourRanges([...targetHours])})`,
-      where: focusC.where,
-      when: hourRanges([...targetHours]),
-      focus: focusC.focus,
-      evidenceBounded: true,
-      assumptions: [
-        "Reallocation, not extra resourcing: the hours outside the target keep their current blockage times.",
-        "A minute saved at 17:00 traps roughly ten times the vehicles of a minute saved at 02:00, which is the entire reason this differs from the strategy above.",
-        "Always at most as large as shorter blockages corridor-wide, since it applies the same floor to fewer hours.",
-        mcNote,
-      ],
-    },
-    {
-      key: "fleet_mix",
-      // "Class 3", not "heavy": on this tab heavy means Class 2+3, and only Class 3 moves here (fix list A10, 2 Nov 2026).
-      label: `Class 3 share down ${deltaPp} pp`,
-      reductionPct: r2(pct(fleetTonnes)),
-      reductionTonnes: r2(fleetTonnes),
-      range: null,
-      lever: `${deltaPp} pp of Class-3 vehicle-km moved to Class 2 (from ${heavySharePct.toFixed(2)}% in this Range) — a policy target, not an observed change`,
-      where: "Corridor-wide: it is a share of all vehicle-km, not of any one stretch",
-      when: "Every day of the Range",
-      evidenceBounded: false,
-      evidenceNote: fleetNote,
-      assumptions: [
-        `NOT bounded by evidence. ${fleetNote}`,
-        `The freight still moves: the saving is the gap between the Class 3 and Class 2 factors (${Math.round(F_HEAVY)} - ${Math.round(F_MEDIUM)} g/km), not the whole Class 3 factor.`,
-        "Linear in the shift, so the figure doubles if the target doubles. Read it as a sensitivity: it has no Monte Carlo range because nothing in it is uncertain except the target you choose.",
+        bootstrapNote,
       ],
     },
   ];
 
-  /* The two incident strategies rest on cleared incidents in the Range. With
-     none recorded there, their zero is an absence of data, not a result. */
+  /* The blockage strategy rests on cleared incidents in the Range. With none
+     recorded there, its zero is an absence of data, not a result. */
   const incidentsCounted = span.n;
   const unavailable: PrescriptiveResult["unavailable"] =
     incidentsCounted > 0
       ? []
       : strategies
-          .filter((s) => s.key === "clearance" || s.key === "deployment")
+          .filter((s) => s.key === "clearance")
           .map((s) => ({
             key: s.key,
             label: s.label,
@@ -561,17 +552,38 @@ export async function getPrescriptiveStrategies(
   }));
   const corridorGPerVkm = vkmSum > 0 ? Math.round(co2Sum / vkmSum) : 0;
 
-  /* ── Heavy-vehicle window advisory ──────────────────────────────────────
-     The diagram's fleet-mix box: KPI "Class 3 peak share reduction". The peak hours are those within 10% of
-     the busiest hour's vehicle-km; the receiving hours are the quietest, filled in order until they hold the
-     moved Class-3 vehicle-km while each stays under the peak's own lowest hour. It is NOT a CO2 strategy: in
-     this model a truck emits the same at 03:00 as at 17:00 (no congestion term), so it is reported on its own
-     KPI and says so, rather than inflating the CO2 bars. */
+  /* ── Class 3 window advisory (the diagram's fleet-mix box, KPI: Class 3 peak share reduction) ──────────
+     A recommendation again since 2 Nov 2026, claiming only what can be measured. The window is the hours the
+     CONGESTION FORECAST expects High congestion most (those within 10% of its highest hour's average chance of
+     High, over the next 7 days), so the advice follows the predictive model; with no forecast it falls back to
+     the Range's busiest hours and says so. The effect is the diagram's KPI, Class 3's share of vehicle-km in
+     those hours, which falls to 0 if trucks keep out; the receiving hours are the quietest, filled in order
+     while each stays under the window's own lowest hour. No CO2 saving is claimed: in this model a truck emits
+     the same at 03:00 as at 17:00, and the record has no freight or truck-ban data to say what it costs. */
   const hrs = (hourly.rows as { h: number; vkm: number; c3: number }[]).map((r) => ({ h: Number(r.h), vkm: Number(r.vkm), c3: Number(r.c3) }));
+  let forecastHours: number[] = [];
+  let forecastBase: string | null = null;
+  try {
+    const src = await forecastTable(db);
+    const fc = await db!.query<{ h: number; p: number; base: string }>(
+      `SELECT EXTRACT(hour FROM base_ts + make_interval(hours => hours_ahead))::int AS h,
+              AVG(COALESCE(p_high, 0))::float AS p,
+              to_char(MAX(base_ts), 'DD Mon YYYY HH24:00') AS base
+         FROM ${src} WHERE hours_ahead BETWEEN 1 AND 168 GROUP BY 1`,
+    );
+    const topP = Math.max(0, ...fc.rows.map((r) => Number(r.p)));
+    if (topP > 0) {
+      forecastHours = fc.rows.filter((r) => Number(r.p) >= topP * 0.9).map((r) => Number(r.h));
+      forecastBase = fc.rows[0]?.base ?? null;
+    }
+  } catch {
+    // No congestion forecast to read: the busiest hours stand in, labelled as such below.
+  }
   let heavyWindow: HeavyWindow | null = null;
   if (hrs.length >= 12) {
     const top = Math.max(...hrs.map((r) => r.vkm));
-    const peak = hrs.filter((r) => r.vkm >= top * 0.9);
+    const fromForecast = forecastHours.length > 0;
+    const peak = fromForecast ? hrs.filter((r) => forecastHours.includes(r.h)) : hrs.filter((r) => r.vkm >= top * 0.9);
     const peakSet = new Set(peak.map((r) => r.h));
     const peakVkm = peak.reduce((a, r) => a + r.vkm, 0);
     const peakC3 = peak.reduce((a, r) => a + r.c3, 0);
@@ -589,8 +601,10 @@ export async function getPrescriptiveStrategies(
       left -= room;
     }
     const sharePeak = peakVkm > 0 ? (peakC3 / peakVkm) * 100 : 0;
+    const window = hourRanges([...peakSet]);
+    const into = receiving.length ? hourRanges(receiving) : "the quieter hours";
     heavyWindow = {
-      peakHours: hourRanges([...peakSet]),
+      peakHours: window,
       peakHourList: [...peakSet].sort((a, b) => a - b),
       peakClass3SharePct: r2(sharePeak),
       class3InPeakPct: r2(allC3 > 0 ? (peakC3 / allC3) * 100 : 0),
@@ -600,18 +614,33 @@ export async function getPrescriptiveStrategies(
       fitsOffPeak: left <= 0,
       capacityNote:
         left <= 0
-          ? `${receiving.length === 1 ? "The quietest hour" : `The ${receiving.length} quietest hours`} can take every displaced Class-3 vehicle-km and stay${receiving.length === 1 ? "s" : ""} below the peak's own lowest hour.`
-          : `The quiet hours cannot take all of it without becoming as busy as the peak (${Math.round((left / peakC3) * 100)}% would be left over): restrict part of the window, not all of it.`,
+          ? `${receiving.length === 1 ? "The quietest hour" : `The ${receiving.length} quietest hours`} can take every moved Class-3 vehicle-km and stay${receiving.length === 1 ? "s" : ""} below the window's own lowest hour.`
+          : `The quiet hours cannot take all of it without becoming as busy as the window (${Math.round((left / peakC3) * 100)}% would be left over): advise part of the window, not all of it.`,
       co2Note:
-        "No CO2 saving is claimed: in this model emissions do not depend on the hour, so a truck moved to the night emits the same. The gain is a peak with fewer trucks in it; the KPI is the Class-3 share in those hours.",
+        "No CO2 saving is claimed: in this model a truck emits the same at 03:00 as at 17:00 (no congestion term), and the record holds no freight, delivery-hour or truck-ban data to say what the advisory costs operators.",
+      action: left <= 0
+        ? `Advise Class 3 to avoid ${window} and travel in ${into}.`
+        : `Advise Class 3 to avoid the worst of ${window}; the quiet hours cannot take all of it.`,
+      source: fromForecast ? "forecast" : "history",
+      basis: fromForecast
+        ? `Window from the congestion forecast${forecastBase ? ` of ${forecastBase}` : ""}: the hours it expects High congestion most over the next 7 days. Class 3 shares from this Range's vehicle-km.`
+        : "No congestion forecast available: the window is this Range's busiest hours (within 10% of the busiest hour's vehicle-km).",
     };
+    /* A "window" of more than half the day is not one (2 Nov 2026: a flat forecast once put 17 of 24 hours in
+       it). Advising trucks off most of the day is not actionable, so no advisory and no surcharge is offered;
+       the card says why instead. */
+    if (peakSet.size > 12) {
+      heavyWindow.action = undefined;
+      heavyWindow.noWindow = `${fromForecast ? "The congestion forecast" : "This Range's traffic"} has no distinct peak: ${peakSet.size} of 24 hours are within 10% of the highest, so there is no window to advise Class 3 away from.`;
+    }
   }
 
-  /* ── Dynamic tolling recommendation ─────────────────────────────────────
-     Where a Class-3 peak toll would act: the exits carrying most Class-3 CO2 in the peak hours. No toll
-     elasticity is in the record, so it states what is at stake there, not a saving. */
+  /* ── Tolling recommendation (the diagram's "Dynamic tolling recommendation") ──────────────────────────
+     Where a Class-3 surcharge in the advisory window would apply: the fewest exits that carry most (at least
+     80%, at most five) of Class 3's CO2 in those hours. It says WHERE, not how much: the record has no toll
+     prices, toll elasticity or diversion data, so no reduction is claimed. */
   let tolling: Tolling | null = null;
-  if (heavyWindow) {
+  if (heavyWindow?.action) {
     const peakSet = new Set(heavyWindow.peakHourList);
     const byExit = new Map<string, number>();
     for (const r of byExitHour.rows as { exit: string; h: number; c3: number }[]) {
@@ -619,72 +648,30 @@ export async function getPrescriptiveStrategies(
       byExit.set(r.exit, (byExit.get(r.exit) ?? 0) + (Number(r.c3) * F_HEAVY) / 1e6);
     }
     const total = [...byExit.values()].reduce((a, b) => a + b, 0);
-    const ranked = [...byExit.entries()].sort((a, b) => b[1] - a[1]).slice(0, 5);
+    const sorted = [...byExit.entries()].sort((a, b) => b[1] - a[1]);
+    const ranked: [string, number][] = [];
+    let covered = 0;
+    for (const e of sorted) {
+      if (ranked.length >= 5 || (total > 0 && covered / total >= 0.8)) break;
+      ranked.push(e);
+      covered += e[1];
+    }
     if (ranked.length) {
+      const coveredPct = r2(total > 0 ? (covered / total) * 100 : 0);
       tolling = {
         hours: heavyWindow.peakHours,
         exits: ranked.map(([name, t]) => ({ name, class3Tonnes: r2(t), sharePct: r2(total > 0 ? (t / total) * 100 : 0) })),
         atStakeTonnes: r2(total),
+        coveredPct,
+        action: `If a Class 3 surcharge for ${heavyWindow.peakHours} is considered, apply it at ${ranked.map(([n]) => n).join(", ")}: they carry ${coveredPct.toFixed(0)}% of Class 3's CO2 in those hours.`,
         note:
-          "A Class-3 surcharge in these hours at these exits is the lever that would enforce the window above. The record holds no toll elasticity, so no CO2 reduction is claimed: the tonnes are what Class 3 emits there now, the most a toll there could act on.",
+          "It says where a surcharge would reach most of the Class-3 traffic in the advisory window, not how much it would cut: the record holds no toll prices, toll elasticity or diversion data, so no reduction is claimed.",
       };
     }
   }
 
-  /* ── TOPSIS ─────────────────────────────────────────────────────────────
-     The diagram ranks interventions with TOPSIS. Criteria are only what the record can measure: the expected
-     saving, the saving even in a bad year (the Monte Carlo 5th percentile; a policy target with no evidence
-     scores 0 there), whether the bound is something the corridor has already achieved, and how wide the
-     uncertainty is. Weights are a stated choice (they sum to 1) and are returned with the ranking. */
-  let ranking: Ranking | null = null;
-  if (shown.length >= 2) {
-    const criteria: Ranking["criteria"] = [
-      { key: "expected", label: "Expected CO2 avoided, as the record supports it (t)", weight: 0.35, kind: "benefit", why: "The size of the saving. A policy target's figure is whatever target is chosen, so it counts 0 here: ranking a chosen number against measured ones would rank the choice." },
-      { key: "worst", label: "Avoided even in a bad year (t, 5th percentile)", weight: 0.25, kind: "benefit", why: "What can be counted on; a policy target with no evidence counts 0." },
-      { key: "evidence", label: "Bound already achieved on NLEX (1 = yes)", weight: 0.25, kind: "benefit", why: "Whether the corridor has shown it can do this." },
-      { key: "spread", label: "Uncertainty (5th-95th width / expected)", weight: 0.15, kind: "cost", why: "How far the figure could move." },
-    ];
-    type Vals = { expected: number; worst: number; evidence: number; spread: number };
-    const spreads = shown
-      .filter((st) => st.range && st.reductionTonnes > 0)
-      .map((st) => (st.range!.highTonnes - st.range!.lowTonnes) / st.reductionTonnes);
-    // No range means the uncertainty is not known, which is scored as the widest one seen, not as none.
-    const unknownSpread = spreads.length ? Math.max(...spreads) : 1;
-    const vals: Vals[] = shown.map((st) => ({
-      expected: st.evidenceBounded ? st.reductionTonnes : 0,
-      worst: st.evidenceBounded ? (st.range?.lowTonnes ?? st.reductionTonnes) : 0,
-      evidence: st.evidenceBounded ? 1 : 0,
-      spread: st.range && st.reductionTonnes > 0 ? (st.range.highTonnes - st.range.lowTonnes) / st.reductionTonnes : unknownSpread,
-    }));
-    const keys = criteria.map((c) => c.key as keyof Vals);
-    const norm = keys.map((k) => Math.sqrt(vals.reduce((a, v) => a + v[k] * v[k], 0)) || 1);
-    const weighted = vals.map((v) => keys.map((k, j) => (v[k] / norm[j]) * criteria[j].weight));
-    const col = (j: number) => weighted.map((w) => w[j]);
-    const ideal = keys.map((_, j) => (criteria[j].kind === "benefit" ? Math.max(...col(j)) : Math.min(...col(j))));
-    const anti = keys.map((_, j) => (criteria[j].kind === "benefit" ? Math.min(...col(j)) : Math.max(...col(j))));
-    const closeness = weighted.map((w) => {
-      const dPlus = Math.sqrt(w.reduce((a, x, j) => a + (x - ideal[j]) ** 2, 0));
-      const dMinus = Math.sqrt(w.reduce((a, x, j) => a + (x - anti[j]) ** 2, 0));
-      return dPlus + dMinus > 0 ? dMinus / (dPlus + dMinus) : 0;
-    });
-    const order = closeness.map((c, i) => ({ c, i })).sort((a, b) => b.c - a.c);
-    ranking = {
-      criteria,
-      rows: order.map(({ c, i }, n) => ({
-        key: shown[i].key,
-        label: shown[i].label,
-        closeness: Math.round(c * 1000) / 1000,
-        rank: n + 1,
-        values: Object.fromEntries(keys.map((k) => [k, Math.round(vals[i][k] * 100) / 100])),
-      })),
-      note:
-        "TOPSIS scores each intervention by how close it is to an ideal one (best on every criterion) and how far from the worst, from 0 to 1. Shorter blockages and busiest-hours deployment overlap (the second is part of the first): rank them as alternatives, never add their savings.",
-    };
-  }
-
   const data: PrescriptiveResult = {
     strategies: shown,
-    ranking,
     classKm,
     corridorGPerVkm,
     heavyWindow,

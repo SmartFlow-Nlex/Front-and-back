@@ -950,3 +950,201 @@
 .viz-emissions .nc-em-fold-btn,
 .viz-emissions .nc-em-scenario-why summary { font-size: 13px; }
 .viz-emissions .nc-em-more-tabs button { font-size: 14px; }
+
+/* ── Emissions prescriptive UI (2 Nov 2026) ─────────────────────────────────
+   Source badges and assumption chips (shared, prescriptiveShell.tsx), the
+   what-if on its own row, the promoted Class 3 window and tolling cards, and
+   the TOPSIS footnote. */
+.viz-emissions .nc-em-acard-answer .rx-assume,
+.viz-emissions .nc-em-rx-answer .rx-assume { margin-top: 8px; }
+.viz-emissions .nc-em-rx-answer dd .rx-source { margin-right: 4px; }
+.viz-emissions .nc-em-rx-key .rx-source { margin-right: 6px; }
+.viz-emissions .nc-em-tile-body .rx-source { margin-right: 6px; }
+
+/* The policy what-if, on its own scale under the chart. */
+.viz-emissions .nc-em-whatif-row {
+  display: grid;
+  grid-template-columns: minmax(0, auto) minmax(80px, 1fr) auto;
+  align-items: center;
+  gap: 8px 14px;
+  margin: 4px 0 14px;
+  padding: 12px 14px;
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--radius-md, 10px);
+}
+.viz-emissions .nc-em-whatif-head { display: inline-flex; align-items: center; gap: 8px; min-width: 0; color: var(--text-primary); font-weight: 600; }
+.viz-emissions .nc-em-whatif-bar { display: block; height: 12px; }
+.viz-emissions .nc-em-whatif-bar i { display: block; height: 100%; width: 100%; border: 2px dashed; border-radius: 0 4px 4px 0; }
+.viz-emissions .nc-em-whatif-val { white-space: nowrap; color: var(--text-secondary); }
+.viz-emissions .nc-em-whatif-val b { color: var(--text-primary); font-weight: 600; }
+.viz-emissions .nc-em-whatif-note { grid-column: 1 / -1; color: var(--text-muted); font-size: 13px; }
+@media (max-width: 640px) {
+  .viz-emissions .nc-em-whatif-row { grid-template-columns: minmax(0, 1fr) auto; }
+  .viz-emissions .nc-em-whatif-bar { grid-column: 1 / -1; grid-row: 2; }
+}
+
+/* The Class 3 window advisory and the tolling recommendation, side by side on a wide screen. */
+.viz-emissions .nc-em-recs { display: grid; gap: 14px; }
+@media (min-width: 1100px) {
+  .viz-emissions .nc-em-recs { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+.viz-emissions .nc-em-rcard { display: flex; flex-direction: column; gap: 12px; padding: 20px 22px 18px; min-width: 0; }
+.viz-emissions .nc-em-rcard-title { margin: 0; color: var(--text-primary); font-size: 17px; font-weight: 600; line-height: 1.35; }
+.viz-emissions .nc-em-rcard .nc-em-rows > div { grid-template-columns: 112px minmax(0, 1fr); }
+@media (max-width: 640px) {
+  .viz-emissions .nc-em-rcard { padding: 16px; }
+  .viz-emissions .nc-em-rcard .nc-em-rows > div { grid-template-columns: minmax(0, 1fr); gap: 2px; }
+}
+.viz-emissions .nc-em-rcard-exits { display: grid; gap: 6px; margin: 0; padding: 0; list-style: none; }
+.viz-emissions .nc-em-rcard-exits li {
+  display: grid;
+  grid-template-columns: minmax(110px, 1.2fr) minmax(60px, 1fr) auto auto;
+  align-items: center;
+  gap: 10px;
+}
+.viz-emissions .nc-em-rcard-exits b { font-weight: 600; color: var(--text-primary); text-align: right; min-width: 3.5em; }
+.viz-emissions .nc-em-rcard-exits .is-muted { color: var(--text-muted); font-size: 13px; text-align: right; white-space: nowrap; }
+.viz-emissions .nc-em-rcard-bar { display: block; height: 8px; border-radius: var(--radius-full); background: color-mix(in srgb, var(--text-primary) 8%, transparent); overflow: hidden; }
+.viz-emissions .nc-em-rcard-bar i { display: block; height: 100%; border-radius: inherit; background: var(--page-accent); }
+
+/* TOPSIS, folded into the supporting card as a footnote. */
+.viz-emissions .nc-em-topsis { margin-top: 14px; }
+.viz-emissions .nc-em-topsis > summary { font-size: 13px; }
+.viz-emissions .nc-em-topsis .nc-em-table-wrap { margin: 10px 0; }
+
+/* 2 Nov 2026: one measured strategy is left, so its two figures (looking back, ahead) as key numbers
+   instead of a one-bar chart; they cover different spans and are not drawn against each other. */
+.viz-emissions .nc-em-keynums { display: grid; gap: 12px; }
+@media (min-width: 720px) {
+  .viz-emissions .nc-em-keynums { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+.viz-emissions .nc-em-keynum {
+  display: grid;
+  align-content: start;
+  gap: 4px;
+  min-width: 0;
+  padding: 14px 16px;
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-md, 10px);
+}
+.viz-emissions .nc-em-keynum-head {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: var(--fs-label);
+  font-weight: 600;
+  letter-spacing: 2px;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+.viz-emissions .nc-em-keynum-head .rx-source { letter-spacing: normal; text-transform: none; }
+.viz-emissions .nc-em-keynum > b { font-size: 26px; font-weight: 600; line-height: 1.2; color: var(--text-primary); font-variant-numeric: tabular-nums; }
+.viz-emissions .nc-em-keynum > span:last-child { font-size: var(--fs-body); font-weight: 300; line-height: 1.5; color: var(--text-secondary); }
+
+/* ── One recommendation card (2 Nov 2026, "look at the UI, improve and fix") ─────────────────────────────
+   Replaces the strip + action card. .chart-card carries min-height: 280px, and a grid stretches its rows
+   to fill it, which is what opened the empty band in the old strip: these cards start their rows at the
+   top and take only the height they need. */
+.viz-emissions .nc-em-hero,
+.viz-emissions .nc-em-rcard,
+.viz-emissions .nc-em-rx-evidence { min-height: 0; align-content: start; }
+.viz-emissions .nc-em-hero {
+  display: grid;
+  gap: 16px;
+  padding: 20px 24px 22px;
+  border-left: 3px solid var(--page-accent);
+}
+.viz-emissions .nc-em-hero .nc-em-action-tag { color: var(--color-success); }
+.viz-emissions .nc-em-hero .nc-em-action-tag.is-none { color: var(--color-warning); }
+.viz-emissions .nc-em-hero-title {
+  margin: 0;
+  max-width: 60ch;
+  font-size: 22px;
+  font-weight: 600;
+  line-height: 1.3;
+  color: var(--text-primary);
+  text-wrap: balance;
+}
+.viz-emissions .nc-em-hero-nums { display: grid; gap: 10px; }
+@media (min-width: 760px) {
+  .viz-emissions .nc-em-hero-nums { grid-template-columns: 1.3fr 1fr 1fr; }
+}
+.viz-emissions .nc-em-hero-num {
+  display: grid;
+  align-content: start;
+  gap: 2px;
+  min-width: 0;
+  padding: 12px 16px 13px;
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-md, 10px);
+}
+.viz-emissions .nc-em-hero-num.is-lead {
+  border-color: color-mix(in srgb, var(--color-success) 40%, var(--border-default));
+  background: color-mix(in srgb, var(--color-success) 6%, transparent);
+}
+.viz-emissions .nc-em-hero-num-label,
+.viz-emissions .nc-em-hero-label {
+  font-size: max(12px, var(--fs-label));
+  font-weight: 600;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+.viz-emissions .nc-em-hero-num > b {
+  font-size: 30px;
+  font-weight: 600;
+  line-height: 1.15;
+  color: var(--text-primary);
+  font-variant-numeric: tabular-nums;
+}
+.viz-emissions .nc-em-hero-num.is-lead > b { color: var(--color-success); }
+.viz-emissions .nc-em-hero-num > b small { font-size: 15px; font-weight: 500; color: var(--text-secondary); }
+.viz-emissions .nc-em-hero-num > b.is-none { color: var(--text-muted); }
+.viz-emissions .nc-em-hero-num > span:last-child { font-size: 13px; line-height: 1.45; color: var(--text-secondary); }
+.viz-emissions .nc-em-hero-grid {
+  display: grid;
+  gap: 18px 28px;
+  padding-top: 14px;
+  border-top: 1px solid var(--border-default);
+}
+@media (min-width: 1000px) {
+  .viz-emissions .nc-em-hero-grid { grid-template-columns: 1.5fr 1fr 1fr; }
+}
+.viz-emissions .nc-em-hero-block { display: grid; align-content: start; gap: 8px; min-width: 0; }
+.viz-emissions .nc-em-hero-label { display: inline-flex; align-items: center; gap: 6px; }
+.viz-emissions .nc-em-hero-label svg { color: var(--page-accent); }
+.viz-emissions .nc-em-hero-places li { grid-template-columns: minmax(0, 1.6fr) minmax(50px, 1fr) auto; font-size: var(--fs-body); color: var(--text-primary); }
+.viz-emissions .nc-em-hero-places li > span:first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.viz-emissions .nc-em-hero-hours { display: flex; flex-wrap: wrap; gap: 6px; margin: 0; padding: 0; list-style: none; }
+.viz-emissions .nc-em-hero-hours li {
+  padding: 3px 10px;
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-full, 999px);
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-primary);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.viz-emissions .nc-em-hero-foot { font-size: 13px; color: var(--text-muted); }
+.viz-emissions .nc-em-hero-start { margin: 0; font-size: var(--fs-body); line-height: 1.5; color: var(--text-secondary); }
+.viz-emissions .nc-em-hero-start b { font-size: 20px; font-weight: 600; color: var(--text-primary); font-variant-numeric: tabular-nums; }
+.viz-emissions .nc-em-basis-rows dd[title] { cursor: help; }
+@media (max-width: 640px) {
+  .viz-emissions .nc-em-hero { padding: 16px; }
+  .viz-emissions .nc-em-hero-title { font-size: 19px; }
+  .viz-emissions .nc-em-hero-num > b { font-size: 26px; }
+}
+
+/* Basis and class-km folded into the recommendations they support (2 Nov 2026). */
+.viz-emissions .nc-em-hero-how { margin-top: -4px; }
+.viz-emissions .nc-em-hero-how > .nc-em-rows { margin-top: 10px; max-width: 900px; }
+.viz-emissions .nc-em-recs-why {
+  padding: 10px 16px;
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-md, 10px);
+  background: color-mix(in srgb, var(--bg-surface) 70%, transparent);
+}
+.viz-emissions .nc-em-recs-why > summary { cursor: pointer; font-size: var(--fs-body); line-height: 1.5; color: var(--text-secondary); }
+.viz-emissions .nc-em-recs-why > summary b { color: var(--text-primary); font-weight: 600; }
+.viz-emissions .nc-em-recs-why .nc-em-table-wrap { margin-top: 10px; max-width: 760px; }

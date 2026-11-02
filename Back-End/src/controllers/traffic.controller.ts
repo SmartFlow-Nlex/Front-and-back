@@ -253,31 +253,23 @@ export const getWeatherEvidence = async (_req: Request, res: Response) => {
   res.json({ success: true, source: "database", data });
 };
 
-/* GET /api/traffic/prescriptive — booth staffing and congestion response.
+/* GET /api/traffic/prescriptive — staffing priority and congestion response.
  *
  * Public for the same reason as /forecast: it is the prescriptive third of a
  * panel whose descriptive and predictive thirds are already open, and it
  * exposes no figure they do not.
  *
- * `throughput` and `pool` are the operator's two dials, validated rather than
- * trusted: a zero throughput divides by zero, and a negative pool would spin
- * the allocator forever.
+ * No operator dials since 2 Nov 2026: the booth-throughput and booth-pool
+ * parameters went with the booth plan, because neither was measured. Only the
+ * split is chosen. An old `?throughput=` is ignored (zod strips unknown keys).
  */
 const PrescriptiveTrafficQuerySchema = z.object({
-  // The range the dashboard's slider offers (PrescriptiveTrafficPanels: 150-800 veh/h a booth). The API took 50-5000,
-  // so a request the page could never send planned with a booth no plaza has (2 Nov 2026, TC-UT-06c).
-  throughput: z.coerce.number().int().min(150).max(800).optional(),
-  pool: z.coerce.number().int().min(0).max(100000).optional(),
   split: z.enum(["80_20", "90_10"]).optional(),
 });
 
 export const getTrafficPrescriptiveHandler = async (req: Request, res: Response) => {
   const q = PrescriptiveTrafficQuerySchema.parse(req.query);
-  const data = await getTrafficPrescriptive({
-    throughput: q.throughput,
-    pool: q.pool ?? null,
-    split: q.split,
-  });
+  const data = await getTrafficPrescriptive({ split: q.split });
   if (!data) {
     return res.status(503).json({
       success: false,

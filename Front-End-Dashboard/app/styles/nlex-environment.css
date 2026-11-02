@@ -107,9 +107,10 @@
 /* --- Motion off: reduced motion, or the reader's Effects switch ------------- */
 .nlex-env[data-motion="off"] .env-cloud,
 .nlex-env[data-motion="off"] .env-sun { animation-play-state: paused; }
-/* Effects switched off: a plain background. The clouds and the sun glow go, not just stop (2026-10-27). */
-html[data-effects="off"] .nlex-env .env-clouds,
-html[data-effects="off"] .nlex-env .env-sun { display: none; }
+/* Effects switched off: the clouds and sun glow stay, frozen where they are (user request; they were hidden from
+   2026-10-27). On <html>, stamped before paint, so they never start moving on load. */
+html[data-effects="off"] .nlex-env .env-cloud,
+html[data-effects="off"] .nlex-env .env-sun { animation-play-state: paused; }
 @media (prefers-reduced-motion: reduce) {
   .env-cloud,
   .env-sun { animation: none; }

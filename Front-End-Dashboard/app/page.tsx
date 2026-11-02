@@ -2,7 +2,7 @@
 
 import Image from 'next/image';
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Mail, Lock, Eye, EyeOff, Pause, Play, ArrowRight, ArrowLeft, ShieldCheck, RotateCw } from "lucide-react";
+import { Mail, Lock, Eye, EyeOff, Pause, Play, ArrowRight, ArrowLeft, RotateCcw, ShieldCheck, RotateCw } from "lucide-react";
 import { supabase } from '../lib/supabase';
 import { deviceTrustHeader, logActivity, notifyPasswordChanged } from "../lib/backend-auth";
 import {
@@ -28,14 +28,14 @@ import {
 } from "../lib/account-device";
 
 const BACKEND = process.env.NEXT_PUBLIC_BACKEND_URL ?? "http://localhost:4000";
-import TitleReveal from '../components/stage/TitleReveal';
 import EffectsToggle from '../components/dashboard/EffectsToggle';
 import ThemeToggle from '../components/dashboard/ThemeToggle';
-import NlexEnvironment from '../components/environment/NlexEnvironment';
+import LoginStage, { loginStage } from '../components/login/LoginStage';
+import TitleReveal from '../components/stage/TitleReveal';
 
-/* Sign-in (redesigned 7 Oct 2026 after the user's reference): the user's own artwork of the mascot
-   driving toward the reader (public/light_login.png and dark_login.png), the story on the left above
-   the mascot, and a frosted glass sign-in card on the right. Styles: app/styles/nlex-signin.css. */
+/* Sign-in, "Enter the SmartFlow Expressway" (2 Nov 2026): the approved paintings with a 3D scene over them
+   (components/login/), the sign-in card on the right. All text and controls here are plain HTML; the journey
+   runs outside React, so it cannot re-render this form. Styles: app/styles/nlex-signin.css. */
 
 /* The four sign-in stories. Copy is taken from PRODUCT.md, verbatim from the
    redesign brief; it makes no claim the product does not. A "\n" sets the line
@@ -186,6 +186,7 @@ export default function Home() {
         setCode("");
         setResumedAs(s.user.email ?? email);
         setStep(next);
+        loginStage.skip(); // the code step is behind the intro, and they have already been through it
       } catch {
         passwordSent.current = false;
         dropPasswordOnlySession();
@@ -537,8 +538,32 @@ export default function Home() {
     else if (stepped) usernameRef.current?.focus();
   }, [step.kind, isLoading, stepped]);
 
-  /* ---- Presentation only: the story timer and the mascot's headlights ---- */
+  /* ---- Presentation only: Navie's headlights, and the replay control ---- */
 
+  /* The sign-in button drives the mascot's headlights: a flash when it is
+     pointed at or focused, a steady pulse while the request is pending, a
+     double blink when it fails. */
+  const [lights, setLights] = useState<Lights>("");
+  const lightsTimer = useRef<number | undefined>(undefined);
+  const pulseLights = useCallback((kind: Exclude<Lights, "">) => {
+    window.clearTimeout(lightsTimer.current);
+    setLights("");
+    // A frame apart, so the same pulse can play again straight after itself.
+    requestAnimationFrame(() => setLights(kind));
+    lightsTimer.current = window.setTimeout(() => setLights(""), kind === "error" ? 1400 : 950);
+  }, []);
+  useEffect(() => () => window.clearTimeout(lightsTimer.current), []);
+  useEffect(() => {
+    if (errorMessage) pulseLights("error");
+  }, [errorMessage, pulseLights]);
+  const flashLights = useCallback(() => pulseLights("flash"), [pulseLights]);
+  useEffect(() => {
+    loginStage.lights(isLoading ? "pending" : lights);
+  }, [isLoading, lights]);
+  const [canReplay, setCanReplay] = useState(false);
+
+  /* ---- Presentation only: the stories, beside the form once the intro is over ---- */
+  const [storiesOn, setStoriesOn] = useState(false);
   const [story, setStory] = useState(0);
   const [userPaused, setUserPaused] = useState(false);
   const [holdFocus, setHoldFocus] = useState(false);
@@ -546,6 +571,15 @@ export default function Home() {
   const [reduced, setReduced] = useState(false);
   const fillRef = useRef<HTMLSpanElement | null>(null);
   const elapsedRef = useRef(0);
+
+  useEffect(() => {
+    const root = document.documentElement;
+    const sync = () => setStoriesOn(!root.hasAttribute("data-login-intro"));
+    sync();
+    const watch = new MutationObserver(sync);
+    watch.observe(root, { attributes: true, attributeFilter: ["data-login-intro"] });
+    return () => watch.disconnect();
+  }, []);
 
   useEffect(() => {
     const mq = window.matchMedia("(prefers-reduced-motion: reduce)");
@@ -560,9 +594,10 @@ export default function Home() {
     setStory(((i % STORIES.length) + STORIES.length) % STORIES.length);
   }, []);
 
-  // The stories advance on a 7 s timer, held while a field has focus, the
-  // pointer is over the card, the reader paused it, or motion is reduced.
-  const held = holdFocus || holdHover || userPaused || reduced;
+  // The stories advance on a 7 s timer, held while someone is typing or pointing at the card, has paused them, or
+  // prefers reduced motion. Focus alone does not hold them: the email field takes focus as soon as the form appears.
+  const typing = holdFocus && Boolean(signInEmail || signInPassword);
+  const held = !storiesOn || typing || holdHover || userPaused || reduced;
   useEffect(() => {
     if (held) return;
     let raf = 0;
@@ -583,29 +618,16 @@ export default function Home() {
     return () => cancelAnimationFrame(raf);
   }, [held, story]);
 
-  /* The sign-in button drives the mascot's headlights: a flash when it is
-     pointed at or focused, a steady pulse while the request is pending, a
-     double blink when it fails. */
-  const [lights, setLights] = useState<Lights>("");
-  const lightsTimer = useRef<number | undefined>(undefined);
-  const pulseLights = useCallback((kind: Exclude<Lights, "">) => {
-    window.clearTimeout(lightsTimer.current);
-    setLights("");
-    // A frame apart, so the same pulse can play again straight after itself.
-    requestAnimationFrame(() => setLights(kind));
-    lightsTimer.current = window.setTimeout(() => setLights(""), kind === "error" ? 1400 : 950);
-  }, []);
-  useEffect(() => () => window.clearTimeout(lightsTimer.current), []);
-  useEffect(() => {
-    if (errorMessage) pulseLights("error");
-  }, [errorMessage, pulseLights]);
-  const flashLights = useCallback(() => pulseLights("flash"), [pulseLights]);
-
   const current = STORIES[story];
 
+  useEffect(() => {
+    loginStage.onReplayable(setCanReplay);
+    return () => loginStage.onReplayable(null);
+  }, []);
+
   return (
-    <main className="si-shell" data-lights={isLoading ? "pending" : lights || undefined}>
-      <NlexEnvironment scene="signin" />
+    <main className="si-shell">
+      <LoginStage />
 
       <header className="si-topbar">
         <section className="si-brand" aria-label="SmartFlow branding">
@@ -632,51 +654,72 @@ export default function Home() {
 
         {/* The same theme control and effects switch as the dashboard's top bar. */}
         <div className="si-topbar-end">
+          {canReplay && step.kind === "password" && (
+            <button type="button" className="si-replay" onClick={() => loginStage.replay()}>
+              <RotateCcw size={13} strokeWidth={2.4} aria-hidden="true" />
+              <span>Replay intro</span>
+            </button>
+          )}
           <EffectsToggle />
           <ThemeToggle />
         </div>
       </header>
 
-      <section className="si-story" aria-label="About SmartFlow">
-        <div className="si-story-text" key={story}>
-          <TitleReveal as="h2" text={current.title} accent={current.accent} className="si-story-title" />
-          <p className="si-story-body">{current.body}</p>
-        </div>
-        {/* The stories: one dash each, the current one filling over its 7 s, and a pause. */}
-        <nav className="si-tabs" aria-label="Stories">
-          {STORIES.map((s, i) => (
-            <button
-              key={s.label}
-              type="button"
-              className={`si-tab${i === story ? " is-current" : ""}${i < story ? " is-done" : ""}`}
-              aria-label={`Story ${i + 1} of ${STORIES.length}: ${s.title.replace("\n", " ")}`}
-              aria-current={i === story ? "true" : undefined}
-              onClick={() => goToStory(i)}
-            >
-              <span className="si-tab-track" aria-hidden="true">
-                <span ref={i === story ? fillRef : undefined} className="si-tab-fill" />
-              </span>
-            </button>
-          ))}
-          {!reduced && (
-            <button
-              type="button"
-              className="si-story-pause"
-              aria-label={userPaused ? "Play stories" : "Pause stories"}
-              aria-pressed={userPaused}
-              onClick={() => setUserPaused((p) => !p)}
-            >
-              {userPaused ? <Play size={12} aria-hidden="true" /> : <Pause size={12} aria-hidden="true" />}
-            </button>
-          )}
-        </nav>
+      {/* Stage A: at the toll plaza. Shown only while <html data-login-intro="plaza"> (see LoginStage). */}
+      <section className="si-welcome" aria-labelledby="si-welcome-title">
+        <h2 id="si-welcome-title">Welcome to SmartFlow NLEX</h2>
+        <p>Decision intelligence for the NLEX corridor, from Balintawak to Sta. Ines.</p>
+        <button type="button" className="submit-button si-enter" onClick={() => loginStage.enter()}>
+          <span>Enter SmartFlow</span>
+          <ArrowRight className="submit-arrow" size={20} aria-hidden="true" />
+        </button>
+        <button type="button" className="si-skip" onClick={() => loginStage.skip()}>Skip intro</button>
       </section>
+
+      {storiesOn && (
+        <section className="si-story" aria-label="About SmartFlow">
+          <div className="si-story-text" key={story}>
+            <TitleReveal as="h2" text={current.title} accent={current.accent} className="si-story-title" />
+            <p className="si-story-body">{current.body}</p>
+          </div>
+          {/* The stories: one dash each, the current one filling over its 7 s, and a pause. */}
+          <nav className="si-tabs" aria-label="Stories">
+            {STORIES.map((s, i) => (
+              <button
+                key={s.label}
+                type="button"
+                className={`si-tab${i === story ? " is-current" : ""}${i < story ? " is-done" : ""}`}
+                aria-label={`Story ${i + 1} of ${STORIES.length}: ${s.title.replace("\n", " ")}`}
+                aria-current={i === story ? "true" : undefined}
+                onClick={() => goToStory(i)}
+              >
+                <span className="si-tab-track" aria-hidden="true">
+                  <span ref={i === story ? fillRef : undefined} className="si-tab-fill" />
+                </span>
+              </button>
+            ))}
+            {!reduced && (
+              <button
+                type="button"
+                className="si-story-pause"
+                aria-label={userPaused ? "Play stories" : "Pause stories"}
+                aria-pressed={userPaused}
+                onClick={() => setUserPaused((p) => !p)}
+              >
+                {userPaused ? <Play size={12} aria-hidden="true" /> : <Pause size={12} aria-hidden="true" />}
+              </button>
+            )}
+          </nav>
+        </section>
+      )}
 
       <section
         className="login-panel"
         aria-labelledby="si-card-title"
         onPointerEnter={() => setHoldHover(true)}
         onPointerLeave={() => setHoldHover(false)}
+        onFocus={() => setHoldFocus(true)}
+        onBlur={() => setHoldFocus(false)}
       >
         <div className="login-card" data-stepped={stepped ? "" : undefined}>
           <div className="login-card-head">
@@ -705,8 +748,6 @@ export default function Home() {
           <form
             onSubmit={handleSignInSubmit}
             className="login-form"
-            onFocus={() => setHoldFocus(true)}
-            onBlur={(e) => { if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setHoldFocus(false); }}
           >
             {errorMessage && <div className="login-alert danger" role="alert">{errorMessage}</div>}
             {successMessage && <div className="login-alert success" role="status">{successMessage}</div>}
@@ -786,7 +827,7 @@ export default function Home() {
             </button>
           </form>
           ) : step.kind === "forgot-email" ? (
-          <form onSubmit={handleResetEmailSubmit} className="login-form" noValidate onFocus={() => setHoldFocus(true)} onBlur={(e) => { if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setHoldFocus(false); }}>
+          <form onSubmit={handleResetEmailSubmit} className="login-form" noValidate>
             <p className="mfa-lead">Enter the email address you sign in with. We&rsquo;ll email you a link to reset your password.</p>
             {errorMessage && <div className="login-alert danger" role="alert">{errorMessage}</div>}
             <label className="field-group">
@@ -825,7 +866,7 @@ export default function Home() {
             </div>
           </div>
           ) : step.kind === "forgot-mfa" ? (
-          <form onSubmit={handleResetMfaSubmit} className="login-form mfa-form" noValidate onFocus={() => setHoldFocus(true)} onBlur={(e) => { if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setHoldFocus(false); }}>
+          <form onSubmit={handleResetMfaSubmit} className="login-form mfa-form" noValidate>
             <p className="mfa-lead">Your account has an authenticator, so enter the code it shows for SmartFlow NLEX before choosing a new password.</p>
             <div className="mfa-field">
               <label className="field-group">
@@ -843,7 +884,7 @@ export default function Home() {
             </button>
           </form>
           ) : step.kind === "forgot-new" ? (
-          <form onSubmit={handleNewPasswordSubmit} className="login-form" noValidate onFocus={() => setHoldFocus(true)} onBlur={(e) => { if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setHoldFocus(false); }}>
+          <form onSubmit={handleNewPasswordSubmit} className="login-form" noValidate>
             <p className="mfa-lead">Choose a new password of at least 8 characters. You&rsquo;ll sign in with it straight after.</p>
             {errorMessage && <div className="login-alert danger" role="alert">{errorMessage}</div>}
             <label className="field-group">
@@ -873,8 +914,6 @@ export default function Home() {
             onSubmit={handleCodeSubmit}
             className="login-form mfa-form"
             noValidate
-            onFocus={() => setHoldFocus(true)}
-            onBlur={(e) => { if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setHoldFocus(false); }}
           >
             {resumedAs && (
               <div className="login-alert success mfa-resumed" role="status">
@@ -903,7 +942,6 @@ export default function Home() {
             ) : (
               <p className="mfa-lead">Open your authenticator app and enter the code it shows for SmartFlow NLEX.</p>
             )}
-
 
             {/* The message sits under the field it is about, not above the QR code a screen away. */}
             <div className="mfa-field">

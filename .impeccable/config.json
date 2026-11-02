@@ -24,6 +24,24 @@
         ],
         "createdAt": "2026-10-19T14:39:13.612Z",
         "reason": "Claude's call: the wide tracking is on the one-time reset code ({{ .Token }}) and short uppercase labels, spaced on purpose so the digits are easy to read and type; not body text"
+      },
+      {
+        "rule": "side-tab",
+        "value": "*",
+        "files": [
+          "Front-End-Dashboard/app/styles/nc-traffic.css"
+        ],
+        "createdAt": "2026-11-03T00:00:00.000Z",
+        "reason": "Claude's call: 2px chart whisker caps on the event uplift bars, not a card accent"
+      },
+      {
+        "rule": "side-tab",
+        "value": "*",
+        "files": [
+          "Front-End-Dashboard/app/styles/nc-incident.css"
+        ],
+        "createdAt": "2026-11-03T00:00:00.000Z",
+        "reason": "Claude's call: 2px left/right edges of the patrol heat strip's outlined time window, not a card accent"
       }
     ]
   }

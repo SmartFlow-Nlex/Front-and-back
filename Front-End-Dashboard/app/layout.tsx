@@ -16,7 +16,9 @@ import './styles/nlex-daylight.css';
 import './styles/nlex-signin.css';
 import { ThemeProvider, THEME_INIT_SCRIPT } from '../lib/theme';
 
-const EFFECTS_INIT_SCRIPT = `(function(){try{if(localStorage.getItem('smartflow-effects')==='off')document.documentElement.setAttribute('data-effects','off');}catch(e){}})();`;
+// Also decides, before first paint, whether the sign-in page opens at the toll plaza (components/login/LoginStage.tsx):
+// once per browser session, never with Effects off or reduced motion, or when arriving by a reset link or idle sign-out.
+const EFFECTS_INIT_SCRIPT = `(function(){var d=document.documentElement,off=false;try{off=localStorage.getItem('smartflow-effects')==='off';if(off)d.setAttribute('data-effects','off');}catch(e){}try{var l=location,p=l.pathname;if(!off&&p.indexOf('/dashboard')<0&&/(^|\\/)(index\\.html)?$/.test(p)&&!/reset=|signedOut=/.test(l.search)&&!/type=recovery/.test(l.hash)&&!sessionStorage.getItem('smartflow-intro-seen')&&!matchMedia('(prefers-reduced-motion: reduce)').matches)d.setAttribute('data-login-intro','plaza');}catch(e){}})();`;
 import { ToastProvider } from '../lib/toast';
 
 // The type (Inter for the interface, wide Saira for brand moments) is

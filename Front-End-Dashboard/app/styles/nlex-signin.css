@@ -1,18 +1,11 @@
 /* ===========================================================================
-   SIGN-IN (app/page.tsx), redesigned 7 Oct 2026 after the user's reference.
+   SIGN-IN (app/page.tsx): "Enter the SmartFlow Expressway", 2 Nov 2026.
 
-   The scene is the user's own artwork (public/light_login.png by day,
-   dark_login.png at night, served as the WebP copies beside them): the mascot
-   driving toward the reader with traffic behind it. It covers the screen with
-   the mascot always in view. Over it: the story on the left, set above the
-   mascot, and a frosted glass sign-in card on the right, copied from the
-   reference (gold accent bar, big title, tall rounded
-   fields, a blue pill button with an arrow).
-
-   The one authored moment is the headline's letter-by-letter blur-up; the
-   card rises in once, and the mascot's headlights answer the sign-in button
-   (a flash when it is pointed at, a pulse while signing in, a double blink on
-   an error). Loaded after nlex-daylight.css.
+   The approved paintings in one box (.ls-art), the 3D scene on a canvas locked
+   to them (components/login/), and the page's HTML over both: the welcome panel
+   at the toll plaza, then the sign-in card, which never moves. The journey's
+   place is on <html data-login-*>, set before first paint (see LoginStage.tsx).
+   Loaded after nlex-daylight.css.
    =========================================================================== */
 
 .si-shell {
@@ -21,7 +14,7 @@
   --si-title-ink: #0b1d58;
   --si-title-accent: #1f6cf5;
   --si-body-ink: #364d7c;
-  --si-card-bg: linear-gradient(162deg, rgba(255, 255, 255, 0.8) 0%, rgba(240, 247, 255, 0.66) 55%, rgba(225, 239, 255, 0.6) 100%);
+  --si-card-bg: linear-gradient(168deg, rgba(255, 255, 255, 0.9) 0%, rgba(245, 250, 255, 0.84) 100%);
   --si-card-line: rgba(255, 255, 255, 0.92);
   --si-card-shadow:
     inset 0 1px 0 rgba(255, 255, 255, 0.95),
@@ -37,6 +30,7 @@
   --si-placeholder: #7486aa;
   --si-copy-ink: #2f4677;
   --si-copy-glow: 0 1px 8px rgba(255, 255, 255, 0.9);
+  --si-story-halo: 0 0 2px rgba(255, 255, 255, 0.95), 0 0 6px rgba(255, 255, 255, 0.9), 0 0 14px rgba(255, 255, 255, 0.8), 0 0 26px rgba(255, 255, 255, 0.6);
   --si-copy-bg: rgba(255, 255, 255, 0.5);
   /* Error text. The corridor's "congested" red is a map colour, too light for 13 px type on this
      card (3.5:1); this is the same red taken dark enough to read (above 4.5:1). */
@@ -61,9 +55,9 @@
 :root[data-theme="dark"] .si-shell {
   --si-title-lead: #ffffff;
   --si-title-ink: #ffffff;
-  --si-title-accent: #8cc2ff;
+  --si-title-accent: #ffc531;
   --si-body-ink: #dbe6ff;
-  --si-card-bg: linear-gradient(162deg, rgba(18, 40, 96, 0.74) 0%, rgba(11, 28, 74, 0.66) 55%, rgba(8, 22, 62, 0.62) 100%);
+  --si-card-bg: linear-gradient(168deg, rgba(14, 30, 72, 0.84) 0%, rgba(9, 22, 58, 0.8) 100%);
   --si-card-line: rgba(150, 190, 255, 0.26);
   --si-card-shadow:
     inset 0 1px 0 rgba(180, 210, 255, 0.16),
@@ -79,6 +73,7 @@
   --si-placeholder: #93a6cf;
   --si-copy-ink: #d2def8;
   --si-copy-glow: 0 1px 10px rgba(2, 10, 34, 0.8);
+  --si-story-halo: 0 0 2px rgba(3, 10, 40, 0.95), 0 0 6px rgba(3, 10, 40, 0.9), 0 0 14px rgba(3, 10, 40, 0.8), 0 0 26px rgba(3, 10, 40, 0.65);
   --si-copy-bg: rgba(4, 16, 48, 0.55);
   --si-error-ink: #ffa39b;
 }
@@ -86,9 +81,9 @@
   :root:not([data-theme="light"]) .si-shell {
     --si-title-lead: #ffffff;
     --si-title-ink: #ffffff;
-    --si-title-accent: #8cc2ff;
+    --si-title-accent: #ffc531;
     --si-body-ink: #dbe6ff;
-    --si-card-bg: linear-gradient(162deg, rgba(18, 40, 96, 0.74) 0%, rgba(11, 28, 74, 0.66) 55%, rgba(8, 22, 62, 0.62) 100%);
+    --si-card-bg: linear-gradient(168deg, rgba(14, 30, 72, 0.84) 0%, rgba(9, 22, 58, 0.8) 100%);
     --si-card-line: rgba(150, 190, 255, 0.26);
     --si-card-shadow:
       inset 0 1px 0 rgba(180, 210, 255, 0.16),
@@ -104,6 +99,7 @@
     --si-placeholder: #93a6cf;
     --si-copy-ink: #d2def8;
     --si-copy-glow: 0 1px 10px rgba(2, 10, 34, 0.8);
+    --si-story-halo: 0 0 2px rgba(3, 10, 40, 0.95), 0 0 6px rgba(3, 10, 40, 0.9), 0 0 14px rgba(3, 10, 40, 0.8), 0 0 26px rgba(3, 10, 40, 0.65);
     --si-copy-bg: rgba(4, 16, 48, 0.55);
     --si-error-ink: #ffa39b;
   }
@@ -112,257 +108,51 @@
 .si-shell ::selection { background: rgba(31, 95, 224, 0.22); }
 .si-topbar,
 .si-story,
+.si-welcome,
 .login-panel { position: relative; z-index: 2; }
 
-/* --- The scene ---------------------------------------------------------------
-   Covers the screen like object-fit: cover, with the focal point on the mascot
-   (about a third across, three quarters down). */
-.nlex-env[data-scene="signin"] {
-  --env-base: linear-gradient(180deg, #62b2fd, #9dc8fb);
-  --env-veil: rgba(246, 250, 255, 0.4);
-  /* The mascot's lamps, as a share of the artwork, the same by day and by night: the night art is
-     aligned onto the day art when its WebP is made (see the comment at .env-art). */
-  --hl-lx: 28.53%;
-  --hl-ly: 73.35%;
-  --hl-rx: 39.2%;
-  --hl-ry: 74.22%;
-  --beam-y: 83.5%;
-}
-:root[data-theme="dark"] .nlex-env[data-scene="signin"] {
-  --env-base: linear-gradient(180deg, #01134a, #1a4aa8);
-  --env-veil: rgba(3, 14, 46, 0.45);
-}
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme="light"]) .nlex-env[data-scene="signin"] {
-    --env-base: linear-gradient(180deg, #01134a, #1a4aa8);
-    --env-veil: rgba(3, 14, 46, 0.45);
-  }
-}
-.nlex-env[data-scene="signin"] .env-bg {
-  --art-ratio: 1.77683; /* 1672 / 941 */
-  --art-w: max(100vw, calc(100vh * var(--art-ratio)));
-  inset: auto;
-  translate: none; /* the environment's small-screen shift does not apply here */
-  left: calc((100vw - var(--art-w)) * var(--art-fx, 0.3));
-  top: calc((100vh - var(--art-w) / var(--art-ratio)) * var(--art-fy, 0.72));
-  width: var(--art-w);
-  height: auto;
-  aspect-ratio: 1672 / 941;
-  -webkit-mask-image: none;
-  mask-image: none;
-  background: none;
-}
-/* --- The scene's layers (SigninScene.tsx) -----------------------------------------------------
-   Load wrapper -> day art, night art, day light, night light, the mascot's lamps. Everything sits
-   inside the art frame and is placed as a share of the artwork, so each effect stays on its lamp,
-   car or stretch of road at any screen size. */
-.ss-scene,
-.ss-fx,
-.ss-fx > i,
-.env-art { position: absolute; inset: 0; pointer-events: none; }
-/* The entrance: the scene fades up from the sky colour and settles from 1.015 to 1, once both
-   artworks have decoded. */
-.ss-scene {
-  opacity: 0;
-  transform: scale(1.015);
-  transition: opacity 1.6s cubic-bezier(0.22, 1, 0.36, 1), transform 1.6s cubic-bezier(0.22, 1, 0.36, 1);
-}
-.ss-scene[data-ready] { opacity: 1; transform: none; }
-
-/* Day and night: two layers with the same box, the same sizing and the same transform, so the scene
-   cannot move when the theme changes; the night cross-fades in over the day like a timelapse. Both
-   artworks are 1672 x 941 and aligned to each other (the current pair came aligned, lamps within
-   2 px; an earlier pair needed the night PNG cropped and moved onto the day art when its WebP was
-   made). Check the alignment again whenever either artwork changes. The images are set inline from
-   SigninScene's ART, which carries their cache tags. */
-.env-art { background: center / 100% 100% no-repeat; }
-.env-art.is-night { opacity: 0; transition: opacity 750ms cubic-bezier(0.4, 0, 0.2, 1); }
-:root[data-theme="dark"] .env-art.is-night { opacity: 1; }
-@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .env-art.is-night { opacity: 1; } }
-
-/* Each theme's light fades with it. Turning dark, the night lights come on a moment after the night
-   picture starts to fade in; turning light, they go out before the day picture is fully back. */
-.ss-day { opacity: 1; transition: opacity 600ms cubic-bezier(0.4, 0, 0.2, 1) 200ms; }
-.ss-night { opacity: 0; transition: opacity 420ms cubic-bezier(0.4, 0, 0.2, 1); }
-:root[data-theme="dark"] .ss-day { opacity: 0; transition: opacity 400ms cubic-bezier(0.4, 0, 0.2, 1); }
-:root[data-theme="dark"] .ss-night { opacity: 1; transition: opacity 700ms cubic-bezier(0.4, 0, 0.2, 1) 180ms; }
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme="light"]) .ss-day { opacity: 0; transition: opacity 400ms cubic-bezier(0.4, 0, 0.2, 1); }
-  :root:not([data-theme="light"]) .ss-night { opacity: 1; transition: opacity 700ms cubic-bezier(0.4, 0, 0.2, 1) 180ms; }
-}
-
-/* Day: sunlight from the upper left, as if through thin cloud; its strength moves by about 4%. */
-.ss-fx > .ss-sun {
-  inset: -4%;
-  background: radial-gradient(52% 58% at 6% 2%, rgba(255, 251, 236, 0.34), rgba(255, 251, 236, 0.12) 42%, transparent 70%);
-  opacity: 0.6;
-  animation: ss-sun 16s ease-in-out infinite alternate;
-}
-/* Day: a soft haze over the sky that drifts about 12 px; the painted clouds themselves never move. */
-.ss-fx > .ss-haze {
-  inset: -3%;
-  background:
-    radial-gradient(20% 11% at 20% 20%, rgba(255, 255, 255, 0.2), transparent 70%),
-    radial-gradient(24% 12% at 58% 12%, rgba(255, 255, 255, 0.16), transparent 70%),
-    radial-gradient(18% 10% at 86% 26%, rgba(255, 255, 255, 0.14), transparent 70%),
-    radial-gradient(30% 9% at 40% 34%, rgba(255, 255, 255, 0.1), transparent 70%);
-  animation: ss-drift 28s ease-in-out infinite alternate;
-}
-/* Day: the whole scene breathes, about 1.5% brighter at most. */
-.ss-breath { background: #ffffff; opacity: 0; animation: ss-breath 18s ease-in-out infinite alternate; }
-
-/* Glints on the wet road: a soft highlight now and then travels toward the reader along the lanes,
-   in the bottom third and left of the card. The day ones are white, the night ones blue-white. */
-.ss-fx > .ss-glint {
-  inset: auto;
-  border-radius: 50%;
-  opacity: 0;
-  background: radial-gradient(closest-side, rgba(255, 255, 255, 0.95), rgba(220, 235, 255, 0.5) 45%, transparent);
-  --glint-max: 0.05;
-}
-.ss-night > .ss-glint {
-  background: radial-gradient(closest-side, rgba(205, 228, 255, 0.95), rgba(120, 170, 255, 0.45) 45%, transparent);
-  --glint-max: 0.045;
-}
-.ss-fx > .ss-glint.is-a { left: 33%; top: 84.5%; width: 15%; height: 4.4%; animation: ss-glint 11s cubic-bezier(0.45, 0, 0.55, 1) infinite; }
-.ss-fx > .ss-glint.is-b { left: 12%; top: 86%; width: 12%; height: 3.6%; animation: ss-glint 13s cubic-bezier(0.45, 0, 0.55, 1) -6s infinite; }
-.ss-night > .ss-glint.is-a { animation-duration: 12s; }
-.ss-night > .ss-glint.is-b { animation-duration: 14.5s; }
-
-/* Night: a faint blue haze along the skyline, and a soft glow over each cluster of towers. */
-.ss-skyhaze {
-  background: linear-gradient(180deg, transparent 32%, rgba(70, 130, 255, 0.09) 44%, rgba(95, 155, 255, 0.13) 53%, rgba(70, 130, 255, 0.07) 60%, transparent 66%);
-  opacity: 0.75;
-  animation: ss-skyhaze 14s ease-in-out infinite alternate;
-}
-.ss-city {
-  background:
-    radial-gradient(15% 9% at 15% 47%, rgba(110, 170, 255, 0.16), transparent 72%),
-    radial-gradient(17% 10% at 77% 44%, rgba(110, 170, 255, 0.16), transparent 72%);
-  opacity: 0.75;
-  animation: ss-city 11s ease-in-out -4s infinite alternate;
-}
-/* Night: the street lamps glow, breathing between 0.75 and 0.9 and never going out. Two layers of
-   alternate lamps on different periods, so they never breathe in step. Each glow is an ellipse
-   whose radii keep it round on the 1672 x 941 artwork; centres measured on dark_login.png, and to be
-   measured again whenever the artwork changes (as must the car lights below and --hl-* above). */
-.ss-lamps { mix-blend-mode: screen; opacity: 0.75; }
-.ss-lamps.is-a {
-  background:
-    radial-gradient(3.4% 6.04% at 61.11% 20.67%, rgba(230, 240, 255, 0.5), rgba(150, 195, 255, 0.18) 40%, transparent 72%),
-    radial-gradient(1.8% 3.2% at 52.7% 45.02%, rgba(230, 240, 255, 0.5), rgba(150, 195, 255, 0.18) 40%, transparent 72%);
-  animation: ss-lamp 6.4s ease-in-out infinite alternate;
-}
-.ss-lamps.is-b {
-  background:
-    radial-gradient(2.4% 4.26% at 55.67% 37.07%, rgba(230, 240, 255, 0.5), rgba(150, 195, 255, 0.18) 40%, transparent 72%),
-    radial-gradient(1.3% 2.31% at 50.88% 49.78%, rgba(230, 240, 255, 0.46), rgba(150, 195, 255, 0.16) 40%, transparent 72%);
-  animation: ss-lamp 7.6s ease-in-out -3s infinite alternate;
-}
-/* Night: a soft halo on the headlights of the mascot and the cars, varying by about 10%. */
-.ss-carlights {
-  mix-blend-mode: screen;
-  opacity: 0.9;
-  background:
-    radial-gradient(2.5% 4.44% at 28.53% 73.35%, rgba(225, 238, 255, 0.36), transparent 70%),
-    radial-gradient(2.5% 4.44% at 39.2% 74.22%, rgba(225, 238, 255, 0.36), transparent 70%),
-    radial-gradient(1.6% 2.84% at 14.26% 69.02%, rgba(225, 238, 255, 0.32), transparent 70%),
-    radial-gradient(1.6% 2.84% at 21.12% 69.07%, rgba(225, 238, 255, 0.32), transparent 70%),
-    radial-gradient(1.6% 2.84% at 54.37% 68.26%, rgba(225, 238, 255, 0.32), transparent 70%),
-    radial-gradient(1.6% 2.84% at 61.17% 68.35%, rgba(225, 238, 255, 0.32), transparent 70%),
-    radial-gradient(1% 1.78% at 46.95% 67.91%, rgba(225, 238, 255, 0.28), transparent 70%),
-    radial-gradient(1% 1.78% at 50.29% 68.03%, rgba(225, 238, 255, 0.28), transparent 70%);
-  animation: ss-carlight 7s ease-in-out infinite alternate;
-}
-
-@keyframes ss-sun { from { opacity: 0.6; transform: translate3d(0, 0, 0); } to { opacity: 0.74; transform: translate3d(5px, 3px, 0); } }
-@keyframes ss-drift { from { transform: translate3d(-5px, 0, 0); } to { transform: translate3d(7px, -2px, 0); } }
-@keyframes ss-breath { from { opacity: 0; } to { opacity: 0.018; } }
-@keyframes ss-glint {
-  0% { opacity: 0; transform: translate(0, 0) rotate(122deg) scale(0.7); }
-  16% { opacity: var(--glint-max); }
-  50% { opacity: calc(var(--glint-max) * 0.7); transform: translate(-28%, 210%) rotate(122deg) scale(1.05); }
-  62%, 100% { opacity: 0; transform: translate(-36%, 270%) rotate(122deg) scale(1.2); }
-}
-@keyframes ss-skyhaze { from { opacity: 0.72; } to { opacity: 0.95; } }
-@keyframes ss-city { from { opacity: 0.7; } to { opacity: 1; } }
-@keyframes ss-lamp { from { opacity: 0.75; } to { opacity: 0.9; } }
-@keyframes ss-carlight { from { opacity: 0.9; } to { opacity: 1; } }
-
-/* Effects off (the reader's switch): the moving light, haze and glints go; the road picture stays, still.
-   (It used to pause them only, so the page looked the same either way.) */
-.nlex-env[data-motion="off"] .ss-fx > i { animation-play-state: paused; }
-.nlex-env[data-motion="off"] .ss-fx > .ss-glint { display: none; }
-html[data-effects="off"] .ss-fx { display: none; }
-/* Reduced motion: nothing drifts, breathes, travels or scales; the theme change is a short fade. */
-@media (prefers-reduced-motion: reduce) {
-  .ss-fx > i { animation: none !important; }
-  .ss-fx > .ss-glint { display: none; }
-  .ss-lamps { opacity: 0.82; }
-  .ss-scene { transform: none; transition: opacity 0.4s ease; }
-  .env-art.is-night,
-  .ss-fx { transition-duration: 250ms !important; transition-delay: 0s !important; }
-}
-
-/* The veil sits under the story only, and fades out before the mascot. */
-.nlex-env[data-scene="signin"] .env-veil {
-  background: linear-gradient(90deg, var(--env-veil) 0%, color-mix(in srgb, var(--env-veil) 55%, transparent) 30%, transparent 54%);
-  -webkit-mask-image: linear-gradient(to bottom, #000 42%, transparent 64%);
-  mask-image: linear-gradient(to bottom, #000 42%, transparent 64%);
-}
-
-/* The headlights, laid on the painted lamps; dark until the button asks for them. */
-.env-headlight,
-.env-beam {
-  position: absolute;
+/* --- The stage --------------------------------------------------------------------
+   The paintings cover the stage like object-fit: cover, in one box for both themes, biased left so the road
+   and Navie stay clear of the card and the road's foot stays on screen. The canvas reads this box's position,
+   so changing --ls-fx or --ls-fy here moves the 3D with it. */
+.ls-stage {
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  overflow: hidden;
+  container-type: size;
   pointer-events: none;
-  opacity: 0;
-  mix-blend-mode: screen;
+  background: #a9d2fb;
 }
-.env-headlight {
-  left: var(--hl-x);
-  top: var(--hl-y);
-  width: 6.4%;
-  aspect-ratio: 1;
-  translate: -50% -50%;
-  border-radius: 50%;
-  background: radial-gradient(circle, #ffffff 0 9%, rgba(220, 236, 255, 0.8) 22%, rgba(150, 196, 255, 0.3) 44%, transparent 70%);
+:root[data-theme="dark"] .ls-stage { background: #0b1a55; }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .ls-stage { background: #0b1a55; } }
+.ls-art {
+  --ls-w: max(100cqw, calc(100cqh * 1672 / 941));
+  position: absolute;
+  width: var(--ls-w);
+  aspect-ratio: 1672 / 941;
+  left: calc((100cqw - var(--ls-w)) * var(--ls-fx, 0.22));
+  top: calc((100cqh - var(--ls-w) * 941 / 1672) * var(--ls-fy, 0.82));
 }
-.env-headlight.is-left { --hl-x: var(--hl-lx); --hl-y: var(--hl-ly); }
-.env-headlight.is-right { --hl-x: var(--hl-rx); --hl-y: var(--hl-ry); }
-.env-beam {
-  left: 33.9%;
-  top: var(--beam-y);
-  width: 25%;
-  height: 12%;
-  translate: -50% -50%;
-  border-radius: 50%;
-  background: radial-gradient(closest-side, rgba(228, 240, 255, 0.75), rgba(170, 205, 255, 0.24) 60%, transparent);
-  filter: blur(6px);
-}
-.si-shell[data-lights="flash"] .env-headlight { animation: si-lamp-flash 0.95s cubic-bezier(0.22, 1, 0.36, 1) both; }
-.si-shell[data-lights="flash"] .env-beam { animation: si-beam-flash 0.95s cubic-bezier(0.22, 1, 0.36, 1) both; }
-.si-shell[data-lights="pending"] .env-headlight { animation: si-lamp-pulse 0.9s ease-in-out infinite alternate; }
-.si-shell[data-lights="pending"] .env-beam { animation: si-beam-pulse 0.9s ease-in-out infinite alternate; }
-.si-shell[data-lights="error"] .env-headlight { animation: si-lamp-blink 1.4s linear both; }
-@keyframes si-lamp-flash {
-  0% { opacity: 0; scale: 0.55; }
-  24% { opacity: 1; scale: 1.15; }
-  100% { opacity: 0; scale: 1; }
-}
-@keyframes si-beam-flash { 0% { opacity: 0; } 26% { opacity: 0.9; } 100% { opacity: 0; } }
-@keyframes si-lamp-pulse { from { opacity: 0.45; scale: 0.9; } to { opacity: 1; scale: 1.1; } }
-@keyframes si-beam-pulse { from { opacity: 0.25; } to { opacity: 0.85; } }
-@keyframes si-lamp-blink {
-  0%, 26%, 54%, 100% { opacity: 0; }
-  10%, 16%, 38%, 44% { opacity: 0.95; }
-}
-@media (prefers-reduced-motion: reduce) {
-  .si-shell[data-lights] .env-headlight,
-  .si-shell[data-lights] .env-beam { animation: none; }
-  .si-shell[data-lights="pending"] .env-headlight { opacity: 0.85; }
-  .si-shell[data-lights="pending"] .env-beam { opacity: 0.6; }
-}
+.ls-layer { position: absolute; inset: 0; width: 100%; height: 100%; display: block; user-select: none; }
+.ls-layer.is-night { opacity: 0; transition: opacity 0.7s ease; }
+:root[data-theme="dark"] .ls-layer.is-night { opacity: 1; }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .ls-layer.is-night { opacity: 1; } }
+/* The patch takes the painted dashes and near lamps away only while the 3D is drawing them. */
+.ls-patch { visibility: hidden; }
+:root[data-login-live]:not([data-login-scene="static"]) .ls-patch { visibility: visible; }
+/* The plaza painting: the same frame as the highway's, dissolved by login-scene.ts during the journey. */
+.ls-toll { opacity: var(--ls-toll, 0); }
+.ls-toll-top { opacity: var(--ls-toll-top, 0); }
+:root[data-login-intro="plaza"] .ls-toll { opacity: 1; }
+:root[data-login-fallback] .ls-toll,
+:root[data-login-fallback] .ls-toll-top { display: none; }
+.ls-canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; opacity: 0; }
+:root[data-login-live] .ls-canvas { opacity: 1; }
+/* No WebGL, or the model failed: the still painting, with Navie's picture standing where the model would. */
+.ls-navie { position: absolute; left: 28.8%; top: 62%; width: 16.2%; height: auto; display: none; filter: drop-shadow(0 10px 8px rgba(8, 20, 50, 0.35)); }
+:root[data-login-fallback] .ls-navie { display: block; }
+:root[data-login-fallback] .ls-canvas { display: none; }
 
 /* --- Top bar ------------------------------------------------------------------ */
 .si-topbar {
@@ -393,110 +183,68 @@ html[data-effects="off"] .ss-fx { display: none; }
 @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .si-wordmark { color: #ffffff; } }
 .si-topbar-end { justify-self: end; display: inline-flex; align-items: center; gap: 10px; }
 
-/* The stories: four thin dashes under the description, the current one filling over its 7 s, then a
-   small round pause. Each dash is a button named for its story. */
-.si-tabs { display: flex; align-items: center; gap: 8px; margin-top: clamp(16px, 2.6vh, 26px); }
-.si-tab {
-  display: grid;
-  align-items: center;
-  width: 44px;
-  height: 22px;
-  padding: 0;
-  border: 0;
-  background: none;
-  color: var(--si-title-ink);
-  cursor: pointer;
-}
-.si-tab:focus-visible,
-.si-story-pause:focus-visible { outline: 2px solid var(--nlex-blue); outline-offset: 2px; border-radius: 4px; }
-.si-tab-track {
-  display: block;
-  height: 2px;
-  border-radius: 2px;
-  overflow: hidden;
-  background: color-mix(in srgb, currentColor 18%, transparent);
-  transition: background-color 0.2s ease;
-}
-.si-tab:hover .si-tab-track { background: color-mix(in srgb, currentColor 36%, transparent); }
-.si-tab-fill {
-  display: block;
-  height: 100%;
-  border-radius: inherit;
-  background: currentColor;
-  transform-origin: left center;
-  transform: scaleX(0);
-}
-.si-tab.is-done .si-tab-fill { transform: scaleX(1) !important; }
-.si-tab:not(.is-current):not(.is-done) .si-tab-fill { transform: scaleX(0) !important; }
-@media (prefers-reduced-motion: reduce) { .si-tab.is-current .si-tab-fill { transform: scaleX(1) !important; } }
-.si-story-pause {
-  display: inline-grid;
-  place-items: center;
-  width: 28px;
-  height: 28px;
-  margin-left: 6px;
-  border-radius: 50%;
-  border: 1px solid var(--border-strong);
-  background: transparent;
-  color: var(--text-secondary);
-  cursor: pointer;
-  transition: border-color 0.2s ease, color 0.2s ease;
-}
-.si-story-pause:hover { border-color: var(--hairline-hover, var(--nlex-blue)); color: var(--text-primary); }
-
-/* --- The story ---------------------------------------------------------------- */
-.si-story {
-  grid-column: 1;
+/* --- Stage A: the welcome panel, where the card will be -------------------------- */
+.si-welcome {
+  grid-column: 2;
   grid-row: 2;
-  align-self: start;
-  max-width: 880px;
-  padding-top: clamp(8px, 5.2vh, 64px);
+  align-self: center;
+  width: 100%;
+  display: none;
+  flex-direction: column;
+  gap: 12px;
+  padding: clamp(24px, 4.6vh, 50px) clamp(24px, 3.1vw, 52px) clamp(24px, 4.4vh, 46px);
+  border-radius: clamp(24px, 2vw, 32px);
+  border: 1.5px solid var(--si-card-line);
+  background: var(--si-card-bg);
+  -webkit-backdrop-filter: blur(22px) saturate(1.35);
+  backdrop-filter: blur(22px) saturate(1.35);
+  box-shadow: var(--si-card-shadow);
 }
-.si-story-title {
+:root[data-login-intro="plaza"] .si-welcome { display: flex; }
+.si-welcome h2 {
   margin: 0;
   font-family: var(--font-display);
-  font-size: clamp(46px, min(6.3vw, 10.6vh), 108px);
-  font-weight: 800;
-  font-stretch: 100%;
-  line-height: 0.97;
-  letter-spacing: -0.04em;
-  color: var(--si-title-ink);
+  font-size: clamp(26px, 2.2vw, 34px);
+  font-weight: 750;
+  line-height: 1.1;
+  letter-spacing: -0.03em;
+  color: var(--si-card-title);
+  text-wrap: balance;
 }
-.si-story-title .tr-line { display: block; }
-.si-story-title .tr-line:first-child { color: var(--si-title-lead); }
-.si-story-title .is-accent { position: relative; color: var(--si-title-accent); }
-:root[data-theme="dark"] .si-story-title { text-shadow: 0 8px 36px rgba(2, 12, 44, 0.55); }
-@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .si-story-title { text-shadow: 0 8px 36px rgba(2, 12, 44, 0.55); } }
-/* The mascot's gold strokes beside the accent word, after the last letter lands. */
-.si-story-title .is-accent::after {
-  content: "";
-  position: absolute;
-  top: -0.14em;
-  right: -0.5em;
-  width: 0.44em;
-  height: 0.44em;
-  background: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 40 40'%3E%3Cg stroke='%23ffc531' stroke-width='5' stroke-linecap='round' fill='none'%3E%3Cpath d='M8 20 L14 6'/%3E%3Cpath d='M20 24 L32 14'/%3E%3Cpath d='M22 34 L36 33'/%3E%3C/g%3E%3C/svg%3E") center / contain no-repeat;
-  opacity: 0;
-  pointer-events: none;
+.si-welcome p { margin: 0 0 6px; font-size: 15.5px; line-height: 1.5; color: var(--si-label-ink); text-wrap: pretty; }
+.si-welcome .submit-button { margin-top: 4px; }
+.si-skip {
+  align-self: center;
+  min-height: 36px;
+  padding: 6px 12px;
+  border: 0;
+  border-radius: 8px;
+  background: none;
+  font-family: var(--font-ui);
+  font-size: 14px;
+  font-weight: 550;
+  color: var(--si-label-ink);
+  cursor: pointer;
 }
-.si-story-title.tr-ready .is-accent::after {
-  animation:
-    ov-spark-in 0.5s cubic-bezier(0.34, 1.56, 0.64, 1) calc(var(--tr-letters, 12) * 0.035s + 0.55s) both,
-    ov-spark 3.6s ease-in-out calc(var(--tr-letters, 12) * 0.035s + 1.05s) infinite;
-}
-@media (prefers-reduced-motion: reduce) {
-  .si-story-title .is-accent::after { opacity: 1; animation: none !important; }
-}
-.si-story-body {
-  margin: clamp(14px, 2.2vh, 24px) 0 0;
-  max-width: 52ch;
-  font-size: 15px;
-  font-weight: 400;
-  line-height: 1.6;
-  color: var(--si-body-ink);
-  text-wrap: pretty;
-  transform-origin: left top;
-  animation: nc-wipe 1.8s cubic-bezier(0.16, 1, 0.3, 1) 0.25s both, nc-unscale 1.8s cubic-bezier(0.16, 1, 0.3, 1) 0.25s both;
+.si-skip:hover { color: var(--si-card-title); text-decoration: underline; text-underline-offset: 3px; }
+.si-skip:focus-visible,
+.si-replay:focus-visible { outline: 2px solid var(--nlex-blue); outline-offset: 2px; }
+.si-replay {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 36px;
+  padding: 0 12px;
+  border: 1px solid var(--si-field-line-hover);
+  border-radius: 999px;
+  background: var(--si-copy-bg);
+  -webkit-backdrop-filter: blur(8px);
+  backdrop-filter: blur(8px);
+  font-family: var(--font-ui);
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--si-card-title);
+  cursor: pointer;
 }
 
 /* --- The sign-in card ------------------------------------------------------------ */
@@ -520,7 +268,6 @@ html[data-effects="off"] .ss-fx { display: none; }
   -webkit-backdrop-filter: blur(22px) saturate(1.35);
   backdrop-filter: blur(22px) saturate(1.35);
   box-shadow: var(--si-card-shadow);
-  animation: si-card-in 0.7s cubic-bezier(0.22, 1, 0.36, 1) 0.2s backwards;
 }
 .login-card-head {
   display: flex;
@@ -711,7 +458,7 @@ html[data-effects="off"] .ss-fx { display: none; }
 .submit-button:disabled { cursor: progress; filter: saturate(0.85); }
 .submit-spinner {
   position: absolute;
-  right: clamp(22px, 2vw, 30px);
+  right: 18px;
   top: 50%;
   width: 20px;
   height: 20px;
@@ -821,88 +568,188 @@ html[data-effects="off"] .ss-fx { display: none; }
   backdrop-filter: blur(8px);
   font-size: 10.5px;
   font-weight: 600;
-  letter-spacing: 2px;
+  letter-spacing: 1.6px;
+  white-space: nowrap;
   text-transform: uppercase;
   text-align: center;
   color: var(--si-copy-ink);
   text-shadow: var(--si-copy-glow);
 }
 
-/* The card rises 12 px into place after the scene starts; inside it the title, the two fields, the
-   options and the button follow 60 ms apart. "backwards" so hover and press transforms still apply
-   once each entrance is over. */
-@keyframes si-card-in { from { opacity: 0; transform: translateY(12px); } to { opacity: 1; transform: none; } }
-@keyframes si-item-in { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
-@keyframes si-fade-in { from { opacity: 0; } to { opacity: 1; } }
-.login-card-head,
-.login-card h2,
-.login-form > .field-group,
-.login-options,
-.submit-button { animation: si-item-in 0.6s cubic-bezier(0.22, 1, 0.36, 1) backwards; }
-.login-card-head { animation-delay: 0.26s; }
-.login-card h2 { animation-delay: 0.31s; }
-.login-form > .field-group:nth-of-type(1) { animation-delay: 0.37s; }
-.login-form > .field-group:nth-of-type(2) { animation-delay: 0.43s; }
-.login-options { animation-delay: 0.49s; }
-.submit-button { animation-delay: 0.55s; }
-/* Moving between the password and the code is a step inside the card, not a page arriving: once
-   the card has changed step, each form's contents come in together and at once, with none of the
-   opening sequence's delays. (Selectors weighted to outrank the per-field delays above.) */
-.login-card .login-form.mfa-form > *,
-.login-card[data-stepped] .login-form > * {
-  animation: si-item-in 0.34s cubic-bezier(0.22, 1, 0.36, 1) backwards;
-  animation-delay: 0s;
+/* The stories: four thin dashes under the description, the current one filling over its 7 s, then a
+   small round pause. Each dash is a button named for its story. */
+.si-tabs { display: flex; align-items: center; gap: 8px; margin-top: clamp(16px, 2.6vh, 26px); }
+.si-tab {
+  display: grid;
+  align-items: center;
+  width: 44px;
+  height: 22px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--si-title-ink);
+  cursor: pointer;
 }
-/* The logo and toggles come in with a plain fade. */
-.si-topbar { animation: si-fade-in 0.6s ease 0.15s backwards; }
+.si-tab:focus-visible,
+.si-story-pause:focus-visible { outline: 2px solid var(--nlex-blue); outline-offset: 2px; border-radius: 4px; }
+.si-tab-track {
+  display: block;
+  height: 3px;
+  border-radius: 2px;
+  overflow: hidden;
+  background: color-mix(in srgb, currentColor 34%, var(--si-copy-bg));
+  transition: background-color 0.2s ease;
+}
+.si-tab:hover .si-tab-track { background: color-mix(in srgb, currentColor 56%, var(--si-copy-bg)); }
+.si-tab-fill {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: currentColor;
+  transform-origin: left center;
+  transform: scaleX(0);
+}
+.si-tab.is-done .si-tab-fill { transform: scaleX(1) !important; }
+.si-tab:not(.is-current):not(.is-done) .si-tab-fill { transform: scaleX(0) !important; }
+@media (prefers-reduced-motion: reduce) { .si-tab.is-current .si-tab-fill { transform: scaleX(1) !important; } }
+.si-story-pause {
+  display: inline-grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  margin-left: 6px;
+  border-radius: 50%;
+  border: 1px solid var(--border-strong);
+  background: var(--si-copy-bg);
+  color: var(--si-title-ink);
+  cursor: pointer;
+  transition: border-color 0.2s ease, color 0.2s ease;
+}
+.si-story-pause:hover { border-color: var(--hairline-hover, var(--nlex-blue)); color: var(--text-primary); }
+
+/* --- The story ---------------------------------------------------------------- */
+.si-story {
+  grid-column: 1;
+  grid-row: 2;
+  align-self: start;
+  max-width: 880px;
+  padding-top: clamp(8px, 5.2vh, 64px);
+}
+.si-story-title {
+  margin: 0;
+  font-family: var(--font-display);
+  font-size: clamp(46px, min(6.3vw, 10.6vh), 108px);
+  font-weight: 800;
+  font-stretch: 100%;
+  line-height: 1.12; /* room between the lines, so the second never touches the first */
+  letter-spacing: -0.04em;
+  color: var(--si-title-ink);
+}
+.si-story-title .tr-line { display: block; }
+.si-story-title .tr-line:first-child { color: var(--si-title-lead); }
+.si-story-title .is-accent { position: relative; color: var(--si-title-accent); }
+:root[data-theme="dark"] .si-story-title { text-shadow: 0 8px 36px rgba(2, 12, 44, 0.55); }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .si-story-title { text-shadow: 0 8px 36px rgba(2, 12, 44, 0.55); } }
+/* The mascot's gold strokes beside the accent word, after the last letter lands. */
+.si-story-title .is-accent::after {
+  content: "";
+  position: absolute;
+  top: -0.03em; /* off the last letter's top corner, just under the baseline of the line above */
+  right: -0.47em;
+  width: 0.44em;
+  height: 0.44em;
+  background: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 40 40'%3E%3Cg stroke='%23ffc531' stroke-width='5' stroke-linecap='round' fill='none'%3E%3Cpath d='M8 20 L14 6'/%3E%3Cpath d='M20 24 L32 14'/%3E%3Cpath d='M22 34 L36 33'/%3E%3C/g%3E%3C/svg%3E") center / contain no-repeat;
+  opacity: 0;
+  pointer-events: none;
+}
+.si-story-title.tr-ready .is-accent::after {
+  animation:
+    ov-spark-in 0.5s cubic-bezier(0.34, 1.56, 0.64, 1) calc(var(--tr-letters, 12) * 0.035s + 0.55s) both,
+    ov-spark 3.6s ease-in-out calc(var(--tr-letters, 12) * 0.035s + 1.05s) infinite;
+}
 @media (prefers-reduced-motion: reduce) {
-  .login-card,
-  .login-card-head,
-  .login-card h2,
-  .login-form > .field-group,
-  .login-options,
-  .submit-button,
+  .si-story-title .is-accent::after { opacity: 1; animation: none !important; }
+}
+.si-story-body {
+  margin: clamp(14px, 2.2vh, 24px) 0 0;
+  /* Stops short of Navie, whose cap starts 30.8% across the painting. The painting covers the stage (see .ls-art), so
+     this follows it at every screen size; less the page's left padding and a clear gap. */
+  --si-art-w: max(100vw, calc(100vh * 1672 / 941));
+  max-width: min(54ch, calc((100vw - var(--si-art-w)) * 0.22 + var(--si-art-w) * 0.308 - clamp(24px, 4.2vw, 64px) - 8px));
+  font-size: 15.5px;
+  font-weight: 600;
+  line-height: 1.55;
+  color: var(--si-title-ink);
+  /* No box behind it: a halo on the letters keeps them clear of the trees and poles. */
+  text-shadow: var(--si-story-halo);
+  text-wrap: pretty;
+  transform-origin: left top;
+  animation: nc-wipe 1.8s cubic-bezier(0.16, 1, 0.3, 1) 0.25s both, nc-unscale 1.8s cubic-bezier(0.16, 1, 0.3, 1) 0.25s both;
+}
+
+/* The card appears as Navie clears the plaza, and then never moves: only opacity and a short rise, and hidden
+   (so it takes no focus) until then. It stays mounted, so a replay keeps what has been typed. */
+.login-panel { transition: opacity 0.5s ease, transform 0.6s cubic-bezier(0.22, 1, 0.36, 1), visibility 0s; }
+/* The plaza's sign and the welcome card already name the product: the brand joins the form. It keeps its place, and
+   stays readable to screen readers. */
+.si-brand { transition: opacity 0.5s ease; }
+:root[data-login-intro] .si-brand { opacity: 0; transition: none; }
+:root[data-login-intro] .login-panel { opacity: 0; visibility: hidden; transform: translateY(10px); transition: none; }
+@keyframes si-item-in { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+/* Moving between steps is a change inside the card: each form's contents come in together, quickly. */
+.login-card .login-form.mfa-form > *,
+.login-card[data-stepped] .login-form > * { animation: si-item-in 0.34s cubic-bezier(0.22, 1, 0.36, 1) backwards; }
+@media (prefers-reduced-motion: reduce) {
+  .login-panel { transition: none; }
   .login-card .login-form.mfa-form > *,
-  .login-card[data-stepped] .login-form > *,
-  .si-story-body { animation: none; }
+  .login-card[data-stepped] .login-form > * { animation: none; }
 }
 
 /* --- Smaller screens ---------------------------------------------------------- */
-/* The card sits a little in from the right edge, toward the middle (user request). */
 @media (min-width: 861px) {
-  .login-panel { right: clamp(0px, 2.5vw, 56px); }
-}
-@media (max-width: 1440px) {
-  .si-shell { column-gap: clamp(28px, 3vw, 56px); }
-}
-@media (max-width: 1240px) {
-  .si-story { padding-top: clamp(8px, 3.4vh, 40px); }
+  .login-panel,
+  .si-welcome { right: clamp(0px, 2.5vw, 56px); }
 }
 @media (max-width: 1100px) {
-  .si-shell { grid-template-columns: minmax(0, 1fr) clamp(360px, 40vw, 440px); }
+  .si-shell { grid-template-columns: minmax(0, 1fr) clamp(340px, 38vw, 400px); column-gap: 28px; }
 }
 
-/* Phones and narrow tablets: one column that scrolls; the scene stays fixed behind it. */
+/* Tablets and phones: the road on top, the page below it, scrolling naturally. The stage scrolls away with the
+   page instead of sitting behind the form, and Navie is centred in it. */
 @media (max-width: 860px) {
-  /* The card covers the road here, and the glints must never cross it. */
-  .ss-fx > .ss-glint { display: none; }
   .si-shell {
+    --ls-h: clamp(300px, 52svh, 560px);
     height: auto;
     min-height: 100svh;
     overflow: visible;
     grid-template-columns: minmax(0, 1fr);
-    grid-template-rows: none;
+    grid-template-rows: auto auto auto;
+    align-content: start;
     padding: 0 20px 28px;
+    background: linear-gradient(180deg, #e9f3ff 0%, #d8e9fc 100%);
   }
-  .nlex-env[data-scene="signin"] .env-bg { --art-fx: 0.27; }
-  .nlex-env[data-scene="signin"] .env-veil {
-    background: linear-gradient(180deg, var(--env-veil), color-mix(in srgb, var(--env-veil) 40%, transparent) 50%, transparent 70%);
-    -webkit-mask-image: none;
-    mask-image: none;
+  .ls-stage {
+    position: absolute;
+    inset: 0 0 auto 0;
+    height: var(--ls-h);
+    background: none;
+    /* The road dissolves into the page rather than ending in a line. */
+    -webkit-mask-image: linear-gradient(to bottom, #000 80%, transparent);
+    mask-image: linear-gradient(to bottom, #000 80%, transparent);
   }
-  .si-story { grid-column: 1; grid-row: auto; padding-top: 22px; max-width: none; }
-  .si-story-title { font-size: clamp(40px, 11.2vw, 64px); }
-  .login-panel { grid-column: 1; grid-row: auto; margin-top: 26px; }
+  .ls-art { left: calc(50cqw - var(--ls-w) * 0.378); --ls-fy: 1; }
+  .si-welcome,
+  .login-panel { grid-column: 1; grid-row: 3; margin-top: calc(var(--ls-h) - 104px); width: 100%; max-width: 440px; justify-self: center; }
+  /* Under the form here: the road and Navie have the top of the page. */
+  .si-story { grid-column: 1; grid-row: 4; width: 100%; max-width: 440px; justify-self: center; padding-top: 26px; }
+  .si-story-body { max-width: none; } /* under the form here, nowhere near Navie */
+  .si-story-title { font-size: clamp(36px, 10.4vw, 56px); }
+}
+@media (max-width: 860px) {
+  :root[data-theme="dark"] .si-shell { background: linear-gradient(180deg, #0b1a4d 0%, #081238 100%); }
+}
+@media (max-width: 860px) and (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .si-shell { background: linear-gradient(180deg, #0b1a4d 0%, #081238 100%); }
 }
 @media (max-width: 560px) {
   /* The logo stands for the wordmark; the name stays the page's heading for screen readers. */
@@ -914,16 +761,16 @@ html[data-effects="off"] .ss-fx { display: none; }
     clip-path: inset(50%);
     white-space: nowrap;
   }
-  .login-card { padding: 24px 20px 22px; }
+  .login-card { padding: 22px 18px 20px; border-radius: 18px; }
+  .si-replay { width: 40px; min-height: 40px; padding: 0; justify-content: center; }
+  .si-replay span { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
   /* The QR code above its instructions, centred, and big enough to scan off a phone-width card. */
   .mfa-setup { grid-template-columns: minmax(0, 1fr); justify-items: center; }
   .mfa-qr img { width: 148px; }
   .mfa-key { justify-self: stretch; }
   .copyright { font-size: 9.5px; letter-spacing: 1px; white-space: nowrap; }
-  .input-with-icon input { padding-left: 48px; }
-  .input-icon-left { left: 16px; }
   .submit-arrow,
-  .submit-spinner { right: 20px; }
+  .submit-spinner { right: 16px; }
 }
 
 /* --- Account additions (19 Oct 2026, user request) ------------------------------------------------
@@ -1025,6 +872,6 @@ html[data-effects="off"] .ss-fx { display: none; }
 }
 .si-steps li > span { flex: 1; min-width: 0; }
 
-
 /* A sign-in carried on at the code step after the tab was closed (app/page.tsx, 3 Nov 2026). */
 .mfa-resumed b { font-weight: 650; overflow-wrap: anywhere; }
+

@@ -2,7 +2,6 @@
 
 import { useEffect, useRef } from "react";
 import CloudLayer, { type Cloud } from "./CloudLayer";
-import SigninScene from "./SigninScene";
 import { useEffectsOn } from "../../lib/effects";
 
 /**
@@ -23,14 +22,10 @@ import { useEffectsOn } from "../../lib/effects";
  * the Live Map included; `scene` marks the Overview ("hero") for styling
  * hooks. Reduced motion and the Effects switch hold everything still.
  * Decorative only: aria-hidden, no pointer events.
- *
- * Sign-in ("signin", 7 Oct 2026) has its own artwork and its own light: see
- * SigninScene, which draws the day and night art stacked in this frame with
- * the ambience over them. The sprite clouds and the moving sun are not used
- * there.
+ * The sign-in page has its own stage: components/login/LoginStage.tsx.
  */
 
-type Scene = "hero" | "page" | "signin";
+type Scene = "hero" | "page";
 
 /* Cloud placements per depth, as screen percentages (x + w <= 100 so the loop is seamless). */
 const FAR: Cloud[] = [
@@ -69,16 +64,11 @@ export default function NlexEnvironment({ scene }: { scene: Scene }) {
 
   return (
     <div ref={rootRef} className="nlex-env" data-scene={scene} data-motion="on" aria-hidden="true">
-      <div className="env-layer env-bg">{scene === "signin" ? <SigninScene /> : null}</div>
-      {/* Sign-in brings its own light and atmosphere (SigninScene); the sprite clouds are the dashboard's. */}
-      {scene === "signin" ? null : (
-        <>
-          <div className="env-layer env-sun" />
-          <CloudLayer clouds={FAR} depth="far" />
-          <CloudLayer clouds={MID} depth="mid" />
-          <CloudLayer clouds={NEAR} depth="near" />
-        </>
-      )}
+      <div className="env-layer env-bg" />
+      <div className="env-layer env-sun" />
+      <CloudLayer clouds={FAR} depth="far" />
+      <CloudLayer clouds={MID} depth="mid" />
+      <CloudLayer clouds={NEAR} depth="near" />
       <div className="env-layer env-veil" />
     </div>
   );

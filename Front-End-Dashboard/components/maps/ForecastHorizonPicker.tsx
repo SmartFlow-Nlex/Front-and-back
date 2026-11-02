@@ -11,7 +11,10 @@ export type DailyPeak = {
   day: string;
   hoursAhead: number;
   at: string;
+  /** Jams the map paints red (Severe), the live map's "congested". */
   congested: number;
+  /** Jams it paints amber (Heavy), the live map's "slow". */
+  slow?: number;
   confidence: number;
 };
 
@@ -26,14 +29,30 @@ export const HORIZON_RANGES = [
 
 export type HorizonRangeKey = (typeof HORIZON_RANGES)[number]["key"];
 
+/* When the forecast run was made. Hour N of the forecast is base + N, not now + N: the run can be hours old
+   (the scheduled job runs every 3-7 h), so labelling from the page clock put "+3 h" on an hour that was already
+   past (2 Nov 2026). Set once by the page from /forecast model info; until then the page clock stands in. */
+let forecastBaseMs: number | null = null;
+export function setForecastBase(iso: string | null | undefined) {
+  const t = iso ? new Date(iso).getTime() : NaN;
+  forecastBaseMs = Number.isFinite(t) ? t : null;
+}
+
 /** The hour a horizon lands on, rounded down.
  *
  *  The model forecasts an hour bucket, not a moment, so a label of 12:26 PM
  *  implied a precision the prediction does not have. */
 function hourOf(hoursAhead: number): Date {
-  const t = new Date(Date.now() + hoursAhead * 3_600_000);
+  const t = new Date((forecastBaseMs ?? Date.now()) + hoursAhead * 3_600_000);
   t.setMinutes(0, 0, 0);
   return t;
+}
+
+/** How many hours from now forecast hour N is (0 for the current hour). */
+export function hoursFromNow(hoursAhead: number): number {
+  const now = new Date();
+  now.setMinutes(0, 0, 0);
+  return Math.round((hourOf(hoursAhead).getTime() - now.getTime()) / 3_600_000);
 }
 
 const timeOf = (d: Date) =>
@@ -65,9 +84,13 @@ export function dayTimeFor(hoursAhead: number): { day: string; time: string } {
 /** The hours worth offering for a range, clamped to what the warehouse holds. */
 export function horizonOptionsFor(range: HorizonRangeKey, maxHorizon: number | null): number[] {
   const r = HORIZON_RANGES.find((x) => x.key === range) ?? HORIZON_RANGES[0];
-  const reach = Math.min(r.hours, maxHorizon ?? r.hours);
+  // Hours of an older run that are already past are not a forecast any more; start at the current hour. When the
+  // whole run is past, offer it anyway: the labels then show the past times honestly rather than an empty picker.
+  const elapsed = forecastBaseMs == null ? 0 : -hoursFromNow(0);
+  const first = elapsed >= 1 && elapsed < (maxHorizon ?? r.hours) ? elapsed : 1;
+  const reach = Math.min(first - 1 + r.hours, maxHorizon ?? r.hours);
   const out: number[] = [];
-  for (let h = 1; h <= reach; h += r.step) out.push(h);
+  for (let h = first; h <= reach; h += r.step) out.push(h);
   // Always offer the far end of what is available, even when the step would
   // have skipped over it.
   if (reach >= 1 && out[out.length - 1] !== reach) out.push(reach);
@@ -236,17 +259,18 @@ export default function ForecastHorizonPicker({
               const on = h === horizon;
               const every = offered.length <= 13 ? 1 : offered.length <= 30 ? 4 : 8;
               const labelled = on || usePeaks || i % every === 0 || i === offered.length - 1;
+              const ahead = hoursFromNow(h);
               const short = usePeaks
                 ? t.toLocaleDateString(undefined, { weekday: "short" })
-                : `+${h} h`;
+                : ahead <= 0 ? "Now" : `+${ahead} h`;
               return (
                 <button
                   key={`${h}-${i}`}
                   type="button"
                   className={`lm-tick${on ? " is-on" : ""}${labelled ? " is-labelled" : ""}`}
                   aria-pressed={on}
-                  aria-label={`${dayOf(t)} ${timeOf(t)}, +${h} h`}
-                  title={`${dayOf(t)} · ${timeOf(t)} · +${h} h`}
+                  aria-label={`${dayOf(t)} ${timeOf(t)}, ${ahead <= 0 ? "now" : `${ahead} h from now`}`}
+                  title={`${dayOf(t)} · ${timeOf(t)} · ${ahead <= 0 ? "now" : `+${ahead} h from now`}`}
                   onClick={() => {
                     setHorizon(h);
                     onPick?.(h);
@@ -283,7 +307,9 @@ export default function ForecastHorizonPicker({
                       // "0 congested" is true but reads as a missing number.
                       // On a day the model expects nothing heavy, the worst
                       // hour is simply a clear one, so say that.
-                      p.congested > 0 ? `${p.congested} congested` : "clear"
+                      p.congested + (p.slow ?? 0) > 0
+                        ? [p.congested > 0 ? `${p.congested} congested` : "", (p.slow ?? 0) > 0 ? `${p.slow} slow` : ""].filter(Boolean).join(" · ")
+                        : "clear"
                     }`}
                   </option>
                 );
@@ -292,7 +318,7 @@ export default function ForecastHorizonPicker({
                 <optgroup key={g.day} label={g.day}>
                   {g.items.map((o) => (
                     <option key={o.h} value={o.h}>
-                      {`${o.time}  ·  +${o.h} h`}
+                      {`${o.time}  ·  ${hoursFromNow(o.h) <= 0 ? "now" : `+${hoursFromNow(o.h)} h`}`}
                     </option>
                   ))}
                 </optgroup>

@@ -9,6 +9,7 @@ import { nearExitsText } from "../../lib/exit-lookup";
 import { lookOf } from "../../lib/waze-report-look";
 import { KM_POST_END, KM_POST_START, fmtKm, fmtKmRange, kmMeasured } from "../../lib/km-post";
 import { corridorKm } from "./corridor-km";
+import { hoursFromNow } from "./ForecastHorizonPicker";
 import type { CorridorSnapshot } from "./livemap-graphics";
 import { fmtDelayShort, fmtDistance, levelWord } from "./livemap-graphics";
 import type { Closure } from "./useActiveClosures";
@@ -301,7 +302,7 @@ export default function CorridorStrip({
         <div className={`lm-instrument${live ? " is-live" : " is-forecast"}`}>
           <span className="lm-instrument-badge" aria-hidden="true">
             <i />
-            {live ? "Live" : `+${horizon} h`}
+            {live ? "Live" : hoursFromNow(horizon) <= 0 ? "Now" : `+${hoursFromNow(horizon)} h`}
           </span>
           <div className="lm-strip-names" aria-hidden="true">
             {K.exits.map((e, i) =>

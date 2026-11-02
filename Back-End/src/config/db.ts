@@ -119,15 +119,31 @@ function noteFailure(err: unknown): void {
   stale.end().catch(() => {}).finally(() => { replacing = false; });
 }
 
+/* A connection that never opened (the TCP or TLS handshake timed out or was reset) means the query never reached
+   the database, so running it again cannot do anything twice. On a patchy link that one retry turns most
+   "database not reachable" pages into a slower load (2 Nov 2026: connects took 1-24 s and some timed out at the
+   OS limit while RDS itself was healthy). Pool waits and query errors are not retried. */
+function neverConnected(err: unknown): boolean {
+  const e = err as { syscall?: string; code?: string; message?: string } | null;
+  return !!e && (e.syscall === "connect" || /Connection terminated due to connection timeout/i.test(e.message ?? ""));
+}
+
 export const db: Pool | null = current
   ? new Proxy(current, {
       get(_target, prop) {
         const pool = current as any;
         if (prop === "query") {
           return (...args: any[]) => {
-            const result = pool.query(...args);
+            const first = pool.query(...args);
+            // Callback-style calls return nothing to retry; leave them as they were.
+            if (!first || typeof first.catch !== "function" || typeof args[args.length - 1] === "function") return first;
+            const result = first.catch((err: unknown) => {
+              if (!neverConnected(err)) throw err;
+              console.warn(`[db] connection never opened (${(err as Error).message}); retrying once`);
+              return (current as any).query(...args);
+            });
             // Watch the outcome without taking it over: the caller still gets the rejection.
-            if (result && typeof result.catch === "function") result.catch(noteFailure);
+            result.catch(noteFailure);
             return result;
           };
         }

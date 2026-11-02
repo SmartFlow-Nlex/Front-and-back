@@ -185,7 +185,10 @@ export function routeCache(req: Request, res: Response, next: NextFunction): voi
     return next();
   }
 
-  const bypass = req.headers["x-cache-bypass"] === "1";
+  // Only the server's own warmer and refresher send this, from this machine. From anyone else it would let a
+  // stranger force every heavy query to rerun on the shared database at will (2 Nov 2026), so it is ignored.
+  const fromHere = ["127.0.0.1", "::1", "::ffff:127.0.0.1"].includes(req.socket.remoteAddress ?? "");
+  const bypass = req.headers["x-cache-bypass"] === "1" && fromHere;
   if (!bypass) lastRead.set(url, Date.now());
   const ttl = ttlFor(url);
   const hit = store.get(url);

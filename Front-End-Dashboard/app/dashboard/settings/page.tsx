@@ -127,7 +127,8 @@ export default function SettingsPage() {
     const { error } = await supabase.auth.updateUser({ data: { display_name: name.trim() } });
     setSavingName(false);
     if (error) return toast.error(error.message || "Your name could not be saved.");
-    void logActivity({ type: "settings.updated", fields: ["display_name"] });
+    // The fresh session's token: updateUser can reissue it, and the log entry was recorded as "anonymous" (2 Nov 2026).
+    void supabase.auth.getSession().then(({ data }) => logActivity({ type: "settings.updated", fields: ["display_name"] }, data.session?.access_token));
     toast.success("Name saved.");
   }
 
@@ -138,7 +139,7 @@ export default function SettingsPage() {
     setSavingIdle(null);
     if (error) return toast.error(error.message || "The setting could not be saved.");
     setIdle(minutes);
-    void logActivity({ type: "settings.updated", fields: ["idle_minutes"] });
+    void supabase.auth.getSession().then(({ data }) => logActivity({ type: "settings.updated", fields: ["idle_minutes"] }, data.session?.access_token));
     toast.success(`You'll be signed out after ${minutes} minutes without activity.`);
   }
 

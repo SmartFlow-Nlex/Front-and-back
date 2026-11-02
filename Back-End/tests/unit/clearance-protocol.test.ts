@@ -38,7 +38,7 @@ test("TC-UT-15: 2000 is censored at 1440 (kept), 5 at risk, S = 80/60/40/20%, fl
   assert.equal(quantileFromCurve(curve, 0.5), 30);
 });
 
-test("TC-UT-16: four scenarios cut at the curve's own P50/P80/P95, probabilities 0.50/0.30/0.15/0.05 (sum 1.00)", () => {
+test("TC-UT-16: four scenarios cut at the curve's own P50/P80/P95, each band's probability read off the curve (sum 1.00)", () => {
   const obs = toObservations(RAW);
   const curve = kaplanMeier(obs);
   const rawEvents = obs.filter((o) => !o.censored).map((o) => o.duration); // as getClearanceProtocolFromDb does
@@ -49,7 +49,26 @@ test("TC-UT-16: four scenarios cut at the curve's own P50/P80/P95, probabilities
   assert.deepEqual(scenarios.map((s) => s.label), ["fast", "typical", "slow", "extreme"]);
   assert.ok(Math.abs(sum - 1) < 1e-9, "probabilities sum to 1");
   assert.deepEqual([p50, p80, p95], [quantileFromCurve(curve, 0.5), quantileFromCurve(curve, 0.8), quantileFromCurve(curve, 0.95)]);
-  assert.deepEqual(probs, [0.5, 0.3, 0.15, 0.05]);
+  // The probabilities are the curve's own mass in each band, S(lower) - S(upper), as buildScenarios documents. On this
+  // five-point sheet the curve is a step with ties (P80 = P95 = 40), so the masses are 0.6 / 0.2 / 0 / 0.2; the nominal
+  // 0.50 / 0.30 / 0.15 / 0.05 holds only for a smooth curve, which the next test checks (2 Nov 2026).
+  const S = (t: number) => survivalAt(curve, t);
+  assert.deepEqual(probs, [1 - S(p50), S(p50) - S(p80), S(p80) - S(p95), S(p95)].map((x) => Math.round(x * 1000) / 1000));
+  assert.deepEqual(probs, [0.6, 0.2, 0, 0.2]);
+});
+
+test("TC-UT-16b: on a large smooth sample the bands come out at about 0.50 / 0.30 / 0.15 / 0.05", () => {
+  let seed = 7;
+  const rand = () => ((seed = (seed * 1103515245 + 12345) % 2 ** 31) / 2 ** 31);
+  const raw = Array.from({ length: 20000 }, () => {
+    const u1 = Math.max(rand(), 1e-9), u2 = rand();
+    return Math.exp(Math.log(40) + 0.9 * Math.sqrt(-2 * Math.log(u1)) * Math.cos(2 * Math.PI * u2));
+  });
+  const obs = toObservations(raw);
+  const { scenarios } = buildScenarios(kaplanMeier(obs), obs.filter((o) => !o.censored).map((o) => o.duration));
+  const probs = scenarios.map((s) => s.probability);
+  console.log(`  smooth sample: ${probs.map((p) => p.toFixed(3)).join(" / ")}`);
+  [0.5, 0.3, 0.15, 0.05].forEach((want, i) => assert.ok(Math.abs(probs[i] - want) < 0.01, `band ${i}: ${probs[i]}`));
 });
 
 // ---- TC-UT-17 -------------------------------------------------------------

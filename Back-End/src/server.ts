@@ -74,8 +74,8 @@ function startCacheWarmer(): void {
     ["/emissions/analytics?months=12", 9 * 60_000],
     ["/map-comparison/exits", 9 * 60_000],
     ["/emissions/fleet-profile", 9 * 60_000],
-    ["/audit-log/list?limit=500", 9 * 60_000],
-    ["/audit-log/summary?days=30", 9 * 60_000],
+    // /audit-log/list and /summary left the list on 2 Nov 2026: they need a token since 1 Nov, so the warmer was
+    // refused every nine minutes and a protected answer is never cached anyway.
     /* Added 15 Oct 2026 from an audit of every module's first load after a restart: the URLs these pages
        request were still cold, at 73-78 s (traffic forecast and booth plan), 34 s (incident forecast) and
        5-15 s (emissions prescriptive, fleet mix). Query strings exactly as the pages build them. */
@@ -94,6 +94,10 @@ function startCacheWarmer(): void {
        default combo here, plus the dedicated cache clearance-protocol.service.ts
        now keeps on that nested call, covers the common case; a slider moved to
        a combination nobody has asked for yet is still a genuine first query. */
+    /* Added 2 Nov 2026: the Incidents page with Weather = Dry or Wet measured 59-61 s cold, past the page's own
+       deadline, so a first click on either timed out. Query strings exactly as the page builds them. */
+    ["/incident/analytics?months=12&weather=dry", 9 * 60_000],
+    ["/incident/analytics?months=12&weather=wet", 9 * 60_000],
     ["/incident/clearance-protocol?type=accident&severity=injury&weather=all&demandLevel=normal&maxUnits=4&unitEffect=0.25&deltaResponseMin=15&months=12", 9 * 60_000],
   ];
   /* The sandbox's first load (7 Oct 2026): 20-30 s of reads, every visit,

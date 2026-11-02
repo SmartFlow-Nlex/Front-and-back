@@ -264,7 +264,9 @@ export const getWeatherEvidence = async (_req: Request, res: Response) => {
  * the allocator forever.
  */
 const PrescriptiveTrafficQuerySchema = z.object({
-  throughput: z.coerce.number().int().min(50).max(5000).optional(),
+  // The range the dashboard's slider offers (PrescriptiveTrafficPanels: 150-800 veh/h a booth). The API took 50-5000,
+  // so a request the page could never send planned with a booth no plaza has (2 Nov 2026, TC-UT-06c).
+  throughput: z.coerce.number().int().min(150).max(800).optional(),
   pool: z.coerce.number().int().min(0).max(100000).optional(),
   split: z.enum(["80_20", "90_10"]).optional(),
 });

@@ -57,6 +57,10 @@ const envSchema = z.object({
   // Signs "remember this device for 7 days" passes (lib/device-trust.ts). Absent = the feature is off and the
   // authenticator code is always asked for. At least 32 characters; never commit it.
   DEVICE_TRUST_SECRET: z.string().optional(),
+  // How many proxies sit in front of the server when it is hosted (e.g. "1" on Render). Without it every visitor
+  // arrives with the proxy's address, so the per-IP rate limit counts all of them as one. Leave unset locally:
+  // trusting a proxy that is not there would let anyone pick their own address with X-Forwarded-For.
+  TRUST_PROXY: z.preprocess((v) => (v === "" ? undefined : v), z.coerce.number().int().min(1).max(5).optional()),
   // Supabase's admin key, used ONLY to create password-reset codes and links that Navie emails itself
   // (routes/auth.routes.ts). Bypasses row security: keep it in the git-ignored .env, never in the frontend.
   SUPABASE_SERVICE_ROLE_KEY: z.string().optional(),

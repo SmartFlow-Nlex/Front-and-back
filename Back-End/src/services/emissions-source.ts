@@ -40,11 +40,15 @@ export const EMISSIONS_TABLE = "gold.fact_emissions_hourly";
    McConnell, Argonne National Laboratory, 2010, To Idle or Not To Idle). Class 2: 0.8 gal/h, the heavy-duty figure in
    Argonne's Long-Haul Truck Idling Burns Up Profits (2015); no source separates buses and small trucks. */
 const IDLE_GAL_PER_HOUR = [0.3, 0.8, 1] as const;
-const KG_CO2_PER_GAL = 20 * 0.45359237;
+/* CO2 per gallon by fuel: US EPA, Greenhouse Gas Emissions from a Typical Passenger Vehicle (updated 3 Jun 2026),
+   8,887 g a gallon of gasoline and 10,180 g a gallon of diesel. Class 1 is gasoline, the same choice as its EMEP/EEA
+   factor; Classes 2-3 are diesel. Argonne's round "about 20 lb" (9.07 kg) for every class understated the diesel
+   classes by about 11% (2 Nov 2026). */
+const KG_CO2_PER_GAL = [8.887, 10.18, 10.18] as const;
 /** kg CO2 per vehicle-minute at a standstill, by class. */
-export const IDLING_KG_PER_MINUTE = IDLE_GAL_PER_HOUR.map((g) => (g * KG_CO2_PER_GAL) / 60);
+export const IDLING_KG_PER_MINUTE = IDLE_GAL_PER_HOUR.map((g, i) => (g * KG_CO2_PER_GAL[i]) / 60);
 export const IDLING_SOURCE =
-  "Argonne National Laboratory: about 0.3 gal/h for a car, 1 for a big truck, 20 lb CO2 per gallon (2010); 0.8 gal/h for Class 2 (2015).";
+  "Argonne National Laboratory: about 0.3 gal/h for a car and 1 for a big truck (2010), 0.8 gal/h for Class 2 (2015); US EPA (2026): 8,887 g CO2 a gallon of gasoline (Class 1), 10,180 g of diesel (Classes 2-3).";
 
 /** The vehicles on one segment in one direction in an hour, and what one of them burns per minute of idling at that hour's class mix. */
 export type Exposure = { veh: number; kgPerMinute: number };

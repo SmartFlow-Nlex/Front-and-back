@@ -22,6 +22,11 @@ from pathlib import Path
 os.environ.setdefault("TF_CPP_MIN_LOG_LEVEL", "3")
 import numpy as np
 import pandas as pd
+# psycopg2 before anything that loads TensorFlow (features/Keras): on the Linux runner the binary wheel's
+# bundled libssl crashed the process (SIGABRT, exit -6) when TensorFlow had loaded first. The congestion
+# trainer, which passes there, imports in this order (2 Nov 2026).
+import psycopg2  # noqa: E402
+from psycopg2.extras import Json, execute_values  # noqa: E402
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "config"))
 from db import PG, WORK  # noqa: E402
@@ -179,8 +184,6 @@ def build(D, prod):
 
 
 def write(run, rows, if_changed):
-    import psycopg2
-    from psycopg2.extras import Json, execute_values
     conn = psycopg2.connect(PG)
     try:
         with conn, conn.cursor() as cur:

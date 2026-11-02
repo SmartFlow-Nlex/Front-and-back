@@ -155,12 +155,14 @@ export async function getForecastModelInfo(): Promise<{
   horizons: number;
   minHorizon: number | null;
   maxHorizon: number | null;
+  /** When the forecast was made. Hour N is baseTs + N, not now + N: the run can be hours old. */
+  baseTs: string | null;
 } | null> {
   if (!db) return null;
   try {
     // Prefer the table only this pipeline writes; see forecast-source.
     const src = await forecastTable(db);
-    const [{ rows: model }, { rows: variance }] = await Promise.all([
+    const [{ rows: model }, { rows: variance }, { rows: base }] = await Promise.all([
       db.query(
         `SELECT model_name, r2, updated_at,
                 (SELECT COUNT(*) FROM gold.ml_model_metrics
@@ -185,6 +187,8 @@ export async function getForecastModelInfo(): Promise<{
               GROUP BY segment_name
            ) per_segment`,
       ),
+      // base_ts is Manila wall time with no zone; say so, or a server in UTC would read it 8 h off.
+      db.query(`SELECT to_char(MAX(base_ts), 'YYYY-MM-DD"T"HH24:MI:SS') || '+08:00' AS base_ts FROM ${src}`),
     ]);
 
     const m = model[0];
@@ -198,6 +202,7 @@ export async function getForecastModelInfo(): Promise<{
       horizons: Number(v?.horizons ?? 0),
       minHorizon: v?.min_h == null ? null : Number(v.min_h),
       maxHorizon: v?.max_h == null ? null : Number(v.max_h),
+      baseTs: base[0]?.base_ts ?? null,
     };
   } catch (error) {
     console.error("Database query failed for forecast model info:", error);
@@ -336,7 +341,7 @@ export async function getForecastCongestionFromDb(hoursAhead: number) {
  * the picture that made it the peak.
  */
 export async function getForecastDailyPeaksFromDb(): Promise<
-  { day: string; hoursAhead: number; at: string; congested: number; confidence: number }[] | null
+  { day: string; hoursAhead: number; at: string; congested: number; slow: number; confidence: number }[] | null
 > {
   if (!db) return null;
   try {
@@ -347,17 +352,24 @@ export async function getForecastDailyPeaksFromDb(): Promise<
          (heavy + severe) is 50% or more. This counted only exits the model
          LABELLED severe, so the week list said "1 congested" for days the map
          drew with a dozen predicted queues. Confidence is the average chance
-         of a jam across the corridor at that hour. */
+         of a jam across the corridor at that hour.
+         Split by the colour the map draws (2 Nov 2026): "congested" is a jam the map paints red (Severe more likely
+         than Heavy), "slow" one it paints amber. They were one count called "congested", which the live map uses
+         for red alone, so "12 congested" ahead could not be compared with "3 congested" now. */
       `WITH per_hour AS (
          SELECT hours_ahead,
                 MAX(base_ts) AS base_ts,
-                COUNT(*) FILTER (WHERE COALESCE(p_med, 0) + COALESCE(p_high, 0) >= 0.5)::int AS congested,
+                COUNT(*) FILTER (WHERE COALESCE(p_med, 0) + COALESCE(p_high, 0) >= 0.5
+                                   AND COALESCE(p_high, 0) >= COALESCE(p_med, 0))::int AS congested,
+                COUNT(*) FILTER (WHERE COALESCE(p_med, 0) + COALESCE(p_high, 0) >= 0.5
+                                   AND COALESCE(p_high, 0) < COALESCE(p_med, 0))::int AS slow,
                 AVG(COALESCE(p_med, 0) + COALESCE(p_high, 0))::float                      AS confidence
            FROM ${src}
           GROUP BY hours_ahead
        ), stamped AS (
          SELECT hours_ahead,
                 congested,
+                slow,
                 confidence,
                 base_ts + make_interval(hours => hours_ahead) AS at
            FROM per_hour
@@ -369,9 +381,10 @@ export async function getForecastDailyPeaksFromDb(): Promise<
        -- labelled 2026-09-18. Formatting it in Postgres keeps the calendar
        -- day the grouping actually used.
        SELECT DISTINCT ON (at::date)
-              to_char(at, 'YYYY-MM-DD') AS day, hours_ahead, at, congested, confidence
+              to_char(at, 'YYYY-MM-DD') AS day, hours_ahead,
+              to_char(at, 'YYYY-MM-DD"T"HH24:MI:SS') || '+08:00' AS at, congested, slow, confidence
          FROM stamped
-        ORDER BY at::date, congested DESC, confidence DESC, hours_ahead
+        ORDER BY at::date, congested DESC, slow DESC, confidence DESC, hours_ahead
       `,
     );
 
@@ -380,6 +393,7 @@ export async function getForecastDailyPeaksFromDb(): Promise<
       hoursAhead: Number(r.hours_ahead),
       at: new Date(r.at).toISOString(),
       congested: Number(r.congested),
+      slow: Number(r.slow),
       confidence: Number(r.confidence),
     }));
   } catch (error) {

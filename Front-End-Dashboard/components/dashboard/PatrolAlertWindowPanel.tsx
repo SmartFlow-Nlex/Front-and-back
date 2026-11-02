@@ -71,11 +71,13 @@ type AnalyticsSlice = { heatmap: HeatmapPoint[]; range: { from: string; to: stri
 type Profile = { hours: number[]; mean: number; peakHour: number; windows: [number, number][] };
 
 function buildProfile(hourly: number[]): Profile {
-  const mean = hourly.reduce((s, v) => s + v, 0) / 24;
+  // The hours given, not an assumed 24: a shorter series was averaged as if the missing hours were zero (TC-UT-12).
+  const n = hourly.length || 1;
+  const mean = hourly.reduce((s, v) => s + v, 0) / n;
   const peakHour = hourly.indexOf(Math.max(...hourly));
   const windows: [number, number][] = [];
   let start: number | null = null;
-  for (let h = 0; h < 24; h++) {
+  for (let h = 0; h < hourly.length; h++) {
     const elevated = hourly[h] > mean;
     if (elevated && start === null) start = h;
     if (!elevated && start !== null) {
@@ -83,7 +85,7 @@ function buildProfile(hourly: number[]): Profile {
       start = null;
     }
   }
-  if (start !== null) windows.push([start, 24]);
+  if (start !== null) windows.push([start, hourly.length]);
   return { hours: hourly, mean, peakHour, windows };
 }
 

@@ -1193,6 +1193,25 @@ def main() -> int:
 
     log_path = LOG_DIR / f"weekly_retrain_{datetime.now():%Y%m%d_%H%M%S}.log"
     _log = open(log_path, "a", encoding="utf-8")
+    # The cloud workflow (.github/workflows/weekly-retrain.yml) is the weekly batch since it first ran on 1 Nov 2026.
+    # This PC's Sunday task is the fallback: both retrained everything that week, the PC's run died part-way (the PC
+    # slept) and the cloud restored what it had left half-written. A scheduled run here does nothing while the cloud
+    # has finished a batch within 8 days, and takes over by itself if the cloud stops running.
+    if args.scheduled and not os.environ.get("GITHUB_ACTIONS"):
+        c = connect()
+        try:
+            with c.cursor() as cur:
+                cur.execute("SELECT id, host, finished_at FROM gold.ml_batch_runs WHERE trigger = 'scheduled' "
+                            "AND host IS DISTINCT FROM %s AND status IN ('retrained', 'no new data', 'needs attention') "
+                            "AND finished_at > now() - interval '8 days' ORDER BY id DESC LIMIT 1",
+                            (socket.gethostname(),))
+                recent = cur.fetchone()
+        finally:
+            c.close()
+        if recent:
+            say(f"the cloud ran this week's batch (#{recent[0]} on {recent[1]}, finished {recent[2]}); "
+                "this PC's scheduled run is only a fallback, so nothing to do")
+            return 0
     lock = connect()
     lock.autocommit = True
     try:

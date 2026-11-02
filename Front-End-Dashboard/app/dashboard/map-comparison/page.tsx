@@ -5,7 +5,7 @@ import { ChevronDown, Clock, Map, Maximize2, Milestone, Box } from "lucide-react
 import type { Feature } from "geojson";
 import TrafficMapPanel, { MAJOR_EXITS } from "../../../components/maps/TrafficMapPanel";
 import ForecastExpandModal from "../../../components/maps/ForecastExpandModal";
-import ForecastHorizonPicker, { dayTimeFor, type HorizonRangeKey } from "../../../components/maps/ForecastHorizonPicker";
+import ForecastHorizonPicker, { dayTimeFor, hoursFromNow, setForecastBase, type HorizonRangeKey } from "../../../components/maps/ForecastHorizonPicker";
 import CorridorStrip, { LegendKey, type StripHover } from "../../../components/maps/CorridorStrip";
 import type { CorridorSnapshot } from "../../../components/maps/livemap-graphics";
 import { useActiveClosures } from "../../../components/maps/useActiveClosures";
@@ -94,7 +94,8 @@ export default function MapComparisonPage() {
     return `${liveSnap?.feed?.stale ? "Stale" : "Live"} · updated ${ago}`;
   })();
   const forecastHours = forecastSnap?.hoursAhead ?? horizon;
-  const forecastAge = `Forecast · +${forecastHours} h`;
+  const forecastAhead = hoursFromNow(forecastHours);
+  const forecastAge = `Forecast · ${forecastAhead <= 0 ? "now" : `+${forecastAhead} h`}`;
   const when = dayTimeFor(horizon);
 
   const flyToExit = (x: ExitHit) => {
@@ -156,7 +157,12 @@ export default function MapComparisonPage() {
   useEffect(() => {
     let cancelled = false;
     cachedJson<{ model?: unknown }>(`${BACKEND}/api/map-comparison/forecast?hours=1`, 10 * 60_000)
-      .then((j) => { if (!cancelled && j?.model) setForecastModel(j.model as never); })
+      .then((j) => {
+        if (cancelled || !j?.model) return;
+        // Hour labels count from when the run was made, so set that before the picker re-renders.
+        setForecastBase((j.model as { baseTs?: string | null }).baseTs);
+        setForecastModel(j.model as never);
+      })
       .catch(() => {/* the panel simply says nothing about the model */});
     return () => { cancelled = true; };
   }, []);
@@ -485,7 +491,7 @@ export default function MapComparisonPage() {
             </div>
             <div className="mc-stat-item">
               <span className="mc-stat-label">Forecast Window</span>
-              <span className="mc-stat-value purple">{`+${horizon} h`}</span>
+              <span className="mc-stat-value purple">{forecastAhead <= 0 ? "Now" : `+${forecastAhead} h`}</span>
             </div>
           </div>
         </div>

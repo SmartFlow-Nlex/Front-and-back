@@ -155,13 +155,15 @@ incident started (the record's hourly volume ÷ days ÷ exits ÷ 2 carriageways)
 `T` = the minutes that incident **blocked a lane** (`blockage_cleared − event_start_date`); `φ` = kg CO₂ per
 vehicle-minute at a standstill, weighted by that hour's class mix:
 
-| class | gal/h | φ kg/min | source |
-|---|---:|---:|---|
-| 1 | 0.3 | 0.0454 | Gaines, Levinson & McConnell, Argonne, 2010 |
-| 2 | 0.8 | 0.1210 | Argonne, 2015 (long-haul heavy-duty, so an upper reading for Class 2) |
-| 3 | 1.0 | 0.1512 | Gaines et al., 2010 |
+| class | gal/h | fuel | kg CO₂/gal | φ kg/min | source of gal/h |
+|---|---:|---|---:|---:|---|
+| 1 | 0.3 | gasoline | 8.887 | 0.0444 | Gaines, Levinson & McConnell, Argonne, 2010; fueleconomy.gov gives 0.25-0.5 gal/h |
+| 2 | 0.8 | diesel | 10.180 | 0.1357 | Argonne, 2015 (long-haul heavy-duty, so an upper reading for Class 2) |
+| 3 | 1.0 | diesel | 10.180 | 0.1697 | Gaines et al., 2010 |
 
-Each gallon burned gives about 20 lb CO₂ (same source). These are US figures: none
+CO₂ per gallon: US EPA, Greenhouse Gas Emissions from a Typical Passenger Vehicle (updated 3 June 2026). Until
+2 Nov 2026 every class used Argonne's round "about 20 lb" (9.07 kg), which fits gasoline and understated the
+diesel classes by about 11%. These are US figures: none
 were found for the Philippine fleet. This replaced 0.0192 kg/min, Climatiq's
 petrol-car factor × 0.10; the 0.10 had no source.
 
@@ -181,8 +183,8 @@ The old per-incident calculator (`calculateRow`) charged every vehicle the full
 delay (λ × T², no /2) over the corridor-wide volume — 40× high — and called
 Climatiq live. Nothing called it; it is removed.
 
-**Shown on the Descriptive view** as the *Delay-Induced CO₂* KPI: 1,338 t in
-2025, 0.16% of the corridor's CO₂.
+**Shown on the Descriptive view** as the *Delay-Induced CO₂* KPI: 1,394 t in
+2025, 0.17% of the corridor's CO₂ (1,338 t before Classes 2-3 used the diesel CO₂ per gallon).
 
 ---
 
@@ -254,7 +256,7 @@ on how many long ones. One figure overstates how well that is known. The
 Range's incidents are resampled with replacement 400 times (a seeded bootstrap,
 so the same Range gives the same range), both savings recomputed against the
 same observed floors, and the **5th–95th percentile** reported. 2025: shorter
-blockages 730 t, likely 318–1,383 t; busiest-hours deployment 593 t, likely 183–1,257 t.
+blockages 758 t, likely 332–1,432 t; busiest-hours deployment 614 t, likely 190–1,298 t.
 
 ---
 

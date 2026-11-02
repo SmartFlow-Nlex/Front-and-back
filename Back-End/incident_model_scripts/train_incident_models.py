@@ -506,11 +506,19 @@ def fetch_future_rain(future_dates: list, rain_by_date: dict) -> dict:
             payload["precipitation_sum"],
         ))
     except Exception as e:
-        print(f"  Open-Meteo forecast fetch failed ({e}); missing future dates default to 0mm rain")
+        print(f"  Open-Meteo forecast fetch failed ({e}); missing future dates use the month's usual rain")
         forecast = {}
 
+    # Past the 16-day weather forecast nothing is known, and 0 mm claimed every day after it was dry (2 Nov 2026).
+    # Use that calendar month's mean daily rain on record, the rule measure_incident_horizon_accuracy.py scores with.
+    by_month: dict[int, list[float]] = {}
+    for day, mm in rain_by_date.items():
+        if mm is not None:
+            by_month.setdefault(day.month, []).append(float(mm))
+    overall = float(np.mean([v for vs in by_month.values() for v in vs])) if by_month else 0.0
     for d in missing:
-        known[d.date()] = float(forecast.get(d.date(), 0.0) or 0.0)
+        f = forecast.get(d.date())
+        known[d.date()] = float(f) if f is not None else (float(np.mean(by_month[d.month])) if d.month in by_month else overall)
     return known
 
 

@@ -168,7 +168,8 @@ export async function getForecastModelInfo(): Promise<{
                 (SELECT COUNT(*) FROM gold.ml_model_metrics
                   WHERE target = 'Congestion' AND NOT accepted)::int AS rejected
            FROM gold.ml_model_metrics
-          WHERE target = 'Congestion' AND accepted
+          -- rank 0 = the exit-hour profile, served when no model is accepted (train_congestion_horizon.py, A4)
+          WHERE target = 'Congestion' AND (accepted OR rank = 0)
           ORDER BY rank NULLS LAST
           LIMIT 1`,
       ),
@@ -281,16 +282,10 @@ export async function getForecastCongestionFromDb(hoursAhead: number) {
         corridor_segment: r.corridor_segment,
         horizon: `${r.hours_ahead}h`,
         hours_ahead: r.hours_ahead,
-        /* The state the dashboard SHOWS: a jam when the chance of one (heavy +
-           severe) is 50% or more, severity by the likelier of the two. The
-           model's own label is the likeliest of three, which called 244 cells
-           of one run "Low" at a 50-60% chance of a jam; above 50% the chance is
-           calibrated (said 55% -> 51% happened). Same rule as the congestion
-           card, so the map, its list and the card agree. */
-        congestion_state:
-          r.p_med != null && r.p_high != null
-            ? (r.p_med + r.p_high >= 0.5 ? (r.p_high >= r.p_med ? "High" : "Med") : "Low")
-            : r.congestion_state,
+        /* The state the model stored, from its own severe-weighted decision rule: the state the mobile app shows
+           and the accuracy is measured on. The map repainted it as a jam whenever heavy + severe reached 50%, a
+           different forecast from the app's (fix list A25, 2 Nov 2026). Same rule as the congestion card. */
+        congestion_state: r.congestion_state,
         model_state: r.congestion_state,
         probability: r.probability,
         p_congested: r.p_congested,
@@ -348,21 +343,14 @@ export async function getForecastDailyPeaksFromDb(): Promise<
     // Prefer the table only this pipeline writes; see forecast-source.
     const src = await forecastTable(db);
     const { rows } = await db.query(
-      /* "Congested" is the rule the map draws by: a jam when the chance of one
-         (heavy + severe) is 50% or more. This counted only exits the model
-         LABELLED severe, so the week list said "1 congested" for days the map
-         drew with a dozen predicted queues. Confidence is the average chance
-         of a jam across the corridor at that hour.
-         Split by the colour the map draws (2 Nov 2026): "congested" is a jam the map paints red (Severe more likely
-         than Heavy), "slow" one it paints amber. They were one count called "congested", which the live map uses
-         for red alone, so "12 congested" ahead could not be compared with "3 congested" now. */
+      /* Counted from the state the map draws, the model's stored state (A25): "congested" = High (red), "slow" =
+         Med (amber), the live map's words. Confidence is the average chance of a jam (heavy + severe) at that hour. */
       `WITH per_hour AS (
          SELECT hours_ahead,
                 MAX(base_ts) AS base_ts,
-                COUNT(*) FILTER (WHERE COALESCE(p_med, 0) + COALESCE(p_high, 0) >= 0.5
-                                   AND COALESCE(p_high, 0) >= COALESCE(p_med, 0))::int AS congested,
-                COUNT(*) FILTER (WHERE COALESCE(p_med, 0) + COALESCE(p_high, 0) >= 0.5
-                                   AND COALESCE(p_high, 0) < COALESCE(p_med, 0))::int AS slow,
+                -- The stored state, as the map now draws it (A25): High = red, Med = amber.
+                COUNT(*) FILTER (WHERE congestion_state = 'High')::int AS congested,
+                COUNT(*) FILTER (WHERE congestion_state = 'Med')::int AS slow,
                 AVG(COALESCE(p_med, 0) + COALESCE(p_high, 0))::float                      AS confidence
            FROM ${src}
           GROUP BY hours_ahead

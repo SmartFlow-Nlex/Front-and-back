@@ -564,18 +564,29 @@ export default function PredictiveIncidentChart({
   })();
   markLineData.push(...periodDividers);
 
-  // Rainfall shaded by intensity so the bars read as a weather condition at a
-  // glance rather than as anonymous blue blocks. Thresholds match
-  // PredictiveVolumeChart's PAGASA-advisory bands so the two charts agree on
-  // what counts as "Heavy" — only the caption below differs, because rain
-  // pushes incidents the opposite way it pushes volume.
+  /* Rainfall shaded by intensity. PAGASA's classes are HOURLY rates (light up to 2.5 mm/h, moderate 2.5-7.5, heavy
+     over 7.5), the same ones the sandbox uses, so they are applied to each bar's wettest hour. They were applied to
+     daily totals before, which called a day of steady drizzle "heavy" (fix list A8, 2 Nov 2026). The bar's height is
+     still the day's (or period's) total. */
   const RAIN_BANDS = [
-    { max: 7.5, label: "Light", color: "rgba(56, 189, 248, 0.45)" },
-    { max: 15, label: "Moderate", color: "rgba(14, 165, 233, 0.65)" },
-    { max: 30, label: "Heavy", color: "rgba(2, 132, 199, 0.8)" },
-    { max: Infinity, label: "Intense", color: "rgba(30, 64, 175, 0.9)" },
+    { max: 2.5, label: "Light", color: "rgba(56, 189, 248, 0.45)" },
+    { max: 7.5, label: "Moderate", color: "rgba(14, 165, 233, 0.65)" },
+    { max: Infinity, label: "Heavy", color: "rgba(30, 64, 175, 0.9)" },
   ];
-  const rainBand = (mm: number) => RAIN_BANDS.find((b) => mm < b.max) ?? RAIN_BANDS[RAIN_BANDS.length - 1];
+  const rainBand = (mmPerHour: number) => RAIN_BANDS.find((b) => mmPerHour <= b.max) ?? RAIN_BANDS[RAIN_BANDS.length - 1];
+  // Each bar's wettest hour: the day's own, or the wettest across the days of a week or month.
+  const peakByDate = new Map(daily.map((d) => [d.date, d.rainfallPeakHourMm ?? null]));
+  const effPeak: (number | null)[] = effIso.map((start, i) => {
+    if (!isAggregated) return peakByDate.get(start) ?? null;
+    const next = effIso[i + 1];
+    let peak: number | null = null;
+    for (const d of daily) {
+      if (d.date < start || (next != null && d.date >= next)) continue;
+      const p = d.rainfallPeakHourMm;
+      if (p != null && (peak == null || p > peak)) peak = p;
+    }
+    return peak;
+  });
 
   // Zone bands + dividers, attached to whichever series is the ground truth.
   const bandProps =
@@ -698,7 +709,7 @@ export default function PredictiveIncidentChart({
     type: "bar" as const,
     xAxisIndex,
     yAxisIndex,
-    data: effRainfall.map((mm) => (mm == null ? null : { value: mm, itemStyle: { color: rainBand(mm).color } })),
+    data: effRainfall.map((mm, i) => (mm == null ? null : { value: mm, itemStyle: { color: rainBand(effPeak[i] ?? 0).color } })),
     barMaxWidth: 14,
     itemStyle: { borderRadius: [2, 2, 0, 0] },
     z: 1,
@@ -1484,19 +1495,19 @@ export default function PredictiveIncidentChart({
           but slicker roads drive collisions and breakdowns per mile up. */}
       {showWeather && (
         <div className="inc-rainkey">
-          <b>Daily rainfall</b>
+          <b>Rainfall</b>
           {RAIN_BANDS.map((b, i) => (
             <span key={b.label}>
               <i style={{ background: b.color }} aria-hidden="true" />
               {b.label}
               <em>
-                {i === 0 ? `< ${b.max} mm`
-                  : b.max === Infinity ? `≥ ${RAIN_BANDS[i - 1].max} mm`
-                  : `${RAIN_BANDS[i - 1].max}–${b.max} mm`}
+                {i === 0 ? `≤ ${b.max} mm/h`
+                  : b.max === Infinity ? `> ${RAIN_BANDS[i - 1].max} mm/h`
+                  : `${RAIN_BANDS[i - 1].max}–${b.max} mm/h`}
               </em>
             </span>
           ))}
-          <span className="inc-rainkey-aside">Taller bar = wetter day</span>
+          <span className="inc-rainkey-aside">Colour = the wettest hour (PAGASA classes) · taller bar = more rain that day</span>
         </div>
       )}
 

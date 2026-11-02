@@ -103,6 +103,7 @@ INPUTS = {
     "motorcycle_crashes": ("public.nlex_motorcycle_crashes", "date", None),
     "stalled": ("public.nlex_stalled_vehicles", "date", None),
     "waze_jams": ("silver.fact_waze_jams", "date_day", "speed_kmh"),
+    "arena_events": ("silver.philippine_arena_events_clean", "event_date", None),
 }
 CONGESTION = ROOT.parent / "All_Scripts" / "Predictive_Modeling"
 HOURLY_48H = WORK / "cache" / "traffic_hourly_48h"
@@ -251,9 +252,12 @@ GROUPS = [
     ),
     Group(
         "event_surge", "Event surge",
-        inputs=["traffic_hourly"],
-        steps=[Step(TT / "event_surge", ["build_event_surge.py"]),
-               Step(TT / "event_surge", ["eval_event_surge.py"])],
+        # The calendar-based build in All_Scripts (Kia, 17 Sep 2026), which also scores itself into ml_model_metrics.
+        # This ran smartflow_scripts/.../event_surge/ until 2 Nov 2026: the old build and eval pick "event days" as days
+        # the CDV exit ran 1.45x its norm, which selects busy days and inflated the uplift (1.15x became 1.59x); the
+        # 1 Nov cloud batch overwrote the table with it.
+        inputs=["traffic_hourly", "arena_events"],
+        steps=[Step(CONGESTION, ["build_event_surge.py"])],
         tables=[("gold.ml_event_surge_forecast", None),
                 ("gold.ml_model_metrics", "target = 'Event Surge'")],
         evaluation="domain = 'Event surge'",

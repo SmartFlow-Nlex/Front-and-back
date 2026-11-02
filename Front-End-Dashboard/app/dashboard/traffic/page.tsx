@@ -972,7 +972,7 @@ export default function TrafficPage() {
               </article>
               <article className={styles.kpiTile}>
                 <span className={styles.kpiIcon} aria-hidden="true"><Gauge size={15} /></span>
-                <h3>Congestion Index<InfoTooltip text="How bad the jams were: the average Waze level of the jams reported on the corridor over the Range, from 1 (light) to 5 (standstill). Waze reports only jams, never free flow, so this measures how severe congestion is when it happens, not how often it happens; it stays near the middle and moves little with weather." /></h3>
+                <h3>Congestion Index<InfoTooltip text="How bad the jams were: the average Waze level of the jams reported on the corridor over the Range, from 1 (light) to 5 (blocked road). Waze reports only jams, never free flow, so this measures how severe congestion is when it happens, not how often it happens; it stays near the middle and moves little with weather." /></h3>
                 <div className={styles.kpiValue}>{kpiValue(data?.kpis.congestionIndex != null ? `${data.kpis.congestionIndex.toFixed(2)} / 5` : null)}</div>
                 <p className={styles.kpiHint}>
                   {derived?.congestionDelta != null ? (

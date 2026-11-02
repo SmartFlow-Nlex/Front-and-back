@@ -56,6 +56,8 @@ export type DailyPoint = {
   predictionType: "train" | "validation" | "future" | null;
   sameDayLastYear: number | null;
   rainfallMm: number | null;
+  /** The day's wettest hour (mm in that hour), for PAGASA's hourly rain classes. */
+  rainfallPeakHourMm?: number | null;
   /** Backend's own wet-day flag: mean hourly rainfall for the day > 0.3 mm. */
   isWet: boolean | null;
   /**

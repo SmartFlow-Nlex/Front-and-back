@@ -878,8 +878,9 @@ export async function getMLEventSurge(eventDate?: string) {
                  EXTRACT(DOW FROM $1::date)::int AS dow,
                  EXTRACT(MONTH FROM $1::date)::int AS mon
         ),
-        -- Same construction as the training baseline: median for that weekday
-        -- and month, excluding known event days so they cannot inflate it.
+        -- Same construction as the training baseline (All_Scripts/Predictive_Modeling/build_event_surge.py): median
+        -- for that weekday and month, excluding Arena event days and holidays so they cannot inflate it. The comment
+        -- said so before, but the SQL took every day (fix list A1, 2 Nov 2026).
         norm AS (
           SELECT t.exit_canonical AS plaza,
                  PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY t.v)::int AS baseline
@@ -887,6 +888,8 @@ export async function getMLEventSurge(eventDate?: string) {
                 FROM gold.fact_traffic_hourly GROUP BY 1, 2) t, target g
           WHERE EXTRACT(DOW FROM t.date) = g.dow
             AND EXTRACT(MONTH FROM t.date) = g.mon
+            AND t.date NOT IN (SELECT event_date::date FROM silver.philippine_arena_events_clean WHERE event_date IS NOT NULL)
+            AND t.date NOT IN (SELECT date_day::date FROM public.ph_holidays)
           GROUP BY 1
         )
         SELECT n.plaza AS "exit", f.event_name AS "event", n.baseline,
@@ -911,14 +914,18 @@ export async function getMLEventSurge(eventDate?: string) {
     // why this query used to carry an alias table to map them onto real plazas.
     // Both the aliases and the invented ratios are gone.
     const { rows } = await db.query(`
+      -- An ordinary day of the last 90: the MEDIAN of days that were neither an Arena event nor a holiday, the same
+      -- exclusions as the training baseline. It was the plain mean of every day, events included (fix list A1).
       WITH observed AS (
-        SELECT exit_canonical AS plaza, ROUND(AVG(v))::int AS baseline
+        SELECT exit_canonical AS plaza, (PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY v))::int AS baseline
         FROM (SELECT date, exit_canonical, SUM(total) AS v
               FROM gold.fact_traffic_hourly
               WHERE date >= (SELECT MAX(date) FROM gold.fact_traffic_hourly) - interval '90 days'
+                AND date NOT IN (SELECT event_date::date FROM silver.philippine_arena_events_clean WHERE event_date IS NOT NULL)
+                AND date NOT IN (SELECT date_day::date FROM public.ph_holidays)
               GROUP BY 1, 2) t
         GROUP BY 1
-        HAVING ROUND(AVG(v)) > 0
+        HAVING PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY v) > 0
       )
       SELECT o.plaza AS "exit",
              f.event_name AS "event",
@@ -1024,9 +1031,13 @@ export async function getUpcomingEventSurge(limit = 60): Promise<UpcomingEvent[]
          ORDER BY start_date
          LIMIT $1
        ),
+       -- Ordinary days only: no Arena event, no holiday, as in the single-date path and the training baseline (A1).
        daily AS (
          SELECT date, exit_canonical AS plaza, SUM(total) AS v
-         FROM gold.fact_traffic_hourly GROUP BY 1, 2
+         FROM gold.fact_traffic_hourly
+         WHERE date NOT IN (SELECT event_date::date FROM silver.philippine_arena_events_clean WHERE event_date IS NOT NULL)
+           AND date NOT IN (SELECT date_day::date FROM public.ph_holidays)
+         GROUP BY 1, 2
        ),
        norm AS (
          SELECT u.d, t.plaza, PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY t.v)::int AS baseline

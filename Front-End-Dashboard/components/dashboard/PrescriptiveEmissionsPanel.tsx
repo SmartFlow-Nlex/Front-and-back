@@ -125,7 +125,7 @@ const MONTH = (iso: string) =>
 const ACTION_HEAD: Record<Strategy["key"], string> = {
   clearance: "Clear blockages as fast as your best 10%",
   deployment: "Put response capacity on the 12 busiest hours",
-  fleet_mix: "Shift heavy-truck travel to smaller vehicles",
+  fleet_mix: "Shift Class 3 truck travel to Class 2 vehicles",
 };
 
 /* One field of an action card as a small box: its label and a one-line headline, the full text only when
@@ -254,7 +254,7 @@ export default function PrescriptiveEmissionsPanel({
     <div className="nc-em-card-head">
       <h3>
         Projected % Emission Reduction by Strategy
-        <InfoTooltip text="Computed from our own records over the selected Range. Shorter lane blockages and busiest-hours response are limited to blockage times NLEX has already achieved. The heavy-vehicle bar is a what-if (drawn hollow): our records have never shown NLEX lowering truck traffic. Moving trips to other hours is not offered, because in this model a vehicle gives off the same CO2 at any hour." />
+        <InfoTooltip text="Computed from our own records over the selected Range. Shorter lane blockages and busiest-hours response are limited to blockage times NLEX has already achieved. The Class 3 bar is a what-if (drawn hollow): our records have never shown NLEX lowering truck traffic. Moving trips to other hours is not offered, because in this model a vehicle gives off the same CO2 at any hour." />
         {updatingBadge}
       </h3>
       <p className="nc-em-context">
@@ -606,7 +606,7 @@ export default function PrescriptiveEmissionsPanel({
               <div className="is-note">
                 <dt>Not this</dt>
                 <dd>
-                  The heavy-vehicle figure ({fmtT(scenario.reductionTonnes)} t) is larger but is a what-if needing a policy
+                  The Class 3 figure ({fmtT(scenario.reductionTonnes)} t) is larger but is a what-if needing a policy
                   decision, not an operations action
                 </dd>
               </div>
@@ -885,7 +885,7 @@ export default function PrescriptiveEmissionsPanel({
             <div className="nc-em-more-pane">
               <div className="nc-em-card-head">
                 <h3>
-                  Heavy-vehicle window restriction advisory
+                  Class 3 window restriction advisory
                   <InfoTooltip text="From the modelling diagram's fleet-mix box. KPI: Class 3 peak share reduction. The peak hours are those within 10% of the busiest hour's vehicle-km over the Range." />
                 </h3>
                 <p className="nc-em-context">

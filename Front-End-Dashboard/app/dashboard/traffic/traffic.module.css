@@ -462,6 +462,8 @@
    has four, and they were laid into five tracks - so the row stopped short and
    left a whole empty column, about 240px of nothing, on the right of the page.
    The track count follows the number of tiles actually present. */
+/* Six on Incidents since 2 Nov 2026 (Time to Clear joined the row): six across, then 3+3 below 1320px. */
+.kpiRow:has(> :nth-child(6):last-child) { grid-template-columns: repeat(6, minmax(0, 1fr)); }
 .kpiRow:has(> :nth-child(4):last-child) { grid-template-columns: repeat(4, minmax(0, 1fr)); }
 .kpiRow:has(> :nth-child(3):last-child) { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 

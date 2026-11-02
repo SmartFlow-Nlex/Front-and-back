@@ -57,12 +57,12 @@ type RawRow = { segment: string; hours: number; state: State; probability: numbe
  * chance, and the severity by whichever of Heavy and Severe is likelier. The
  * live score (Validation evidence) measures both rules on served forecasts.
  */
+/* The state the model stored: its own decision rule, which counts the chance of Severe 1.5 times (chosen on the test
+   window, 27 Oct 2026). The mobile app shows this state and the published accuracy scores it, so the card does too
+   (fix list A25, 2 Nov 2026). It used to repaint cells as a jam whenever heavy + severe reached 50%, so the card,
+   the app and the accuracy figure could each describe a different forecast. */
 function shownState(d: RawRow): State {
-  if (d.pMed == null || d.pHigh == null) return d.state;
-  const pMed = Number(d.pMed);
-  const pHigh = Number(d.pHigh);
-  if (pMed + pHigh < 0.5) return "Low";
-  return pHigh >= pMed ? "High" : "Med";
+  return d.state;
 }
 
 /**
@@ -853,8 +853,7 @@ export default function PredictiveCongestionChart() {
           : known.filter((x) => states[y][x] === "Med" || states[y][x] === "High").length;
         const severe = known.filter((x) => states[y][x] === "High");
         // The first hour more likely congested than not is the one to plan around.
-        const firstCol = known.find((x) =>
-          haveProbs ? (probs[y][x] ?? 0) >= 0.5 : states[y][x] === "Med" || states[y][x] === "High");
+        const firstCol = known.find((x) => states[y][x] === "Med" || states[y][x] === "High");
         const rounded = Math.round(expected);
         dayMax = Math.max(dayMax, rounded);
         dayCells.push({
@@ -1028,7 +1027,7 @@ export default function PredictiveCongestionChart() {
           <>
             <h3 className="nct-title">
               Predictive Congestion State Map
-              <InfoTooltip text="Predicted jam state at each exit for the next 12 hours, from Waze jam reports. Red = crawling under 10 km/h, amber = heavy at 10-20 km/h, blue = moving freely or no jam reported. The cuts are this corridor's own: a generic 30 km/h threshold put every reported jam in one class. Hover a cell for the typical queue length, its distance from the toll plaza and the delay, from four years of Waze jam history at that exit and hour." />
+              <InfoTooltip text="Predicted jam state at each exit for the hours the forecast covers (up to 168 hours ahead; choose the range above), from Waze jam reports. Red = crawling under 10 km/h, amber = heavy at 10-20 km/h, blue = moving freely or no jam reported. The cuts are this corridor's own: a generic 30 km/h threshold put every reported jam in one class. Hover a cell for the typical queue length, its distance from the toll plaza and the delay, from four years of Waze jam history at that exit and hour." />
             </h3>
             <StateNote kind="error" role="alert">
               {loadError}
@@ -1634,7 +1633,7 @@ export default function PredictiveCongestionChart() {
         <div className="nct-card-head-split">
           <h3 className="nct-title">
             Predictive Congestion State Map
-            <InfoTooltip text="Predicted jam state at each exit for the next 12 hours, from Waze jam reports. Red = crawling under 10 km/h, amber = heavy at 10-20 km/h, blue = moving freely or no jam reported. The cuts are this corridor's own: a generic 30 km/h threshold put every reported jam in one class. Hover a cell for the typical queue length, its distance from the toll plaza and the delay, from four years of Waze jam history at that exit and hour." />
+            <InfoTooltip text="Predicted jam state at each exit for the hours the forecast covers (up to 168 hours ahead; choose the range above), from Waze jam reports. Red = crawling under 10 km/h, amber = heavy at 10-20 km/h, blue = moving freely or no jam reported. The cuts are this corridor's own: a generic 30 km/h threshold put every reported jam in one class. Hover a cell for the typical queue length, its distance from the toll plaza and the delay, from four years of Waze jam history at that exit and hour." />
           </h3>
           <div className="nct-pill-row">
             <span

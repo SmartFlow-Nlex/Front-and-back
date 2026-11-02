@@ -1756,7 +1756,7 @@ export default function TrafficMapPanel({
       };
 
       const LEVEL_WORD: Record<number, string> = {
-        0: "Clear", 1: "Slow", 2: "Slow", 3: "Congested", 4: "Congested", 5: "Standstill",
+        0: "Clear", 1: "Slow", 2: "Slow", 3: "Congested", 4: "Congested", 5: "Blocked",
       };
 
       /* Street names arrive from Waze, so they are outside data going into

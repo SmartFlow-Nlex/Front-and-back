@@ -59,7 +59,14 @@ type Analytics = {
     // from, so they contribute nothing here rather than a fabricated value.
     // Replaced the old single avgResponseMin, which conflated accidents and
     // breakdowns despite having no accident-side data behind it at all.
-    avgTimeToFirstResponder: { min: number | null; n: number; totalBreakdowns: number };
+    avgTimeToFirstResponder: { min: number | null; medianMin?: number | null; p90Min?: number | null; n: number; totalBreakdowns: number };
+    /** Time to clear (MTTC), by type, with how many incidents carry the times (K9, K15). */
+    mttc?: {
+      overallMin: number | null;
+      accident?: { meanMin: number | null; medianMin: number | null; p90Min: number | null };
+      breakdown?: { meanMin: number | null; medianMin: number | null; p90Min: number | null };
+      coverage: { pctValid: number | null };
+    };
     rainyCrashes: number;
     weatherKnown: number;
   };
@@ -337,6 +344,17 @@ export default function IncidentPage() {
        crashes over the crashes those wet hours would have had at their own hours' dry rate. Falls back to the plain
        ratio when the API sends no per-hour cells. */
     let rainSameHour = false;
+    /* 95% interval (fix list A13, 2 Nov 2026), approximate, on the log scale. Plain ratio: exp(ln RR +/- 1.96
+       sqrt(1/n_wet + 1/n_dry)). Same-hour ratio: the expected count is built from the dry crashes, so its own Poisson
+       variance, sum of (wet hours / dry hours)^2 x dry crashes per hour, is added to 1/observed. */
+    let rainLo: number | null = null;
+    let rainHi: number | null = null;
+    const ci = (r: number, varLog: number) => {
+      const half = 1.96 * Math.sqrt(varLog);
+      rainLo = Math.exp(Math.log(r) - half);
+      rainHi = Math.exp(Math.log(r) + half);
+    };
+    if (rainMultiplier != null && wetCrashes > 0 && dryCrashes > 0) ci(rainMultiplier, 1 / wetCrashes + 1 / dryCrashes);
     if (rainMultiplier != null && Array.isArray(wx.cells) && wx.cells.length > 0) {
       const byHour = new Map<number, { wetH: number; dryH: number; wetA: number; dryA: number }>();
       for (const c of wx.cells) {
@@ -346,18 +364,22 @@ export default function IncidentPage() {
       }
       let observed = 0;
       let expected = 0;
+      let varExpected = 0;
       for (const b of byHour.values()) {
         if (b.wetH === 0 || b.dryH === 0) continue;
         observed += b.wetA;
         expected += b.wetH * (b.dryA / b.dryH);
+        varExpected += (b.wetH / b.dryH) ** 2 * b.dryA;
       }
       if (expected > 0) {
         rainMultiplier = observed / expected;
         rainSameHour = true;
+        rainLo = rainHi = null;
+        if (observed > 0) ci(rainMultiplier, 1 / observed + varExpected / expected ** 2);
       }
     }
 
-    return { deltaPct, topHotspot, hotspotTotal, wetRate, dryRate, rainMultiplier, rainEmptyReason, rainSameHour };
+    return { deltaPct, topHotspot, hotspotTotal, wetRate, dryRate, rainMultiplier, rainEmptyReason, rainSameHour, rainLo: rainLo as number | null, rainHi: rainHi as number | null };
   }, [data, source]);
 
     // ---------- Trend ----------
@@ -1162,7 +1184,7 @@ export default function IncidentPage() {
                 </div>
                 <p className={styles.kpiHint}>
                   {data && data.kpis.avgTimeToFirstResponder.min != null
-                    ? `breakdowns only · ${fmtInt(data.kpis.avgTimeToFirstResponder.n)} of ${fmtInt(data.kpis.avgTimeToFirstResponder.totalBreakdowns)} logged`
+                    ? `${data.kpis.avgTimeToFirstResponder.medianMin != null ? `median ${data.kpis.avgTimeToFirstResponder.medianMin} · p90 ${data.kpis.avgTimeToFirstResponder.p90Min} min · ` : ""}breakdowns only · ${fmtInt(data.kpis.avgTimeToFirstResponder.n)} of ${fmtInt(data.kpis.avgTimeToFirstResponder.totalBreakdowns)} logged`
                     : data && source === "accident"
                       ? "Breakdowns only: Incident type is set to Accidents"
                       : data && data.kpis.avgTimeToFirstResponder.totalBreakdowns === 0
@@ -1170,6 +1192,28 @@ export default function IncidentPage() {
                         : data
                           ? `None of the ${fmtInt(data.kpis.avgTimeToFirstResponder.totalBreakdowns)} breakdowns in range has a dispatch response logged`
                           : pendingHint}
+                </p>
+              </article>
+              {/* Time to clear (MTTC, KPI 3.6.2): computed by the API since October but never shown (fix list A15,
+                  2 Nov 2026). Mean beside median and 90th percentile, because a few very long clearances pull the
+                  mean up; and how many incidents carry the times at all. */}
+              <article className={styles.kpiTile}>
+                <span className={styles.kpiIcon} aria-hidden="true"><Timer size={15} /></span>
+                <h3>
+                  Avg Time to Clear
+                  {kpiInfo("Minutes from an incident being reported until the road was cleared: accidents from their recorded clearance time, breakdowns until the last responding unit left. The headline is the mean of both, weighted by how many of each have times; the hint gives the median and 90th percentile by type, since a few very long clearances pull the mean up.")}
+                </h3>
+                <div className={styles.kpiValue}>
+                  {kpiValue(data?.kpis.mttc?.overallMin != null ? `${data.kpis.mttc.overallMin} min` : null)}
+                </div>
+                <p className={styles.kpiHint}>
+                  {data?.kpis.mttc
+                    ? [
+                        data.kpis.mttc.accident?.medianMin != null ? `accidents median ${data.kpis.mttc.accident.medianMin} · p90 ${data.kpis.mttc.accident.p90Min}` : "",
+                        data.kpis.mttc.breakdown?.medianMin != null ? `breakdowns median ${data.kpis.mttc.breakdown.medianMin} · p90 ${data.kpis.mttc.breakdown.p90Min}` : "",
+                        data.kpis.mttc.coverage.pctValid != null ? `${data.kpis.mttc.coverage.pctValid}% have times` : "",
+                      ].filter(Boolean).join(" min · ") || "No clearance times in this Range"
+                    : pendingHint}
                 </p>
               </article>
               <article className={styles.kpiTile}>
@@ -1197,7 +1241,7 @@ export default function IncidentPage() {
                 <p className={styles.kpiHint}>
                   {derived
                     ? derived.rainMultiplier != null
-                      ? `${derived.wetRate.toFixed(1)} vs ${derived.dryRate.toFixed(1)} crashes/day, wet vs dry${derived.rainSameHour ? " · same hours compared" : ""}${weather !== "all" ? " · always both weathers" : ""}`
+                      ? `${derived.wetRate.toFixed(1)} vs ${derived.dryRate.toFixed(1)} crashes/day, wet vs dry${derived.rainLo != null && derived.rainHi != null ? ` · 95% CI ${derived.rainLo.toFixed(2)}–${derived.rainHi.toFixed(2)}×` : ""}${derived.rainSameHour ? " · same hours compared" : ""}${weather !== "all" ? " · always both weathers" : ""}`
                       : derived.rainEmptyReason
                     : pendingHint}
                 </p>

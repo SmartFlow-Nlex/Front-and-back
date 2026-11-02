@@ -74,7 +74,8 @@ export function toObservations(rawMinutes: (number | null)[]): Observation[] {
   const obs: Observation[] = [];
   for (const raw of rawMinutes) {
     if (raw == null || !Number.isFinite(raw)) continue;
-    if (raw < 0) continue;
+    // 0 minutes is a recording artefact, not a clearance (fix list A7, 2 Nov 2026); negatives were already dropped.
+    if (raw <= 0) continue;
     if (raw > 1440) obs.push({ duration: 1440, censored: true });
     else obs.push({ duration: raw, censored: false });
   }

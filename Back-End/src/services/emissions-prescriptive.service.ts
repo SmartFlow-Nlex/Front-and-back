@@ -455,16 +455,16 @@ export async function getPrescriptiveStrategies(
   const highest = months[months.length - 1];
   const allDecember = lowest.length > 0 && lowest.every((x) => x.m.endsWith("-12"));
   const fleetNote = lowest.length
-    ? `Heavy vehicles' monthly share of vehicle-km ran from ${lowest[0].share.toFixed(2)}% (${fmtMonth(lowest[0].m)}) to ${highest.share.toFixed(2)}% (${fmtMonth(highest.m)}) over ${months.length} months. ` +
+    ? `Class 3's monthly share of vehicle-km ran from ${lowest[0].share.toFixed(2)}% (${fmtMonth(lowest[0].m)}) to ${highest.share.toFixed(2)}% (${fmtMonth(highest.m)}) over ${months.length} months. ` +
       (allDecember
         ? `The lowest months are all Decembers (${lowest.map((x) => fmtMonth(x.m)).join(", ")}), when holiday car traffic dilutes the trucks rather than fewer trucks running, so nothing in the record shows the share can be pushed down by policy.`
         : `The lowest were ${lowest.map((x) => `${fmtMonth(x.m)} (${x.share.toFixed(2)}%)`).join(", ")}; nothing in the record ties them to anything NLEX controls.`)
-    : "The record has no monthly heavy share to compare against.";
+    : "The record has no monthly Class 3 share to compare against.";
 
   const days = incidents.map((e) => e.day).sort();
   const span = { lo: days[0] ?? null, hi: days[days.length - 1] ?? null, n: incidents.length };
   const mcNote =
-    `Range: the 5th to 95th percentile of ${MC_RUNS} Monte Carlo resamples of this Range's incidents, with the floors held at the observed ones. Which incidents happen moves the figure, the rare long ones most of all.`;
+    `Range: the 5th to 95th percentile of ${MC_RUNS} bootstrap resamples of this Range's incidents, with the floors held at the observed ones. Which incidents happen moves the figure, the rare long ones most of all.`;
 
   const strategies: Strategy[] = [
     {
@@ -508,7 +508,8 @@ export async function getPrescriptiveStrategies(
     },
     {
       key: "fleet_mix",
-      label: `Heavy-vehicle share down ${deltaPp} pp`,
+      // "Class 3", not "heavy": on this tab heavy means Class 2+3, and only Class 3 moves here (fix list A10, 2 Nov 2026).
+      label: `Class 3 share down ${deltaPp} pp`,
       reductionPct: r2(pct(fleetTonnes)),
       reductionTonnes: r2(fleetTonnes),
       range: null,

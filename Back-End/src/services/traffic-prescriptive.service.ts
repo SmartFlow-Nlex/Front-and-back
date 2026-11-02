@@ -434,28 +434,46 @@ function loadCongestion(): Promise<CongestionRow[] | null> {
 }
 
 async function readInputs(split: string): Promise<Inputs | null> {
-  /* The champion. `accepted` is reported rather than required: the volume
-     models currently all fail the MASE gate, and refusing to staff a toll
-     plaza because the forecast is imperfect is not the operator's choice to
-     have made for them. The flag travels with the answer instead. */
+  /* The champion: the best accepted volume model. When none is accepted the plan falls back to the seasonal
+     naive (below) rather than refusing to staff a plaza; the flag travels with the answer. */
   const champQ = await db!.query<{ model_name: string; wmape: string | null; accepted: boolean }>(
     `SELECT model_name, wmape, accepted FROM gold.ml_model_metrics
       WHERE target = 'Total Traffic' AND split_label = $1
       ORDER BY accepted DESC, rank ASC NULLS LAST LIMIT 1`,
     [split],
   );
-  const champion = champQ.rows[0];
-  const col = champion ? MODEL_COLUMN[champion.model_name] : undefined;
-  if (!champion || !col) return null;
+  let champion = champQ.rows[0];
+  if (!champion) return null;
+  /* No model passed the acceptance test: plan with the benchmark they failed to beat, the same weekday of the last
+     recorded week, and keep the warning (fix list A5, 2 Nov 2026). It used to staff with the best of the rejected
+     models, i.e. a forecast measured to be worse than repeating last week. */
+  const naive = !champion.accepted;
+  const col = naive ? undefined : MODEL_COLUMN[champion.model_name];
+  if (!naive && !col) return null;
+  if (naive) champion = { model_name: "Seasonal naive (last week repeated)", wmape: null, accepted: false };
 
   const [futureQ, profileQ, typicalQ, segmentQ] = await Promise.all([
-    db!.query<{ d: string; v: string | null; dow: number }>(
-      `SELECT forecast_date::text AS d, ${col}::text AS v, EXTRACT(dow FROM forecast_date)::int AS dow
-         FROM gold.ml_predictive_volume
-        WHERE split_label = $1 AND is_future AND ${col} IS NOT NULL
-        ORDER BY forecast_date ASC LIMIT $2`,
-      [split, WEEK_DAYS],
-    ),
+    naive
+      ? db!.query<{ d: string; v: string | null; dow: number }>(
+          `WITH last_week AS (
+             SELECT forecast_date AS d, actual_volume AS v FROM gold.ml_predictive_volume
+              WHERE split_label = $1 AND actual_volume IS NOT NULL ORDER BY forecast_date DESC LIMIT 7
+           ), ahead AS (
+             SELECT forecast_date AS d FROM gold.ml_predictive_volume
+              WHERE split_label = $1 AND is_future ORDER BY forecast_date ASC LIMIT $2
+           )
+           SELECT a.d::text AS d, w.v::text AS v, EXTRACT(dow FROM a.d)::int AS dow
+             FROM ahead a JOIN last_week w ON EXTRACT(dow FROM w.d) = EXTRACT(dow FROM a.d)
+            ORDER BY a.d`,
+          [split, WEEK_DAYS],
+        )
+      : db!.query<{ d: string; v: string | null; dow: number }>(
+          `SELECT forecast_date::text AS d, ${col}::text AS v, EXTRACT(dow FROM forecast_date)::int AS dow
+             FROM gold.ml_predictive_volume
+            WHERE split_label = $1 AND is_future AND ${col} IS NOT NULL
+            ORDER BY forecast_date ASC LIMIT $2`,
+          [split, WEEK_DAYS],
+        ),
     /* Plaza volume by movement, carriageway, hour and day type in one pass:
        the shares the demand formula multiplies by, and which of the plaza's
        booths each part of it goes through. Shares are computed WITHIN each
@@ -689,6 +707,10 @@ export async function getTrafficPrescriptive(opts: {
   /* ── congestion ─────────────────────────────────────────────────────────── */
   const bySeg = new Map<string, CongestionAdvice>();
   for (const c of congestionRows ?? []) {
+    // The 1-12 h horizon the banner names (fix list A3, 2 Nov 2026). Beyond 18 h every proximity membership is 0, so
+    // those hours could only ever score Monitor while the 168 h forecast fed them in.
+    const hrs = Number(c.hours);
+    if (!(hrs >= 1 && hrs <= 12)) continue;
     const p = Number(c.probability);
     if (!Number.isFinite(p)) continue;
     const high = String(c.state).toLowerCase() === "high";

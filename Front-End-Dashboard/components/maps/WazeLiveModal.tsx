@@ -122,16 +122,12 @@ const LEVELS = [
   { level: 2, label: "Moderate" },
   { level: 3, label: "Heavy" },
   { level: 4, label: "Severe" },
-  { level: 5, label: "Standstill" },
+  { level: 5, label: "Blocked" },
 ];
 
-/** Speed bands for the sidebar's own readouts, which have no level to hand. */
-function band(kmh: number): { key: string; label: string } {
-  if (kmh >= 40) return { key: "light", label: "Light" };
-  if (kmh >= 25) return { key: "moderate", label: "Moderate" };
-  if (kmh >= 12) return { key: "heavy", label: "Heavy" };
-  return { key: "severe", label: "Severe" };
-}
+/* Waze's own level words everywhere (fix list A6, 2 Nov 2026). The sidebar used its own 40/25/12 km/h speed bands,
+   which named the same jam differently from the map; the exits carry Waze's level, so the word comes from that. */
+const levelWord = (level: number) => LEVELS.find((l) => l.level === Math.round(level))?.label ?? "Free flow";
 
 export default function WazeLiveModal({ open, onClose }: { open: boolean; onClose: () => void }) {
   const { isDark } = useChartTheme();
@@ -267,7 +263,7 @@ export default function WazeLiveModal({ open, onClose }: { open: boolean; onClos
                 </div>
                 <p className="wz-note">
                   {data && data.exits.length > 0
-                    ? `${data.jamCount} jams across ${data.exits.length} exits · worst is ${band(data.exits[0].avgSpeedKmh).label.toLowerCase()}`
+                    ? `${data.jamCount} jams across ${data.exits.length} exits · worst is ${levelWord(data.exits[0].worstLevel).toLowerCase()}`
                     : "No jams reported on the corridor"}
                 </p>
 
